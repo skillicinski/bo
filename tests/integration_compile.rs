@@ -114,7 +114,7 @@ fn compile_produces_at_least_one_branch_file() {
     let branch_files: Vec<_> = fs::read_dir(&branches_dir)
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "md"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
         .collect();
 
     assert!(
@@ -201,8 +201,7 @@ fn compile_rerun_preserves_compiled_at() {
     let first_branch = fs::read_dir(&branches_dir)
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "md"))
-        .next()
+        .find(|e| e.path().extension().is_some_and(|ext| ext == "md"))
         .expect("no branch files after first compile")
         .path();
 

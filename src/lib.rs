@@ -49,5 +49,7 @@ pub mod fetch;
 pub mod frontmatter;
 pub mod index;
 pub mod leaf;
+mod quality;
+pub use quality::RejectReason;
 pub mod slug;
 pub mod tree;

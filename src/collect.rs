@@ -12,13 +12,13 @@
 // `collect_html` is the testable core; `collect_url` is a thin wrapper that
 // fetches first.
 //
-// Dependency direction: collect → fetch, extract, leaf, slug, index.
+// Dependency direction: collect → fetch, quality, extract, leaf, slug, index.
 
 use chrono::Utc;
 use std::fmt;
 use std::path::Path;
 
-use crate::{extract, fetch, index, leaf, slug};
+use crate::{extract, fetch, index, leaf, quality, slug, RejectReason};
 
 // ── types ────────────────────────────────────────────────────────────────────
 
@@ -40,6 +40,10 @@ pub enum CollectError {
     },
     Fetch(fetch::FetchError),
     Extract(extract::ExtractError),
+    Rejected {
+        url: String,
+        reason: RejectReason,
+    },
     Io(std::io::Error),
 }
 
@@ -51,6 +55,9 @@ impl fmt::Display for CollectError {
             }
             CollectError::Fetch(e) => write!(f, "{}", e),
             CollectError::Extract(e) => write!(f, "{}", e),
+            CollectError::Rejected { url, reason } => {
+                write!(f, "{} was not collected: {}", url, reason)
+            }
             CollectError::Io(e) => write!(f, "I/O error: {}", e),
         }
     }
@@ -82,7 +89,19 @@ impl From<std::io::Error> for CollectError {
 /// returned by `fetch_url`, preserving the canonicalisation that was previously
 /// done in `main.rs`.
 pub fn collect_url(url: &str, output_dir: &Path) -> Result<Document, CollectError> {
-    let fetched = fetch::fetch_url(url)?;
+    let fetched = match fetch::fetch_url(url) {
+        Ok(fetched) => fetched,
+        Err(fetch::FetchError::HttpStatus(status, message)) => {
+            if let Some(reason) = quality::classify_http_status(status) {
+                return Err(CollectError::Rejected {
+                    url: url.to_string(),
+                    reason,
+                });
+            }
+            return Err(fetch::FetchError::HttpStatus(status, message).into());
+        }
+        Err(e) => return Err(e.into()),
+    };
     collect_html(&fetched.url, &fetched.html, output_dir)
 }
 
@@ -105,8 +124,26 @@ pub fn collect_html(url: &str, html: &str, output_dir: &Path) -> Result<Document
         });
     }
 
+    // Reject obvious non-document HTML before extraction.
+    if let Some(reason) = quality::classify_html(html) {
+        return Err(CollectError::Rejected {
+            url: url.to_string(),
+            reason,
+        });
+    }
+
     // Extract
     let content = extract::extract_content(html)?;
+
+    // Reject extracted boilerplate/shell content before writing artifacts.
+    if let Some(reason) =
+        quality::classify_extracted(content.title.as_deref(), &content.body_markdown)
+    {
+        return Err(CollectError::Rejected {
+            url: url.to_string(),
+            reason,
+        });
+    }
 
     // Slug
     let title_ref = content.title.as_deref().unwrap_or("");

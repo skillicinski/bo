@@ -7,6 +7,38 @@
 use std::fs;
 use tempfile::TempDir;
 
+fn assert_no_collection_artifacts(dir: &TempDir) {
+    let md_files: Vec<_> = fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+        .collect();
+    assert!(
+        md_files.is_empty(),
+        "rejected collection wrote markdown files"
+    );
+
+    let index_path = dir.path().join("index.jsonl");
+    assert!(
+        !index_path.exists() || fs::read_to_string(&index_path).unwrap().is_empty(),
+        "rejected collection wrote index entries"
+    );
+}
+
+fn assert_rejected_with(
+    result: Result<bo::collect::Document, bo::collect::CollectError>,
+    url: &str,
+    reason: &str,
+) {
+    let err = result
+        .expect_err("collection should be rejected")
+        .to_string();
+    assert!(
+        err.contains(&format!("{url} was not collected: {reason}")),
+        "unexpected rejection message: {err}"
+    );
+}
+
 const SAMPLE_HTML: &str = r#"
 <html><head><title>Test Article</title></head>
 <body><article>
@@ -31,6 +63,57 @@ const COLLISION_HTML_2: &str = r#"
 <h1>Introduction</h1>
 <p>This is the second introduction page, from a completely different source, also with enough content for extraction.</p>
 </article></body></html>
+"#;
+
+const REDIRECT_STUB_HTML: &str = r#"<!doctype html>
+<meta charset="utf-8">
+<title>Redirect</title>
+<script>
+  const target = "https://blog.rust-lang.org/2015/05/11/traits/";
+  window.location.replace(target);
+</script>
+<noscript>
+  <meta http-equiv="refresh" content="0; url=https://blog.rust-lang.org/2015/05/11/traits/">
+</noscript>
+<p><a href="https://blog.rust-lang.org/2015/05/11/traits/">Click here</a> to be redirected.</p>
+"#;
+
+const X_JS_SHELL_HTML: &str = r#"
+<html><body>
+<div class="errorContainer">
+<h1>JavaScript is not available.</h1>
+<p>We’ve detected that JavaScript is disabled in this browser. Please enable JavaScript or switch to a supported browser to continue using x.com.</p>
+<p>Something went wrong, but don’t fret — let’s give it another shot.</p>
+</div>
+<div id="react-root"></div>
+</body></html>
+"#;
+
+const CLOUDFLARE_BLOCK_HTML: &str = r#"
+<html><head><title>Just a moment...</title>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script></head>
+<body><div id="cf-challenge">Checking your browser before accessing this site.</div></body></html>
+"#;
+
+const OPENREVIEW_FOOTER_HTML: &str = r#"
+<html><head><title>ChainRepair: Enabling Efficient Program Repair with Small...</title></head>
+<body><main>
+<h1>ChainRepair: Enabling Efficient Program Repair with Small...</h1>
+<p>OpenReview is a long-term project to advance science through improved peer review with legal nonprofit status. We gratefully acknowledge the support of the OpenReview Sponsors. © 2026 OpenReview</p>
+</main></body></html>
+"#;
+
+const MDBOOK_WITH_BAD_UI_TITLE_HTML: &str = r#"
+<html><head><title>Understanding Ownership - The Rust Programming Language</title></head>
+<body>
+<section class="help"><h2>Keyboard shortcuts</h2><p>Press ? to show keyboard shortcuts.</p></section>
+<nav><h1>The Rust Programming Language</h1></nav>
+<main>
+<h1 id="understanding-ownership">Understanding Ownership</h1>
+<p>Ownership is Rust’s most unique feature and has deep implications for the rest of the language. It enables Rust to make memory safety guarantees without needing a garbage collector, so it is important to understand how ownership works.</p>
+<p>This chapter discusses ownership, borrowing, slices, and how Rust lays data out in memory. The examples provide substantive documentation content that should be accepted even if surrounding UI chrome confuses title extraction.</p>
+</main>
+</body></html>
 "#;
 
 #[test]
@@ -119,17 +202,67 @@ fn empty_extraction_no_artifacts() {
     let result = bo::collect::collect_html("https://example.com/empty", empty_html, dir.path());
     assert!(result.is_err());
 
-    // No markdown file
-    let md_files: Vec<_> = fs::read_dir(dir.path())
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
-        .collect();
-    assert!(md_files.is_empty());
+    assert_no_collection_artifacts(&dir);
+}
 
-    // No index entry
-    let index_path = dir.path().join("index.jsonl");
-    assert!(!index_path.exists() || fs::read_to_string(&index_path).unwrap().is_empty());
+#[test]
+fn redirect_stub_rejected_without_artifacts() {
+    let dir = TempDir::new().unwrap();
+    let url = "https://blog.rust-lang.org/2015/05/11/traits.html";
+
+    let result = bo::collect::collect_html(url, REDIRECT_STUB_HTML, dir.path());
+
+    assert_rejected_with(result, url, "redirect stub");
+    assert_no_collection_artifacts(&dir);
+}
+
+#[test]
+fn x_js_shell_rejected_without_artifacts() {
+    let dir = TempDir::new().unwrap();
+    let url = "https://x.com/lifeof_jer/status/2048103471019434248";
+
+    let result = bo::collect::collect_html(url, X_JS_SHELL_HTML, dir.path());
+
+    assert_rejected_with(result, url, "JS-rendered content");
+    assert_no_collection_artifacts(&dir);
+}
+
+#[test]
+fn openreview_footer_only_rejected_without_artifacts() {
+    let dir = TempDir::new().unwrap();
+    let url = "https://openreview.net/forum?id=OAudWSf7aH";
+
+    let result = bo::collect::collect_html(url, OPENREVIEW_FOOTER_HTML, dir.path());
+
+    assert_rejected_with(result, url, "boilerplate-only content");
+    assert_no_collection_artifacts(&dir);
+}
+
+#[test]
+fn cloudflare_block_rejected_without_artifacts() {
+    let dir = TempDir::new().unwrap();
+    let url = "https://medium.com/@loci.ai/deploying-vllm-on-ecs-with-ec2-82d58b482125";
+
+    let result = bo::collect::collect_html(url, CLOUDFLARE_BLOCK_HTML, dir.path());
+
+    assert_rejected_with(result, url, "blocked by site");
+    assert_no_collection_artifacts(&dir);
+}
+
+#[test]
+fn mdbook_page_with_bad_ui_title_and_substantive_body_is_accepted() {
+    let dir = TempDir::new().unwrap();
+
+    let result = bo::collect::collect_html(
+        "https://doc.rust-lang.org/book/ch04-00-understanding-ownership.html",
+        MDBOOK_WITH_BAD_UI_TITLE_HTML,
+        dir.path(),
+    );
+
+    assert!(result.is_ok(), "mdBook page should be accepted: {result:?}");
+    let page = result.unwrap();
+    let content = fs::read_to_string(dir.path().join(page.filename)).unwrap();
+    assert!(content.contains("Understanding Ownership") || content.contains("Ownership is Rust"));
 }
 
 #[test]
