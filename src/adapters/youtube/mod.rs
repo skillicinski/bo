@@ -1,0 +1,134 @@
+mod innertube;
+mod transcript;
+mod url;
+
+pub use innertube::CaptionTrack;
+pub use url::{classify_url, SupportedYoutubeUrl, YoutubeUrlMatch};
+
+use std::fmt;
+
+#[derive(Debug)]
+pub struct YoutubeTranscriptDocument {
+    pub url: String,
+    pub video_id: String,
+    pub title: String,
+    pub body_markdown: String,
+}
+
+#[derive(Debug)]
+pub enum YoutubeError {
+    InvalidUrl(String),
+    UnsupportedUrl { url: String, reason: String },
+    Network(String),
+    Player(String),
+    NoEnglishCaptions,
+    EmptyTranscript,
+    Parse(String),
+}
+
+impl fmt::Display for YoutubeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            YoutubeError::InvalidUrl(msg) => write!(f, "invalid YouTube URL: {}", msg),
+            YoutubeError::UnsupportedUrl { reason, .. } => {
+                write!(f, "unsupported YouTube URL: {}", reason)
+            }
+            YoutubeError::Network(msg) => write!(f, "YouTube network error: {}", msg),
+            YoutubeError::Player(msg) => write!(f, "YouTube player error: {}", msg),
+            YoutubeError::NoEnglishCaptions => {
+                write!(
+                    f,
+                    "YouTube transcript unavailable: no English captions found"
+                )
+            }
+            YoutubeError::EmptyTranscript => {
+                write!(f, "YouTube transcript unavailable: transcript is empty")
+            }
+            YoutubeError::Parse(msg) => write!(f, "YouTube transcript parse error: {}", msg),
+        }
+    }
+}
+
+pub fn collect_transcript(url: &str) -> Result<YoutubeTranscriptDocument, YoutubeError> {
+    let supported = match classify_url(url) {
+        YoutubeUrlMatch::Supported(supported) => supported,
+        YoutubeUrlMatch::Unsupported { url, reason } => {
+            return Err(YoutubeError::UnsupportedUrl { url, reason })
+        }
+        YoutubeUrlMatch::NotYoutube => {
+            return Err(YoutubeError::UnsupportedUrl {
+                url: url.to_string(),
+                reason: "not a YouTube URL".to_string(),
+            })
+        }
+        YoutubeUrlMatch::Invalid { message } => return Err(YoutubeError::InvalidUrl(message)),
+    };
+
+    fetch_supported_transcript(&supported)
+}
+
+pub fn fetch_supported_transcript(
+    supported: &SupportedYoutubeUrl,
+) -> Result<YoutubeTranscriptDocument, YoutubeError> {
+    let player = innertube::fetch_player_response(&supported.video_id)?;
+    innertube::ensure_playable(&player)?;
+
+    let title = player
+        .video_details
+        .as_ref()
+        .and_then(|details| non_empty(&details.title))
+        .unwrap_or_else(|| supported.video_id.clone());
+
+    let track = innertube::select_english_caption_track(&player.caption_tracks())
+        .ok_or(YoutubeError::NoEnglishCaptions)?;
+    let xml = innertube::fetch_caption_xml(&track.base_url)?;
+    let body_markdown = transcript::parse_transcript_markdown(&xml)?;
+
+    Ok(YoutubeTranscriptDocument {
+        url: supported.normalized_url.clone(),
+        video_id: supported.video_id.clone(),
+        title,
+        body_markdown,
+    })
+}
+
+fn non_empty(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+#[cfg(test)]
+mod network_tests {
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn fetches_known_captioned_watch_video() {
+        assert_captioned_video_collects("https://www.youtube.com/watch?v=a1mhk7mAetk");
+    }
+
+    #[test]
+    #[ignore]
+    fn fetches_known_captioned_youtu_be_video() {
+        assert_captioned_video_collects("https://youtu.be/a1mhk7mAetk");
+    }
+
+    #[test]
+    #[ignore]
+    fn fetches_known_captioned_shorts_url() {
+        assert_captioned_video_collects("https://www.youtube.com/shorts/a1mhk7mAetk");
+    }
+
+    fn assert_captioned_video_collects(url: &str) {
+        let doc = collect_transcript(url).unwrap();
+        assert!(!doc.title.trim().is_empty());
+        assert!(!doc.body_markdown.trim().is_empty());
+        assert!(!doc.body_markdown.contains("YouTube"));
+        assert!(!doc.body_markdown.contains("Sign in"));
+        assert!(!doc.body_markdown.contains("0:00"));
+    }
+}
