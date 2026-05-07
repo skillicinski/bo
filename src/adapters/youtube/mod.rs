@@ -2,7 +2,6 @@ mod innertube;
 mod transcript;
 mod url;
 
-pub use innertube::CaptionTrack;
 pub use url::{classify_url, SupportedYoutubeUrl, YoutubeUrlMatch};
 
 use std::fmt;
@@ -10,14 +9,12 @@ use std::fmt;
 #[derive(Debug)]
 pub struct YoutubeTranscriptDocument {
     pub url: String,
-    pub video_id: String,
     pub title: String,
     pub body_markdown: String,
 }
 
 #[derive(Debug)]
 pub enum YoutubeError {
-    InvalidUrl(String),
     UnsupportedUrl { url: String, reason: String },
     Network(String),
     Player(String),
@@ -29,7 +26,6 @@ pub enum YoutubeError {
 impl fmt::Display for YoutubeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            YoutubeError::InvalidUrl(msg) => write!(f, "invalid YouTube URL: {}", msg),
             YoutubeError::UnsupportedUrl { reason, .. } => {
                 write!(f, "unsupported YouTube URL: {}", reason)
             }
@@ -61,7 +57,6 @@ pub fn collect_transcript(url: &str) -> Result<YoutubeTranscriptDocument, Youtub
                 reason: "not a YouTube URL".to_string(),
             })
         }
-        YoutubeUrlMatch::Invalid { message } => return Err(YoutubeError::InvalidUrl(message)),
     };
 
     fetch_supported_transcript(&supported)
@@ -70,7 +65,7 @@ pub fn collect_transcript(url: &str) -> Result<YoutubeTranscriptDocument, Youtub
 pub fn fetch_supported_transcript(
     supported: &SupportedYoutubeUrl,
 ) -> Result<YoutubeTranscriptDocument, YoutubeError> {
-    let player = innertube::fetch_player_response(&supported.video_id)?;
+    let player = innertube::fetch_player_response(supported.video_id())?;
     innertube::ensure_playable(&player)?;
 
     let title = player
@@ -78,7 +73,7 @@ pub fn fetch_supported_transcript(
         .as_ref()
         .and_then(|details| details.title.as_deref())
         .and_then(non_empty)
-        .unwrap_or_else(|| supported.video_id.clone());
+        .unwrap_or_else(|| supported.video_id().to_string());
 
     let track = innertube::select_english_caption_track(&player.caption_tracks())
         .ok_or(YoutubeError::NoEnglishCaptions)?;
@@ -86,8 +81,7 @@ pub fn fetch_supported_transcript(
     let body_markdown = transcript::parse_transcript_markdown(&xml)?;
 
     Ok(YoutubeTranscriptDocument {
-        url: supported.normalized_url.clone(),
-        video_id: supported.video_id.clone(),
+        url: supported.normalized_url().to_string(),
         title,
         body_markdown,
     })

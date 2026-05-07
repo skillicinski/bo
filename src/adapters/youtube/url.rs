@@ -1,15 +1,49 @@
 use url::Url;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+struct VideoId(String);
+
+impl VideoId {
+    fn parse(value: &str) -> Result<Self, String> {
+        if value.is_empty() {
+            return Err("video ID is missing".to_string());
+        }
+        if !value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            return Err("video ID contains unsupported characters".to_string());
+        }
+        if value.len() != 11 {
+            return Err("video ID must be 11 URL-safe characters".to_string());
+        }
+        Ok(Self(value.to_string()))
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SupportedYoutubeUrl {
-    pub video_id: String,
-    pub normalized_url: String,
+    video_id: VideoId,
+    normalized_url: String,
+}
+
+impl SupportedYoutubeUrl {
+    pub fn video_id(&self) -> &str {
+        self.video_id.as_str()
+    }
+
+    pub fn normalized_url(&self) -> &str {
+        &self.normalized_url
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum YoutubeUrlMatch {
     NotYoutube,
-    Invalid { message: String },
     Supported(SupportedYoutubeUrl),
     Unsupported { url: String, reason: String },
 }
@@ -55,7 +89,7 @@ pub fn classify_url(input: &str) -> YoutubeUrlMatch {
 fn classify_youtu_be(parsed: Url) -> YoutubeUrlMatch {
     let normalized_url = parsed.as_str().to_string();
     let path = parsed.path().trim_matches('/');
-    match validate_video_id(path) {
+    match VideoId::parse(path) {
         Ok(video_id) => YoutubeUrlMatch::Supported(SupportedYoutubeUrl {
             video_id,
             normalized_url,
@@ -79,7 +113,7 @@ fn classify_youtube_host(parsed: Url) -> YoutubeUrlMatch {
                 }
             });
             match video_id {
-                Some(video_id) => match validate_video_id(&video_id) {
+                Some(video_id) => match VideoId::parse(&video_id) {
                     Ok(video_id) => YoutubeUrlMatch::Supported(SupportedYoutubeUrl {
                         video_id,
                         normalized_url,
@@ -97,7 +131,7 @@ fn classify_youtube_host(parsed: Url) -> YoutubeUrlMatch {
         }
         path if path.starts_with("/shorts/") => {
             let id = path.trim_start_matches("/shorts/").trim_matches('/');
-            match validate_video_id(id) {
+            match VideoId::parse(id) {
                 Ok(video_id) => YoutubeUrlMatch::Supported(SupportedYoutubeUrl {
                     video_id,
                     normalized_url,
@@ -152,22 +186,6 @@ fn is_youtube_like_host(host: Option<&str>) -> bool {
     )
 }
 
-fn validate_video_id(value: &str) -> Result<String, String> {
-    if value.is_empty() {
-        return Err("video ID is missing".to_string());
-    }
-    if !value
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        return Err("video ID contains unsupported characters".to_string());
-    }
-    if value.len() != 11 {
-        return Err("video ID must be 11 URL-safe characters".to_string());
-    }
-    Ok(value.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,22 +207,22 @@ mod tests {
     #[test]
     fn supports_watch_urls() {
         let result = supported("https://www.youtube.com/watch?v=a1mhk7mAetk");
-        assert_eq!(result.video_id, "a1mhk7mAetk");
+        assert_eq!(result.video_id(), "a1mhk7mAetk");
         assert_eq!(
-            result.normalized_url,
+            result.normalized_url(),
             "https://www.youtube.com/watch?v=a1mhk7mAetk"
         );
 
         let result = supported("https://youtube.com/watch?v=1GXrAY-wzfk");
-        assert_eq!(result.video_id, "1GXrAY-wzfk");
+        assert_eq!(result.video_id(), "1GXrAY-wzfk");
     }
 
     #[test]
     fn supports_watch_urls_with_extra_query_params() {
         let result = supported("https://www.youtube.com/watch?si=x&v=a1mhk7mAetk&t=30s&list=abc");
-        assert_eq!(result.video_id, "a1mhk7mAetk");
+        assert_eq!(result.video_id(), "a1mhk7mAetk");
         assert_eq!(
-            result.normalized_url,
+            result.normalized_url(),
             "https://www.youtube.com/watch?si=x&v=a1mhk7mAetk&t=30s&list=abc"
         );
     }
@@ -212,9 +230,9 @@ mod tests {
     #[test]
     fn supports_short_urls_without_canonicalizing() {
         let result = supported("https://youtu.be/a1mhk7mAetk?si=x&t=30");
-        assert_eq!(result.video_id, "a1mhk7mAetk");
+        assert_eq!(result.video_id(), "a1mhk7mAetk");
         assert_eq!(
-            result.normalized_url,
+            result.normalized_url(),
             "https://youtu.be/a1mhk7mAetk?si=x&t=30"
         );
     }
@@ -222,13 +240,13 @@ mod tests {
     #[test]
     fn supports_shorts_urls() {
         let result = supported("https://www.youtube.com/shorts/a1mhk7mAetk?feature=share");
-        assert_eq!(result.video_id, "a1mhk7mAetk");
+        assert_eq!(result.video_id(), "a1mhk7mAetk");
     }
 
     #[test]
     fn host_matching_is_case_insensitive() {
         let result = supported("https://WWW.YouTube.COM/watch?v=a1mhk7mAetk");
-        assert_eq!(result.video_id, "a1mhk7mAetk");
+        assert_eq!(result.video_id(), "a1mhk7mAetk");
     }
 
     #[test]

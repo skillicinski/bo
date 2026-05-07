@@ -39,7 +39,7 @@
 //!         └── index
 //! ```
 
-pub mod adapters;
+mod adapters;
 pub mod agent;
 pub mod branch;
 pub mod collect;

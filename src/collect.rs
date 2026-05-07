@@ -99,9 +99,10 @@ impl From<std::io::Error> for CollectError {
 /// done in `main.rs`.
 pub fn collect_url(url: &str, output_dir: &Path) -> Result<Document, CollectError> {
     match youtube::classify_url(url) {
-        YoutubeUrlMatch::Supported(_) => {
+        YoutubeUrlMatch::Supported(supported) => {
+            ensure_not_duplicate(supported.normalized_url(), output_dir)?;
             let transcript = youtube::collect_transcript(url)?;
-            return write_document(
+            return write_new_document(
                 &transcript.url,
                 Some(&transcript.title),
                 &transcript.body_markdown,
@@ -110,9 +111,6 @@ pub fn collect_url(url: &str, output_dir: &Path) -> Result<Document, CollectErro
         }
         YoutubeUrlMatch::Unsupported { url, reason } => {
             return Err(YoutubeError::UnsupportedUrl { url, reason }.into());
-        }
-        YoutubeUrlMatch::Invalid { message } => {
-            return Err(YoutubeError::InvalidUrl(message).into())
         }
         YoutubeUrlMatch::NotYoutube => {}
     }
@@ -172,16 +170,6 @@ pub fn collect_html(url: &str, html: &str, output_dir: &Path) -> Result<Document
         &content.body_markdown,
         output_dir,
     )
-}
-
-fn write_document(
-    url: &str,
-    title: Option<&str>,
-    body_markdown: &str,
-    output_dir: &Path,
-) -> Result<Document, CollectError> {
-    ensure_not_duplicate(url, output_dir)?;
-    write_new_document(url, title, body_markdown, output_dir)
 }
 
 fn ensure_not_duplicate(url: &str, output_dir: &Path) -> Result<(), CollectError> {
@@ -264,36 +252,36 @@ filtering. It remains an ordinary HTML collection fixture after refactoring.</p>
     }
 
     #[test]
-    fn shared_write_path_detects_exact_duplicate_youtube_url() {
+    fn collect_url_rejects_duplicate_youtube_url_before_network_fetch() {
         let dir = TempDir::new().unwrap();
         let url = "https://www.youtube.com/watch?v=a1mhk7mAetk";
+        index::append_entry(
+            &dir.path().join("index.jsonl"),
+            &index::IndexEntry {
+                file: "existing.md".to_string(),
+                title: "Existing Video".to_string(),
+                url: url.to_string(),
+            },
+        )
+        .unwrap();
 
-        write_document(url, Some("Video Title"), "Transcript body", dir.path()).unwrap();
-        let duplicate = write_document(url, Some("Video Title"), "Transcript body", dir.path());
+        let duplicate = collect_url(url, dir.path());
 
         assert!(matches!(duplicate, Err(CollectError::DuplicateUrl { .. })));
-        let entries = index::read_index(&dir.path().join("index.jsonl")).unwrap();
-        assert_eq!(entries.len(), 1);
+        assert!(!dir.path().join("existing.md").exists());
     }
 
     #[test]
-    fn shared_write_path_keeps_exact_match_duplicate_semantics() {
+    fn collect_html_keeps_exact_match_duplicate_semantics_for_youtube_urls() {
         let dir = TempDir::new().unwrap();
 
-        write_document(
+        collect_html(
             "https://www.youtube.com/watch?v=a1mhk7mAetk",
-            Some("Video Title"),
-            "Transcript body",
+            ARTICLE_HTML,
             dir.path(),
         )
         .unwrap();
-        write_document(
-            "https://youtu.be/a1mhk7mAetk",
-            Some("Video Title"),
-            "Transcript body",
-            dir.path(),
-        )
-        .unwrap();
+        collect_html("https://youtu.be/a1mhk7mAetk", ARTICLE_HTML, dir.path()).unwrap();
 
         let entries = index::read_index(&dir.path().join("index.jsonl")).unwrap();
         assert_eq!(entries.len(), 2);
