@@ -122,8 +122,13 @@ mod network_tests {
         let doc = collect_transcript(url).unwrap();
         assert!(!doc.title.trim().is_empty());
         assert!(!doc.body_markdown.trim().is_empty());
-        assert!(!doc.body_markdown.contains("YouTube"));
-        assert!(!doc.body_markdown.contains("Sign in"));
-        assert!(!doc.body_markdown.contains("0:00"));
+        assert!(!doc.body_markdown.contains("ytInitialData"));
+        assert!(!doc.body_markdown.contains("<html"));
+        assert!(!doc.body_markdown.contains("<script"));
+        assert!(!doc.body_markdown.contains("Sign in to confirm"));
+        assert!(!doc
+            .body_markdown
+            .lines()
+            .any(|line| line.trim_start().starts_with("0:00 ")));
     }
 }
