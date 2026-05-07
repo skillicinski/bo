@@ -12,12 +12,13 @@
 // `collect_html` is the testable core; `collect_url` is a thin wrapper that
 // fetches first.
 //
-// Dependency direction: collect → fetch, quality, extract, leaf, slug, index.
+// Dependency direction: collect → adapters, fetch, quality, extract, leaf, slug, index.
 
 use chrono::Utc;
 use std::fmt;
 use std::path::Path;
 
+use crate::adapters::youtube::{self, YoutubeError, YoutubeUrlMatch};
 use crate::{extract, fetch, index, leaf, quality, slug, RejectReason};
 
 // ── types ────────────────────────────────────────────────────────────────────
@@ -40,6 +41,7 @@ pub enum CollectError {
     },
     Fetch(fetch::FetchError),
     Extract(extract::ExtractError),
+    Youtube(YoutubeError),
     Rejected {
         url: String,
         reason: RejectReason,
@@ -55,6 +57,7 @@ impl fmt::Display for CollectError {
             }
             CollectError::Fetch(e) => write!(f, "{}", e),
             CollectError::Extract(e) => write!(f, "{}", e),
+            CollectError::Youtube(e) => write!(f, "{}", e),
             CollectError::Rejected { url, reason } => {
                 write!(f, "{} was not collected: {}", url, reason)
             }
@@ -75,6 +78,12 @@ impl From<extract::ExtractError> for CollectError {
     }
 }
 
+impl From<YoutubeError> for CollectError {
+    fn from(e: YoutubeError) -> Self {
+        CollectError::Youtube(e)
+    }
+}
+
 impl From<std::io::Error> for CollectError {
     fn from(e: std::io::Error) -> Self {
         CollectError::Io(e)
@@ -89,6 +98,23 @@ impl From<std::io::Error> for CollectError {
 /// returned by `fetch_url`, preserving the canonicalisation that was previously
 /// done in `main.rs`.
 pub fn collect_url(url: &str, output_dir: &Path) -> Result<Document, CollectError> {
+    match youtube::classify_url(url) {
+        YoutubeUrlMatch::Supported(supported) => {
+            ensure_not_duplicate(supported.normalized_url(), output_dir)?;
+            let transcript = youtube::collect_transcript(url)?;
+            return write_new_document(
+                &transcript.url,
+                Some(&transcript.title),
+                &transcript.body_markdown,
+                output_dir,
+            );
+        }
+        YoutubeUrlMatch::Unsupported { url, reason } => {
+            return Err(YoutubeError::UnsupportedUrl { url, reason }.into());
+        }
+        YoutubeUrlMatch::NotYoutube => {}
+    }
+
     let fetched = match fetch::fetch_url(url) {
         Ok(fetched) => fetched,
         Err(fetch::FetchError::HttpStatus(status, message)) => {
@@ -113,16 +139,9 @@ pub fn collect_url(url: &str, output_dir: &Path) -> Result<Document, CollectErro
 /// This is the testable core of the pipeline: integration tests call it directly
 /// with fixture HTML to avoid network dependencies.
 pub fn collect_html(url: &str, html: &str, output_dir: &Path) -> Result<Document, CollectError> {
-    let index_path = output_dir.join("index.jsonl");
-
     // Duplicate check — reads index only (fast path).
     // If index.jsonl is absent, the URL is treated as new.
-    let entries = index::read_index(&index_path)?;
-    if let Some(existing) = index::is_duplicate(&entries, url) {
-        return Err(CollectError::DuplicateUrl {
-            existing_file: existing.file.clone(),
-        });
-    }
+    ensure_not_duplicate(url, output_dir)?;
 
     // Reject obvious non-document HTML before extraction.
     if let Some(reason) = quality::classify_html(html) {
@@ -145,28 +164,45 @@ pub fn collect_html(url: &str, html: &str, output_dir: &Path) -> Result<Document
         });
     }
 
-    // Slug
-    let title_ref = content.title.as_deref().unwrap_or("");
+    write_new_document(
+        url,
+        content.title.as_deref(),
+        &content.body_markdown,
+        output_dir,
+    )
+}
+
+fn ensure_not_duplicate(url: &str, output_dir: &Path) -> Result<(), CollectError> {
+    let index_path = output_dir.join("index.jsonl");
+    let entries = index::read_index(&index_path)?;
+    if let Some(existing) = index::is_duplicate(&entries, url) {
+        return Err(CollectError::DuplicateUrl {
+            existing_file: existing.file.clone(),
+        });
+    }
+    Ok(())
+}
+
+fn write_new_document(
+    url: &str,
+    title: Option<&str>,
+    body_markdown: &str,
+    output_dir: &Path,
+) -> Result<Document, CollectError> {
+    let index_path = output_dir.join("index.jsonl");
+    let title_ref = title.unwrap_or("");
     let base_slug = slug::slugify(title_ref, url);
     let filename = slug::resolve_slug(&base_slug, url, output_dir);
 
-    // Write leaf file.
     // `leaf::write` calls `create_dir_all` internally, ensuring `output_dir`
     // exists before `append_entry` below requires the directory.
     let now_str = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let leaf_path = output_dir.join(format!("{}.md", filename));
-    leaf::write(
-        &leaf_path,
-        content.title.as_deref(),
-        url,
-        &now_str,
-        &content.body_markdown,
-    )?;
+    leaf::write(&leaf_path, title, url, &now_str, body_markdown)?;
 
-    // Index
     let entry = index::IndexEntry {
         file: format!("{}.md", filename),
-        title: content.title.clone().unwrap_or_default(),
+        title: title.unwrap_or_default().to_string(),
         url: url.to_string(),
     };
     index::append_entry(&index_path, &entry)?;
@@ -175,4 +211,79 @@ pub fn collect_html(url: &str, html: &str, output_dir: &Path) -> Result<Document
         url: url.to_string(),
         filename: format!("{}.md", filename),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    const ARTICLE_HTML: &str = r#"<html><head><title>Plain Article</title></head>
+<body><article><h1>Plain Article</h1>
+<p>This article contains enough useful body text to pass extraction and quality
+filtering. It remains an ordinary HTML collection fixture after refactoring.</p>
+</article></body></html>"#;
+
+    #[test]
+    fn unsupported_youtube_embed_rejected_without_writes() {
+        let dir = TempDir::new().unwrap();
+        let result = collect_url("https://www.youtube.com/embed/a1mhk7mAetk", dir.path());
+
+        assert!(matches!(result, Err(CollectError::Youtube(_))));
+        assert!(!dir.path().join("index.jsonl").exists());
+        let markdown_files = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "md"))
+            .count();
+        assert_eq!(markdown_files, 0);
+    }
+
+    #[test]
+    fn ordinary_html_collection_still_writes_leaf_and_index() {
+        let dir = TempDir::new().unwrap();
+        let document =
+            collect_html("https://example.com/article", ARTICLE_HTML, dir.path()).unwrap();
+
+        assert!(dir.path().join(&document.filename).exists());
+        let entries = index::read_index(&dir.path().join("index.jsonl")).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].url, "https://example.com/article");
+    }
+
+    #[test]
+    fn collect_url_rejects_duplicate_youtube_url_before_network_fetch() {
+        let dir = TempDir::new().unwrap();
+        let url = "https://www.youtube.com/watch?v=a1mhk7mAetk";
+        index::append_entry(
+            &dir.path().join("index.jsonl"),
+            &index::IndexEntry {
+                file: "existing.md".to_string(),
+                title: "Existing Video".to_string(),
+                url: url.to_string(),
+            },
+        )
+        .unwrap();
+
+        let duplicate = collect_url(url, dir.path());
+
+        assert!(matches!(duplicate, Err(CollectError::DuplicateUrl { .. })));
+        assert!(!dir.path().join("existing.md").exists());
+    }
+
+    #[test]
+    fn collect_html_keeps_exact_match_duplicate_semantics_for_youtube_urls() {
+        let dir = TempDir::new().unwrap();
+
+        collect_html(
+            "https://www.youtube.com/watch?v=a1mhk7mAetk",
+            ARTICLE_HTML,
+            dir.path(),
+        )
+        .unwrap();
+        collect_html("https://youtu.be/a1mhk7mAetk", ARTICLE_HTML, dir.path()).unwrap();
+
+        let entries = index::read_index(&dir.path().join("index.jsonl")).unwrap();
+        assert_eq!(entries.len(), 2);
+    }
 }
