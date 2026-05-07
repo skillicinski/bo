@@ -38,7 +38,7 @@ pub struct PlayabilityStatus {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoDetails {
-    pub title: String,
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

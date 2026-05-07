@@ -76,7 +76,8 @@ pub fn fetch_supported_transcript(
     let title = player
         .video_details
         .as_ref()
-        .and_then(|details| non_empty(&details.title))
+        .and_then(|details| details.title.as_deref())
+        .and_then(non_empty)
         .unwrap_or_else(|| supported.video_id.clone());
 
     let track = innertube::select_english_caption_track(&player.caption_tracks())
