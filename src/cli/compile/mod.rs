@@ -145,9 +145,20 @@ fn compile_run(
         .map_err(|e| format!("failed to create async runtime: {}", e))?;
 
     rt.block_on(async {
+        let (leaves_for_index, output_dir_for_read) = {
+            let c = ctx.lock().unwrap();
+            (
+                Arc::new(Mutex::new(c.valid_leaves.clone())),
+                c.output_dir.clone(),
+            )
+        };
         let tools: Vec<Box<dyn crate::engine::agent::Tool>> = vec![
-            Box::new(ListIndexTool::new(Arc::clone(&ctx))),
-            Box::new(ReadLeafTool::new(Arc::clone(&ctx))),
+            Box::new(crate::engine::agent::tools::ListIndexTool::new(
+                leaves_for_index,
+            )),
+            Box::new(crate::engine::agent::tools::ReadLeafTool::new(
+                output_dir_for_read,
+            )),
             Box::new(WriteBranchTool::new(Arc::clone(&ctx))),
             Box::new(UpdateLeafFrontmatterTool::new(Arc::clone(&ctx))),
         ];
@@ -269,6 +280,7 @@ mod tests {
 
     use crate::domain::frontmatter;
     use crate::domain::index::IndexEntry;
+    use crate::engine::agent::tools::{ListIndexTool, ReadLeafTool};
     use crate::engine::agent::Tool;
     use tempfile::TempDir;
 
@@ -309,7 +321,11 @@ mod tests {
     async fn list_index_returns_valid_json() {
         let dir = TempDir::new().unwrap();
         let ctx = make_ctx(&dir);
-        let tool = ListIndexTool::new(ctx);
+        let leaves = {
+            let c = ctx.lock().unwrap();
+            Arc::new(Mutex::new(c.valid_leaves.clone()))
+        };
+        let tool = ListIndexTool::new(leaves);
         let result = tool.execute(json!({})).await.unwrap();
         let parsed: Vec<Value> = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed.len(), 2);
@@ -323,8 +339,7 @@ mod tests {
     async fn read_leaf_returns_content() {
         let dir = TempDir::new().unwrap();
         write_leaf(&dir, "leaf-a.md", "Leaf A");
-        let ctx = make_ctx(&dir);
-        let tool = ReadLeafTool::new(ctx);
+        let tool = ReadLeafTool::new(dir.path().to_path_buf());
         let result = tool
             .execute(json!({"filename": "leaf-a.md"}))
             .await
@@ -335,8 +350,7 @@ mod tests {
     #[tokio::test]
     async fn read_leaf_path_traversal_returns_error_string() {
         let dir = TempDir::new().unwrap();
-        let ctx = make_ctx(&dir);
-        let tool = ReadLeafTool::new(ctx);
+        let tool = ReadLeafTool::new(dir.path().to_path_buf());
         let result = tool
             .execute(json!({"filename": "../../../etc/passwd"}))
             .await
@@ -347,8 +361,7 @@ mod tests {
     #[tokio::test]
     async fn read_leaf_missing_file_returns_error_string() {
         let dir = TempDir::new().unwrap();
-        let ctx = make_ctx(&dir);
-        let tool = ReadLeafTool::new(ctx);
+        let tool = ReadLeafTool::new(dir.path().to_path_buf());
         let result = tool
             .execute(json!({"filename": "nonexistent.md"}))
             .await

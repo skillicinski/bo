@@ -1,6 +1,9 @@
 // Agent loop — provider-agnostic LLM tool-calling infrastructure.
 //
 // Public surface: Tool + LlmProvider traits, AgentConfig, supporting types.
+// Reusable tools live in the `tools` submodule.
+
+pub mod tools;
 // async-openai is an implementation detail — none of its types appear outside
 // this module.  Swapping the backend means replacing OpenAiProvider below.
 //
