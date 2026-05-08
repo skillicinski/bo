@@ -58,3 +58,5 @@ https://www.youtube.com/watch?v=Xxuxg8PcBvc
 https://www.youtube.com/watch?v=87Q8nf1XHKA
 https://www.youtube.com/watch?v=fdbXNWkpPMY
 https://www.youtube.com/watch?v=gJctVD_oMx4
+https://cloudnativeplatforms.com/es/blog/composable/
+https://aimultiple.com/building-ai-agents
