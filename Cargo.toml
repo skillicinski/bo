@@ -25,6 +25,8 @@ async-openai = { version = "0.34", features = ["chat-completion"] }
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt", "macros"] }
 serde_yaml_ng = "0.10"
+dotenvy = "0.15.7"
 
 [dev-dependencies]
+serial_test = "3.4.0"
 tempfile = "3"

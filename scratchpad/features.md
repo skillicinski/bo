@@ -32,6 +32,26 @@ Somewhat formulated feature candidates. Keep items tickable. Promote one item at
   - Expected: support OpenAI, Anthropic, and OpenRouter first; answer with citations from retrieved tree content.
   - Notes: no backend/SaaS requirement; keep provider config shared with compile where possible.
 
+- [x] Migrate compile from agent loop to structured-output pipeline
+  - Context: ADR-001 commits to deterministic pipelines. Current compile uses an internal agent loop (~50 tool-calling steps) that is fragile, expensive, and caps collection size.
+  - Expected: replace agent loop with: code reads all leaves → single structured-output LLM call → code writes branches + updates frontmatter. Remove engine/agent/ module.
+  - Notes: see `adrs/001-deterministic-pipelines-over-internal-agent.md`. LlmProvider trait retained for provider abstraction.
+
+- [ ] Add leaf summary field for context-window scaling
+  - Context: large collections (50+ docs, >128K tokens) overflow the compile model's context window. Karpathy's pattern relies on "index files and brief summaries" as the compressed representation.
+  - Expected: generate a ~200-word summary per leaf at collect time (or lazily on first compile) via a cheap/fast model. Store as `summary:` field in leaf frontmatter. Compile uses summaries as fallback when full content overflows.
+  - Notes: summaries also benefit `bo query` (select relevant docs by summary, read full bodies of selected few). Cheap model (gpt-4.1-nano or equivalent) keeps per-leaf cost negligible. Cache in frontmatter avoids re-generation.
+
+- [ ] Add `bo config set` for compile_model and other settings
+  - Context: users must manually edit `~/.bo/config.json` to change compile_model. Dogfood showed gpt-4o overflows at 53 docs while gpt-4.1-mini (1M context) handles it fine.
+  - Expected: `bo config set compile_model gpt-4.1-mini` updates the config. `bo config get compile_model` shows current value. `bo config list` shows all settings.
+  - Notes: minimal scope — just compile_model initially. Extensible to other settings (summary_model, base_url) later.
+
+- [ ] Add --json output flag to all commands
+  - Context: bo commands should be machine-parseable for agent/MCP consumption alongside human-friendly defaults.
+  - Expected: `--json` flag on collect, compile, list, query, lint produces structured JSON output suitable for programmatic use.
+  - Notes: enables external agents to reliably parse bo's results without screen-scraping.
+
 - [ ] Add local/OpenAI-compatible LLM endpoint support
   - Context: users may want local or self-hosted inference through llama.cpp, vLLM, Ollama, or other OpenAI-compatible servers.
   - Expected: configure a base URL/model/key for local query/compile use without changing command semantics.
@@ -58,14 +78,14 @@ Somewhat formulated feature candidates. Keep items tickable. Promote one item at
   - Notes: keep markdown tree authoritative; consider git/git-like storage or manifests under `~/.bo` to reduce blast radius.
 
 - [ ] Add compile dry-run and planned write preview
-  - Context: `bo compile` invokes an agent and writes generated branches/frontmatter, so users need to inspect planned changes first.
-  - Expected: `bo compile --dry-run` traverses/plans without writing and prints or stores the proposed writes/diffs.
-  - Notes: should use deterministic tools for tree reads and validation.
+  - Context: `bo compile` makes a structured LLM call and writes generated branches/frontmatter, so users need to inspect planned changes first.
+  - Expected: `bo compile --dry-run` runs the full pipeline (read → LLM call → validate) but prints proposed writes/diffs instead of writing.
+  - Notes: the pipeline is deterministic except for the LLM call; dry-run can cache the LLM response for review-then-apply.
 
 - [ ] Add final validation gate before compile writes
-  - Context: successful agentic systems often gate planned writes with deterministic checks and/or a focused reviewer before mutation.
+  - Context: the compile pipeline's structured LLM output must be validated before mutation.
   - Expected: validate branch/frontmatter shape, referenced leaf existence, non-empty outputs, no invented files, and sane diff size before applying compile writes.
-  - Notes: can later use a small/specialized LLM as an additional review gate, but deterministic validation should come first.
+  - Notes: deterministic validation between LLM response and file writes; reject malformed output and surface errors without partial writes.
 
 - [ ] Add collection/rejection event ledger and retry command
   - Context: failed collections are currently transient CLI output, making it hard to audit or retry failures later.

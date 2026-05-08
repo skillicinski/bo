@@ -225,6 +225,9 @@ fn cmd_raze() -> Result<(), String> {
 // ── main ─────────────────────────────────────────────────────────────────────
 
 fn main() {
+    // Load .env if present (no-op if missing)
+    let _ = dotenvy::dotenv();
+
     // Initialise tracing. WARN+ shown by default; set RUST_LOG=debug for verbose output.
     // Format is message-only (no timestamp/level prefix) to match the CLI's plain output style.
     tracing_subscriber::fmt()
