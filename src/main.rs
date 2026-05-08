@@ -1,7 +1,7 @@
-use bo::collect;
-use bo::config::{self, Config, ConfigError};
-use bo::index;
-use bo::list::{self, ListOptions};
+use bo::cli::collect;
+use bo::cli::list::{self, ListOptions};
+use bo::domain::index;
+use bo::engine::config::{self, Config, ConfigError};
 
 use chrono::Utc;
 use clap::{Parser, Subcommand};
@@ -107,7 +107,7 @@ fn cmd_seed(output_dir: PathBuf, name: Option<String>) -> Result<(), String> {
 
     config::write_config(
         &Config {
-            tree: bo::config::TreeConfig {
+            tree: bo::domain::tree::TreeConfig {
                 output_dir: output_dir.clone(),
                 name: tree_name,
                 created_at: Some(created_at),
@@ -241,7 +241,7 @@ fn main() {
     let result = match cli.command {
         Commands::Seed { output_dir, name } => cmd_seed(output_dir, name),
         Commands::Collect { url } => cmd_collect(url),
-        Commands::Compile => require_config().and_then(|cfg| bo::compile::cmd_compile(&cfg)),
+        Commands::Compile => require_config().and_then(|cfg| bo::cli::compile::cmd_compile(&cfg)),
         Commands::List {
             limit,
             recent,
@@ -261,7 +261,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bo::config;
+    use bo::engine::config;
     use std::sync::Mutex;
     use tempfile::TempDir;
 

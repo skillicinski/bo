@@ -7,9 +7,9 @@
 
 use std::fs;
 
-use bo::compile;
-use bo::config::Config;
-use bo::index;
+use bo::cli::compile;
+use bo::domain::index;
+use bo::engine::config::Config;
 
 struct FixtureDoc {
     file: &'static str,
@@ -51,7 +51,7 @@ fn setup_fixture_collection() -> tempfile::TempDir {
     let index_path = dir.path().join("index.jsonl");
 
     for doc in FIXTURE_DOCS {
-        bo::leaf::write(
+        bo::domain::leaf::write(
             &dir.path().join(doc.file),
             Some(doc.title),
             doc.url,
@@ -76,7 +76,7 @@ fn setup_fixture_collection() -> tempfile::TempDir {
 
 fn make_config(output_dir: &std::path::Path) -> Config {
     Config {
-        tree: bo::config::TreeConfig {
+        tree: bo::domain::tree::TreeConfig {
             output_dir: output_dir.to_path_buf(),
             name: None,
             created_at: None,
@@ -125,7 +125,7 @@ fn compile_produces_at_least_one_branch_file() {
     // Validate the first branch file has correct frontmatter
     let first_path = branch_files[0].path();
     let content = fs::read_to_string(&first_path).unwrap();
-    let (mapping, body) = bo::frontmatter::parse(&content).unwrap();
+    let (mapping, body) = bo::domain::frontmatter::parse(&content).unwrap();
     assert!(
         mapping.get("title").and_then(|v| v.as_str()).is_some(),
         "branch missing 'title' in frontmatter"
@@ -162,7 +162,7 @@ fn compile_gives_every_leaf_a_branches_field() {
     for entry in &entries {
         let leaf_path = dir.path().join(&entry.file);
         let content = fs::read_to_string(&leaf_path).unwrap();
-        let (mapping, _) = bo::frontmatter::parse(&content).unwrap();
+        let (mapping, _) = bo::domain::frontmatter::parse(&content).unwrap();
         assert!(
             mapping.get("branches").is_some(),
             "leaf {} missing 'branches' field after compile",
@@ -206,7 +206,7 @@ fn compile_rerun_preserves_compiled_at() {
         .path();
 
     let content1 = fs::read_to_string(&first_branch).unwrap();
-    let (m1, _) = bo::frontmatter::parse(&content1).unwrap();
+    let (m1, _) = bo::domain::frontmatter::parse(&content1).unwrap();
     let compiled_at_1 = m1
         .get("compiled_at")
         .and_then(|v| v.as_str())
@@ -221,7 +221,7 @@ fn compile_rerun_preserves_compiled_at() {
 
     // Find the same branch (by slug/filename)
     let content2 = fs::read_to_string(&first_branch).unwrap();
-    let (m2, _) = bo::frontmatter::parse(&content2).unwrap();
+    let (m2, _) = bo::domain::frontmatter::parse(&content2).unwrap();
     let compiled_at_2 = m2
         .get("compiled_at")
         .and_then(|v| v.as_str())
@@ -231,51 +231,5 @@ fn compile_rerun_preserves_compiled_at() {
     assert_eq!(
         compiled_at_1, compiled_at_2,
         "compiled_at changed on second compile run"
-    );
-}
-
-// ── offline unit checks ───────────────────────────────────────────────────────
-
-#[test]
-fn compile_exits_cleanly_on_empty_collection() {
-    let dir = tempfile::TempDir::new().unwrap();
-    // No index.jsonl — read_index returns empty vec
-    let cfg = make_config(dir.path());
-    // Should print "bo is empty!" and return Ok(())
-    // (no OPENAI_API_KEY needed — guard fires first)
-    std::env::remove_var("OPENAI_API_KEY");
-    // With 0 leaves the guard fires before the API key check
-    // We need an empty index file to test this
-    fs::write(dir.path().join("index.jsonl"), "").unwrap();
-    let result = compile::cmd_compile(&cfg);
-    assert!(result.is_ok());
-}
-
-#[test]
-fn compile_exits_cleanly_on_single_leaf() {
-    let dir = tempfile::TempDir::new().unwrap();
-    fs::write(
-        dir.path().join("index.jsonl"),
-        r#"{"file":"only.md","title":"Only","url":"https://example.com"}"#,
-    )
-    .unwrap();
-    std::env::remove_var("OPENAI_API_KEY");
-    let cfg = make_config(dir.path());
-    let result = compile::cmd_compile(&cfg);
-    assert!(result.is_ok());
-}
-
-#[test]
-fn compile_errors_without_api_key() {
-    let dir = setup_fixture_collection();
-    let cfg = make_config(dir.path());
-    std::env::remove_var("OPENAI_API_KEY");
-    let result = compile::cmd_compile(&cfg);
-    assert!(result.is_err());
-    let msg = result.unwrap_err();
-    assert!(
-        msg.contains("OPENAI_API_KEY"),
-        "error message should mention OPENAI_API_KEY, got: {}",
-        msg
     );
 }

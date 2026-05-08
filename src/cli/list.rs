@@ -1,6 +1,6 @@
 // bo list — deterministic tree inspection for collected leaves.
 
-use crate::{frontmatter, index};
+use crate::domain::{frontmatter, index};
 use chrono::{DateTime, FixedOffset};
 use serde::Serialize;
 use serde_yaml_ng::{Mapping, Value};

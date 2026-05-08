@@ -11,8 +11,26 @@
 // `~/.bo/config.json` (via `Config`).  This module provides the domain type
 // and derived path helpers; all persistence is delegated to `config.rs`.
 
-use crate::config::TreeConfig;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+// ── TreeConfig ─────────────────────────────────────────────────────────────────
+
+/// Serialised metadata for the active tree, stored under the `"tree"` key
+/// in `config.json`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TreeConfig {
+    pub output_dir: PathBuf,
+
+    /// Human-readable name for the tree. Derived from the output directory
+    /// basename at seed time, or supplied via `bo seed --name`.
+    #[serde(default)]
+    pub name: Option<String>,
+
+    /// ISO 8601 UTC timestamp recorded when `bo seed` first ran.
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
 
 // ── Tree ──────────────────────────────────────────────────────────────────────
 

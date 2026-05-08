@@ -4,7 +4,7 @@
 // It lives at {output_dir}/branches/{slug}.md and has YAML frontmatter
 // followed by a markdown body beginning with a heading matching the title.
 
-use crate::frontmatter;
+use crate::domain::frontmatter;
 use serde_yaml_ng::{Mapping, Value};
 use std::fs;
 use std::io;

@@ -21,9 +21,9 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::{json, Value};
 
-use crate::agent::{AgentError, Tool};
-use crate::index::IndexEntry;
-use crate::{branch, frontmatter, slug};
+use crate::domain::index::IndexEntry;
+use crate::domain::{branch, frontmatter, slug};
+use crate::engine::agent::{AgentError, Tool};
 
 // ── context ───────────────────────────────────────────────────────────────────
 
@@ -460,11 +460,11 @@ the concepts it belongs to.
 
 // ── cmd_compile ───────────────────────────────────────────────────────────────
 
-use crate::agent::{AgentConfig, OpenAiProvider};
-use crate::config::Config;
-use crate::index;
-use crate::leaf;
-use crate::tree::Tree;
+use crate::domain::index;
+use crate::domain::leaf;
+use crate::domain::tree::Tree;
+use crate::engine::agent::{AgentConfig, OpenAiProvider};
+use crate::engine::config::Config;
 
 pub fn cmd_compile(cfg: &Config) -> Result<(), String> {
     // ── read index first (leaf count guard fires before API key check) ──────
@@ -543,7 +543,7 @@ fn compile_run(
         .map_err(|e| format!("failed to create async runtime: {}", e))?;
 
     rt.block_on(async {
-        let tools: Vec<Box<dyn crate::agent::Tool>> = vec![
+        let tools: Vec<Box<dyn crate::engine::agent::Tool>> = vec![
             Box::new(ListIndexTool::new(Arc::clone(&ctx))),
             Box::new(ReadLeafTool::new(Arc::clone(&ctx))),
             Box::new(WriteBranchTool::new(Arc::clone(&ctx))),
@@ -556,7 +556,7 @@ fn compile_run(
             n_leaves
         );
 
-        let result = crate::agent::run(
+        let result = crate::engine::agent::run(
             &provider,
             &tools,
             &agent_config,
@@ -568,7 +568,7 @@ fn compile_run(
 
         match result {
             Ok(()) => {}
-            Err(crate::agent::AgentError::MaxSteps(n)) => {
+            Err(crate::engine::agent::AgentError::MaxSteps(n)) => {
                 eprintln!(
                     "warning: agent hit step limit ({} steps) — results may be incomplete",
                     n
@@ -661,7 +661,7 @@ impl CompileContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::IndexEntry;
+    use crate::domain::index::IndexEntry;
     use tempfile::TempDir;
 
     fn make_ctx(dir: &TempDir) -> Arc<Mutex<CompileContext>> {
@@ -937,5 +937,64 @@ mod tests {
             .await
             .unwrap();
         assert!(result.starts_with("error:"));
+    }
+
+    // ── guard-clause tests (moved from tests/integration_compile.rs) ───────
+
+    fn make_test_config(output_dir: &std::path::Path) -> Config {
+        Config {
+            tree: crate::domain::tree::TreeConfig {
+                output_dir: output_dir.to_path_buf(),
+                name: None,
+                created_at: None,
+            },
+            compile_model: Some("gpt-4o-mini".to_string()),
+        }
+    }
+
+    #[test]
+    fn compile_exits_cleanly_on_empty_collection() {
+        let dir = TempDir::new().unwrap();
+        let cfg = make_test_config(dir.path());
+        std::env::remove_var("OPENAI_API_KEY");
+        fs::write(dir.path().join("index.jsonl"), "").unwrap();
+        let result = cmd_compile(&cfg);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn compile_exits_cleanly_on_single_leaf() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("index.jsonl"),
+            r#"{"file":"only.md","title":"Only","url":"https://example.com"}"#,
+        )
+        .unwrap();
+        std::env::remove_var("OPENAI_API_KEY");
+        let cfg = make_test_config(dir.path());
+        let result = cmd_compile(&cfg);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn compile_errors_without_api_key() {
+        let dir = TempDir::new().unwrap();
+        let index_path = dir.path().join("index.jsonl");
+        fs::write(
+            &index_path,
+            r#"{"file":"a.md","title":"A","url":"https://example.com/a"}
+{"file":"b.md","title":"B","url":"https://example.com/b"}"#,
+        )
+        .unwrap();
+        std::env::remove_var("OPENAI_API_KEY");
+        let cfg = make_test_config(dir.path());
+        let result = cmd_compile(&cfg);
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("OPENAI_API_KEY"),
+            "error message should mention OPENAI_API_KEY, got: {}",
+            msg
+        );
     }
 }

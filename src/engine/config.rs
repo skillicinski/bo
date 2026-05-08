@@ -20,28 +20,11 @@
 // under "tree" so the boundary is explicit and multi-tree support can extend
 // the shape without touching the global keys.
 
+use crate::domain::tree::TreeConfig;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
-
-// ── TreeConfig ─────────────────────────────────────────────────────────────────────
-
-/// Serialised metadata for the active tree, stored under the `"tree"` key
-/// in `config.json`.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TreeConfig {
-    pub output_dir: PathBuf,
-
-    /// Human-readable name for the tree. Derived from the output directory
-    /// basename at seed time, or supplied via `bo seed --name`.
-    #[serde(default)]
-    pub name: Option<String>,
-
-    /// ISO 8601 UTC timestamp recorded when `bo seed` first ran.
-    #[serde(default)]
-    pub created_at: Option<String>,
-}
 
 // ── Config ──────────────────────────────────────────────────────────────────────────
 
