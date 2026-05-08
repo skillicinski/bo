@@ -1,55 +1,28 @@
-// bo compile — the compile command, context, tools, and summary output.
+// bo compile — the compile command.
 //
 // This module owns:
-//   - CompileContext: state shared by all four tools during an agent run
-//   - The four Tool implementations: ListIndex, ReadLeaf, WriteBranch,
-//     UpdateLeafFrontmatter
 //   - cmd_compile: entry point (setup + run phases)
-//   - print_summary: formatted stdout output
+//   - CompileSummary / print_summary: formatted stdout output
+//   - COMPILE_SYSTEM_PROMPT: the system prompt for the compile agent
 //
-// All four tools hold Arc<Mutex<CompileContext>>.  They follow the
-// lock/copy/unlock pattern: lock briefly to copy needed data, drop the guard
-// before any file I/O, re-lock briefly to record results.
-// No MutexGuard is held across an .await point.
+// Tools are defined in engine/agent/tools/ and assembled here.
 
-use std::path::PathBuf;
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 
+use crate::domain::index;
 use crate::domain::index::IndexEntry;
+use crate::domain::leaf;
+use crate::domain::tree::Tree;
+use crate::engine::agent::tools::{
+    BranchResult, ListIndexTool, ReadLeafTool, UpdateLeafFrontmatterTool, WriteBranchTool,
+};
+use crate::engine::agent::{AgentConfig, OpenAiProvider, Tool};
+use crate::engine::config::Config;
 
-// ── context ───────────────────────────────────────────────────────────────────
-
-pub struct CompileContext {
-    pub output_dir: PathBuf,
-    pub branches_dir: PathBuf,
-    pub run_timestamp: String,
-
-    // Inputs
-    pub valid_leaves: Vec<IndexEntry>,
-    pub skipped_leaves: Vec<String>,
-
-    // Outputs accumulated by tools
-    pub branches_written: Vec<BranchResult>,
-    pub leaves_updated: Vec<String>,
-}
-
-impl CompileContext {
-    pub fn into_summary(self) -> CompileSummary {
-        CompileSummary {
-            branches: self.branches_written,
-            leaves_updated: self.leaves_updated.len(),
-            leaves_skipped: self.skipped_leaves,
-        }
-    }
-}
-
-pub struct BranchResult {
-    pub slug: String,
-    pub title: String,
-    pub leaf_count: usize,
-}
+// ── summary types ─────────────────────────────────────────────────────────────
 
 pub struct CompileSummary {
     pub branches: Vec<BranchResult>,
@@ -57,16 +30,41 @@ pub struct CompileSummary {
     pub leaves_skipped: Vec<String>,
 }
 
-mod tools;
-pub use tools::*;
+// ── system prompt ─────────────────────────────────────────────────────────────
+
+const COMPILE_SYSTEM_PROMPT: &str = "\
+You are a knowledge compilation agent for a personal document collection managed by bo.
+
+Your task is to identify recurring concepts and themes that appear across multiple \
+documents, then produce one branch file per concept and backlink every document to \
+the concepts it belongs to.
+
+## Steps
+
+1. Call `list_index` once to discover all available documents.
+2. Call `read_leaf` for each document to understand its content. You do not need to \
+   re-read a document you have already read.
+3. After reading, identify recurring concepts — themes, topics, or ideas that appear \
+   in at least two documents. A concept must appear in at least two documents to merit \
+   a branch. Prefer specific, recurring themes over broad catch-all categories.
+4. For each concept, call `write_branch` with a title, a markdown body describing the \
+   concept as it appears across the collection, and the list of leaves it appears in. \
+   Only use filenames returned by `list_index`.
+5. After writing ALL branches, call `update_leaf_frontmatter` for EVERY document — \
+   including documents that belong to no branches (pass `branches: []` for those). \
+   This step is mandatory for every document.
+6. When all writes are complete, respond with a plain-text summary of what you produced.
+
+## Quality guidance
+
+- A concept must appear in at least two documents.
+- Prefer specific themes over broad categories.
+- Each branch body should synthesise how the concept appears across the collection, \
+  not just list documents.
+- Do not invent leaf filenames; only use filenames from `list_index`.
+";
 
 // ── cmd_compile ───────────────────────────────────────────────────────────────
-
-use crate::domain::index;
-use crate::domain::leaf;
-use crate::domain::tree::Tree;
-use crate::engine::agent::{AgentConfig, OpenAiProvider};
-use crate::engine::config::Config;
 
 pub fn cmd_compile(cfg: &Config) -> Result<(), String> {
     // ── read index first (leaf count guard fires before API key check) ──────
@@ -114,59 +112,46 @@ pub fn cmd_compile(cfg: &Config) -> Result<(), String> {
     let branches_dir = Tree::from_config(&cfg.tree).branches_dir();
     let n_valid = valid_leaves.len();
 
-    // ── build context and agent config ───────────────────────────────────────
-    let ctx = Arc::new(Mutex::new(CompileContext {
-        output_dir: cfg.tree.output_dir.clone(),
-        branches_dir,
-        run_timestamp,
-        valid_leaves,
-        skipped_leaves,
-        branches_written: Vec::new(),
-        leaves_updated: Vec::new(),
-    }));
+    let valid_filenames: Arc<HashSet<String>> =
+        Arc::new(valid_leaves.iter().map(|e| e.file.clone()).collect());
 
     let agent_config = AgentConfig {
         api_key,
         model: cfg.effective_compile_model().to_string(),
     };
 
-    // ── run phase ─────────────────────────────────────────────────────────────
-    compile_run(ctx, agent_config, n_valid)
-}
+    // ── shared result sinks ──────────────────────────────────────────────────
+    let branches_written: Arc<Mutex<Vec<BranchResult>>> = Arc::new(Mutex::new(Vec::new()));
+    let leaves_updated: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
-fn compile_run(
-    ctx: Arc<Mutex<CompileContext>>,
-    agent_config: AgentConfig,
-    n_leaves: usize,
-) -> Result<(), String> {
+    // ── build tools ──────────────────────────────────────────────────────────
+    let tools: Vec<Box<dyn Tool>> = vec![
+        Box::new(ListIndexTool::new(Arc::new(Mutex::new(valid_leaves)))),
+        Box::new(ReadLeafTool::new(cfg.tree.output_dir.clone())),
+        Box::new(WriteBranchTool::new(
+            branches_dir,
+            run_timestamp.clone(),
+            Arc::clone(&valid_filenames),
+            Arc::clone(&branches_written),
+        )),
+        Box::new(UpdateLeafFrontmatterTool::new(
+            cfg.tree.output_dir.clone(),
+            run_timestamp,
+            Arc::clone(&leaves_updated),
+        )),
+    ];
+
+    // ── run phase ─────────────────────────────────────────────────────────────
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| format!("failed to create async runtime: {}", e))?;
 
     rt.block_on(async {
-        let (leaves_for_index, output_dir_for_read) = {
-            let c = ctx.lock().unwrap();
-            (
-                Arc::new(Mutex::new(c.valid_leaves.clone())),
-                c.output_dir.clone(),
-            )
-        };
-        let tools: Vec<Box<dyn crate::engine::agent::Tool>> = vec![
-            Box::new(crate::engine::agent::tools::ListIndexTool::new(
-                leaves_for_index,
-            )),
-            Box::new(crate::engine::agent::tools::ReadLeafTool::new(
-                output_dir_for_read,
-            )),
-            Box::new(WriteBranchTool::new(Arc::clone(&ctx))),
-            Box::new(UpdateLeafFrontmatterTool::new(Arc::clone(&ctx))),
-        ];
-
         let provider = OpenAiProvider::new(&agent_config.api_key);
         let initial_message = format!(
             "Please compile my knowledge base. There are {} leaves in the collection.",
-            n_leaves
+            n_valid
         );
 
         let result = crate::engine::agent::run(
@@ -194,12 +179,16 @@ fn compile_run(
     })?;
 
     // ── extract summary ───────────────────────────────────────────────────────
-    let summary = {
-        // Try to unwrap the Arc; fall back to locking if other references remain
-        match Arc::try_unwrap(ctx) {
-            Ok(mutex) => mutex.into_inner().unwrap().into_summary(),
-            Err(arc) => arc.lock().unwrap().clone_summary(),
-        }
+    let summary = CompileSummary {
+        branches: match Arc::try_unwrap(branches_written) {
+            Ok(mutex) => mutex.into_inner().unwrap_or_default(),
+            Err(arc) => arc.lock().unwrap().clone(),
+        },
+        leaves_updated: match Arc::try_unwrap(leaves_updated) {
+            Ok(mutex) => mutex.into_inner().unwrap_or_default().len(),
+            Err(arc) => arc.lock().unwrap().len(),
+        },
+        leaves_skipped: skipped_leaves,
     };
 
     print_summary(&summary);
@@ -249,26 +238,6 @@ pub fn print_summary(summary: &CompileSummary) {
     }
 }
 
-// ── helper for Arc fallback ───────────────────────────────────────────────────
-
-impl CompileContext {
-    fn clone_summary(&self) -> CompileSummary {
-        CompileSummary {
-            branches: self
-                .branches_written
-                .iter()
-                .map(|b| BranchResult {
-                    slug: b.slug.clone(),
-                    title: b.title.clone(),
-                    leaf_count: b.leaf_count,
-                })
-                .collect(),
-            leaves_updated: self.leaves_updated.len(),
-            leaves_skipped: self.skipped_leaves.clone(),
-        }
-    }
-}
-
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -279,32 +248,31 @@ mod tests {
     use serde_json::{json, Value};
 
     use crate::domain::frontmatter;
-    use crate::domain::index::IndexEntry;
-    use crate::engine::agent::tools::{ListIndexTool, ReadLeafTool};
     use crate::engine::agent::Tool;
     use tempfile::TempDir;
 
-    fn make_ctx(dir: &TempDir) -> Arc<Mutex<CompileContext>> {
-        Arc::new(Mutex::new(CompileContext {
-            output_dir: dir.path().to_path_buf(),
-            branches_dir: dir.path().join("branches"),
-            run_timestamp: "2025-06-01T12:00:00Z".to_string(),
-            valid_leaves: vec![
-                IndexEntry {
-                    file: "leaf-a.md".to_string(),
-                    title: "Leaf A".to_string(),
-                    url: "https://example.com/a".to_string(),
-                },
-                IndexEntry {
-                    file: "leaf-b.md".to_string(),
-                    title: "Leaf B".to_string(),
-                    url: "https://example.com/b".to_string(),
-                },
-            ],
-            skipped_leaves: vec![],
-            branches_written: vec![],
-            leaves_updated: vec![],
-        }))
+    fn make_valid_filenames() -> Arc<HashSet<String>> {
+        Arc::new(
+            ["leaf-a.md", "leaf-b.md"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        )
+    }
+
+    fn make_leaves() -> Vec<IndexEntry> {
+        vec![
+            IndexEntry {
+                file: "leaf-a.md".to_string(),
+                title: "Leaf A".to_string(),
+                url: "https://example.com/a".to_string(),
+            },
+            IndexEntry {
+                file: "leaf-b.md".to_string(),
+                title: "Leaf B".to_string(),
+                url: "https://example.com/b".to_string(),
+            },
+        ]
     }
 
     fn write_leaf(dir: &TempDir, filename: &str, title: &str) {
@@ -319,12 +287,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_index_returns_valid_json() {
-        let dir = TempDir::new().unwrap();
-        let ctx = make_ctx(&dir);
-        let leaves = {
-            let c = ctx.lock().unwrap();
-            Arc::new(Mutex::new(c.valid_leaves.clone()))
-        };
+        let leaves = Arc::new(Mutex::new(make_leaves()));
         let tool = ListIndexTool::new(leaves);
         let result = tool.execute(json!({})).await.unwrap();
         let parsed: Vec<Value> = serde_json::from_str(&result).unwrap();
@@ -374,8 +337,13 @@ mod tests {
     #[tokio::test]
     async fn write_branch_creates_file_and_records_result() {
         let dir = TempDir::new().unwrap();
-        let ctx = make_ctx(&dir);
-        let tool = WriteBranchTool::new(Arc::clone(&ctx));
+        let results: Arc<Mutex<Vec<BranchResult>>> = Arc::new(Mutex::new(Vec::new()));
+        let tool = WriteBranchTool::new(
+            dir.path().join("branches"),
+            "2025-06-01T12:00:00Z".to_string(),
+            make_valid_filenames(),
+            Arc::clone(&results),
+        );
 
         let result = tool
             .execute(json!({
@@ -391,25 +359,26 @@ mod tests {
         let branch_path = dir.path().join("branches").join("test-concept.md");
         assert!(branch_path.exists());
 
-        let ctx_guard = ctx.lock().unwrap();
-        assert_eq!(ctx_guard.branches_written.len(), 1);
-        assert_eq!(ctx_guard.branches_written[0].slug, "test-concept");
-        assert_eq!(ctx_guard.branches_written[0].leaf_count, 2);
+        let r = results.lock().unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].slug, "test-concept");
+        assert_eq!(r[0].leaf_count, 2);
     }
 
     #[tokio::test]
     async fn write_branch_first_write_compiled_at_equals_updated_at() {
         let dir = TempDir::new().unwrap();
-        let ctx = make_ctx(&dir);
-        let tool = WriteBranchTool::new(Arc::clone(&ctx));
+        let results = Arc::new(Mutex::new(Vec::new()));
+        let tool = WriteBranchTool::new(
+            dir.path().join("branches"),
+            "2025-06-01T12:00:00Z".to_string(),
+            make_valid_filenames(),
+            results,
+        );
 
-        tool.execute(json!({
-            "title": "Concept",
-            "body": "body",
-            "leaves": []
-        }))
-        .await
-        .unwrap();
+        tool.execute(json!({"title": "Concept", "body": "body", "leaves": []}))
+            .await
+            .unwrap();
 
         let path = dir.path().join("branches").join("concept.md");
         let content = fs::read_to_string(&path).unwrap();
@@ -423,41 +392,43 @@ mod tests {
     #[tokio::test]
     async fn write_branch_second_write_preserves_compiled_at() {
         let dir = TempDir::new().unwrap();
+        let branches_dir = dir.path().join("branches");
 
         // First write
         {
-            let ctx = make_ctx(&dir);
-            let tool = WriteBranchTool::new(ctx);
+            let results = Arc::new(Mutex::new(Vec::new()));
+            let tool = WriteBranchTool::new(
+                branches_dir.clone(),
+                "2025-06-01T12:00:00Z".to_string(),
+                make_valid_filenames(),
+                results,
+            );
             tool.execute(json!({"title": "Concept", "body": "v1", "leaves": []}))
                 .await
                 .unwrap();
         }
 
-        // Second write with different run_timestamp
-        let ctx2 = Arc::new(Mutex::new(CompileContext {
-            output_dir: dir.path().to_path_buf(),
-            branches_dir: dir.path().join("branches"),
-            run_timestamp: "2025-12-01T10:00:00Z".to_string(),
-            valid_leaves: vec![],
-            skipped_leaves: vec![],
-            branches_written: vec![],
-            leaves_updated: vec![],
-        }));
-        let tool2 = WriteBranchTool::new(ctx2);
-        tool2
-            .execute(json!({"title": "Concept", "body": "v2", "leaves": []}))
-            .await
-            .unwrap();
+        // Second write with different timestamp
+        {
+            let results = Arc::new(Mutex::new(Vec::new()));
+            let tool = WriteBranchTool::new(
+                branches_dir,
+                "2025-12-01T10:00:00Z".to_string(),
+                make_valid_filenames(),
+                results,
+            );
+            tool.execute(json!({"title": "Concept", "body": "v2", "leaves": []}))
+                .await
+                .unwrap();
+        }
 
         let path = dir.path().join("branches").join("concept.md");
         let content = fs::read_to_string(&path).unwrap();
         let (m, _) = frontmatter::parse(&content).unwrap();
-        // compiled_at is from first write
         assert_eq!(
             m.get("compiled_at").and_then(|v| v.as_str()),
             Some("2025-06-01T12:00:00Z")
         );
-        // updated_at is from second write
         assert_eq!(
             m.get("updated_at").and_then(|v| v.as_str()),
             Some("2025-12-01T10:00:00Z")
@@ -467,8 +438,13 @@ mod tests {
     #[tokio::test]
     async fn write_branch_filters_invented_leaf_names() {
         let dir = TempDir::new().unwrap();
-        let ctx = make_ctx(&dir);
-        let tool = WriteBranchTool::new(Arc::clone(&ctx));
+        let results: Arc<Mutex<Vec<BranchResult>>> = Arc::new(Mutex::new(Vec::new()));
+        let tool = WriteBranchTool::new(
+            dir.path().join("branches"),
+            "2025-06-01T12:00:00Z".to_string(),
+            make_valid_filenames(),
+            Arc::clone(&results),
+        );
 
         let result = tool
             .execute(json!({
@@ -482,7 +458,6 @@ mod tests {
         assert!(result.contains("written:"));
         assert!(result.contains("invented-nonexistent.md"));
 
-        // Only valid leaf should be in the branch file
         let path = dir.path().join("branches").join("concept.md");
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("leaf-a.md"));
@@ -495,8 +470,12 @@ mod tests {
     async fn update_leaf_frontmatter_adds_branches_field() {
         let dir = TempDir::new().unwrap();
         write_leaf(&dir, "leaf-a.md", "Leaf A");
-        let ctx = make_ctx(&dir);
-        let tool = UpdateLeafFrontmatterTool::new(Arc::clone(&ctx));
+        let results = Arc::new(Mutex::new(Vec::new()));
+        let tool = UpdateLeafFrontmatterTool::new(
+            dir.path().to_path_buf(),
+            "2025-06-01T12:00:00Z".to_string(),
+            results,
+        );
 
         let result = tool
             .execute(json!({
@@ -519,8 +498,12 @@ mod tests {
     async fn update_leaf_frontmatter_empty_branches_writes_inline_empty() {
         let dir = TempDir::new().unwrap();
         write_leaf(&dir, "leaf-a.md", "Leaf A");
-        let ctx = make_ctx(&dir);
-        let tool = UpdateLeafFrontmatterTool::new(Arc::clone(&ctx));
+        let results = Arc::new(Mutex::new(Vec::new()));
+        let tool = UpdateLeafFrontmatterTool::new(
+            dir.path().to_path_buf(),
+            "2025-06-01T12:00:00Z".to_string(),
+            results,
+        );
 
         tool.execute(json!({"filename": "leaf-a.md", "branches": []}))
             .await
@@ -537,8 +520,12 @@ mod tests {
         let original = fs::read_to_string(dir.path().join("leaf-a.md")).unwrap();
         let orig_body = original.split("\n---\n\n").nth(1).unwrap().to_string();
 
-        let ctx = make_ctx(&dir);
-        let tool = UpdateLeafFrontmatterTool::new(ctx);
+        let results = Arc::new(Mutex::new(Vec::new()));
+        let tool = UpdateLeafFrontmatterTool::new(
+            dir.path().to_path_buf(),
+            "2025-06-01T12:00:00Z".to_string(),
+            results,
+        );
         tool.execute(json!({"filename": "leaf-a.md", "branches": ["x"]}))
             .await
             .unwrap();
@@ -551,8 +538,12 @@ mod tests {
     #[tokio::test]
     async fn update_leaf_frontmatter_path_traversal_returns_error() {
         let dir = TempDir::new().unwrap();
-        let ctx = make_ctx(&dir);
-        let tool = UpdateLeafFrontmatterTool::new(ctx);
+        let results = Arc::new(Mutex::new(Vec::new()));
+        let tool = UpdateLeafFrontmatterTool::new(
+            dir.path().to_path_buf(),
+            "2025-06-01T12:00:00Z".to_string(),
+            results,
+        );
         let result = tool
             .execute(json!({"filename": "../etc/passwd", "branches": []}))
             .await
@@ -560,7 +551,7 @@ mod tests {
         assert!(result.starts_with("error:"));
     }
 
-    // ── guard-clause tests (moved from tests/integration_compile.rs) ───────
+    // ── guard-clause tests ────────────────────────────────────────────────────
 
     fn make_test_config(output_dir: &std::path::Path) -> Config {
         Config {
