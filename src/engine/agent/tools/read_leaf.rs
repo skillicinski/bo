@@ -67,3 +67,57 @@ impl Tool for ReadLeafTool {
         }
     }
 }
+
+// ── tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::fs;
+    use tempfile::TempDir;
+
+    use crate::engine::agent::Tool;
+
+    fn write_leaf(dir: &TempDir, filename: &str, title: &str) {
+        let content = format!(
+            "---\ntitle: {}\nurl: https://example.com\ncollected_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-01T00:00:00Z\n---\n\n# {}\n\nBody.\n",
+            title, title
+        );
+        fs::write(dir.path().join(filename), content).unwrap();
+    }
+
+    #[tokio::test]
+    async fn read_leaf_returns_content() {
+        let dir = TempDir::new().unwrap();
+        write_leaf(&dir, "leaf-a.md", "Leaf A");
+        let tool = ReadLeafTool::new(dir.path().to_path_buf());
+        let result = tool
+            .execute(json!({"filename": "leaf-a.md"}))
+            .await
+            .unwrap();
+        assert!(result.contains("Leaf A"));
+    }
+
+    #[tokio::test]
+    async fn read_leaf_path_traversal_returns_error_string() {
+        let dir = TempDir::new().unwrap();
+        let tool = ReadLeafTool::new(dir.path().to_path_buf());
+        let result = tool
+            .execute(json!({"filename": "../../../etc/passwd"}))
+            .await
+            .unwrap();
+        assert!(result.starts_with("error:"));
+    }
+
+    #[tokio::test]
+    async fn read_leaf_missing_file_returns_error_string() {
+        let dir = TempDir::new().unwrap();
+        let tool = ReadLeafTool::new(dir.path().to_path_buf());
+        let result = tool
+            .execute(json!({"filename": "nonexistent.md"}))
+            .await
+            .unwrap();
+        assert!(result.starts_with("error:"));
+    }
+}
