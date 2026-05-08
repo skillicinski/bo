@@ -1,6 +1,7 @@
 use bo::collect;
 use bo::config::{self, Config, ConfigError};
 use bo::index;
+use bo::list::{self, ListOptions};
 
 use chrono::Utc;
 use clap::{Parser, Subcommand};
@@ -34,6 +35,21 @@ enum Commands {
     },
     /// Compile collected documents into a linked knowledge graph
     Compile,
+    /// List collected leaves in the current tree
+    List {
+        /// Maximum number of leaves to show
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Sort by collected date, newest first
+        #[arg(long)]
+        recent: bool,
+        /// Filter by exact branch name/slug
+        #[arg(long)]
+        branch: Option<String>,
+        /// Emit machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Delete all bo-managed files and config
     Raze,
 }
@@ -113,6 +129,35 @@ fn cmd_collect(url: String) -> Result<(), String> {
     eprintln!("fetching {}...", url);
     let page = collect::collect_url(&url, &cfg.tree.output_dir).map_err(|e| e.to_string())?;
     println!("✓ collected: {} → {}", page.url, page.filename);
+    Ok(())
+}
+
+// ── cmd_list ─────────────────────────────────────────────────────────────────
+
+fn cmd_list(
+    limit: Option<usize>,
+    recent: bool,
+    branch: Option<String>,
+    json: bool,
+) -> Result<(), String> {
+    let cfg = require_config()?;
+    let result = list::list_leaves(
+        &cfg.tree.output_dir,
+        &ListOptions {
+            limit,
+            recent,
+            branch,
+        },
+    )
+    .map_err(|e| e.to_string())?;
+
+    let output = if json {
+        list::render_json(&result).map_err(|e| e.to_string())?
+    } else {
+        list::render_human(&result)
+    };
+
+    print!("{output}");
     Ok(())
 }
 
@@ -197,6 +242,12 @@ fn main() {
         Commands::Seed { output_dir, name } => cmd_seed(output_dir, name),
         Commands::Collect { url } => cmd_collect(url),
         Commands::Compile => require_config().and_then(|cfg| bo::compile::cmd_compile(&cfg)),
+        Commands::List {
+            limit,
+            recent,
+            branch,
+            json,
+        } => cmd_list(limit, recent, branch, json),
         Commands::Raze => cmd_raze(),
     };
     if let Err(e) = result {

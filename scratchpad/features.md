@@ -12,7 +12,10 @@ Somewhat formulated feature candidates. Keep items tickable. Promote one item at
 - [ ] Add deterministic tree inspection commands
   - Context: users and agents need to see what is in a tree without manually browsing markdown files.
   - Expected: add low-risk commands such as `bo list`, `bo show <slug>`, and `bo status` for leaves/branches, recent collection state, and compile metadata.
-  - Notes: no network or LLM dependency; useful before query.
+  - Notes: no network or LLM dependency; useful before query. Command names below are illustrative — final naming decided at spec time.
+  - [ ] `bo list` — enumerate leaves/branches with title, slug, URL, and collected timestamp from index/frontmatter. Smallest useful standalone increment; single-session scope.
+  - [ ] `bo show <slug>` — render a single leaf or branch in the terminal with metadata and content preview.
+  - [ ] `bo status` — tree summary: leaf/branch counts, last collect/compile timestamps, index health.
 
 - [ ] Add deterministic lexical search
   - Context: query needs a deterministic retrieval foundation before LLM answer synthesis.
@@ -123,6 +126,11 @@ Somewhat formulated feature candidates. Keep items tickable. Promote one item at
   - Context: dogfood caught both bad collections and a false positive during low-value rejection work, but result inspection is currently manual.
   - Expected: encode expected `ok`/rejected categories for selected corpus URLs so regressions are visible without manually reading every leaf.
   - Notes: keep network variability in mind; likely support loose expectations or a smaller stable regression corpus.
+
+- [ ] Add source-domain or source-type indicator to `bo list` output
+  - Context: dogfood showed that with many leaves, titles alone don't always indicate provenance. "Understanding Ownership" could be Rust Book, a blog, or a video.
+  - Expected: small patch — add an optional domain/source-type column or `--verbose` flag so users can scan by source without running `bo show` on each item.
+  - Notes: not the full URL; just enough to categorize at a glance. Low priority until the tree has enough leaves for scanning to feel painful.
 
 - [ ] Investigate Medium/Cloudflare client variance
   - Context: Medium sometimes blocks `bo collect`/reqwest and sometimes serves the article, while `curl -A bo/0.1` still receives Cloudflare `403`.
