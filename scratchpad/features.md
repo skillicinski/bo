@@ -12,7 +12,10 @@ Somewhat formulated feature candidates. Keep items tickable. Promote one item at
 - [ ] Add deterministic tree inspection commands
   - Context: users and agents need to see what is in a tree without manually browsing markdown files.
   - Expected: add low-risk commands such as `bo list`, `bo show <slug>`, and `bo status` for leaves/branches, recent collection state, and compile metadata.
-  - Notes: no network or LLM dependency; useful before query.
+  - Notes: no network or LLM dependency; useful before query. Command names below are illustrative — final naming decided at spec time.
+  - [ ] `bo list` — enumerate leaves/branches with title, slug, URL, and collected timestamp from index/frontmatter. Smallest useful standalone increment; single-session scope.
+  - [ ] `bo show <slug>` — render a single leaf or branch in the terminal with metadata and content preview.
+  - [ ] `bo status` — tree summary: leaf/branch counts, last collect/compile timestamps, index health.
 
 - [ ] Add deterministic lexical search
   - Context: query needs a deterministic retrieval foundation before LLM answer synthesis.
