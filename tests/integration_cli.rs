@@ -42,9 +42,9 @@ fn config_path(home: &TempDir) -> std::path::PathBuf {
 }
 
 fn append_index_entry(tree: &Path, file: &str, title: &str) {
-    bo::index::append_entry(
+    bo::domain::index::append_entry(
         &tree.join("index.jsonl"),
-        &bo::index::IndexEntry {
+        &bo::domain::index::IndexEntry {
             file: file.to_string(),
             title: title.to_string(),
             url: format!("https://example.com/{}", file.trim_end_matches(".md")),

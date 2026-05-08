@@ -11,7 +11,7 @@
 // canonical on-disk format for leaf files and is preserved by patch_fields
 // when bo compile updates the frontmatter later.
 
-use crate::frontmatter::{self, FrontmatterError};
+use crate::domain::frontmatter::{self, FrontmatterError};
 use serde_yaml_ng::Mapping;
 use std::{fmt, fs, io, path::Path};
 
