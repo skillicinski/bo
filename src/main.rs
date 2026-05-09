@@ -1,5 +1,6 @@
 use bo::cli::collect;
 use bo::cli::list::{self, ListOptions};
+use bo::cli::search::{self, SearchOptions, SearchQuery};
 use bo::domain::index;
 use bo::engine::config::{self, Config, ConfigError};
 
@@ -46,6 +47,21 @@ enum Commands {
         /// Filter by exact branch name/slug
         #[arg(long)]
         branch: Option<String>,
+        /// Emit machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Search collected leaves by content
+    Search {
+        /// Search terms (all must match). Quote phrases: "borrow checker"
+        #[arg(required = true)]
+        terms: Vec<String>,
+        /// Page number (default 1, 5 results per page)
+        #[arg(long, default_value = "1")]
+        page: usize,
+        /// Sort by collected date instead of relevance
+        #[arg(long)]
+        recent: bool,
         /// Emit machine-readable JSON
         #[arg(long)]
         json: bool,
@@ -161,6 +177,38 @@ fn cmd_list(
     Ok(())
 }
 
+// ── cmd_search ───────────────────────────────────────────────────────────────
+
+fn cmd_search(terms: Vec<String>, page: usize, recent: bool, json: bool) -> Result<(), String> {
+    if page == 0 {
+        eprintln!("error: --page must be at least 1");
+        process::exit(2);
+    }
+    let cfg = require_config()?;
+    let query = SearchQuery {
+        terms: terms.iter().map(|t| t.to_lowercase()).collect(),
+    };
+    let options = SearchOptions { page, recent };
+
+    let result =
+        search::search_leaves(&cfg.tree.output_dir, &query, &options).map_err(|e| e.to_string())?;
+
+    let has_results = !result.hits.is_empty();
+
+    let output = if json {
+        search::render_json(&result).map_err(|e| e.to_string())?
+    } else {
+        search::render_human(&result)
+    };
+
+    print!("{output}");
+
+    if !has_results {
+        process::exit(1);
+    }
+    Ok(())
+}
+
 // ── cmd_raze ─────────────────────────────────────────────────────────────────
 
 fn cmd_raze() -> Result<(), String> {
@@ -251,6 +299,12 @@ fn main() {
             branch,
             json,
         } => cmd_list(limit, recent, branch, json),
+        Commands::Search {
+            terms,
+            page,
+            recent,
+            json,
+        } => cmd_search(terms, page, recent, json),
         Commands::Raze => cmd_raze(),
     };
     if let Err(e) = result {
