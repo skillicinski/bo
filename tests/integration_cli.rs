@@ -30,6 +30,14 @@ fn list(home: &Path, args: &[&str]) -> Output {
         .expect("failed to run bo list")
 }
 
+fn show(home: &Path, args: &[&str]) -> Output {
+    bo(home)
+        .arg("show")
+        .args(args)
+        .output()
+        .expect("failed to run bo show")
+}
+
 fn raze(home: &Path) -> Output {
     bo(home)
         .arg("raze")
@@ -118,6 +126,29 @@ fn write_json_list_tree(tree: &Path) {
     );
 
     append_index_entry(tree, "missing-entry.md", "Missing Entry");
+}
+
+fn write_show_leaf(
+    tree: &Path,
+    file: &str,
+    index_title: &str,
+    frontmatter_title: &str,
+    body: &str,
+) {
+    append_index_entry(tree, file, index_title);
+
+    let escaped_title = frontmatter_title.replace('\\', "\\\\").replace('"', "\\\"");
+    let content = format!(
+        "---\ntitle: \"{}\"\nurl: https://example.com/{}\ncollected_at: 2025-04-01T12:00:00Z\nupdated_at: 2025-04-01T12:00:00Z\n---\n\n{}",
+        escaped_title,
+        file.trim_end_matches(".md"),
+        body,
+    );
+
+    if let Some(parent) = tree.join(file).parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(tree.join(file), content).unwrap();
 }
 
 fn write_combined_flags_tree(tree: &Path) {
@@ -509,6 +540,208 @@ fn list_combined_flags_filter_sort_limit_and_emit_json() {
     }
     assert!(!files.contains(&"b-other.md"));
     assert!(!files.contains(&"a-oldest.md"));
+}
+
+// ── show ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn show_without_seed_fails_with_existing_seed_hint() {
+    let home = TempDir::new().unwrap();
+
+    let out = show(home.path(), &["Some Title"]);
+    assert!(!out.status.success());
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("bo hasn't been seeded yet"),
+        "expected existing seed hint, got: {stderr}"
+    );
+    assert!(stderr.contains("bo seed"), "stderr: {stderr}");
+}
+
+#[test]
+fn show_prints_frontmatter_and_bounded_preview() {
+    let home = TempDir::new().unwrap();
+    let tree = home.path().join("my-tree");
+
+    let seeded = seed(home.path(), &tree);
+    assert!(seeded.status.success());
+    let body = format!("# Some Title\n\n{}\nTAIL_MARKER\n", "A".repeat(10_000));
+    write_show_leaf(&tree, "some-title.md", "Some Title", "Some Title", &body);
+
+    let out = show(home.path(), &["Some Title"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("---\ntitle: \"Some Title\""),
+        "stdout: {stdout}"
+    );
+    assert!(stdout.contains("# Some Title"), "stdout: {stdout}");
+    assert!(stdout.contains("preview truncated"), "stdout: {stdout}");
+    assert!(!stdout.contains("TAIL_MARKER"), "stdout: {stdout}");
+}
+
+#[test]
+fn show_title_matching_is_case_insensitive_and_exact() {
+    let home = TempDir::new().unwrap();
+    let tree = home.path().join("my-tree");
+
+    let seeded = seed(home.path(), &tree);
+    assert!(seeded.status.success());
+    write_show_leaf(
+        &tree,
+        "case-title.md",
+        "Case Title",
+        "Case Title",
+        "Body.\n",
+    );
+
+    let matched = show(home.path(), &["case title"]);
+    assert!(
+        matched.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&matched.stderr)
+    );
+
+    let partial = show(home.path(), &["Case"]);
+    assert!(!partial.status.success());
+    let stderr = String::from_utf8_lossy(&partial.stderr);
+    assert!(stderr.contains("not found"), "stderr: {stderr}");
+}
+
+#[test]
+fn show_full_prints_complete_body() {
+    let home = TempDir::new().unwrap();
+    let tree = home.path().join("my-tree");
+
+    let seeded = seed(home.path(), &tree);
+    assert!(seeded.status.success());
+    let body = format!("# Full Title\n\n{}\nTAIL_MARKER\n", "B".repeat(10_000));
+    write_show_leaf(&tree, "full-title.md", "Full Title", "Full Title", &body);
+
+    let out = show(home.path(), &["--full", "Full Title"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("TAIL_MARKER"), "stdout: {stdout}");
+    assert!(!stdout.contains("preview truncated"), "stdout: {stdout}");
+}
+
+#[test]
+fn show_json_output_is_parseable_and_contains_required_fields() {
+    let home = TempDir::new().unwrap();
+    let tree = home.path().join("my-tree");
+
+    let seeded = seed(home.path(), &tree);
+    assert!(seeded.status.success());
+    let body = format!("# Json Title\n\n{}\nTAIL_MARKER\n", "C".repeat(10_000));
+    write_show_leaf(&tree, "json-title.md", "Json Title", "Json Title", &body);
+
+    let out = show(home.path(), &["--json", "Json Title"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let payload: Value = serde_json::from_slice(&out.stdout).expect("stdout was not valid JSON");
+    let leaf = payload.get("leaf").expect("missing leaf object");
+
+    assert_eq!(leaf["title"], "Json Title");
+    assert_eq!(leaf["file"], "json-title.md");
+    assert_eq!(leaf["url"], "https://example.com/json-title");
+    assert_eq!(leaf["frontmatter"]["title"], "Json Title");
+    assert!(
+        leaf["frontmatter_raw"]
+            .as_str()
+            .is_some_and(|raw| raw.contains("title: \"Json Title\"")),
+        "leaf: {leaf}"
+    );
+    assert_eq!(leaf["truncated"], true);
+    assert_eq!(leaf["full"], false);
+    assert!(
+        !leaf["body"]
+            .as_str()
+            .expect("body must be a string")
+            .contains("TAIL_MARKER"),
+        "leaf: {leaf}"
+    );
+}
+
+#[test]
+fn show_json_full_output_contains_full_body() {
+    let home = TempDir::new().unwrap();
+    let tree = home.path().join("my-tree");
+
+    let seeded = seed(home.path(), &tree);
+    assert!(seeded.status.success());
+    let body = format!("# Json Full\n\n{}\nTAIL_MARKER\n", "D".repeat(10_000));
+    write_show_leaf(&tree, "json-full.md", "Json Full", "Json Full", &body);
+
+    let out = show(home.path(), &["--json", "--full", "Json Full"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let payload: Value = serde_json::from_slice(&out.stdout).expect("stdout was not valid JSON");
+    let leaf = payload.get("leaf").expect("missing leaf object");
+
+    assert_eq!(leaf["truncated"], false);
+    assert_eq!(leaf["full"], true);
+    assert!(
+        leaf["body"]
+            .as_str()
+            .expect("body must be a string")
+            .contains("TAIL_MARKER"),
+        "leaf: {leaf}"
+    );
+}
+
+#[test]
+fn show_missing_title_reports_not_found_and_suggests_list() {
+    let home = TempDir::new().unwrap();
+    let tree = home.path().join("my-tree");
+
+    let seeded = seed(home.path(), &tree);
+    assert!(seeded.status.success());
+    write_show_leaf(&tree, "available.md", "Available", "Available", "Body.\n");
+
+    let out = show(home.path(), &["Missing Title"]);
+    assert!(!out.status.success());
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("not found"), "stderr: {stderr}");
+    assert!(stderr.contains("bo list"), "stderr: {stderr}");
+}
+
+#[test]
+fn show_duplicate_title_reports_ambiguity_with_candidates() {
+    let home = TempDir::new().unwrap();
+    let tree = home.path().join("my-tree");
+
+    let seeded = seed(home.path(), &tree);
+    assert!(seeded.status.success());
+    write_show_leaf(&tree, "duplicate-a.md", "Duplicate", "Duplicate", "A\n");
+    write_show_leaf(&tree, "duplicate-b.md", "Duplicate", "duplicate", "B\n");
+
+    let out = show(home.path(), &["DUPLICATE"]);
+    assert!(!out.status.success());
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("ambiguous"), "stderr: {stderr}");
+    assert!(stderr.contains("duplicate-a.md"), "stderr: {stderr}");
+    assert!(stderr.contains("duplicate-b.md"), "stderr: {stderr}");
 }
 
 // ── raze ─────────────────────────────────────────────────────────────────────
