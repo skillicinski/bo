@@ -17,7 +17,7 @@ Somewhat formulated feature candidates. Keep items tickable. Promote one item at
   - [ ] `bo show <slug>` — render a single leaf or branch in the terminal with metadata and content preview.
   - [ ] `bo status` — tree summary: leaf/branch counts, last collect/compile timestamps, index health.
 
-- [ ] Add deterministic lexical search
+- [x] Add deterministic lexical search
   - Context: query needs a deterministic retrieval foundation before LLM answer synthesis.
   - Expected: `bo search <term>` returns matching leaves/branches with file, title, URL, and short context snippets.
   - Notes: start with simple lexical ranking/BM25-style scoring; no mutation.
