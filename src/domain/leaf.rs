@@ -46,8 +46,9 @@ pub fn write(
     url: &str,
     collected_at: &str,
     body: &str,
+    summary: Option<&str>,
 ) -> io::Result<()> {
-    let content = format_content(title, url, collected_at, body);
+    let content = format_content(title, url, collected_at, body, summary);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -58,7 +59,13 @@ pub fn write(
 ///
 /// Kept private; callers should use `write`. Separated only so that the
 /// formatting logic can be exercised in tests without touching the filesystem.
-fn format_content(title: Option<&str>, url: &str, collected_at: &str, body: &str) -> String {
+fn format_content(
+    title: Option<&str>,
+    url: &str,
+    collected_at: &str,
+    body: &str,
+    summary: Option<&str>,
+) -> String {
     let title_yaml = match title {
         Some(t) => format!("\"{}\"", t.replace('\\', "\\\\").replace('"', "\\\"")),
         None => "\"\"".to_string(),
@@ -70,6 +77,23 @@ fn format_content(title: Option<&str>, url: &str, collected_at: &str, body: &str
     doc.push_str(&format!("url: {}\n", url));
     doc.push_str(&format!("collected_at: {}\n", collected_at));
     doc.push_str(&format!("updated_at: {}\n", collected_at));
+
+    if let Some(s) = summary {
+        if !s.is_empty() {
+            if s.contains('\n') {
+                doc.push_str("summary: |\n");
+                for line in s.lines() {
+                    doc.push_str("  ");
+                    doc.push_str(line);
+                    doc.push('\n');
+                }
+            } else {
+                let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+                doc.push_str(&format!("summary: \"{}\"\n", escaped));
+            }
+        }
+    }
+
     doc.push_str("---\n\n");
 
     if let Some(t) = title {
@@ -121,6 +145,7 @@ mod tests {
             "https://example.com",
             "2025-01-15T09:32:00Z",
             "Some content here.",
+            None,
         )
         .unwrap();
 
@@ -146,6 +171,7 @@ mod tests {
             "https://example.com",
             "2025-01-15T09:32:00Z",
             "Body only.",
+            None,
         )
         .unwrap();
 
@@ -165,6 +191,7 @@ mod tests {
             "https://example.com",
             "2025-01-15T09:32:00Z",
             "Content.",
+            None,
         )
         .unwrap();
 
@@ -183,6 +210,7 @@ mod tests {
             "https://example.com",
             "2025-01-01T00:00:00Z",
             "content",
+            None,
         )
         .unwrap();
 
@@ -200,6 +228,7 @@ mod tests {
             "https://example.com",
             "2025-01-01T00:00:00Z",
             "no newline",
+            None,
         )
         .unwrap();
 
@@ -218,6 +247,7 @@ mod tests {
             "https://example.com",
             "2025-01-01T00:00:00Z",
             "has newline\n",
+            None,
         )
         .unwrap();
 
@@ -238,6 +268,7 @@ mod tests {
             "https://example.com",
             "2025-06-01T10:00:00Z",
             "Body.\n",
+            None,
         )
         .unwrap();
 
@@ -279,5 +310,99 @@ mod tests {
             err,
             LeafError::Frontmatter(FrontmatterError::Missing)
         ));
+    }
+
+    // ── summary tests ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn write_with_single_line_summary() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("summary.md");
+
+        write(
+            &path,
+            Some("Article"),
+            "https://example.com",
+            "2025-01-01T00:00:00Z",
+            "Body content.",
+            Some("This is a single-line summary of the article."),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("summary: \"This is a single-line summary of the article.\""));
+
+        let mapping = read_frontmatter(&path).unwrap();
+        assert_eq!(
+            mapping.get("summary").and_then(|v| v.as_str()),
+            Some("This is a single-line summary of the article.")
+        );
+    }
+
+    #[test]
+    fn write_with_multi_line_summary() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("multi.md");
+
+        let summary = "First line of the summary.\nSecond line continues.\nThird line ends.";
+        write(
+            &path,
+            Some("Article"),
+            "https://example.com",
+            "2025-01-01T00:00:00Z",
+            "Body.",
+            Some(summary),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("summary: |\n"));
+        assert!(content.contains("  First line of the summary.\n"));
+
+        let mapping = read_frontmatter(&path).unwrap();
+        let parsed = mapping.get("summary").and_then(|v| v.as_str()).unwrap();
+        assert!(parsed.contains("First line"));
+        assert!(parsed.contains("Third line"));
+    }
+
+    #[test]
+    fn write_with_summary_containing_special_chars() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("special.md");
+
+        let summary = "Rust's \"ownership\" model: memory safety without GC.";
+        write(
+            &path,
+            Some("Article"),
+            "https://example.com",
+            "2025-01-01T00:00:00Z",
+            "Body.",
+            Some(summary),
+        )
+        .unwrap();
+
+        let mapping = read_frontmatter(&path).unwrap();
+        let parsed = mapping.get("summary").and_then(|v| v.as_str()).unwrap();
+        assert!(parsed.contains("ownership"));
+        assert!(parsed.contains("Rust's"));
+    }
+
+    #[test]
+    fn write_with_none_summary_omits_field() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("nosummary.md");
+
+        write(
+            &path,
+            Some("Article"),
+            "https://example.com",
+            "2025-01-01T00:00:00Z",
+            "Body.",
+            None,
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(!content.contains("summary"));
     }
 }
