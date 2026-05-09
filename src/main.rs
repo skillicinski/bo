@@ -1,5 +1,6 @@
 use bo::cli::collect;
 use bo::cli::list::{self, ListOptions};
+use bo::cli::show::{self, ShowOptions};
 use bo::domain::index;
 use bo::engine::config::{self, Config, ConfigError};
 
@@ -46,6 +47,17 @@ enum Commands {
         /// Filter by exact branch name/slug
         #[arg(long)]
         branch: Option<String>,
+        /// Emit machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one collected leaf by exact title
+    Show {
+        /// Leaf title to show
+        title: String,
+        /// Show the full leaf body instead of a preview
+        #[arg(long)]
+        full: bool,
         /// Emit machine-readable JSON
         #[arg(long)]
         json: bool,
@@ -161,6 +173,23 @@ fn cmd_list(
     Ok(())
 }
 
+// ── cmd_show ─────────────────────────────────────────────────────────────────
+
+fn cmd_show(title: String, full: bool, json: bool) -> Result<(), String> {
+    let cfg = require_config()?;
+    let result = show::show_leaf(&cfg.tree.output_dir, &title, &ShowOptions { full })
+        .map_err(|e| e.to_string())?;
+
+    let output = if json {
+        show::render_json(&result).map_err(|e| e.to_string())?
+    } else {
+        show::render_human(&result)
+    };
+
+    print!("{output}");
+    Ok(())
+}
+
 // ── cmd_raze ─────────────────────────────────────────────────────────────────
 
 fn cmd_raze() -> Result<(), String> {
@@ -251,6 +280,7 @@ fn main() {
             branch,
             json,
         } => cmd_list(limit, recent, branch, json),
+        Commands::Show { title, full, json } => cmd_show(title, full, json),
         Commands::Raze => cmd_raze(),
     };
     if let Err(e) = result {
