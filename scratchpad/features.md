@@ -13,8 +13,8 @@ Somewhat formulated feature candidates. Keep items tickable. Promote one item at
   - Context: users and agents need to see what is in a tree without manually browsing markdown files.
   - Expected: add low-risk commands such as `bo list`, `bo show <slug>`, and `bo status` for leaves/branches, recent collection state, and compile metadata.
   - Notes: no network or LLM dependency; useful before query. Command names below are illustrative — final naming decided at spec time.
-  - [ ] `bo list` — enumerate leaves/branches with title, slug, URL, and collected timestamp from index/frontmatter. Smallest useful standalone increment; single-session scope.
-  - [ ] `bo show <slug>` — render a single leaf or branch in the terminal with metadata and content preview.
+  - [x] `bo list` — enumerate leaves/branches with title, slug, URL, and collected timestamp from index/frontmatter. Smallest useful standalone increment; single-session scope.
+  - [x] `bo show <slug>` — render a single leaf or branch in the terminal with metadata and content preview.
   - [ ] `bo status` — tree summary: leaf/branch counts, last collect/compile timestamps, index health.
 
 - [x] Add deterministic lexical search
@@ -45,7 +45,7 @@ Somewhat formulated feature candidates. Keep items tickable. Promote one item at
 - [ ] Add `bo config set` for compile_model and other settings
   - Context: users must manually edit `~/.bo/config.json` to change compile_model. Dogfood showed gpt-4o overflows at 53 docs while gpt-4.1-mini (1M context) handles it fine.
   - Expected: `bo config set compile_model gpt-4.1-mini` updates the config. `bo config get compile_model` shows current value. `bo config list` shows all settings.
-  - Notes: minimal scope — just compile_model initially. Extensible to other settings (summary_model, base_url) later.
+  - Notes: minimal scope — just compile_model initially. Extensible to other settings (summary_model, base_url) later. `summary_model` allows using a cheaper/faster model (e.g. gpt-4.1-nano) for leaf summary generation independently of compile_model.
 
 - [ ] Add --json output flag to all commands
   - Context: bo commands should be machine-parseable for agent/MCP consumption alongside human-friendly defaults.

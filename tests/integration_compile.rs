@@ -57,6 +57,7 @@ fn setup_fixture_collection() -> tempfile::TempDir {
             doc.url,
             "2025-06-01T10:00:00Z",
             doc.body,
+            None,
         )
         .unwrap();
 

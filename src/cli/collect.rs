@@ -21,7 +21,7 @@ use std::path::Path;
 use crate::adapters::youtube::{self, YoutubeError, YoutubeUrlMatch};
 use crate::domain::{index, leaf, slug};
 use crate::engine::quality::RejectReason;
-use crate::engine::{extract, fetch, quality};
+use crate::engine::{extract, fetch, quality, summary};
 
 // ── types ────────────────────────────────────────────────────────────────────
 
@@ -200,7 +200,16 @@ fn write_new_document(
     // exists before `append_entry` below requires the directory.
     let now_str = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let leaf_path = output_dir.join(format!("{}.md", filename));
-    leaf::write(&leaf_path, title, url, &now_str, body_markdown)?;
+
+    let summary_text = summary::generate(body_markdown, title, "gpt-4o");
+    leaf::write(
+        &leaf_path,
+        title,
+        url,
+        &now_str,
+        body_markdown,
+        Some(&summary_text),
+    )?;
 
     let entry = index::IndexEntry {
         file: format!("{}.md", filename),
@@ -411,6 +420,8 @@ filtering. It remains an ordinary HTML collection fixture after refactoring.</p>
         assert!(!content.contains("fetched:"));
         assert!(content.contains("# Test Article"));
         assert!(content.contains("Section One"));
+        // Summary field is present (fallback: first ~200 words)
+        assert!(content.contains("summary:"));
 
         let entries = index::read_index(&dir.path().join("index.jsonl")).unwrap();
         assert_eq!(entries.len(), 1);
