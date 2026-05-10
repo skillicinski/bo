@@ -8,23 +8,23 @@
 
 ## Query module: term extraction + retrieval
 
-- [ ] Create `src/cli/query.rs`, add `pub mod query` to `src/cli/mod.rs`
-- [ ] Define `QueryError` enum covering all error conditions (no provider, no results, LLM failure, parse failure)
-- [ ] Implement stop-word term extraction: strip question words/articles/prepositions, lowercase, strip boundary punctuation, strip possessive suffixes (`'s`, `'t` etc.), drop terms < 2 chars
-- [ ] Handle degenerate extraction: if zero terms remain after filtering, return `QueryError` (exit 2, "could not extract meaningful terms from question")
-- [ ] Implement OR-semantics leaf retrieval: read all leaves via `index.jsonl`, parse frontmatter (title, url, summary), score by term density, filter score > 0, sort descending, return top-10. Fall back to first 200 words of body when summary field is absent in frontmatter.
-- [ ] Unit tests: term extraction (various question shapes, single word, all-stop-words → error, possessives stripped, short terms dropped)
-- [ ] Unit tests: retrieval scoring (fixture leaf content, verify OR semantics and ranking order, leaf with missing summary uses body fallback)
+- [x] Create `src/cli/query.rs`, add `pub mod query` to `src/cli/mod.rs`
+- [x] Define `QueryError` enum covering all error conditions (no provider, no results, LLM failure, parse failure)
+- [x] Implement stop-word term extraction: strip question words/articles/prepositions, lowercase, strip boundary punctuation, strip possessive suffixes (`'s`, `'t` etc.), drop terms < 2 chars
+- [x] Handle degenerate extraction: if zero terms remain after filtering, return `QueryError` (exit 2, "could not extract meaningful terms from question")
+- [x] Implement OR-semantics leaf retrieval: read all leaves via `index.jsonl`, parse frontmatter (title, url, summary), score by term density, filter score > 0, sort descending, return top-10. Fall back to first 200 words of body when summary field is absent in frontmatter.
+- [x] Unit tests: term extraction (various question shapes, single word, all-stop-words → error, possessives stripped, short terms dropped)
+- [x] Unit tests: retrieval scoring (fixture leaf content, verify OR semantics and ranking order, leaf with missing summary uses body fallback)
 
 ## Context assembly + synthesis
 
-- [ ] Implement two-tier context assembly: top-10 get slug/title/url/summary, top-5 get full body; cap at ~60k words total
-- [ ] Define synthesis system prompt (answer from sources only, cite with `[[slug]]`, concise)
-- [ ] Define structured-output schema for `SynthesisResponse { answer, cited_slugs }`
-- [ ] Implement synthesis call via `LlmProvider` (construct messages, call, parse response)
-- [ ] Implement citation validation: verify cited slugs exist in retrieval set, strip hallucinated citations from `cited_slugs` AND regex-remove invalid `[[slug]]` wikilinks from answer prose
-- [ ] Unit tests: context assembly respects token budget, truncates when over limit
-- [ ] Unit tests: citation validation strips invalid slugs from list and from prose, preserves valid ones
+- [x] Implement two-tier context assembly: top-10 get slug/title/url/summary, top-5 get full body; cap at ~60k words total
+- [x] Define synthesis system prompt (answer from sources only, cite with `[[slug]]`, concise)
+- [x] Define structured-output schema for `SynthesisResponse { answer, cited_slugs }`
+- [x] Implement synthesis call via `LlmProvider` (construct messages, call, parse response)
+- [x] Implement citation validation: verify cited slugs exist in retrieval set, strip hallucinated citations from `cited_slugs` AND regex-remove invalid `[[slug]]` wikilinks from answer prose
+- [x] Unit tests: context assembly respects token budget, truncates when over limit
+- [x] Unit tests: citation validation strips invalid slugs from list and from prose, preserves valid ones
 
 ## Output formatting + CLI wiring
 
