@@ -10,10 +10,11 @@
 
 - [ ] Create `src/cli/query.rs`, add `pub mod query` to `src/cli/mod.rs`
 - [ ] Define `QueryError` enum covering all error conditions (no provider, no results, LLM failure, parse failure)
-- [ ] Implement stop-word term extraction: strip question words/articles/prepositions, lowercase, strip boundary punctuation
-- [ ] Implement OR-semantics leaf retrieval: read all leaves via `index.jsonl`, parse frontmatter (title, url, summary), score by term density, filter score > 0, sort descending, return top-10
-- [ ] Unit tests: term extraction (various question shapes, empty input, all-stop-words input)
-- [ ] Unit tests: retrieval scoring (fixture leaf content, verify OR semantics and ranking order)
+- [ ] Implement stop-word term extraction: strip question words/articles/prepositions, lowercase, strip boundary punctuation, strip possessive suffixes (`'s`, `'t` etc.), drop terms < 2 chars
+- [ ] Handle degenerate extraction: if zero terms remain after filtering, return `QueryError` (exit 2, "could not extract meaningful terms from question")
+- [ ] Implement OR-semantics leaf retrieval: read all leaves via `index.jsonl`, parse frontmatter (title, url, summary), score by term density, filter score > 0, sort descending, return top-10. Fall back to first 200 words of body when summary field is absent in frontmatter.
+- [ ] Unit tests: term extraction (various question shapes, single word, all-stop-words → error, possessives stripped, short terms dropped)
+- [ ] Unit tests: retrieval scoring (fixture leaf content, verify OR semantics and ranking order, leaf with missing summary uses body fallback)
 
 ## Context assembly + synthesis
 
@@ -21,9 +22,9 @@
 - [ ] Define synthesis system prompt (answer from sources only, cite with `[[slug]]`, concise)
 - [ ] Define structured-output schema for `SynthesisResponse { answer, cited_slugs }`
 - [ ] Implement synthesis call via `LlmProvider` (construct messages, call, parse response)
-- [ ] Implement citation validation: verify cited slugs exist in retrieval set, strip hallucinated citations
+- [ ] Implement citation validation: verify cited slugs exist in retrieval set, strip hallucinated citations from `cited_slugs` AND regex-remove invalid `[[slug]]` wikilinks from answer prose
 - [ ] Unit tests: context assembly respects token budget, truncates when over limit
-- [ ] Unit tests: citation validation strips invalid slugs, preserves valid ones
+- [ ] Unit tests: citation validation strips invalid slugs from list and from prose, preserves valid ones
 
 ## Output formatting + CLI wiring
 
@@ -36,7 +37,8 @@
 
 ## Integration test
 
-- [ ] Create end-to-end test with temp tree directory containing 5+ fixture leaves with frontmatter and summaries
+- [ ] Create end-to-end test with temp tree directory containing 5+ fixture leaves with frontmatter and summaries (include one leaf without summary field)
 - [ ] Mock `LlmProvider` returning a canned `SynthesisResponse` with valid and one invalid citation
-- [ ] Assert full pipeline: terms extracted → correct leaves retrieved → context assembled → mock called with expected messages → output contains answer with valid citations only → invalid citation stripped
+- [ ] Assert full pipeline: terms extracted → correct leaves retrieved → context assembled → mock called with expected messages → output contains answer with valid citations only → invalid citation stripped from both prose and list
 - [ ] Assert JSON output is valid and schema-conformant
+- [ ] Boundary case: tree with 1 leaf — verify top-k logic handles gracefully
