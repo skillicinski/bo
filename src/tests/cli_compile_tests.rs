@@ -11,6 +11,7 @@ fn make_test_config(output_dir: &std::path::Path) -> Config {
             created_at: None,
         },
         compile_model: Some("gpt-4o-mini".to_string()),
+        query_model: None,
     }
 }
 

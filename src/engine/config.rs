@@ -37,11 +37,20 @@ pub struct Config {
     /// Defaults to "gpt-4o" when absent.
     #[serde(default)]
     pub compile_model: Option<String>,
+
+    /// Model used by `bo query`. Operator-level: applies across all trees.
+    /// Defaults to "gpt-4o" when absent.
+    #[serde(default)]
+    pub query_model: Option<String>,
 }
 
 impl Config {
     pub fn effective_compile_model(&self) -> &str {
         self.compile_model.as_deref().unwrap_or("gpt-4o")
+    }
+
+    pub fn effective_query_model(&self) -> &str {
+        self.query_model.as_deref().unwrap_or("gpt-4o")
     }
 }
 

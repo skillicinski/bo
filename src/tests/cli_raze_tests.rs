@@ -18,6 +18,7 @@ fn setup_tree(tmp: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
                 created_at: Some("2025-01-01T00:00:00Z".to_string()),
             },
             compile_model: None,
+            query_model: None,
         },
         &config_path,
     )

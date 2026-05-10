@@ -81,6 +81,7 @@ pub fn seed(
                 created_at: Some(created_at),
             },
             compile_model: None,
+            query_model: None,
         },
         config_path,
     )
