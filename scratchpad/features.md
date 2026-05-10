@@ -22,22 +22,17 @@ Somewhat formulated feature candidates. Keep items tickable. Promote one item at
   - Expected: `bo search <term>` returns matching leaves/branches with file, title, URL, and short context snippets.
   - Notes: start with simple lexical ranking/BM25-style scoring; no mutation.
 
-- [ ] Add lexical `bo query` MVP with citations
-  - Context: the core product loop is incomplete until users can ask questions over the collected tree.
-  - Expected: `bo query <question>` retrieves local evidence lexically and returns an answer with cited files/URLs, without modifying the tree.
-  - Notes: LLM synthesis can be a follow-up; first scope should make retrieval/citation behaviour testable.
-
-- [ ] Add BYOK LLM answer synthesis for query
-  - Context: after deterministic retrieval works, users should be able to bring provider API keys for answer synthesis over retrieved context.
-  - Expected: support OpenAI, Anthropic, and OpenRouter first; answer with citations from retrieved tree content.
-  - Notes: no backend/SaaS requirement; keep provider config shared with compile where possible.
+- [ ] Add `bo query` with BYOK LLM synthesis and deterministic fallback
+  - Context: the core product loop is incomplete until users can ask questions over the collected tree. Search already provides the deterministic retrieval layer, making a separate "lexical query MVP" redundant.
+  - Expected: `bo query <question>` retrieves relevant leaves via search, synthesizes an answer with citations via BYOK LLM (OpenAI, Anthropic, OpenRouter). Without an API key, falls back to presenting retrieved sources with citations (deterministic mode). Does not modify the tree.
+  - Notes: single command with graceful degradation. Provider config shared with compile. Retrieval uses existing search internals. New work is context assembly, synthesis prompt, citation format, and output formatting.
 
 - [x] Migrate compile from agent loop to structured-output pipeline
   - Context: ADR-001 commits to deterministic pipelines. Current compile uses an internal agent loop (~50 tool-calling steps) that is fragile, expensive, and caps collection size.
   - Expected: replace agent loop with: code reads all leaves → single structured-output LLM call → code writes branches + updates frontmatter. Remove engine/agent/ module.
   - Notes: see `adrs/001-deterministic-pipelines-over-internal-agent.md`. LlmProvider trait retained for provider abstraction.
 
-- [ ] Add leaf summary field for context-window scaling
+- [x] Add leaf summary field for context-window scaling
   - Context: large collections (50+ docs, >128K tokens) overflow the compile model's context window. Karpathy's pattern relies on "index files and brief summaries" as the compressed representation.
   - Expected: generate a ~200-word summary per leaf at collect time (or lazily on first compile) via a cheap/fast model. Store as `summary:` field in leaf frontmatter. Compile uses summaries as fallback when full content overflows.
   - Notes: summaries also benefit `bo query` (select relevant docs by summary, read full bodies of selected few). Cheap model (gpt-4.1-nano or equivalent) keeps per-leaf cost negligible. Cache in frontmatter avoids re-generation.
