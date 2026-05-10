@@ -37,8 +37,8 @@
 
 ## Integration test
 
-- [ ] Create end-to-end test with temp tree directory containing 5+ fixture leaves with frontmatter and summaries (include one leaf without summary field)
-- [ ] Mock `LlmProvider` returning a canned `SynthesisResponse` with valid and one invalid citation
-- [ ] Assert full pipeline: terms extracted → correct leaves retrieved → context assembled → mock called with expected messages → output contains answer with valid citations only → invalid citation stripped from both prose and list
-- [ ] Assert JSON output is valid and schema-conformant
-- [ ] Boundary case: tree with 1 leaf — verify top-k logic handles gracefully
+- [x] Create end-to-end test with temp tree directory containing 5+ fixture leaves with frontmatter and summaries (include one leaf without summary field)
+- [x] Mock `LlmProvider` returning a canned `SynthesisResponse` with valid and one invalid citation
+- [x] Assert full pipeline: terms extracted → correct leaves retrieved → context assembled → mock called with expected messages → output contains answer with valid citations only → invalid citation stripped from both prose and list
+- [x] Assert JSON output is valid and schema-conformant
+- [x] Boundary case: tree with 1 leaf — verify top-k logic handles gracefully
