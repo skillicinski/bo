@@ -22,7 +22,7 @@ Somewhat formulated feature candidates. Keep items tickable. Promote one item at
   - Expected: `bo search <term>` returns matching leaves/branches with file, title, URL, and short context snippets.
   - Notes: start with simple lexical ranking/BM25-style scoring; no mutation.
 
-- [ ] Add `bo query` V1 — prompt-chaining synthesis with citations
+- [x] Add `bo query` V1 — prompt-chaining synthesis with citations
   - Context: the core product loop is incomplete until users can ask questions over the collected tree. Search already provides the deterministic retrieval layer. Fails without a configured provider (no silent degradation to search).
   - Expected: `bo query <question>` retrieves relevant leaves via search, assembles context, makes a single structured-output LLM call for synthesis, and outputs an answer with wikilink citations to source leaves. Read-only. Requires BYOK API key.
   - Notes: V1 architecture per ADR-003 (prompt-chaining, ADR-001 compliant). Separate `query_model` config field. OpenAI provider first. V2 (agentic tree navigation) is the target architecture once V1's retrieval proves insufficient at scale — see ADR-003.
