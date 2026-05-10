@@ -2,5 +2,7 @@ pub mod collect;
 pub mod compile;
 pub mod json;
 pub mod list;
+pub mod raze;
 pub mod search;
+pub mod seed;
 pub mod show;

@@ -2,19 +2,18 @@ use bo::cli::collect::{self, CollectError};
 use bo::cli::compile::{self, BranchResult, CompileError, CompileResult};
 use bo::cli::json::{self as json_output, JsonError, JsonWarning};
 use bo::cli::list::{self, ListOptions};
+use bo::cli::raze;
 use bo::cli::search::{self, SearchOptions, SearchQuery};
+use bo::cli::seed;
 use bo::cli::show::{self, ShowOptions};
-use bo::domain::index;
 use bo::engine::config::{self, Config, ConfigError};
-
-use chrono::Utc;
 use clap::{error::ErrorKind as ClapErrorKind, Parser, Subcommand};
 use serde::Serialize;
 use serde_json::json;
 use std::ffi::OsString;
 use std::fmt;
-use std::io::{self, ErrorKind as IoErrorKind, Write};
-use std::path::{Component, Path, PathBuf};
+use std::io::{self, Write};
+use std::path::PathBuf;
 use std::process;
 
 const NOT_SEEDED_MSG: &str = "bo hasn't been seeded yet — run: bo seed <output-dir>";
@@ -89,13 +88,6 @@ enum Commands {
 // ── JSON payloads ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
-struct SeedResult {
-    status: String,
-    output_dir: String,
-    tree_name: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 struct CollectResult {
     url: String,
     file: String,
@@ -119,23 +111,6 @@ struct ShowJsonData<'a> {
     leaf: &'a show::ShowResult,
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct RazeResult {
-    deleted_files: usize,
-    deleted_index: bool,
-    removed_output_dir: bool,
-    output_dir_left_in_place: bool,
-    deleted_config: bool,
-    output_dir: String,
-    config_path: String,
-}
-
-#[derive(Debug)]
-struct RazeOutput {
-    result: RazeResult,
-    warnings: Vec<JsonWarning>,
-}
-
 // ── errors ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -143,15 +118,13 @@ enum CliError {
     Usage { message: String, exit_code: i32 },
     NotSeeded,
     ConfigRead(String),
-    ConfigWrite(String),
-    CurrentDir(String),
-    CreateOutputDir(String),
+    Seed(seed::SeedError),
+    Raze(raze::RazeError),
     Collect(CollectError),
     List(list::ListError),
     Search(search::SearchError),
     Show(show::ShowError),
     Compile(CompileError),
-    IoMessage(String),
 }
 
 impl CliError {
@@ -170,11 +143,9 @@ impl CliError {
                 json!({ "exit_code": self.exit_code() }),
             ),
             CliError::NotSeeded => JsonError::new("not_seeded", NOT_SEEDED_MSG),
-            CliError::ConfigRead(message)
-            | CliError::ConfigWrite(message)
-            | CliError::CurrentDir(message)
-            | CliError::CreateOutputDir(message)
-            | CliError::IoMessage(message) => JsonError::new("io_error", message.clone()),
+            CliError::ConfigRead(message) => JsonError::new("io_error", message.clone()),
+            CliError::Seed(error) => JsonError::new("io_error", error.to_string()),
+            CliError::Raze(error) => JsonError::new("io_error", error.to_string()),
             CliError::Collect(error) => collect_json_error(error),
             CliError::List(error) => JsonError::new(list_error_code(error), error.to_string()),
             CliError::Search(error) => JsonError::new(search_error_code(error), error.to_string()),
@@ -189,11 +160,9 @@ impl fmt::Display for CliError {
         match self {
             CliError::Usage { message, .. } => write!(f, "{}", message),
             CliError::NotSeeded => write!(f, "{}", NOT_SEEDED_MSG),
-            CliError::ConfigRead(message)
-            | CliError::ConfigWrite(message)
-            | CliError::CurrentDir(message)
-            | CliError::CreateOutputDir(message)
-            | CliError::IoMessage(message) => write!(f, "{}", message),
+            CliError::ConfigRead(message) => write!(f, "{}", message),
+            CliError::Seed(error) => write!(f, "{}", error),
+            CliError::Raze(error) => write!(f, "{}", error),
             CliError::Collect(error) => write!(f, "{}", error),
             CliError::List(error) => write!(f, "{}", error),
             CliError::Search(error) => write!(f, "{}", error),
@@ -304,11 +273,15 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
     let json = cli.json;
 
     match cli.command {
-        Commands::Seed { output_dir, name } => match execute_seed(output_dir, name) {
-            Ok(result) if json => emit_json_success("seed", &result, Vec::new(), stdout),
-            Ok(result) => write_human_or_error(render_seed_human(&result, stdout), stderr),
-            Err(error) => emit_cli_error("seed", json, error, stdout, stderr),
-        },
+        Commands::Seed { output_dir, name } => {
+            match seed::seed(output_dir, name, &config::config_path()) {
+                Ok(result) if json => emit_json_success("seed", &result, Vec::new(), stdout),
+                Ok(result) => {
+                    write_human_or_error(write!(stdout, "{}", seed::render_human(&result)), stderr)
+                }
+                Err(error) => emit_cli_error("seed", json, CliError::Seed(error), stdout, stderr),
+            }
+        }
         Commands::Collect { url } => match execute_collect(url) {
             Ok(result) if json => emit_json_success("collect", &result, Vec::new(), stdout),
             Ok(result) => write_human_or_error(render_collect_human(&result, stdout), stderr),
@@ -375,17 +348,23 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
             }
             Err(error) => emit_cli_error("show", json, error, stdout, stderr),
         },
-        Commands::Raze => match execute_raze() {
-            Ok(output) if json => {
-                emit_json_success("raze", &output.result, output.warnings, stdout)
-            }
-            Ok(output) => {
-                for warning in &output.warnings {
-                    let _ = writeln!(stderr, "warning: {}", warning.message);
-                }
-                write_human_or_error(render_raze_human(&output.result, stdout), stderr)
-            }
+        Commands::Raze => match require_config() {
             Err(error) => emit_cli_error("raze", json, error, stdout, stderr),
+            Ok(cfg) => match raze::raze(&cfg.tree.output_dir, &config::config_path()) {
+                Ok(output) if json => {
+                    emit_json_success("raze", &output.result, output.warnings, stdout)
+                }
+                Ok(output) => {
+                    for warning in &output.warnings {
+                        let _ = writeln!(stderr, "warning: {}", warning.message);
+                    }
+                    write_human_or_error(
+                        write!(stdout, "{}", raze::render_human(&output.result)),
+                        stderr,
+                    )
+                }
+                Err(error) => emit_cli_error("raze", json, CliError::Raze(error), stdout, stderr),
+            },
         },
     }
 }
@@ -549,64 +528,6 @@ fn require_config() -> Result<Config, CliError> {
     }
 }
 
-fn execute_seed(output_dir: PathBuf, name: Option<String>) -> Result<SeedResult, CliError> {
-    let output_dir = if output_dir.is_absolute() {
-        output_dir
-    } else {
-        std::env::current_dir()
-            .map_err(|error| CliError::CurrentDir(format!("failed to get current dir: {error}")))?
-            .join(&output_dir)
-    };
-
-    match config::read_config(&config::config_path()) {
-        Ok(existing) => {
-            return Ok(SeedResult {
-                status: "already_seeded".to_string(),
-                output_dir: path_string(&existing.tree.output_dir),
-                tree_name: existing.tree.name,
-            });
-        }
-        Err(ConfigError::NotFound) => {}
-        Err(error) => {
-            return Err(CliError::ConfigRead(format!(
-                "failed to read config: {}",
-                error
-            )));
-        }
-    }
-
-    std::fs::create_dir_all(&output_dir).map_err(|error| {
-        CliError::CreateOutputDir(format!("failed to create output directory: {error}"))
-    })?;
-
-    let tree_name = name.or_else(|| {
-        output_dir
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-    });
-
-    let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-
-    config::write_config(
-        &Config {
-            tree: bo::domain::tree::TreeConfig {
-                output_dir: output_dir.clone(),
-                name: tree_name.clone(),
-                created_at: Some(created_at),
-            },
-            compile_model: None,
-        },
-        &config::config_path(),
-    )
-    .map_err(|error| CliError::ConfigWrite(format!("failed to write config: {error}")))?;
-
-    Ok(SeedResult {
-        status: "created".to_string(),
-        output_dir: path_string(&output_dir),
-        tree_name,
-    })
-}
-
 fn execute_collect(url: String) -> Result<CollectResult, CliError> {
     let cfg = require_config()?;
     eprintln!("fetching {}...", url);
@@ -616,7 +537,7 @@ fn execute_collect(url: String) -> Result<CollectResult, CliError> {
     Ok(CollectResult {
         url: page.url,
         file: page.filename,
-        path: path_string(&path),
+        path: path.display().to_string(),
     })
 }
 
@@ -665,119 +586,7 @@ fn execute_show(title: String, full: bool) -> Result<show::ShowResult, CliError>
     show::show_leaf(&cfg.tree.output_dir, &title, &ShowOptions { full }).map_err(CliError::Show)
 }
 
-fn execute_raze() -> Result<RazeOutput, CliError> {
-    let cfg = require_config()?;
-    let output_dir = cfg.tree.output_dir;
-    let index_path = output_dir.join("index.jsonl");
-    let entries = index::read_index(&index_path)
-        .map_err(|error| CliError::IoMessage(format!("failed to read index: {error}")))?;
-
-    let mut deleted_files = 0usize;
-    let mut warnings = Vec::new();
-
-    for entry in &entries {
-        if is_suspicious_relative_path(&entry.file) {
-            warnings.push(JsonWarning::with_details(
-                "suspicious_ledger_entry",
-                format!("skipping ledger entry with suspicious path: {}", entry.file),
-                json!({ "file": entry.file }),
-            ));
-            continue;
-        }
-
-        let resolved = output_dir.join(&entry.file);
-
-        match std::fs::remove_file(&resolved) {
-            Ok(()) => deleted_files += 1,
-            Err(error) if error.kind() == IoErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(CliError::IoMessage(format!(
-                    "failed to delete {}: {}",
-                    resolved.display(),
-                    error
-                )));
-            }
-        }
-    }
-
-    let deleted_index = match std::fs::remove_file(&index_path) {
-        Ok(()) => true,
-        Err(error) if error.kind() == IoErrorKind::NotFound => false,
-        Err(error) => {
-            return Err(CliError::IoMessage(format!(
-                "failed to delete ledger: {}",
-                error
-            )));
-        }
-    };
-
-    let (removed_output_dir, output_dir_left_in_place) = match std::fs::remove_dir(&output_dir) {
-        Ok(()) => (true, false),
-        Err(error)
-            if error.kind() == IoErrorKind::DirectoryNotEmpty
-                || error.kind() == IoErrorKind::NotFound =>
-        {
-            (false, true)
-        }
-        Err(error) => {
-            return Err(CliError::IoMessage(format!(
-                "failed to remove output directory: {}",
-                error
-            )));
-        }
-    };
-
-    let config_path = config::config_path();
-    let deleted_config = match std::fs::remove_file(&config_path) {
-        Ok(()) => true,
-        Err(error) if error.kind() == IoErrorKind::NotFound => false,
-        Err(error) => {
-            return Err(CliError::IoMessage(format!(
-                "failed to delete config: {}",
-                error
-            )));
-        }
-    };
-
-    Ok(RazeOutput {
-        result: RazeResult {
-            deleted_files,
-            deleted_index,
-            removed_output_dir,
-            output_dir_left_in_place,
-            deleted_config,
-            output_dir: path_string(&output_dir),
-            config_path: path_string(&config_path),
-        },
-        warnings,
-    })
-}
-
-fn path_string(path: &Path) -> String {
-    path.display().to_string()
-}
-
-fn is_suspicious_relative_path(file: &str) -> bool {
-    let relative = Path::new(file);
-    relative.as_os_str().is_empty()
-        || relative.is_absolute()
-        || relative
-            .components()
-            .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
-}
-
 // ── human rendering ──────────────────────────────────────────────────────────
-
-fn render_seed_human<W: Write>(result: &SeedResult, stdout: &mut W) -> io::Result<()> {
-    match result.status.as_str() {
-        "already_seeded" => writeln!(
-            stdout,
-            "bo has already been seeded at {}!",
-            result.output_dir
-        ),
-        _ => writeln!(stdout, "seeded bo at {}", result.output_dir),
-    }
-}
 
 fn render_collect_human<W: Write>(result: &CollectResult, stdout: &mut W) -> io::Result<()> {
     writeln!(stdout, "✓ collected: {} → {}", result.url, result.file)
@@ -856,30 +665,6 @@ fn render_compile_summary_human<W: Write>(
     Ok(())
 }
 
-fn render_raze_human<W: Write>(result: &RazeResult, stdout: &mut W) -> io::Result<()> {
-    writeln!(stdout, "deleted {} markdown file(s)", result.deleted_files)?;
-
-    if result.deleted_index {
-        writeln!(stdout, "deleted index")?;
-    }
-
-    if result.removed_output_dir {
-        writeln!(stdout, "removed output directory {}", result.output_dir)?;
-    } else if result.output_dir_left_in_place {
-        writeln!(
-            stdout,
-            "output directory left in place (not empty or already absent): {}",
-            result.output_dir
-        )?;
-    }
-
-    if result.deleted_config {
-        writeln!(stdout, "deleted config")?;
-    }
-
-    Ok(())
-}
-
 // ── warning extraction ───────────────────────────────────────────────────────
 
 fn list_warnings(result: &list::ListResult) -> Vec<JsonWarning> {
@@ -915,14 +700,6 @@ fn compile_warnings(result: &CompileResult) -> Vec<JsonWarning> {
     )]
 }
 
-// ── compatibility wrappers used by existing unit tests ───────────────────────
-
-#[cfg(test)]
-fn cmd_seed(output_dir: PathBuf, name: Option<String>) -> Result<(), String> {
-    let result = execute_seed(output_dir, name).map_err(|error| error.to_string())?;
-    render_seed_human(&result, &mut io::stdout()).map_err(|error| error.to_string())
-}
-
 // ── main ─────────────────────────────────────────────────────────────────────
 
 fn main() {
@@ -947,396 +724,5 @@ fn main() {
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use bo::engine::config;
-    use serde_json::Value;
-    use std::fs;
-    use std::sync::Mutex;
-    use tempfile::TempDir;
-
-    static HOME_LOCK: Mutex<()> = Mutex::new(());
-
-    fn seed_with_home(
-        home: &TempDir,
-        output_dir: PathBuf,
-        name: Option<String>,
-    ) -> Result<(), String> {
-        let _guard = HOME_LOCK.lock().unwrap();
-        std::env::set_var("HOME", home.path());
-        cmd_seed(output_dir, name)
-    }
-
-    fn run_with_home(home: &TempDir, args: &[&str]) -> (i32, String, String) {
-        let _guard = HOME_LOCK.lock().unwrap();
-        std::env::set_var("HOME", home.path());
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let exit = run_from(args.iter().copied(), &mut stdout, &mut stderr);
-        (
-            exit,
-            String::from_utf8(stdout).unwrap(),
-            String::from_utf8(stderr).unwrap(),
-        )
-    }
-
-    fn parse_json(stdout: &str) -> Value {
-        serde_json::from_str(stdout)
-            .unwrap_or_else(|error| panic!("stdout is not valid JSON: {error}\nstdout:\n{stdout}"))
-    }
-
-    fn seed_tree(home: &TempDir, name: &str) -> PathBuf {
-        let output_dir = home.path().join(name);
-        let output_arg = output_dir.to_string_lossy().to_string();
-        let (exit, _stdout, _stderr) = run_with_home(home, &["bo", "seed", &output_arg]);
-        assert_eq!(exit, 0);
-        output_dir
-    }
-
-    fn write_compile_leaf(tree: &Path, file: &str, title: &str) {
-        bo::domain::index::append_entry(
-            &tree.join("index.jsonl"),
-            &bo::domain::index::IndexEntry {
-                file: file.to_string(),
-                title: title.to_string(),
-                url: format!("https://example.com/{}", file.trim_end_matches(".md")),
-            },
-        )
-        .unwrap();
-        fs::write(
-            tree.join(file),
-            format!(
-                "---\ntitle: {title}\nurl: https://example.com/{slug}\ncollected_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-01T00:00:00Z\n---\n\n# {title}\n\nBody.\n",
-                slug = file.trim_end_matches(".md")
-            ),
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn raw_json_mode_detection_stops_at_arg_terminator() {
-        assert!(raw_json_mode_requested(&[
-            OsString::from("bo"),
-            OsString::from("search"),
-            OsString::from("--json"),
-        ]));
-        assert!(!raw_json_mode_requested(&[
-            OsString::from("bo"),
-            OsString::from("search"),
-            OsString::from("--"),
-            OsString::from("--json"),
-        ]));
-    }
-
-    #[test]
-    fn json_parser_error_for_missing_subcommand() {
-        let home = TempDir::new().unwrap();
-        let (exit, stdout, stderr) = run_with_home(&home, &["bo", "--json"]);
-        assert_ne!(exit, 0);
-        assert!(stderr.is_empty());
-        let parsed = parse_json(&stdout);
-        assert_eq!(parsed["ok"], false);
-        assert_eq!(parsed["command"], "bo");
-        assert_eq!(parsed["error"]["code"], "usage_error");
-    }
-
-    #[test]
-    fn command_local_json_flag_is_accepted() {
-        let home = TempDir::new().unwrap();
-        let (exit, stdout, _stderr) = run_with_home(&home, &["bo", "list", "--json"]);
-        assert_ne!(exit, 0);
-        let parsed = parse_json(&stdout);
-        assert_eq!(parsed["command"], "list");
-        assert_eq!(parsed["error"]["code"], "not_seeded");
-    }
-
-    #[test]
-    fn global_json_flag_is_accepted() {
-        let home = TempDir::new().unwrap();
-        let (exit, stdout, _stderr) = run_with_home(&home, &["bo", "--json", "list"]);
-        assert_ne!(exit, 0);
-        let parsed = parse_json(&stdout);
-        assert_eq!(parsed["command"], "list");
-        assert_eq!(parsed["error"]["code"], "not_seeded");
-    }
-
-    #[test]
-    fn seed_json_created_payload() {
-        let home = TempDir::new().unwrap();
-        let output = TempDir::new().unwrap();
-        let output_dir = output.path().join("my-tree");
-        let output_arg = output_dir.to_string_lossy().to_string();
-
-        let (exit, stdout, stderr) = run_with_home(&home, &["bo", "seed", "--json", &output_arg]);
-        assert_eq!(exit, 0);
-        assert!(stderr.is_empty());
-        let parsed = parse_json(&stdout);
-        assert_eq!(parsed["ok"], true);
-        assert_eq!(parsed["command"], "seed");
-        assert_eq!(parsed["data"]["status"], "created");
-        assert_eq!(parsed["data"]["tree_name"], "my-tree");
-    }
-
-    #[test]
-    fn seed_json_already_seeded_payload() {
-        let home = TempDir::new().unwrap();
-        let output = TempDir::new().unwrap();
-        let output_dir = output.path().join("my-tree");
-        let output_arg = output_dir.to_string_lossy().to_string();
-
-        let first = run_with_home(&home, &["bo", "seed", &output_arg]);
-        assert_eq!(first.0, 0);
-        let (exit, stdout, _stderr) = run_with_home(&home, &["bo", "seed", "--json", &output_arg]);
-        assert_eq!(exit, 0);
-        let parsed = parse_json(&stdout);
-        assert_eq!(parsed["data"]["status"], "already_seeded");
-        assert_eq!(parsed["data"]["tree_name"], "my-tree");
-    }
-
-    #[test]
-    fn every_output_command_accepts_json_flag() {
-        let output = TempDir::new().unwrap();
-        let output_arg = output.path().join("tree").to_string_lossy().to_string();
-
-        let cases: Vec<(Vec<&str>, &str)> = vec![
-            (vec!["bo", "seed", "--json", &output_arg], "seed"),
-            (
-                vec!["bo", "collect", "--json", "https://example.com"],
-                "collect",
-            ),
-            (vec!["bo", "compile", "--json"], "compile"),
-            (vec!["bo", "list", "--json"], "list"),
-            (vec!["bo", "search", "--json", "term"], "search"),
-            (vec!["bo", "show", "--json", "Title"], "show"),
-            (vec!["bo", "raze", "--json"], "raze"),
-        ];
-
-        for (args, command) in cases {
-            let home = TempDir::new().unwrap();
-            let (_exit, stdout, _stderr) = run_with_home(&home, &args);
-            let parsed = parse_json(&stdout);
-            assert_eq!(parsed["command"], command, "args: {args:?}");
-            assert!(parsed.get("schema_version").is_some(), "args: {args:?}");
-            assert!(parsed.get("warnings").is_some(), "args: {args:?}");
-        }
-    }
-
-    #[test]
-    fn search_json_no_results_exits_successfully() {
-        let home = TempDir::new().unwrap();
-        let output = TempDir::new().unwrap();
-        let output_dir = output.path().join("tree");
-        let output_arg = output_dir.to_string_lossy().to_string();
-        let _ = run_with_home(&home, &["bo", "seed", &output_arg]);
-
-        let (exit, stdout, _stderr) = run_with_home(&home, &["bo", "search", "--json", "missing"]);
-        assert_eq!(exit, 0);
-        let parsed = parse_json(&stdout);
-        assert_eq!(parsed["ok"], true);
-        assert_eq!(parsed["command"], "search");
-        assert_eq!(parsed["data"]["hits"].as_array().unwrap().len(), 0);
-        assert_eq!(parsed["data"]["query"]["terms"][0], "missing");
-    }
-
-    #[test]
-    fn compile_json_empty_tree_is_noop_without_api_key() {
-        let home = TempDir::new().unwrap();
-        let tree = seed_tree(&home, "tree");
-        assert!(tree.exists());
-        std::env::remove_var("OPENAI_API_KEY");
-
-        let (exit, stdout, _stderr) = run_with_home(&home, &["bo", "compile", "--json"]);
-        assert_eq!(exit, 0);
-        let parsed = parse_json(&stdout);
-        assert_eq!(parsed["ok"], true);
-        assert_eq!(parsed["data"]["status"], "noop");
-        assert_eq!(parsed["data"]["reason"], "empty_tree");
-    }
-
-    #[test]
-    fn compile_json_single_leaf_is_noop_without_api_key() {
-        let home = TempDir::new().unwrap();
-        let tree = seed_tree(&home, "tree");
-        write_compile_leaf(&tree, "a.md", "A");
-        std::env::remove_var("OPENAI_API_KEY");
-
-        let (exit, stdout, _stderr) = run_with_home(&home, &["bo", "compile", "--json"]);
-        assert_eq!(exit, 0);
-        let parsed = parse_json(&stdout);
-        assert_eq!(parsed["ok"], true);
-        assert_eq!(parsed["data"]["status"], "noop");
-        assert_eq!(parsed["data"]["reason"], "single_leaf");
-    }
-
-    #[test]
-    fn compile_json_missing_api_key_is_structured_error() {
-        let home = TempDir::new().unwrap();
-        let tree = seed_tree(&home, "tree");
-        write_compile_leaf(&tree, "a.md", "A");
-        write_compile_leaf(&tree, "b.md", "B");
-        std::env::remove_var("OPENAI_API_KEY");
-
-        let (exit, stdout, _stderr) = run_with_home(&home, &["bo", "compile", "--json"]);
-        assert_ne!(exit, 0);
-        let parsed = parse_json(&stdout);
-        assert_eq!(parsed["ok"], false);
-        assert_eq!(parsed["error"]["code"], "io_error");
-        assert!(parsed["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("OPENAI_API_KEY"));
-    }
-
-    #[test]
-    fn show_json_not_found_is_structured_error() {
-        let home = TempDir::new().unwrap();
-        let _tree = seed_tree(&home, "tree");
-
-        let (exit, stdout, _stderr) = run_with_home(&home, &["bo", "show", "--json", "Missing"]);
-        assert_ne!(exit, 0);
-        let parsed = parse_json(&stdout);
-        assert_eq!(parsed["ok"], false);
-        assert_eq!(parsed["command"], "show");
-        assert_eq!(parsed["error"]["code"], "not_found");
-        assert_eq!(parsed["error"]["details"]["title"], "Missing");
-    }
-
-    #[test]
-    fn show_json_ambiguous_title_includes_candidates() {
-        let home = TempDir::new().unwrap();
-        let tree = seed_tree(&home, "tree");
-        write_compile_leaf(&tree, "a.md", "Same Title");
-        write_compile_leaf(&tree, "b.md", "Same Title");
-
-        let (exit, stdout, _stderr) = run_with_home(&home, &["bo", "show", "--json", "Same Title"]);
-        assert_ne!(exit, 0);
-        let parsed = parse_json(&stdout);
-        assert_eq!(parsed["ok"], false);
-        assert_eq!(parsed["command"], "show");
-        assert_eq!(parsed["error"]["code"], "ambiguous");
-        assert_eq!(
-            parsed["error"]["details"]["candidates"]
-                .as_array()
-                .unwrap()
-                .len(),
-            2
-        );
-    }
-
-    #[test]
-    fn search_json_page_zero_is_structured_usage_error() {
-        let home = TempDir::new().unwrap();
-        let _tree = seed_tree(&home, "tree");
-
-        let (exit, stdout, _stderr) =
-            run_with_home(&home, &["bo", "search", "--json", "term", "--page", "0"]);
-        assert_eq!(exit, 2);
-        let parsed = parse_json(&stdout);
-        assert_eq!(parsed["ok"], false);
-        assert_eq!(parsed["command"], "search");
-        assert_eq!(parsed["error"]["code"], "usage_error");
-    }
-
-    #[test]
-    fn raze_json_summary() {
-        let home = TempDir::new().unwrap();
-        let tree = seed_tree(&home, "tree");
-
-        let (exit, stdout, _stderr) = run_with_home(&home, &["bo", "raze", "--json"]);
-        assert_eq!(exit, 0);
-        let parsed = parse_json(&stdout);
-        assert_eq!(parsed["ok"], true);
-        assert_eq!(parsed["command"], "raze");
-        assert_eq!(parsed["data"]["output_dir"], tree.display().to_string());
-        assert_eq!(parsed["data"]["removed_output_dir"], true);
-        assert_eq!(parsed["data"]["deleted_config"], true);
-    }
-
-    #[test]
-    fn raze_json_reports_suspicious_ledger_entries_as_warnings() {
-        let home = TempDir::new().unwrap();
-        let tree = seed_tree(&home, "tree");
-        bo::domain::index::append_entry(
-            &tree.join("index.jsonl"),
-            &bo::domain::index::IndexEntry {
-                file: "../outside.md".to_string(),
-                title: "Suspicious".to_string(),
-                url: "https://example.com/suspicious".to_string(),
-            },
-        )
-        .unwrap();
-
-        let (exit, stdout, _stderr) = run_with_home(&home, &["bo", "raze", "--json"]);
-        assert_eq!(exit, 0);
-        let parsed = parse_json(&stdout);
-        assert_eq!(parsed["warnings"][0]["code"], "suspicious_ledger_entry");
-        assert_eq!(parsed["warnings"][0]["details"]["file"], "../outside.md");
-    }
-
-    #[test]
-    fn collect_json_duplicate_url_is_structured_error() {
-        let home = TempDir::new().unwrap();
-        let tree = seed_tree(&home, "tree");
-        let url = "https://www.youtube.com/watch?v=a1mhk7mAetk";
-        bo::domain::index::append_entry(
-            &tree.join("index.jsonl"),
-            &bo::domain::index::IndexEntry {
-                file: "existing.md".to_string(),
-                title: "Existing Video".to_string(),
-                url: url.to_string(),
-            },
-        )
-        .unwrap();
-
-        let (exit, stdout, _stderr) = run_with_home(&home, &["bo", "collect", "--json", url]);
-        assert_ne!(exit, 0);
-        let parsed = parse_json(&stdout);
-        assert_eq!(parsed["ok"], false);
-        assert_eq!(parsed["command"], "collect");
-        assert_eq!(parsed["error"]["code"], "duplicate_url");
-        assert_eq!(parsed["error"]["details"]["existing_file"], "existing.md");
-    }
-
-    #[test]
-    fn seed_writes_name_derived_from_dir_basename() {
-        let home = TempDir::new().unwrap();
-        let output = TempDir::new().unwrap();
-        let output_dir = output.path().join("my-tree");
-
-        seed_with_home(&home, output_dir, None).unwrap();
-
-        let cfg_path = home.path().join(".bo").join("config.json");
-        let cfg = config::read_config(&cfg_path).unwrap();
-        assert_eq!(cfg.tree.name.as_deref(), Some("my-tree"));
-        assert!(cfg.tree.created_at.is_some());
-    }
-
-    #[test]
-    fn seed_uses_explicit_name_flag() {
-        let home = TempDir::new().unwrap();
-        let output = TempDir::new().unwrap();
-        let output_dir = output.path().join("some-dir");
-
-        seed_with_home(&home, output_dir, Some("explicit-name".to_string())).unwrap();
-
-        let cfg_path = home.path().join(".bo").join("config.json");
-        let cfg = config::read_config(&cfg_path).unwrap();
-        assert_eq!(cfg.tree.name.as_deref(), Some("explicit-name"));
-    }
-
-    #[test]
-    fn seed_already_seeded_is_idempotent() {
-        let home = TempDir::new().unwrap();
-        let output = TempDir::new().unwrap();
-        let output_dir = output.path().join("my-tree");
-        let cfg_path = home.path().join(".bo").join("config.json");
-
-        seed_with_home(&home, output_dir.clone(), None).unwrap();
-        let first_created_at = config::read_config(&cfg_path).unwrap().tree.created_at;
-
-        seed_with_home(&home, output_dir, None).unwrap();
-        let second_created_at = config::read_config(&cfg_path).unwrap().tree.created_at;
-
-        assert_eq!(first_created_at, second_created_at);
-    }
-}
+#[path = "tests/main_tests.rs"]
+mod tests;
