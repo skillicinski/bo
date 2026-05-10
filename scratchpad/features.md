@@ -42,7 +42,7 @@ Somewhat formulated feature candidates. Keep items tickable. Promote one item at
   - Expected: `bo config set compile_model gpt-4.1-mini` updates the config. `bo config get compile_model` shows current value. `bo config list` shows all settings.
   - Notes: minimal scope — just compile_model initially. Extensible to other settings (summary_model, base_url) later. `summary_model` allows using a cheaper/faster model (e.g. gpt-4.1-nano) for leaf summary generation independently of compile_model.
 
-- [ ] Add --json output flag to all commands
+- [x] Add --json output flag to all commands
   - Context: bo commands should be machine-parseable for agent/MCP consumption alongside human-friendly defaults.
   - Expected: `--json` flag on collect, compile, list, query, lint produces structured JSON output suitable for programmatic use.
   - Notes: enables external agents to reliably parse bo's results without screen-scraping.
