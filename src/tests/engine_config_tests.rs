@@ -13,6 +13,7 @@ fn make_config(output_dir: &str) -> Config {
             created_at: None,
         },
         compile_model: None,
+        query_model: None,
     }
 }
 
@@ -72,6 +73,7 @@ fn compile_model_roundtrip_with_value() {
             created_at: None,
         },
         compile_model: Some("gpt-4o-mini".to_string()),
+        query_model: None,
     };
     write_config(&config, &path).unwrap();
 
@@ -92,6 +94,7 @@ fn name_and_created_at_roundtrip() {
             created_at: Some("2026-04-14T09:00:00Z".to_string()),
         },
         compile_model: None,
+        query_model: None,
     };
     write_config(&config, &path).unwrap();
 
@@ -126,6 +129,55 @@ fn effective_compile_model_returns_stored_value_when_set() {
             created_at: None,
         },
         compile_model: Some("claude-3-5-sonnet".to_string()),
+        query_model: None,
     };
     assert_eq!(cfg.effective_compile_model(), "claude-3-5-sonnet");
+}
+
+#[test]
+fn query_model_roundtrip_with_value() {
+    let dir = TempDir::new().unwrap();
+    let path = temp_config_path(&dir);
+
+    let config = Config {
+        tree: TreeConfig {
+            output_dir: PathBuf::from("/tmp/bo"),
+            name: None,
+            created_at: None,
+        },
+        compile_model: None,
+        query_model: Some("gpt-4o-mini".to_string()),
+    };
+    write_config(&config, &path).unwrap();
+
+    let loaded = read_config(&path).unwrap();
+    assert_eq!(loaded.query_model.as_deref(), Some("gpt-4o-mini"));
+    assert_eq!(loaded.effective_query_model(), "gpt-4o-mini");
+}
+
+#[test]
+fn query_model_absent_uses_default() {
+    let dir = TempDir::new().unwrap();
+    let path = temp_config_path(&dir);
+
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, r#"{"tree":{"output_dir":"/tmp/bo"}}"#).unwrap();
+
+    let loaded = read_config(&path).unwrap();
+    assert!(loaded.query_model.is_none());
+    assert_eq!(loaded.effective_query_model(), "gpt-4o");
+}
+
+#[test]
+fn effective_query_model_returns_stored_value_when_set() {
+    let cfg = Config {
+        tree: TreeConfig {
+            output_dir: PathBuf::from("/tmp/bo"),
+            name: None,
+            created_at: None,
+        },
+        compile_model: None,
+        query_model: Some("gpt-4.1-mini".to_string()),
+    };
+    assert_eq!(cfg.effective_query_model(), "gpt-4.1-mini");
 }

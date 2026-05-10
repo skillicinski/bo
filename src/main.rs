@@ -2,6 +2,7 @@ use bo::cli::collect::{self, CollectError};
 use bo::cli::compile::{self, BranchResult, CompileError, CompileResult};
 use bo::cli::json::{self as json_output, JsonError, JsonWarning};
 use bo::cli::list::{self, ListOptions};
+use bo::cli::query;
 use bo::cli::raze;
 use bo::cli::search::{self, SearchOptions, SearchQuery};
 use bo::cli::seed;
@@ -18,7 +19,7 @@ use std::process;
 
 const NOT_SEEDED_MSG: &str = "bo hasn't been seeded yet — run: bo seed <output-dir>";
 const KNOWN_COMMANDS: &[&str] = &[
-    "seed", "collect", "compile", "list", "search", "show", "raze",
+    "seed", "collect", "compile", "list", "search", "show", "query", "raze",
 ];
 
 #[derive(Parser, Debug)]
@@ -80,6 +81,12 @@ enum Commands {
         /// Show the full leaf body instead of a preview
         #[arg(long)]
         full: bool,
+    },
+    /// Ask a question and get an answer synthesized from collected sources
+    Query {
+        /// Natural-language question (all arguments joined)
+        #[arg(required = true, num_args = 1..)]
+        question: Vec<String>,
     },
     /// Delete all bo-managed files and config
     Raze,
@@ -366,6 +373,25 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 Err(error) => emit_cli_error("raze", json, CliError::Raze(error), stdout, stderr),
             },
         },
+        Commands::Query { question } => {
+            let question_str = question.join(" ");
+            match execute_query(&question_str) {
+                Ok(result) if json => emit_json_success("query", &result, Vec::new(), stdout),
+                Ok(result) => {
+                    write_human_or_error(write!(stdout, "{}", query::render_human(&result)), stderr)
+                }
+                Err(error) => {
+                    let exit_code = error.exit_code();
+                    let json_error = query_json_error(&error);
+                    if json {
+                        emit_json_error("query", json_error, Vec::new(), stdout, exit_code)
+                    } else {
+                        let _ = writeln!(stderr, "error: {}", error);
+                        exit_code
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -584,6 +610,37 @@ fn execute_search(
 fn execute_show(title: String, full: bool) -> Result<show::ShowResult, CliError> {
     let cfg = require_config()?;
     show::show_leaf(&cfg.tree.output_dir, &title, &ShowOptions { full }).map_err(CliError::Show)
+}
+
+fn execute_query(question: &str) -> Result<query::QueryResult, query::QueryError> {
+    let cfg = require_config().map_err(|e| {
+        query::QueryError::NoProvider(format!("{}. Cannot query without a configured tree.", e))
+    })?;
+
+    let api_key = match std::env::var("OPENAI_API_KEY") {
+        Ok(key) if !key.is_empty() => key,
+        _ => {
+            return Err(query::QueryError::NoProvider(
+                "No API key configured. Set OPENAI_API_KEY or configure a provider.".to_string(),
+            ))
+        }
+    };
+
+    let model = cfg.effective_query_model().to_string();
+    query::run(&cfg.tree.output_dir, question, &api_key, &model)
+}
+
+fn query_json_error(error: &query::QueryError) -> JsonError {
+    let code = match error {
+        query::QueryError::NoProvider(_) => "no_provider",
+        query::QueryError::NoTerms => "no_terms",
+        query::QueryError::NoResults => "no_results",
+        query::QueryError::EmptyTree => "empty_tree",
+        query::QueryError::Io(_) => "io_error",
+        query::QueryError::Llm(_) => "llm_error",
+        query::QueryError::Parse(_) => "parse_error",
+    };
+    JsonError::new(code, error.to_string())
 }
 
 // ── human rendering ──────────────────────────────────────────────────────────

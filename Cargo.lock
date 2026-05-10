@@ -190,6 +190,7 @@ dependencies = [
  "clap",
  "dotenvy",
  "quick-xml",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
