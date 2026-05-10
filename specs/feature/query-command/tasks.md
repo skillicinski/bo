@@ -28,12 +28,12 @@
 
 ## Output formatting + CLI wiring
 
-- [ ] Implement human-mode renderer (prose answer + Sources list with wikilinks)
-- [ ] Implement JSON-mode renderer (ADR-002 compliant schema: answer, citations, model, leaves_consulted)
-- [ ] Add `Query` variant to `Commands` enum in `src/main.rs` with `question: String` arg
-- [ ] Wire dispatch: read config → check API key → call query pipeline → render output
-- [ ] Handle exit codes: 0 = success, 1 = no results, 2 = provider/config error
-- [ ] Verify: `bo query --help` shows correct usage, `bo query "test"` without API key exits 2 with actionable message
+- [x] Implement human-mode renderer (prose answer + Sources list with wikilinks)
+- [x] Implement JSON-mode renderer (ADR-002 compliant schema: answer, citations, model, leaves_consulted)
+- [x] Add `Query` variant to `Commands` enum in `src/main.rs` with `question: String` arg
+- [x] Wire dispatch: read config → check API key → call query pipeline → render output
+- [x] Handle exit codes: 0 = success, 1 = no results, 2 = provider/config error
+- [x] Verify: `bo query --help` shows correct usage, `bo query "test"` without API key exits 2 with actionable message
 
 ## Integration test
 

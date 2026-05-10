@@ -297,19 +297,17 @@ struct SynthesisResponse {
     cited_slugs: Vec<String>,
 }
 
-/// Run the synthesis LLM call. Returns raw SynthesisResponse.
-fn synthesize(
+/// Run synthesis with an injectable provider.
+fn synthesize_with_provider(
     question: &str,
     context: &str,
-    api_key: &str,
+    provider: &dyn LlmProvider,
     model: &str,
 ) -> Result<SynthesisResponse, QueryError> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| QueryError::Io(format!("failed to create async runtime: {}", e)))?;
-
-    let provider = OpenAiProvider::new(api_key);
 
     let user_message = format!(
         "<question>{}</question>\n\n<sources>\n{}</sources>",
@@ -426,6 +424,17 @@ pub fn run(
     api_key: &str,
     model: &str,
 ) -> Result<QueryResult, QueryError> {
+    let provider = OpenAiProvider::new(api_key);
+    run_with_provider(tree_dir, question, &provider, model)
+}
+
+/// Run the full query pipeline with an injectable provider (for testing).
+pub fn run_with_provider(
+    tree_dir: &Path,
+    question: &str,
+    provider: &dyn LlmProvider,
+    model: &str,
+) -> Result<QueryResult, QueryError> {
     let terms = extract_terms(question)?;
 
     eprintln!("searching...");
@@ -434,7 +443,7 @@ pub fn run(
     let (context, consulted) = assemble_context(&retrieved);
 
     eprintln!("synthesizing...");
-    let response = synthesize(question, &context, api_key, model)?;
+    let response = synthesize_with_provider(question, &context, provider, model)?;
 
     let (answer, citations) = validate_citations(response, &retrieved);
 
