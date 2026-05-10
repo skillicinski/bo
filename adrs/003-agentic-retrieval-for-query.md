@@ -114,8 +114,30 @@ ADR-001's core thesis — that bo is a reliable primitive for external agents to
 
 ---
 
+## Open Direction: Cross-Query Context
+
+V2's agentic retrieval produces structured intermediate state (branches explored, leaves read, relevance assessments) that could benefit subsequent queries. A follow-up question ("what about lifetimes specifically?") after an ownership query shouldn't re-discover the same branches from scratch.
+
+**Sketch:**
+
+- After each query, the agent's retrieval trace (explored paths, selected leaves, synthesized answer) is persisted as a lightweight session record
+- On the next query, the agent receives the prior record and decides whether to reuse context or start fresh
+- The relatedness decision belongs to the agent — no heuristic threshold in code
+- A local DB (sqlite or similar) is the natural backend for session records, avoiding file proliferation in the markdown tree
+
+**Not decided:**
+
+- Session boundary semantics (time-based? explicit `--new` flag? agent-determined?)
+- Storage format and location (`~/.bo/sessions/` vs sqlite vs tree-adjacent)
+- Whether V1 should capture any trace data opportunistically for future V2 consumption
+- Privacy implications of persisting query content locally
+
+This is deferred until V2 implementation. Noted here so the retrieval tool design doesn't accidentally preclude session continuity.
+
+---
+
 ## References
 
 - ADR-001: deterministic pipelines, agent-loop exception clause
-- Gulli, *Agentic Design Patterns*: Tool Use (#5), Planning (#6), Reflection (#4), Resource-Aware Optimization (#16)
+- Gulli, *Agentic Design Patterns*: Tool Use (#5), Planning (#6), Reflection (#4), Resource-Aware Optimization (#16), Memory Management (#8)
 - Karpathy, *LLM Knowledge Bases*: navigable structure as retrieval advantage over flat document stores
