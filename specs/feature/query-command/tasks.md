@@ -2,9 +2,9 @@
 
 ## Config
 
-- [ ] Add `query_model: Option<String>` to `Config` struct in `src/engine/config.rs`
-- [ ] Add `effective_query_model()` accessor defaulting to `"gpt-4o"`
-- [ ] Verify existing config read/write tests pass, add test for new field round-trip
+- [x] Add `query_model: Option<String>` to `Config` struct in `src/engine/config.rs`
+- [x] Add `effective_query_model()` accessor defaulting to `"gpt-4o"`
+- [x] Verify existing config read/write tests pass, add test for new field round-trip
 
 ## Query module: term extraction + retrieval
 
