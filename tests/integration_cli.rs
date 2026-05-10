@@ -438,9 +438,11 @@ fn list_json_output_is_parseable_and_includes_required_fields_and_degradation_st
     );
 
     let payload: Value = serde_json::from_slice(&out.stdout).expect("stdout was not valid JSON");
-    let leaves = payload["leaves"]
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["command"], "list");
+    let leaves = payload["data"]["leaves"]
         .as_array()
-        .expect("expected object-rooted JSON with leaves array");
+        .expect("expected enveloped JSON with data.leaves array");
 
     assert_eq!(leaves.len(), 2, "payload: {payload}");
     for row in leaves {
@@ -501,9 +503,11 @@ fn list_combined_flags_filter_sort_limit_and_emit_json() {
     );
 
     let payload: Value = serde_json::from_slice(&out.stdout).expect("stdout was not valid JSON");
-    let leaves = payload["leaves"]
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["command"], "list");
+    let leaves = payload["data"]["leaves"]
         .as_array()
-        .expect("expected object-rooted JSON with leaves array");
+        .expect("expected enveloped JSON with data.leaves array");
 
     assert_eq!(leaves.len(), 5, "payload: {payload}");
 
@@ -654,7 +658,9 @@ fn show_json_output_is_parseable_and_contains_required_fields() {
     );
 
     let payload: Value = serde_json::from_slice(&out.stdout).expect("stdout was not valid JSON");
-    let leaf = payload.get("leaf").expect("missing leaf object");
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["command"], "show");
+    let leaf = payload["data"].get("leaf").expect("missing leaf object");
 
     assert_eq!(leaf["title"], "Json Title");
     assert_eq!(leaf["file"], "json-title.md");
@@ -695,7 +701,9 @@ fn show_json_full_output_contains_full_body() {
     );
 
     let payload: Value = serde_json::from_slice(&out.stdout).expect("stdout was not valid JSON");
-    let leaf = payload.get("leaf").expect("missing leaf object");
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["command"], "show");
+    let leaf = payload["data"].get("leaf").expect("missing leaf object");
 
     assert_eq!(leaf["truncated"], false);
     assert_eq!(leaf["full"], true);

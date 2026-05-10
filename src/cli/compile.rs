@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 
 use chrono::Utc;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::domain::{branch, frontmatter, index, slug, tree::Tree};
@@ -85,13 +85,44 @@ documents, then produce structured output describing each concept.
 
 // ── public types ──────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone, Serialize)]
+pub struct CompileResult {
+    pub status: String,
+    pub reason: Option<String>,
+    pub branches: Vec<BranchResult>,
+    pub leaves_updated: usize,
+    pub leaves_skipped: Vec<String>,
+}
+
+impl CompileResult {
+    fn compiled(summary: CompileSummary) -> Self {
+        Self {
+            status: "compiled".to_string(),
+            reason: None,
+            branches: summary.branches,
+            leaves_updated: summary.leaves_updated,
+            leaves_skipped: summary.leaves_skipped,
+        }
+    }
+
+    fn noop(reason: &str) -> Self {
+        Self {
+            status: "noop".to_string(),
+            reason: Some(reason.to_string()),
+            branches: Vec::new(),
+            leaves_updated: 0,
+            leaves_skipped: Vec::new(),
+        }
+    }
+}
+
 pub struct CompileSummary {
     pub branches: Vec<BranchResult>,
     pub leaves_updated: usize,
     pub leaves_skipped: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BranchResult {
     pub slug: String,
     pub title: String,
@@ -139,24 +170,20 @@ struct ValidatedBranch {
 // ── cmd_compile ───────────────────────────────────────────────────────────────
 
 pub fn cmd_compile(cfg: &Config) -> Result<(), String> {
-    compile_pipeline(cfg).map_err(|e| e.to_string())
+    let result = run_compile(cfg).map_err(|e| e.to_string())?;
+    print_result(&result);
+    Ok(())
 }
 
-fn compile_pipeline(cfg: &Config) -> Result<(), CompileError> {
+pub fn run_compile(cfg: &Config) -> Result<CompileResult, CompileError> {
     // ── read index (guard: empty/single-leaf) ────────────────────────────────
     let index_path = cfg.tree.output_dir.join("index.jsonl");
     let all_entries = index::read_index(&index_path)
         .map_err(|e| CompileError::Io(format!("failed to read index: {}", e)))?;
 
     match all_entries.len() {
-        0 => {
-            println!("bo is empty!");
-            return Ok(());
-        }
-        1 => {
-            println!("bo only has 1 leaf!");
-            return Ok(());
-        }
+        0 => return Ok(CompileResult::noop("empty_tree")),
+        1 => return Ok(CompileResult::noop("single_leaf")),
         _ => {}
     }
 
@@ -178,8 +205,7 @@ fn compile_pipeline(cfg: &Config) -> Result<(), CompileError> {
     }
 
     if loaded_leaves.len() < 2 {
-        println!("bo only has 1 leaf!");
-        return Ok(());
+        return Ok(CompileResult::noop("single_leaf"));
     }
 
     // ── build prompt and schema ──────────────────────────────────────────────
@@ -210,8 +236,7 @@ fn compile_pipeline(cfg: &Config) -> Result<(), CompileError> {
     )?;
 
     // ── output ───────────────────────────────────────────────────────────────
-    print_summary(&summary);
-    Ok(())
+    Ok(CompileResult::compiled(summary))
 }
 
 // ── read_valid_leaves ─────────────────────────────────────────────────────────
@@ -535,21 +560,42 @@ fn execute_plan(
 
 // ── print_summary ─────────────────────────────────────────────────────────────
 
-pub fn print_summary(summary: &CompileSummary) {
-    if summary.branches.is_empty() {
+pub fn print_result(result: &CompileResult) {
+    if result.status == "noop" {
+        match result.reason.as_deref() {
+            Some("empty_tree") => println!("bo is empty!"),
+            Some("single_leaf") => println!("bo only has 1 leaf!"),
+            _ => println!("compiled: no work to do"),
+        }
+        return;
+    }
+
+    print_summary_parts(
+        &result.branches,
+        result.leaves_updated,
+        &result.leaves_skipped,
+    );
+}
+
+fn print_summary_parts(
+    branches: &[BranchResult],
+    leaves_updated: usize,
+    leaves_skipped: &[String],
+) {
+    if branches.is_empty() {
         println!("compiled: no branches found");
     } else {
         println!(
             "compiled: {} {} across {} leaves",
-            summary.branches.len(),
-            if summary.branches.len() == 1 {
+            branches.len(),
+            if branches.len() == 1 {
                 "branch"
             } else {
                 "branches"
             },
-            summary.leaves_updated
+            leaves_updated
         );
-        for b in &summary.branches {
+        for b in branches {
             println!(
                 "  ✓ {} ({} {})",
                 b.slug,
@@ -559,18 +605,18 @@ pub fn print_summary(summary: &CompileSummary) {
         }
     }
 
-    if !summary.leaves_skipped.is_empty() {
+    if !leaves_skipped.is_empty() {
         println!();
         println!(
             "  ⚠ skipped {} {} (unparseable frontmatter):",
-            summary.leaves_skipped.len(),
-            if summary.leaves_skipped.len() == 1 {
+            leaves_skipped.len(),
+            if leaves_skipped.len() == 1 {
                 "leaf"
             } else {
                 "leaves"
             }
         );
-        for f in &summary.leaves_skipped {
+        for f in leaves_skipped {
             println!("    - {}", f);
         }
     }

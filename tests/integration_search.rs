@@ -221,13 +221,17 @@ fn search_json_output_parseable() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
 
-    assert!(!parsed["hits"].as_array().unwrap().is_empty());
-    assert!(parsed["total_results"].as_u64().unwrap() > 0);
-    assert_eq!(parsed["page"], 1);
-    assert!(parsed["total_pages"].as_u64().unwrap() >= 1);
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["command"], "search");
+    let data = &parsed["data"];
+    assert!(!data["hits"].as_array().unwrap().is_empty());
+    assert!(data["total_results"].as_u64().unwrap() > 0);
+    assert_eq!(data["page"], 1);
+    assert!(data["total_pages"].as_u64().unwrap() >= 1);
+    assert_eq!(data["query"]["terms"][0], "ownership");
 
     // Each hit has required fields
-    let hit = &parsed["hits"][0];
+    let hit = &data["hits"][0];
     assert!(hit["file"].is_string());
     assert!(hit["title"].is_string());
     assert!(hit["snippet"].is_string());
@@ -236,14 +240,16 @@ fn search_json_output_parseable() {
 }
 
 #[test]
-fn search_json_no_results_exits_1() {
+fn search_json_no_results_exits_0() {
     let tree = TestTree::new(&corpus());
     let output = tree.search(&["xyznonexistent", "--json"]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(parsed["total_results"], 0);
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["data"]["total_results"], 0);
+    assert_eq!(parsed["data"]["hits"].as_array().unwrap().len(), 0);
 }
 
 #[test]
