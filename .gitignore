@@ -4,4 +4,7 @@
 # dev
 .env
 /tmp-tree/
-specs/
+
+# internal planning (not shipped)
+docs/scratchpad/
+docs/specs/
