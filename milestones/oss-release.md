@@ -24,10 +24,14 @@ Bo's CLI commands are reliable primitives. External agents (Claude Code, Cursor,
 
 **Experimental OSS** (~1–2 sessions):
 - basic README expansion
+- explicit experimental caveat
 - at least one inspect command
 - basic scan/survey or rebuild-index
-- CI basics
-- explicit experimental caveat
+- CI basics (fmt + clippy + test)
+- LICENSE file in repo root (MIT, matching Cargo.toml)
+- Cargo.toml metadata: description, repository, homepage, keywords
+- zero-citation = not-answered patch (prevent hallucination on irrelevant retrieval)
+- `bo config set` MVP (compile_model, query_model) — removes manual JSON editing friction
 
 **Useful alpha** (~3–5 sessions):
 - `bo query` MVP
