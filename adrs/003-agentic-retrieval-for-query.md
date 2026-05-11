@@ -2,6 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-05-10
+**Revised:** 2026-05-11
 
 ---
 
@@ -20,6 +21,22 @@ However, `bo query` has a fundamentally different retrieval problem. Unlike comp
 
 Steps 1–5 are open-ended exploration — the system doesn't know upfront which path through the tree will yield good results. This is precisely the case where an agent loop (tool-use pattern) outperforms a fixed pipeline, because the LLM's pattern recognition over structured documents exceeds what code-driven heuristics can achieve for relevance.
 
+### The pattern: Agentic RAG over a structural index
+
+The V2 architecture is best understood as **Agentic RAG** (Gulli, Ch. 14) — but with a critical difference from the standard embed-chunk-retrieve pipeline: bo's retrieval substrate is the **tree's branch/leaf hierarchy**, not a vector database.
+
+In standard RAG, retrieval means: embed query → vector similarity search → top-k chunks. The intelligence is in the embedding space.
+
+In bo's Agentic RAG, retrieval means: the LLM navigates a human-readable structural index (branches as topic clusters, leaves as documents) the way a researcher browses a wiki — by topic, then by document, with the ability to backtrack and try a different path. The intelligence is in the navigation decisions.
+
+This is an architectural differentiator:
+- No embedding model or vector store infrastructure required
+- The retrieval index (branches + leaf summaries) is the same artifact users see when they run `bo list` or `bo show` — fully inspectable
+- Tree structure produced by `compile` doubles as both a knowledge graph for humans and a navigation substrate for the query agent
+- The tree is rebuildable from its own content (storage philosophy) — the retrieval index is never a black-box embedding table
+
+Gulli's key question for when Planning applies: "does the *how* need to be discovered, or is it already known?" For query retrieval over a growing tree, the how (which branches, which leaves, in what order) varies per question and cannot be hardcoded. This is the fundamental argument for agentic retrieval over a fixed pipeline.
+
 ---
 
 ## Decision
@@ -37,9 +54,9 @@ LLM:  single structured-output call → synthesized answer with citations
 code: format and output
 ```
 
-### V2: Agentic tree navigation
+### V2: Agentic RAG over structural index
 
-Replaces V1's retrieval step with an LLM-driven exploration loop. The model receives tools to navigate the tree structure and decides its own retrieval path:
+Replaces V1's retrieval step with an LLM-driven exploration loop. The model receives tools to navigate the tree structure and decides its own retrieval path. This is **Agentic RAG** — the agent actively interrogates relevance, decomposes multi-faceted questions into sub-queries across branches, and identifies knowledge gaps — but the retrieval substrate is bo's compiled tree hierarchy rather than a vector store.
 
 **Tools provided to the query agent:**
 
@@ -57,12 +74,17 @@ Replaces V1's retrieval step with an LLM-driven exploration loop. The model rece
 - Step limit: hard cap prevents runaway loops (configurable, default ~15 steps)
 - No mutation: query tools are strictly read-only
 
-**Relevant agentic patterns (Gulli):**
+**Composed agentic patterns (Gulli):**
 
-- **Tool Use (#5):** core mechanic — LLM decides which tree navigation tools to invoke
-- **Planning (#6):** model implicitly plans a retrieval strategy before executing
-- **Reflection (#4):** backtracking when initial selection is poor is a form of self-correction
-- **Resource-Aware Optimization (#16):** peek (summary) before read (full body) minimizes token spend
+V2 is not a single pattern — it composes several:
+
+- **Agentic RAG (#14):** the governing pattern. The agent reasons about what to retrieve, validates source relevance, decomposes multi-faceted questions into sub-queries across branches, and identifies when the tree lacks coverage. The difference from standard Agentic RAG is the retrieval substrate: structural hierarchy instead of embedding space.
+- **Planning (#6):** the retrieval path varies per query and must be discovered. The agent implicitly forms a strategy ("check the Rust branch first, then concurrency") before executing. Gulli: "does the how need to be discovered?" — yes.
+- **Resource-Aware Optimization (#16):** peek (summary) before read (full body) minimizes token spend. Simple factual queries may resolve from summaries alone; complex synthesis requires full reads of fewer, confirmed-relevant leaves.
+- **Reflection (#4):** backtracking when initial branch selection is poor. "This branch on inference scalability doesn't answer the ownership question — try another." Self-correction within the retrieval loop.
+- **Tool Use (#5):** the execution mechanic — LLM decides which navigation tools to invoke and in what order.
+
+Tool Use is the mechanic; Agentic RAG is the pattern. The distinction matters because it clarifies *why* the agent has tools (to navigate and reason about retrieval) rather than treating tool-calling as the design goal itself.
 
 ### V1 → V2 boundary
 
@@ -108,9 +130,11 @@ ADR-001's core thesis — that bo is a reliable primitive for external agents to
 
 1. **Single-call retrieval forever** — rejected because relevance over structured trees is an open-ended problem that fixed pipelines solve poorly at scale.
 
-2. **RAG with vector embeddings** — deferred; adds infrastructure (embedding model, vector store) that the tree's existing structure may render unnecessary. Revisit if agentic navigation proves insufficient.
+2. **Standard RAG with vector embeddings** — deferred. Adds infrastructure (embedding model, vector store) that bo's existing tree structure may render unnecessary. The tree's branch/leaf hierarchy already provides a navigable index — one that is human-readable, inspectable, and rebuildable from content. Vector search may complement structural navigation later but is not the primary retrieval mechanism. Revisit if agentic navigation over structure proves insufficient at scale.
 
 3. **Multi-step prompt chain (fixed sequence)** — partially adopted as V1. Insufficient long-term because the optimal retrieval path varies per query and cannot be hardcoded.
+
+4. **Pure tool-use framing** — considered but reframed. Tool Use (#5) is the execution mechanic, not the design pattern. Framing V2 as "give the LLM tools" misses the why: the agent needs tools in order to perform Agentic RAG over a structural index. The pattern is retrieval reasoning; tool-calling is how it acts on those decisions.
 
 ---
 
@@ -136,8 +160,20 @@ This is deferred until V2 implementation. Noted here so the retrieval tool desig
 
 ---
 
+## V2 Trigger
+
+V2 implementation begins when dogfood shows search-based retrieval consistently missing relevant content that a human would find by browsing the tree structure. Specific signals:
+
+- Multi-hop questions that require material from multiple branches ("how does X compare to Y across these articles?")
+- Queries where relevant leaves exist but V1's lexical search doesn't surface them due to vocabulary mismatch
+- Trees large enough (hundreds of leaves, many branches) that flat top-k ranking produces noise from term overlap
+
+The zero-citation patch (v0.0.1) addresses V1's answerability detection gap — the model hallucinating from parametric knowledge when retrieval finds irrelevant leaves. That is a different failure mode from retrieval quality and does not itself trigger V2.
+
+---
+
 ## References
 
 - ADR-001: deterministic pipelines, agent-loop exception clause
-- Gulli, *Agentic Design Patterns*: Tool Use (#5), Planning (#6), Reflection (#4), Resource-Aware Optimization (#16), Memory Management (#8)
+- Gulli, *Agentic Design Patterns*: Agentic RAG (#14), Planning (#6), Resource-Aware Optimization (#16), Reflection (#4), Tool Use (#5)
 - Karpathy, *LLM Knowledge Bases*: navigable structure as retrieval advantage over flat document stores
