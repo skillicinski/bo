@@ -714,3 +714,70 @@ fn assemble_truncates_on_word_budget() {
     assert!(word_count <= test_budget_words + 100); // small overhead from formatting
     assert_eq!(consulted, 1);
 }
+
+// ── insufficient sources (zero-citation) tests ───────────────────────────────
+
+struct ZeroCitationProvider;
+
+#[async_trait]
+impl LlmProvider for ZeroCitationProvider {
+    async fn complete(
+        &self,
+        _messages: &[Message],
+        _model: &str,
+        _max_tokens: u32,
+        _response_schema: Option<&Value>,
+    ) -> Result<LlmResponse, LlmError> {
+        Ok(LlmResponse {
+            content: r#"{"answer":"The sources do not cover this topic.","cited_slugs":[]}"#
+                .to_string(),
+            finish_reason: FinishReason::Stop,
+        })
+    }
+}
+
+#[test]
+fn zero_citations_returns_insufficient_sources_error() {
+    let dir = single_leaf_query_tree();
+    let provider = ZeroCitationProvider;
+
+    let err = run_with_provider_and_policy(
+        dir.path(),
+        "what is rust safety",
+        &provider,
+        "gpt-4o",
+        short_query_policy(1),
+    )
+    .unwrap_err();
+
+    match &err {
+        QueryError::InsufficientSources { leaves_consulted } => {
+            assert_eq!(*leaves_consulted, 1);
+        }
+        other => panic!("expected InsufficientSources, got: {:?}", other),
+    }
+    assert_eq!(err.exit_code(), 1);
+    assert!(
+        err.to_string().contains("searched 1 sources"),
+        "display: {}",
+        err
+    );
+}
+
+#[test]
+fn one_valid_citation_returns_ok() {
+    let dir = single_leaf_query_tree();
+    let provider = FlakyQueryProvider::new(0, FinishReason::Stop);
+
+    let result = run_with_provider_and_policy(
+        dir.path(),
+        "what is rust safety",
+        &provider,
+        "gpt-4o",
+        short_query_policy(1),
+    )
+    .unwrap();
+
+    assert_eq!(result.citations.len(), 1);
+    assert_eq!(result.citations[0].slug, "only-leaf");
+}

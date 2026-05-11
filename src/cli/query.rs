@@ -89,6 +89,8 @@ pub enum QueryError {
     Llm(LlmError),
     /// LLM response could not be parsed
     Parse(String),
+    /// Synthesis produced zero valid citations — tree doesn't cover the question
+    InsufficientSources { leaves_consulted: usize },
 }
 
 impl fmt::Display for QueryError {
@@ -123,6 +125,11 @@ impl fmt::Display for QueryError {
             QueryError::ContentFilter => write!(f, "query synthesis was blocked by content filter"),
             QueryError::Llm(e) => write!(f, "{}", e),
             QueryError::Parse(msg) => write!(f, "synthesis failed — {}", msg),
+            QueryError::InsufficientSources { leaves_consulted } => write!(
+                f,
+                "searched {} sources but could not produce a grounded answer",
+                leaves_consulted
+            ),
         }
     }
 }
@@ -131,7 +138,9 @@ impl QueryError {
     /// Exit code per spec: 1 = no results, 2 = provider/config/system error
     pub fn exit_code(&self) -> i32 {
         match self {
-            QueryError::NoResults | QueryError::EmptyTree => 1,
+            QueryError::NoResults
+            | QueryError::EmptyTree
+            | QueryError::InsufficientSources { .. } => 1,
             _ => 2,
         }
     }
@@ -606,6 +615,12 @@ fn run_with_provider_and_policy(
     let response = synthesize_with_provider(question, &context, provider, model, policy)?;
 
     let (answer, citations) = validate_citations(response, &retrieved);
+
+    if citations.is_empty() {
+        return Err(QueryError::InsufficientSources {
+            leaves_consulted: consulted,
+        });
+    }
 
     Ok(QueryResult {
         answer,

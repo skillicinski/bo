@@ -329,6 +329,24 @@ fn leaf_without_summary_still_retrieved() {
     assert_eq!(result.citations[0].slug, "rust-traits");
 }
 
+#[test]
+fn zero_citations_returns_insufficient_sources() {
+    let dir = setup_test_tree();
+
+    // Provider returns an answer but cites nothing — retrieval matched but synthesis couldn't ground
+    let provider = MockProvider::new("The PMNS matrix describes neutrino mixing parameters.", &[]);
+
+    // "rust ownership" will match leaves, but provider returns zero citations
+    let err = query::run_with_provider(dir.path(), "what is Rust ownership?", &provider, "gpt-4o")
+        .unwrap_err();
+
+    assert!(matches!(err, query::QueryError::InsufficientSources { .. }));
+    assert_eq!(err.exit_code(), 1);
+    assert!(err
+        .to_string()
+        .contains("could not produce a grounded answer"));
+}
+
 // ── live API test (ignored by default) ───────────────────────────────────────
 
 #[test]

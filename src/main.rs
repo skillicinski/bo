@@ -643,6 +643,7 @@ fn query_json_error(error: &query::QueryError) -> JsonError {
         query::QueryError::Truncated | query::QueryError::ContentFilter => "llm_error",
         query::QueryError::Llm(_) => "llm_error",
         query::QueryError::Parse(_) => "parse_error",
+        query::QueryError::InsufficientSources { .. } => "insufficient_sources",
     };
     JsonError::new(code, error.to_string())
 }
