@@ -34,6 +34,22 @@ fn ordinary_html_collection_still_writes_leaf_and_index() {
 }
 
 #[test]
+fn summary_failure_writes_no_leaf_or_index_entry() {
+    let dir = TempDir::new().unwrap();
+
+    let result = write_new_document_with_summary_result(
+        "https://example.com/article",
+        Some("Article"),
+        "Substantial article body that would otherwise be written.",
+        dir.path(),
+        Err(summary::SummaryError::Parse("boom".to_string())),
+    );
+
+    assert!(matches!(result, Err(CollectError::Summary(_))));
+    assert_no_collection_artifacts(&dir);
+}
+
+#[test]
 fn collect_url_rejects_duplicate_youtube_url_before_network_fetch() {
     let dir = TempDir::new().unwrap();
     let url = "https://www.youtube.com/watch?v=a1mhk7mAetk";
@@ -136,7 +152,7 @@ const OPENREVIEW_FOOTER_HTML: &str = r#"
 "#;
 
 const MDBOOK_WITH_BAD_UI_TITLE_HTML: &str = r#"
-<html><head><title>Understanding Ownership - The Rust Programming Language</title></head>
+<html><head><title>Keyboard shortcuts</title></head>
 <body>
 <section class="help"><h2>Keyboard shortcuts</h2><p>Press ? to show keyboard shortcuts.</p></section>
 <nav><h1>The Rust Programming Language</h1></nav>
@@ -305,8 +321,19 @@ fn mdbook_page_with_bad_ui_title_and_substantive_body_is_accepted() {
 
     assert!(result.is_ok(), "mdBook page should be accepted: {result:?}");
     let page = result.unwrap();
-    let content = std::fs::read_to_string(dir.path().join(page.filename)).unwrap();
-    assert!(content.contains("Understanding Ownership") || content.contains("Ownership is Rust"));
+    assert!(
+        page.filename.starts_with("understanding-ownership"),
+        "expected slug from content title, got {}",
+        page.filename
+    );
+
+    let content = std::fs::read_to_string(dir.path().join(&page.filename)).unwrap();
+    assert!(content.contains("title: \"Understanding Ownership\""));
+    assert!(!content.contains("title: \"Keyboard shortcuts\""));
+
+    let entries = index::read_index(&dir.path().join("index.jsonl")).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].title, "Understanding Ownership");
 }
 
 #[test]

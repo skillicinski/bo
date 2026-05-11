@@ -2,19 +2,28 @@
 //
 // Two paths:
 //   generate_fallback(body) — deterministic, first ~200 words of body
-//   generate_llm(body, title, provider, model) — async LLM structured-output call
+//   generate_llm(body, title, provider, model, policy) — async LLM structured-output call
 //
 // The orchestrator `generate` tries LLM when OPENAI_API_KEY is set,
-// falls back to deterministic on missing key or any error.
+// falls back to deterministic only when no key/provider is configured.
 
-use crate::engine::llm::{LlmError, LlmProvider, Message};
+use crate::engine::llm::{
+    complete_with_policy, FinishReason, LlmCallPolicy, LlmError, LlmProvider, Message,
+};
 use serde::Deserialize;
-use tracing::warn;
+use std::fmt;
+use std::time::Duration;
 
 // ── constants ────────────────────────────────────────────────────────────────
 
 pub const SUMMARY_TARGET_WORDS: usize = 200;
 pub const SUMMARY_INPUT_MAX_WORDS: usize = 4000;
+
+const SUMMARY_LLM_POLICY: LlmCallPolicy = LlmCallPolicy {
+    timeout: Duration::from_secs(30),
+    max_attempts: 3,
+    initial_backoff: Duration::from_millis(500),
+};
 
 const SUMMARY_SYSTEM_PROMPT: &str = "\
 You are a document summarizer. Produce a single prose paragraph of approximately \
@@ -23,6 +32,32 @@ or thesis, and what makes it distinctive. The summary should be optimized for \
 retrieval — a reader should be able to determine whether to read the full document \
 based on your summary alone. Do not include meta-commentary like \"This document \
 discusses...\" — write directly about the content.";
+
+// ── errors ───────────────────────────────────────────────────────────────────
+
+#[derive(Debug)]
+pub enum SummaryError {
+    Llm(LlmError),
+    Parse(String),
+    Truncated,
+    ContentFilter,
+    Runtime(String),
+}
+
+impl fmt::Display for SummaryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SummaryError::Llm(error) => write!(f, "LLM summary failed: {}", error),
+            SummaryError::Parse(message) => write!(f, "summary response parse error: {}", message),
+            SummaryError::Truncated => write!(
+                f,
+                "summary output was truncated — try a model with larger output capacity"
+            ),
+            SummaryError::ContentFilter => write!(f, "summary was blocked by content filter"),
+            SummaryError::Runtime(message) => write!(f, "summary runtime error: {}", message),
+        }
+    }
+}
 
 // ── deterministic fallback ───────────────────────────────────────────────────
 
@@ -60,7 +95,8 @@ pub async fn generate_llm(
     title: Option<&str>,
     provider: &dyn LlmProvider,
     model: &str,
-) -> Result<String, LlmError> {
+    policy: LlmCallPolicy,
+) -> Result<String, SummaryError> {
     let truncated_body = truncate_body(body, SUMMARY_INPUT_MAX_WORDS);
 
     let user_message = match title {
@@ -85,15 +121,29 @@ pub async fn generate_llm(
         "additionalProperties": false
     });
 
-    let response = provider
-        .complete(&messages, model, 512, Some(&schema))
-        .await?;
+    let response = complete_with_policy(provider, &messages, model, 512, Some(&schema), policy)
+        .await
+        .map_err(SummaryError::Llm)?;
+
+    match response.finish_reason {
+        FinishReason::Stop => {}
+        FinishReason::Length => return Err(SummaryError::Truncated),
+        FinishReason::ContentFilter => return Err(SummaryError::ContentFilter),
+        FinishReason::Other(reason) => {
+            return Err(SummaryError::Llm(LlmError::Api(format!(
+                "unexpected finish reason: {}",
+                reason
+            ))));
+        }
+    }
 
     let parsed: SummaryResponse =
-        serde_json::from_str(&response.content).map_err(|e| LlmError::Parse(e.to_string()))?;
+        serde_json::from_str(&response.content).map_err(|e| SummaryError::Parse(e.to_string()))?;
 
     if parsed.summary.trim().is_empty() {
-        return Err(LlmError::Parse("LLM returned empty summary".to_string()));
+        return Err(SummaryError::Parse(
+            "LLM returned empty summary".to_string(),
+        ));
     }
 
     Ok(parsed.summary)
@@ -101,36 +151,29 @@ pub async fn generate_llm(
 
 // ── orchestrator ─────────────────────────────────────────────────────────────
 
-/// Generate a summary for a leaf. Tries LLM if OPENAI_API_KEY is set,
-/// falls back to deterministic extraction on missing key or any error.
-pub fn generate(body: &str, title: Option<&str>, model: &str) -> String {
+/// Generate a summary for a leaf. Uses deterministic fallback when no provider
+/// is configured. If a provider call is attempted, provider failures are errors.
+pub fn generate(body: &str, title: Option<&str>, model: &str) -> Result<String, SummaryError> {
     let api_key = match std::env::var("OPENAI_API_KEY") {
         Ok(key) if !key.is_empty() => key,
-        _ => return generate_fallback(body),
+        _ => return Ok(generate_fallback(body)),
     };
 
     eprintln!("summarizing...");
 
-    let rt = match tokio::runtime::Builder::new_current_thread()
+    let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-    {
-        Ok(rt) => rt,
-        Err(e) => {
-            warn!("failed to create async runtime for summary: {}", e);
-            return generate_fallback(body);
-        }
-    };
+        .map_err(|e| SummaryError::Runtime(format!("failed to create async runtime: {}", e)))?;
 
     let provider = crate::engine::llm::OpenAiProvider::new(&api_key);
-
-    match rt.block_on(generate_llm(body, title, &provider, model)) {
-        Ok(summary) => summary,
-        Err(e) => {
-            warn!("LLM summary failed, using fallback: {}", e);
-            generate_fallback(body)
-        }
-    }
+    rt.block_on(generate_llm(
+        body,
+        title,
+        &provider,
+        model,
+        SUMMARY_LLM_POLICY,
+    ))
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────

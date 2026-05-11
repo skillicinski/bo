@@ -27,6 +27,11 @@ Somewhat formulated feature candidates. Keep items tickable. Promote one item at
   - Expected: `bo query <question>` retrieves relevant leaves via search, assembles context, makes a single structured-output LLM call for synthesis, and outputs an answer with wikilink citations to source leaves. Read-only. Requires BYOK API key.
   - Notes: V1 architecture per ADR-003 (prompt-chaining, ADR-001 compliant). Separate `query_model` config field. OpenAI provider first. V2 (agentic tree navigation) is the target architecture once V1's retrieval proves insufficient at scale — see ADR-003.
 
+- [ ] Harden `bo query` no-answer handling when retrieval finds weak/irrelevant matches
+  - Context: live smoke after query V1 hardening showed true `no_results` only when lexical retrieval finds zero hits. OR substring retrieval can pull generic-term matches for unrelated questions, causing synthesis to run against irrelevant context. The model often says sources do not cover the topic with zero citations, but one smoke query (`PMNS matrix`) hallucinated a real external answer with no citations.
+  - Expected: if synthesis produces zero valid citations, treat the result as not answered from the tree rather than successful answer output. Surface clear human and JSON behavior such as `no answer from collected sources` / `insufficient_sources`. Consider a retrieval relevance floor or generic-term filtering so irrelevant OR matches do not invoke synthesis.
+  - Notes: separate from V2 agentic retrieval. Keep V1 architecture; this is a correctness/safety patch around answerability and citation enforcement.
+
 - [x] Migrate compile from agent loop to structured-output pipeline
   - Context: ADR-001 commits to deterministic pipelines. Current compile uses an internal agent loop (~50 tool-calling steps) that is fragile, expensive, and caps collection size.
   - Expected: replace agent loop with: code reads all leaves → single structured-output LLM call → code writes branches + updates frontmatter. Remove engine/agent/ module.

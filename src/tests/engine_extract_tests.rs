@@ -109,3 +109,50 @@ fn extract_empty_returns_error() {
     let result = extract_content(html);
     assert!(result.is_err());
 }
+
+// ── title selection tests ────────────────────────────────────────────────
+
+#[test]
+fn title_selection_preserves_good_metadata_title() {
+    let title = choose_title(
+        Some("Good Metadata Title"),
+        "# Different Body Heading\n\nBody",
+    );
+    assert_eq!(title.as_deref(), Some("Good Metadata Title"));
+}
+
+#[test]
+fn title_selection_empty_metadata_uses_h1() {
+    let title = choose_title(None, "# Understanding Ownership\n\nBody");
+    assert_eq!(title.as_deref(), Some("Understanding Ownership"));
+}
+
+#[test]
+fn title_selection_chrome_metadata_uses_h1() {
+    let title = choose_title(
+        Some("Keyboard shortcuts"),
+        "# Understanding Ownership\n\nBody",
+    );
+    assert_eq!(title.as_deref(), Some("Understanding Ownership"));
+}
+
+#[test]
+fn title_selection_chrome_metadata_uses_h2_when_no_h1_available() {
+    let title = choose_title(
+        Some("Keyboard shortcuts"),
+        "## Understanding Ownership\n\nBody",
+    );
+    assert_eq!(title.as_deref(), Some("Understanding Ownership"));
+}
+
+#[test]
+fn title_selection_ignores_deeper_headings() {
+    let title = choose_title(Some("Keyboard shortcuts"), "### Too Deep\n\nBody");
+    assert_eq!(title.as_deref(), Some("Keyboard shortcuts"));
+}
+
+#[test]
+fn title_selection_keeps_existing_title_when_no_confident_heading_exists() {
+    let title = choose_title(Some("Keyboard shortcuts"), "Body without a heading");
+    assert_eq!(title.as_deref(), Some("Keyboard shortcuts"));
+}

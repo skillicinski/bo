@@ -1,4 +1,13 @@
 use super::*;
+use async_trait::async_trait;
+use serde_json::Value;
+use serial_test::serial;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+use crate::engine::llm::{
+    FinishReason, LlmCallPolicy, LlmError, LlmProvider, LlmResponse, Message,
+};
 
 #[test]
 fn fallback_empty_body() {
@@ -48,4 +57,169 @@ fn truncate_body_long_input_cut() {
     let body = words.join(" ");
     let result = truncate_body(&body, 4000);
     assert_eq!(result.split_whitespace().count(), 4000);
+}
+
+struct SummaryFakeProvider {
+    calls: AtomicUsize,
+    fail_attempts: usize,
+    finish_reason: FinishReason,
+}
+
+impl SummaryFakeProvider {
+    fn new(fail_attempts: usize, finish_reason: FinishReason) -> Self {
+        Self {
+            calls: AtomicUsize::new(0),
+            fail_attempts,
+            finish_reason,
+        }
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl LlmProvider for SummaryFakeProvider {
+    async fn complete(
+        &self,
+        _messages: &[Message],
+        _model: &str,
+        _max_tokens: u32,
+        _response_schema: Option<&Value>,
+    ) -> Result<LlmResponse, LlmError> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if call <= self.fail_attempts {
+            return Err(LlmError::Network("temporary failure".to_string()));
+        }
+        Ok(LlmResponse {
+            content: r#"{"summary":"short useful summary"}"#.to_string(),
+            finish_reason: self.finish_reason.clone(),
+        })
+    }
+}
+
+struct SummaryHangingProvider {
+    calls: AtomicUsize,
+}
+
+impl SummaryHangingProvider {
+    fn new() -> Self {
+        Self {
+            calls: AtomicUsize::new(0),
+        }
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl LlmProvider for SummaryHangingProvider {
+    async fn complete(
+        &self,
+        _messages: &[Message],
+        _model: &str,
+        _max_tokens: u32,
+        _response_schema: Option<&Value>,
+    ) -> Result<LlmResponse, LlmError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        Ok(LlmResponse {
+            content: r#"{"summary":"late"}"#.to_string(),
+            finish_reason: FinishReason::Stop,
+        })
+    }
+}
+
+fn short_summary_policy(max_attempts: usize) -> LlmCallPolicy {
+    LlmCallPolicy {
+        timeout: Duration::from_millis(20),
+        max_attempts,
+        initial_backoff: Duration::ZERO,
+    }
+}
+
+#[test]
+#[serial]
+fn generate_without_api_key_returns_fallback() {
+    std::env::remove_var("OPENAI_API_KEY");
+
+    let summary = generate("one two three", Some("Title"), "gpt-4o").unwrap();
+
+    assert_eq!(summary, "one two three");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn attempted_summary_retries_transient_failure_and_succeeds() {
+    let provider = SummaryFakeProvider::new(1, FinishReason::Stop);
+
+    let summary = generate_llm(
+        "Body text for summary generation.",
+        Some("Title"),
+        &provider,
+        "gpt-4o",
+        short_summary_policy(3),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(provider.calls(), 2);
+    assert_eq!(summary, "short useful summary");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn attempted_summary_timeout_returns_error_not_fallback() {
+    let provider = SummaryHangingProvider::new();
+
+    let err = generate_llm(
+        "Body text for summary generation.",
+        Some("Title"),
+        &provider,
+        "gpt-4o",
+        short_summary_policy(1),
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(provider.calls(), 1);
+    assert!(matches!(
+        err,
+        SummaryError::Llm(LlmError::RetryExhausted { .. })
+    ));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn attempted_summary_length_finish_reason_fails() {
+    let provider = SummaryFakeProvider::new(0, FinishReason::Length);
+
+    let err = generate_llm(
+        "Body text for summary generation.",
+        Some("Title"),
+        &provider,
+        "gpt-4o",
+        short_summary_policy(1),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(err, SummaryError::Truncated));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn attempted_summary_content_filter_finish_reason_fails() {
+    let provider = SummaryFakeProvider::new(0, FinishReason::ContentFilter);
+
+    let err = generate_llm(
+        "Body text for summary generation.",
+        Some("Title"),
+        &provider,
+        "gpt-4o",
+        short_summary_policy(1),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(err, SummaryError::ContentFilter));
 }

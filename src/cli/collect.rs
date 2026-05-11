@@ -44,6 +44,7 @@ pub enum CollectError {
     Fetch(fetch::FetchError),
     Extract(extract::ExtractError),
     Youtube(YoutubeError),
+    Summary(summary::SummaryError),
     Rejected {
         url: String,
         reason: RejectReason,
@@ -60,6 +61,7 @@ impl fmt::Display for CollectError {
             CollectError::Fetch(e) => write!(f, "{}", e),
             CollectError::Extract(e) => write!(f, "{}", e),
             CollectError::Youtube(e) => write!(f, "{}", e),
+            CollectError::Summary(e) => write!(f, "{}", e),
             CollectError::Rejected { url, reason } => {
                 write!(f, "{} was not collected: {}", url, reason)
             }
@@ -83,6 +85,12 @@ impl From<extract::ExtractError> for CollectError {
 impl From<YoutubeError> for CollectError {
     fn from(e: YoutubeError) -> Self {
         CollectError::Youtube(e)
+    }
+}
+
+impl From<summary::SummaryError> for CollectError {
+    fn from(e: summary::SummaryError) -> Self {
+        CollectError::Summary(e)
     }
 }
 
@@ -191,6 +199,23 @@ fn write_new_document(
     body_markdown: &str,
     output_dir: &Path,
 ) -> Result<Document, CollectError> {
+    write_new_document_with_summary_result(
+        url,
+        title,
+        body_markdown,
+        output_dir,
+        summary::generate(body_markdown, title, "gpt-4o"),
+    )
+}
+
+fn write_new_document_with_summary_result(
+    url: &str,
+    title: Option<&str>,
+    body_markdown: &str,
+    output_dir: &Path,
+    summary_text: Result<String, summary::SummaryError>,
+) -> Result<Document, CollectError> {
+    let summary_text = summary_text?;
     let index_path = output_dir.join("index.jsonl");
     let title_ref = title.unwrap_or("");
     let base_slug = slug::slugify(title_ref, url);
@@ -201,7 +226,6 @@ fn write_new_document(
     let now_str = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let leaf_path = output_dir.join(format!("{}.md", filename));
 
-    let summary_text = summary::generate(body_markdown, title, "gpt-4o");
     leaf::write(
         &leaf_path,
         title,

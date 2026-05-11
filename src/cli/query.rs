@@ -7,19 +7,33 @@
 
 use crate::domain::frontmatter;
 use crate::domain::index;
-use crate::engine::llm::{LlmError, LlmProvider, Message, OpenAiProvider};
-use regex::Regex;
+use crate::engine::llm::{
+    complete_with_policy, context_window_tokens, FinishReason, LlmCallPolicy, LlmError,
+    LlmProvider, Message, OpenAiProvider,
+};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fmt;
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 // ── constants ────────────────────────────────────────────────────────────────
 
 const RETRIEVAL_TOP_K: usize = 10;
 const DEPTH_TOP_K: usize = 5;
-const TOKEN_BUDGET_WORDS: usize = 60_000;
+const QUERY_MAX_COMPLETION_TOKENS: u32 = 2048;
+const QUERY_PROMPT_OVERHEAD_TOKENS: usize = 4096;
+const MIN_QUERY_SOURCE_WORDS: usize = 1000;
+const TOKENS_TO_WORDS_NUMERATOR: usize = 3;
+const TOKENS_TO_WORDS_DENOMINATOR: usize = 4;
 const SUMMARY_FALLBACK_WORDS: usize = 200;
+
+const QUERY_LLM_POLICY: LlmCallPolicy = LlmCallPolicy {
+    timeout: Duration::from_secs(60),
+    max_attempts: 3,
+    initial_backoff: Duration::from_secs(1),
+};
 
 const STOP_WORDS: &[&str] = &[
     "what", "which", "who", "whom", "where", "when", "why", "how", "is", "are", "was", "were",
@@ -59,6 +73,18 @@ pub enum QueryError {
     EmptyTree,
     /// Index read or file I/O error
     Io(String),
+    /// Configured query model has no known context window
+    UnknownModelContext { model: String },
+    /// Known model has too little context after reserved prompt/completion budget
+    ContextBudgetExhausted {
+        model: String,
+        context_tokens: usize,
+        reserved_tokens: usize,
+    },
+    /// LLM output hit the completion token limit
+    Truncated,
+    /// LLM output was blocked by content filtering
+    ContentFilter,
     /// LLM call failed
     Llm(LlmError),
     /// LLM response could not be parsed
@@ -76,6 +102,25 @@ impl fmt::Display for QueryError {
             QueryError::NoResults => write!(f, "no relevant sources found in tree"),
             QueryError::EmptyTree => write!(f, "no sources collected yet"),
             QueryError::Io(msg) => write!(f, "{}", msg),
+            QueryError::UnknownModelContext { model } => write!(
+                f,
+                "unknown context window for query_model '{}' — choose a known model or add its context window",
+                model
+            ),
+            QueryError::ContextBudgetExhausted {
+                model,
+                context_tokens,
+                reserved_tokens,
+            } => write!(
+                f,
+                "query exhausted model context for '{}' — context window is {} tokens and {} tokens are reserved before source context",
+                model, context_tokens, reserved_tokens
+            ),
+            QueryError::Truncated => write!(
+                f,
+                "query synthesis was truncated — try a model with larger output capacity"
+            ),
+            QueryError::ContentFilter => write!(f, "query synthesis was blocked by content filter"),
             QueryError::Llm(e) => write!(f, "{}", e),
             QueryError::Parse(msg) => write!(f, "synthesis failed — {}", msg),
         }
@@ -93,6 +138,15 @@ impl QueryError {
 }
 
 // ── internal types ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct QueryContextBudget {
+    pub model: String,
+    pub context_tokens: usize,
+    pub reserved_tokens: usize,
+    pub source_tokens: usize,
+    pub source_words: usize,
+}
 
 #[derive(Debug, Clone)]
 struct RetrievedLeaf {
@@ -231,11 +285,54 @@ fn retrieve_leaves(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedLea
 
 // ── context assembly ─────────────────────────────────────────────────────────
 
+fn compute_query_context_budget(model: &str) -> Result<QueryContextBudget, QueryError> {
+    let Some(context_tokens) = context_window_tokens(model) else {
+        return Err(QueryError::UnknownModelContext {
+            model: model.to_string(),
+        });
+    };
+
+    compute_query_context_budget_from_tokens(model, context_tokens)
+}
+
+fn compute_query_context_budget_from_tokens(
+    model: &str,
+    context_tokens: usize,
+) -> Result<QueryContextBudget, QueryError> {
+    let reserved_tokens = QUERY_PROMPT_OVERHEAD_TOKENS + QUERY_MAX_COMPLETION_TOKENS as usize;
+    if context_tokens <= reserved_tokens {
+        return Err(QueryError::ContextBudgetExhausted {
+            model: model.to_string(),
+            context_tokens,
+            reserved_tokens,
+        });
+    }
+
+    let source_tokens = context_tokens - reserved_tokens;
+    let source_words = (source_tokens * TOKENS_TO_WORDS_NUMERATOR) / TOKENS_TO_WORDS_DENOMINATOR;
+
+    if source_words < MIN_QUERY_SOURCE_WORDS {
+        return Err(QueryError::ContextBudgetExhausted {
+            model: model.to_string(),
+            context_tokens,
+            reserved_tokens,
+        });
+    }
+
+    Ok(QueryContextBudget {
+        model: model.to_string(),
+        context_tokens,
+        reserved_tokens,
+        source_tokens,
+        source_words,
+    })
+}
+
 /// Assemble LLM context from retrieved leaves.
 /// Returns (context_string, leaves_consulted_count).
-fn assemble_context(leaves: &[RetrievedLeaf]) -> (String, usize) {
+fn assemble_context(leaves: &[RetrievedLeaf], source_word_budget: usize) -> (String, usize) {
     let mut context = String::new();
-    let mut word_budget = TOKEN_BUDGET_WORDS;
+    let mut word_budget = source_word_budget;
     let mut consulted = 0;
 
     // Breadth tier: all retrieved leaves get summary context
@@ -303,6 +400,7 @@ fn synthesize_with_provider(
     context: &str,
     provider: &dyn LlmProvider,
     model: &str,
+    policy: LlmCallPolicy,
 ) -> Result<SynthesisResponse, QueryError> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -337,8 +435,27 @@ fn synthesize_with_provider(
     });
 
     let response = rt
-        .block_on(provider.complete(&messages, model, 2048, Some(&schema)))
+        .block_on(complete_with_policy(
+            provider,
+            &messages,
+            model,
+            QUERY_MAX_COMPLETION_TOKENS,
+            Some(&schema),
+            policy,
+        ))
         .map_err(QueryError::Llm)?;
+
+    match response.finish_reason {
+        FinishReason::Stop => {}
+        FinishReason::Length => return Err(QueryError::Truncated),
+        FinishReason::ContentFilter => return Err(QueryError::ContentFilter),
+        FinishReason::Other(reason) => {
+            return Err(QueryError::Llm(LlmError::Api(format!(
+                "unexpected finish reason: {}",
+                reason
+            ))));
+        }
+    }
 
     let parsed: SynthesisResponse = serde_json::from_str(&response.content)
         .map_err(|e| QueryError::Parse(format!("invalid response from model: {}", e)))?;
@@ -354,31 +471,24 @@ fn validate_citations(
     response: SynthesisResponse,
     retrieved: &[RetrievedLeaf],
 ) -> (String, Vec<Citation>) {
-    let valid_slugs: std::collections::HashSet<&str> =
-        retrieved.iter().map(|l| l.slug.as_str()).collect();
+    let valid_slugs: HashSet<&str> = retrieved.iter().map(|l| l.slug.as_str()).collect();
 
-    // Filter cited_slugs to only valid ones
-    let validated_slugs: Vec<String> = response
-        .cited_slugs
+    let (answer, prose_slugs) =
+        sanitize_wikilinks_and_collect_valid(&response.answer, &valid_slugs);
+
+    let mut ordered_slugs: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    for slug in prose_slugs
         .into_iter()
-        .filter(|s| valid_slugs.contains(s.as_str()))
-        .collect();
+        .chain(response.cited_slugs.into_iter())
+    {
+        if valid_slugs.contains(slug.as_str()) && seen.insert(slug.clone()) {
+            ordered_slugs.push(slug);
+        }
+    }
 
-    // Remove invalid [[slug]] wikilinks from answer prose
-    let wikilink_re = Regex::new(r"\[\[([^\]]+)\]\]").unwrap();
-    let answer = wikilink_re
-        .replace_all(&response.answer, |caps: &regex::Captures| {
-            let slug = &caps[1];
-            if valid_slugs.contains(slug) {
-                format!("[[{}]]", slug)
-            } else {
-                slug.to_string()
-            }
-        })
-        .to_string();
-
-    // Build citation metadata
-    let citations: Vec<Citation> = validated_slugs
+    let citations: Vec<Citation> = ordered_slugs
         .iter()
         .filter_map(|slug| {
             retrieved
@@ -393,6 +503,48 @@ fn validate_citations(
         .collect();
 
     (answer, citations)
+}
+
+fn sanitize_wikilinks_and_collect_valid(
+    answer: &str,
+    valid_slugs: &HashSet<&str>,
+) -> (String, Vec<String>) {
+    let mut sanitized = String::with_capacity(answer.len());
+    let mut valid_in_prose = Vec::new();
+    let mut i = 0;
+
+    while i < answer.len() {
+        let rest = &answer[i..];
+        if !rest.starts_with("[[") {
+            let ch = rest.chars().next().expect("non-empty slice");
+            sanitized.push(ch);
+            i += ch.len_utf8();
+            continue;
+        }
+
+        let Some(relative_end) = rest[2..].find("]]") else {
+            sanitized.push_str(rest);
+            break;
+        };
+        let inner_start = i + 2;
+        let inner_end = inner_start + relative_end;
+        let span_end = inner_end + 2;
+        let inner = &answer[inner_start..inner_end];
+        let span = &answer[i..span_end];
+
+        if inner.is_empty() || inner.contains('[') || inner.contains(']') {
+            sanitized.push_str(span);
+        } else if valid_slugs.contains(inner) {
+            sanitized.push_str(span);
+            valid_in_prose.push(inner.to_string());
+        } else {
+            sanitized.push_str(inner);
+        }
+
+        i = span_end;
+    }
+
+    (sanitized, valid_in_prose)
 }
 
 // ── output formatting ────────────────────────────────────────────────────────
@@ -435,15 +587,26 @@ pub fn run_with_provider(
     provider: &dyn LlmProvider,
     model: &str,
 ) -> Result<QueryResult, QueryError> {
+    run_with_provider_and_policy(tree_dir, question, provider, model, QUERY_LLM_POLICY)
+}
+
+fn run_with_provider_and_policy(
+    tree_dir: &Path,
+    question: &str,
+    provider: &dyn LlmProvider,
+    model: &str,
+    policy: LlmCallPolicy,
+) -> Result<QueryResult, QueryError> {
     let terms = extract_terms(question)?;
+    let budget = compute_query_context_budget(model)?;
 
     eprintln!("searching...");
     let retrieved = retrieve_leaves(tree_dir, &terms)?;
 
-    let (context, consulted) = assemble_context(&retrieved);
+    let (context, consulted) = assemble_context(&retrieved, budget.source_words);
 
     eprintln!("synthesizing...");
-    let response = synthesize_with_provider(question, &context, provider, model)?;
+    let response = synthesize_with_provider(question, &context, provider, model, policy)?;
 
     let (answer, citations) = validate_citations(response, &retrieved);
 
