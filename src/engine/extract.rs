@@ -34,10 +34,17 @@ pub fn extract_content(html: &str) -> Result<ExtractedContent, ExtractError> {
     let result = extract(html, &opts).map_err(|e| ExtractError::ExtractionFailed(e.to_string()))?;
 
     let body = result.content_markdown();
+    let title = choose_title(
+        if result.metadata.title.is_empty() {
+            None
+        } else {
+            Some(result.metadata.title.as_str())
+        },
+        &body,
+    );
 
-    // Strip leading H1 if it matches the title — we add our own in the markdown template
-    let title_str = &result.metadata.title;
-    let body = if !title_str.is_empty() {
+    // Strip leading H1 if it matches the selected title — we add our own in the markdown template
+    let body = if let Some(title_str) = title.as_deref() {
         strip_leading_h1(&body, title_str)
     } else {
         body
@@ -50,16 +57,59 @@ pub fn extract_content(html: &str) -> Result<ExtractedContent, ExtractError> {
     // Post-process: strip any remaining markdown links [text](url) → text
     let body = strip_markdown_links(&body);
 
-    let title = if result.metadata.title.is_empty() {
-        None
-    } else {
-        Some(result.metadata.title.clone())
-    };
-
     Ok(ExtractedContent {
         title,
         body_markdown: body,
     })
+}
+
+fn choose_title(metadata_title: Option<&str>, body_markdown: &str) -> Option<String> {
+    let metadata_title = metadata_title
+        .map(str::trim)
+        .filter(|title| !title.is_empty());
+
+    if let Some(title) = metadata_title {
+        if !is_clearly_chrome_title(title) {
+            return Some(title.to_string());
+        }
+    }
+
+    if let Some(heading) = first_meaningful_heading(body_markdown) {
+        return Some(heading);
+    }
+
+    metadata_title.map(str::to_string)
+}
+
+fn first_meaningful_heading(body_markdown: &str) -> Option<String> {
+    for line in body_markdown.lines() {
+        let trimmed = line.trim_start();
+        let heading = if let Some(rest) = trimmed.strip_prefix("# ") {
+            rest
+        } else if let Some(rest) = trimmed.strip_prefix("## ") {
+            rest
+        } else {
+            continue;
+        };
+
+        let heading = strip_markdown_links(heading).trim().to_string();
+        if !heading.is_empty() && !is_clearly_chrome_title(&heading) {
+            return Some(heading);
+        }
+    }
+    None
+}
+
+fn is_clearly_chrome_title(title: &str) -> bool {
+    normalize_title(title) == "keyboard shortcuts"
+}
+
+fn normalize_title(title: &str) -> String {
+    title
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// Remove a leading `# Title` line from markdown body if it matches the page title.

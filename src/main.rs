@@ -194,6 +194,7 @@ fn collect_json_error(error: &CollectError) -> JsonError {
         CollectError::Fetch(_) => JsonError::new("fetch_error", error.to_string()),
         CollectError::Extract(_) => JsonError::new("extract_error", error.to_string()),
         CollectError::Youtube(_) => JsonError::new("youtube_error", error.to_string()),
+        CollectError::Summary(_) => JsonError::new("llm_error", error.to_string()),
         CollectError::Io(_) => JsonError::new("io_error", error.to_string()),
     }
 }
@@ -637,6 +638,9 @@ fn query_json_error(error: &query::QueryError) -> JsonError {
         query::QueryError::NoResults => "no_results",
         query::QueryError::EmptyTree => "empty_tree",
         query::QueryError::Io(_) => "io_error",
+        query::QueryError::UnknownModelContext { .. } => "unknown_model_context",
+        query::QueryError::ContextBudgetExhausted { .. } => "context_budget_exhausted",
+        query::QueryError::Truncated | query::QueryError::ContentFilter => "llm_error",
         query::QueryError::Llm(_) => "llm_error",
         query::QueryError::Parse(_) => "parse_error",
     };

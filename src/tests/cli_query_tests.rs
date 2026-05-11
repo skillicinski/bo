@@ -1,7 +1,13 @@
 use super::*;
+use async_trait::async_trait;
+use serde_json::Value;
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 use tempfile::TempDir;
+
+use crate::engine::llm::{FinishReason, LlmProvider, LlmResponse};
 
 // ── term extraction tests ────────────────────────────────────────────
 
@@ -224,6 +230,33 @@ fn slug_from_file_strips_dir_and_extension() {
 
 // ── citation validation tests ────────────────────────────────────────
 
+fn retrieved_leaf(slug: &str) -> RetrievedLeaf {
+    RetrievedLeaf {
+        slug: slug.to_string(),
+        title: format!("Title for {}", slug),
+        url: format!("https://example.com/{}", slug),
+        file: format!("leaves/{}.md", slug),
+        summary: "summary".to_string(),
+        body: "body".to_string(),
+        score: 1.0,
+    }
+}
+
+#[test]
+fn validate_preserves_valid_wikilinks_exactly() {
+    let retrieved = vec![retrieved_leaf("valid-leaf")];
+    let response = SynthesisResponse {
+        answer: "Answer cites [[valid-leaf]] exactly.".to_string(),
+        cited_slugs: vec!["valid-leaf".to_string()],
+    };
+
+    let (answer, citations) = validate_citations(response, &retrieved);
+
+    assert_eq!(answer, "Answer cites [[valid-leaf]] exactly.");
+    assert_eq!(citations.len(), 1);
+    assert_eq!(citations[0].slug, "valid-leaf");
+}
+
 #[test]
 fn validate_strips_invalid_citations() {
     let retrieved = vec![RetrievedLeaf {
@@ -251,6 +284,86 @@ fn validate_strips_invalid_citations() {
     // Invalid slug removed from citations list
     assert_eq!(citations.len(), 1);
     assert_eq!(citations[0].slug, "valid-leaf");
+}
+
+#[test]
+fn validate_preserves_adjacent_valid_wikilinks() {
+    let retrieved = vec![retrieved_leaf("leaf-a"), retrieved_leaf("leaf-b")];
+    let response = SynthesisResponse {
+        answer: "Compare [[leaf-a]][[leaf-b]].".to_string(),
+        cited_slugs: vec!["leaf-a".to_string(), "leaf-b".to_string()],
+    };
+
+    let (answer, citations) = validate_citations(response, &retrieved);
+
+    assert_eq!(answer, "Compare [[leaf-a]][[leaf-b]].");
+    assert_eq!(
+        citations
+            .iter()
+            .map(|c| c.slug.as_str())
+            .collect::<Vec<_>>(),
+        vec!["leaf-a", "leaf-b"]
+    );
+}
+
+#[test]
+fn validate_leaves_malformed_nested_empty_and_unclosed_wikilinks_unchanged() {
+    let retrieved = vec![retrieved_leaf("leaf-a")];
+    let response = SynthesisResponse {
+        answer: "Keep [[ and [[foo and [[]] and [[foo] and [[foo[[bar]] but keep [[leaf-a]]."
+            .to_string(),
+        cited_slugs: vec!["leaf-a".to_string()],
+    };
+
+    let (answer, citations) = validate_citations(response, &retrieved);
+
+    assert_eq!(
+        answer,
+        "Keep [[ and [[foo and [[]] and [[foo] and [[foo[[bar]] but keep [[leaf-a]]."
+    );
+    assert_eq!(citations.len(), 1);
+    assert_eq!(citations[0].slug, "leaf-a");
+}
+
+#[test]
+fn validate_includes_valid_prose_wikilink_missing_from_cited_slugs() {
+    let retrieved = vec![retrieved_leaf("leaf-a")];
+    let response = SynthesisResponse {
+        answer: "The answer cites [[leaf-a]] in prose only.".to_string(),
+        cited_slugs: Vec::new(),
+    };
+
+    let (_answer, citations) = validate_citations(response, &retrieved);
+
+    assert_eq!(citations.len(), 1);
+    assert_eq!(citations[0].slug, "leaf-a");
+}
+
+#[test]
+fn validate_dedupes_citations_in_prose_then_structured_order() {
+    let retrieved = vec![
+        retrieved_leaf("leaf-a"),
+        retrieved_leaf("leaf-b"),
+        retrieved_leaf("leaf-c"),
+    ];
+    let response = SynthesisResponse {
+        answer: "First [[leaf-b]], then [[leaf-a]], then again [[leaf-b]].".to_string(),
+        cited_slugs: vec![
+            "leaf-c".to_string(),
+            "leaf-a".to_string(),
+            "leaf-c".to_string(),
+        ],
+    };
+
+    let (_answer, citations) = validate_citations(response, &retrieved);
+
+    assert_eq!(
+        citations
+            .iter()
+            .map(|c| c.slug.as_str())
+            .collect::<Vec<_>>(),
+        vec!["leaf-b", "leaf-a", "leaf-c"]
+    );
 }
 
 #[test]
@@ -288,6 +401,268 @@ fn validate_preserves_all_valid_citations() {
     assert_eq!(citations.len(), 2);
 }
 
+// ── model budget tests ───────────────────────────────────────────────
+
+#[test]
+fn query_budget_known_128k_model() {
+    let budget = compute_query_context_budget("gpt-4o").unwrap();
+
+    assert_eq!(budget.model, "gpt-4o");
+    assert_eq!(budget.context_tokens, 128_000);
+    assert_eq!(
+        budget.reserved_tokens,
+        QUERY_PROMPT_OVERHEAD_TOKENS + QUERY_MAX_COMPLETION_TOKENS as usize
+    );
+    assert_eq!(
+        budget.source_words,
+        ((128_000 - budget.reserved_tokens) * TOKENS_TO_WORDS_NUMERATOR)
+            / TOKENS_TO_WORDS_DENOMINATOR
+    );
+}
+
+#[test]
+fn query_budget_known_1m_model() {
+    let budget = compute_query_context_budget("gpt-4.1-mini").unwrap();
+
+    assert_eq!(budget.model, "gpt-4.1-mini");
+    assert_eq!(budget.context_tokens, 1_000_000);
+    assert_eq!(
+        budget.source_words,
+        ((1_000_000 - budget.reserved_tokens) * TOKENS_TO_WORDS_NUMERATOR)
+            / TOKENS_TO_WORDS_DENOMINATOR
+    );
+}
+
+struct CountingProvider {
+    calls: AtomicUsize,
+}
+
+impl CountingProvider {
+    fn new() -> Self {
+        Self {
+            calls: AtomicUsize::new(0),
+        }
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl LlmProvider for CountingProvider {
+    async fn complete(
+        &self,
+        _messages: &[Message],
+        _model: &str,
+        _max_tokens: u32,
+        _response_schema: Option<&Value>,
+    ) -> Result<LlmResponse, LlmError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(LlmResponse {
+            content: r#"{"answer":"unused","cited_slugs":[]}"#.to_string(),
+            finish_reason: FinishReason::Stop,
+        })
+    }
+}
+
+#[test]
+fn unknown_model_fails_before_provider_invocation() {
+    let dir = TempDir::new().unwrap();
+    let provider = CountingProvider::new();
+
+    let err =
+        run_with_provider(dir.path(), "what is rust", &provider, "unknown-model").unwrap_err();
+
+    assert!(matches!(err, QueryError::UnknownModelContext { .. }));
+    assert_eq!(provider.calls(), 0);
+}
+
+#[test]
+fn exhausted_budget_returns_error() {
+    let reserved = QUERY_PROMPT_OVERHEAD_TOKENS + QUERY_MAX_COMPLETION_TOKENS as usize;
+    let err = compute_query_context_budget_from_tokens("tiny", reserved).unwrap_err();
+
+    assert!(matches!(err, QueryError::ContextBudgetExhausted { .. }));
+}
+
+struct FlakyQueryProvider {
+    calls: AtomicUsize,
+    fail_attempts: usize,
+    finish_reason: FinishReason,
+}
+
+impl FlakyQueryProvider {
+    fn new(fail_attempts: usize, finish_reason: FinishReason) -> Self {
+        Self {
+            calls: AtomicUsize::new(0),
+            fail_attempts,
+            finish_reason,
+        }
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl LlmProvider for FlakyQueryProvider {
+    async fn complete(
+        &self,
+        _messages: &[Message],
+        _model: &str,
+        _max_tokens: u32,
+        _response_schema: Option<&Value>,
+    ) -> Result<LlmResponse, LlmError> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if call <= self.fail_attempts {
+            return Err(LlmError::Network("temporary failure".to_string()));
+        }
+        Ok(LlmResponse {
+            content: r#"{"answer":"Rust is safe [[only-leaf]].","cited_slugs":["only-leaf"]}"#
+                .to_string(),
+            finish_reason: self.finish_reason.clone(),
+        })
+    }
+}
+
+struct HangingQueryProvider {
+    calls: AtomicUsize,
+}
+
+impl HangingQueryProvider {
+    fn new() -> Self {
+        Self {
+            calls: AtomicUsize::new(0),
+        }
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl LlmProvider for HangingQueryProvider {
+    async fn complete(
+        &self,
+        _messages: &[Message],
+        _model: &str,
+        _max_tokens: u32,
+        _response_schema: Option<&Value>,
+    ) -> Result<LlmResponse, LlmError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        Ok(LlmResponse {
+            content: "{}".to_string(),
+            finish_reason: FinishReason::Stop,
+        })
+    }
+}
+
+fn single_leaf_query_tree() -> TempDir {
+    let dir = TempDir::new().unwrap();
+    make_leaf(
+        dir.path(),
+        "only-leaf.md",
+        "Only Leaf",
+        "https://example.com/only",
+        Some("Rust safety"),
+        "Rust is a language focused on safety.",
+    );
+    make_index(
+        dir.path(),
+        &[(
+            "leaves/only-leaf.md",
+            "Only Leaf",
+            "https://example.com/only",
+        )],
+    );
+    dir
+}
+
+fn short_query_policy(max_attempts: usize) -> LlmCallPolicy {
+    LlmCallPolicy {
+        timeout: Duration::from_millis(20),
+        max_attempts,
+        initial_backoff: Duration::ZERO,
+    }
+}
+
+#[test]
+fn query_retries_transient_failure_and_succeeds() {
+    let dir = single_leaf_query_tree();
+    let provider = FlakyQueryProvider::new(1, FinishReason::Stop);
+
+    let result = run_with_provider_and_policy(
+        dir.path(),
+        "what is rust safety",
+        &provider,
+        "gpt-4o",
+        short_query_policy(3),
+    )
+    .unwrap();
+
+    assert_eq!(provider.calls(), 2);
+    assert_eq!(result.citations[0].slug, "only-leaf");
+}
+
+#[test]
+fn query_timeout_returns_llm_error() {
+    let dir = single_leaf_query_tree();
+    let provider = HangingQueryProvider::new();
+
+    let err = run_with_provider_and_policy(
+        dir.path(),
+        "what is rust safety",
+        &provider,
+        "gpt-4o",
+        short_query_policy(1),
+    )
+    .unwrap_err();
+
+    assert_eq!(provider.calls(), 1);
+    assert!(matches!(
+        err,
+        QueryError::Llm(LlmError::RetryExhausted { .. })
+    ));
+}
+
+#[test]
+fn query_length_finish_reason_fails_before_parse() {
+    let dir = single_leaf_query_tree();
+    let provider = FlakyQueryProvider::new(0, FinishReason::Length);
+
+    let err = run_with_provider_and_policy(
+        dir.path(),
+        "what is rust safety",
+        &provider,
+        "gpt-4o",
+        short_query_policy(1),
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, QueryError::Truncated));
+}
+
+#[test]
+fn query_content_filter_finish_reason_fails_before_parse() {
+    let dir = single_leaf_query_tree();
+    let provider = FlakyQueryProvider::new(0, FinishReason::ContentFilter);
+
+    let err = run_with_provider_and_policy(
+        dir.path(),
+        "what is rust safety",
+        &provider,
+        "gpt-4o",
+        short_query_policy(1),
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, QueryError::ContentFilter));
+}
+
 // ── context assembly tests ───────────────────────────────────────────
 
 #[test]
@@ -304,7 +679,7 @@ fn assemble_respects_depth_limit() {
         })
         .collect();
 
-    let (context, consulted) = assemble_context(&leaves);
+    let (context, consulted) = assemble_context(&leaves, 10_000);
 
     // All 10 appear in breadth tier
     for i in 0..10 {
@@ -320,7 +695,8 @@ fn assemble_respects_depth_limit() {
 #[test]
 fn assemble_truncates_on_word_budget() {
     // Create a leaf with a massive body
-    let big_body = "word ".repeat(TOKEN_BUDGET_WORDS + 1000);
+    let test_budget_words = 1000;
+    let big_body = "word ".repeat(test_budget_words + 1000);
     let leaves = vec![RetrievedLeaf {
         slug: "big".to_string(),
         title: "Big Leaf".to_string(),
@@ -331,10 +707,10 @@ fn assemble_truncates_on_word_budget() {
         score: 10.0,
     }];
 
-    let (context, consulted) = assemble_context(&leaves);
+    let (context, consulted) = assemble_context(&leaves, test_budget_words);
 
     // Should not exceed budget significantly
     let word_count = context.split_whitespace().count();
-    assert!(word_count <= TOKEN_BUDGET_WORDS + 100); // small overhead from formatting
+    assert!(word_count <= test_budget_words + 100); // small overhead from formatting
     assert_eq!(consulted, 1);
 }

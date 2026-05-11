@@ -186,11 +186,11 @@ version = "0.0.1"
 dependencies = [
  "async-openai",
  "async-trait",
+ "backoff",
  "chrono",
  "clap",
  "dotenvy",
  "quick-xml",
- "regex",
  "reqwest",
  "serde",
  "serde_json",

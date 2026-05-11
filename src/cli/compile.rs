@@ -8,6 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::time::Duration;
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -15,11 +16,20 @@ use serde_json::{json, Value};
 
 use crate::domain::{branch, frontmatter, index, slug, tree::Tree};
 use crate::engine::config::Config;
-use crate::engine::llm::{FinishReason, LlmError, Message, OpenAiProvider};
+use crate::engine::llm::{
+    complete_with_policy, FinishReason, LlmCallPolicy, LlmError, LlmProvider, Message,
+    OpenAiProvider,
+};
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
 const MAX_COMPLETION_TOKENS: u32 = 16384;
+
+const COMPILE_LLM_POLICY: LlmCallPolicy = LlmCallPolicy {
+    timeout: Duration::from_secs(180),
+    max_attempts: 3,
+    initial_backoff: Duration::from_secs(2),
+};
 
 // ── errors ────────────────────────────────────────────────────────────────────
 
@@ -339,34 +349,59 @@ fn call_llm(
         .build()
         .map_err(|e| CompileError::Io(format!("failed to create async runtime: {}", e)))?;
 
-    rt.block_on(async {
-        let provider = OpenAiProvider::new(api_key);
-        let messages = vec![
-            Message::system(COMPILE_SYSTEM_PROMPT),
-            Message::user(user_message),
-        ];
+    let provider = OpenAiProvider::new(api_key);
+    rt.block_on(call_llm_with_provider(
+        &provider,
+        model,
+        user_message,
+        schema,
+        COMPILE_LLM_POLICY,
+    ))
+}
 
-        use crate::engine::llm::LlmProvider;
-        let response = provider
-            .complete(&messages, model, MAX_COMPLETION_TOKENS, Some(schema))
-            .await
-            .map_err(|e| match e {
-                LlmError::Api(msg) if msg.contains("maximum context length") => {
-                    CompileError::ContextOverflow
-                }
-                other => CompileError::Llm(other.to_string()),
-            })?;
+async fn call_llm_with_provider(
+    provider: &dyn LlmProvider,
+    model: &str,
+    user_message: &str,
+    schema: &Value,
+    policy: LlmCallPolicy,
+) -> Result<String, CompileError> {
+    let messages = vec![
+        Message::system(COMPILE_SYSTEM_PROMPT),
+        Message::user(user_message),
+    ];
 
-        if response.finish_reason == FinishReason::Length {
-            return Err(CompileError::Truncated);
+    let response = complete_with_policy(
+        provider,
+        &messages,
+        model,
+        MAX_COMPLETION_TOKENS,
+        Some(schema),
+        policy,
+    )
+    .await
+    .map_err(map_compile_llm_error)?;
+
+    match response.finish_reason {
+        FinishReason::Stop => Ok(response.content),
+        FinishReason::Length => Err(CompileError::Truncated),
+        FinishReason::ContentFilter => Err(CompileError::ContentFilter),
+        FinishReason::Other(reason) => Err(CompileError::Llm(format!(
+            "unexpected finish reason: {}",
+            reason
+        ))),
+    }
+}
+
+fn map_compile_llm_error(error: LlmError) -> CompileError {
+    let message = error.to_string();
+    match error {
+        LlmError::Api(msg) if msg.contains("maximum context length") => {
+            CompileError::ContextOverflow
         }
-
-        if response.finish_reason == FinishReason::ContentFilter {
-            return Err(CompileError::ContentFilter);
-        }
-
-        Ok(response.content)
-    })
+        _ if message.contains("maximum context length") => CompileError::ContextOverflow,
+        other => CompileError::Llm(other.to_string()),
+    }
 }
 
 // ── parse_and_validate ────────────────────────────────────────────────────────

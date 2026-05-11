@@ -1,5 +1,6 @@
 use async_openai::{
     config::OpenAIConfig,
+    error::{ApiError, OpenAIError},
     types::chat::{
         ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
         ChatCompletionRequestUserMessageArgs, CreateChatCompletionRequestArgs,
@@ -9,6 +10,7 @@ use async_openai::{
 };
 use async_trait::async_trait;
 use serde_json::Value;
+use std::time::Duration;
 
 use crate::engine::llm::{FinishReason, LlmError, LlmProvider, LlmResponse, Message, Role};
 
@@ -19,8 +21,10 @@ pub struct OpenAiProvider {
 impl OpenAiProvider {
     pub fn new(api_key: &str) -> Self {
         let config = OpenAIConfig::new().with_api_key(api_key);
+        let mut backoff_builder = backoff::ExponentialBackoffBuilder::new();
+        backoff_builder.with_max_elapsed_time(Some(Duration::ZERO));
         Self {
-            client: Client::with_config(config),
+            client: Client::build(reqwest::Client::new(), config, backoff_builder.build()),
         }
     }
 }
@@ -65,7 +69,7 @@ impl LlmProvider for OpenAiProvider {
             .chat()
             .create(request)
             .await
-            .map_err(|e| LlmError::Api(e.to_string()))?;
+            .map_err(map_openai_error)?;
 
         let choice = response
             .choices
@@ -87,6 +91,44 @@ impl LlmProvider for OpenAiProvider {
             finish_reason,
         })
     }
+}
+
+fn map_openai_error(error: OpenAIError) -> LlmError {
+    match error {
+        OpenAIError::Reqwest(e) => LlmError::Network(e.to_string()),
+        OpenAIError::ApiError(api_error) => map_api_error(api_error),
+        OpenAIError::JSONDeserialize(e, body) => LlmError::Parse(format!("{}; body: {}", e, body)),
+        OpenAIError::InvalidArgument(message) => LlmError::Parse(message),
+        OpenAIError::FileSaveError(message) | OpenAIError::FileReadError(message) => {
+            LlmError::Api(message)
+        }
+        OpenAIError::StreamError(error) => LlmError::Network(error.to_string()),
+    }
+}
+
+fn map_api_error(error: ApiError) -> LlmError {
+    let message = error.to_string();
+    let code = error.code.as_deref().unwrap_or_default();
+    let error_type = error.r#type.as_deref().unwrap_or_default();
+    let lower_message = message.to_lowercase();
+
+    if code.contains("rate_limit")
+        || error_type.contains("rate_limit")
+        || lower_message.contains("rate limit")
+        || lower_message.contains("rate_limit")
+    {
+        return LlmError::RateLimited(message);
+    }
+
+    if error_type == "insufficient_quota" || code == "insufficient_quota" {
+        return LlmError::Api(message);
+    }
+
+    if error.r#type.is_none() && error.code.is_none() && error.param.is_none() {
+        return LlmError::Server(message);
+    }
+
+    LlmError::Api(message)
 }
 
 fn to_api_message(m: &Message) -> Result<ChatCompletionRequestMessage, LlmError> {
