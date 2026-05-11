@@ -479,10 +479,7 @@ fn validate_citations(
     let mut ordered_slugs: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
-    for slug in prose_slugs
-        .into_iter()
-        .chain(response.cited_slugs.into_iter())
-    {
+    for slug in prose_slugs.into_iter().chain(response.cited_slugs) {
         if valid_slugs.contains(slug.as_str()) && seen.insert(slug.clone()) {
             ordered_slugs.push(slug);
         }

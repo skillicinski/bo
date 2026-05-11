@@ -44,19 +44,15 @@ fn parse_segments(xml: &str) -> Result<Vec<String>, YoutubeError> {
                 }
                 _ => {}
             },
-            Ok(Event::Text(text)) => {
-                if in_p || in_text {
-                    let unescaped = text
-                        .unescape()
-                        .map_err(|e| YoutubeError::Parse(e.to_string()))?;
-                    current.push_str(&unescaped);
-                }
+            Ok(Event::Text(text)) if in_p || in_text => {
+                let unescaped = text
+                    .unescape()
+                    .map_err(|e| YoutubeError::Parse(e.to_string()))?;
+                current.push_str(&unescaped);
             }
-            Ok(Event::CData(text)) => {
-                if in_p || in_text {
-                    let content = String::from_utf8_lossy(text.as_ref());
-                    current.push_str(&content);
-                }
+            Ok(Event::CData(text)) if in_p || in_text => {
+                let content = String::from_utf8_lossy(text.as_ref());
+                current.push_str(&content);
             }
             Ok(Event::End(event)) => match event.name().as_ref() {
                 b"p" if in_p => {

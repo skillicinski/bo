@@ -3,6 +3,11 @@ name = "bo"
 version = "0.0.1"
 edition = "2021"
 license = "MIT"
+description = "Collect web pages into a local markdown knowledge tree"
+repository = "https://github.com/jellysnake/bo"
+homepage = "https://github.com/jellysnake/bo"
+keywords = ["cli", "knowledge-base", "markdown", "rag", "web"]
+categories = ["command-line-utilities"]
 
 [lib]
 name = "bo"
