@@ -8,14 +8,14 @@ Ordered implementation work for the Experimental OSS release. Each section is on
 
 **Goal:** Mechanical release infrastructure. No design decisions.
 
-- [ ] Add `LICENSE` file (MIT, full text) to repo root
-- [ ] Update `Cargo.toml` metadata:
+- [x] Add `LICENSE` file (MIT, full text) to repo root
+- [x] Update `Cargo.toml` metadata:
   - `description` — one-line (e.g. "Collect web pages into a local markdown knowledge tree")
   - `repository` — GitHub URL
   - `homepage` — GitHub URL (or separate if exists)
   - `keywords` — e.g. `["cli", "knowledge-base", "markdown", "rag", "web"]`
   - `categories` — e.g. `["command-line-utilities"]`
-- [ ] Add GitHub Actions CI workflow (`.github/workflows/ci.yml`):
+- [x] Add GitHub Actions CI workflow (`.github/workflows/ci.yml`):
   - `cargo fmt --check`
   - `cargo clippy --all-targets --all-features -- -D warnings`
   - `cargo test`
@@ -34,14 +34,14 @@ Ordered implementation work for the Experimental OSS release. Each section is on
 
 **Implementation:**
 
-- [ ] After synthesis, check `cited_slugs` (the validated citation list)
-- [ ] If `cited_slugs` is empty:
+- [x] After synthesis, check `cited_slugs` (the validated citation list)
+- [x] If `cited_slugs` is empty:
   - Human output: print "no answer from collected sources" (or similar), exit 1
   - JSON output: `{ "status": "error", "error": { "code": "insufficient_sources", "message": "..." } }`
-- [ ] Add unit tests:
+- [x] Add unit tests:
   - Mock synthesis that returns prose with zero valid wikilinks → verify not-answered behavior
   - Mock synthesis that returns prose with ≥1 valid wikilink → verify normal answer output
-- [ ] Add integration test: query against a tree with irrelevant content for a known-unrelated question → verify exit 1
+- [x] Add integration test: query against a tree with irrelevant content for a known-unrelated question → verify exit 1
 
 **Done when:** `bo query "What is the PMNS matrix?"` against the default corpus exits 1 with clear messaging instead of emitting a hallucinated answer.
 
