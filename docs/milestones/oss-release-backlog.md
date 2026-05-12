@@ -49,32 +49,32 @@ Ordered implementation work for the Experimental OSS release. Each section is on
 
 ## 3. `bo config set` MVP
 
-**Goal:** Users can change `compile_model` and `query_model` without hand-editing JSON.
+**Goal:** Users can change the model without hand-editing JSON.
+
+**Design decision (2026-05-11):** Single `model` field for v0.0.1. One knob, affects all LLM stages (compile, query, summary). Per-stage overrides (`compile_model`, `query_model`) remain in the config struct as internal fallback tiers but are not exposed in the CLI yet.
+
+Fallback hierarchy: `compile_model` > `model` > `"gpt-4o"` (same pattern for query).
 
 **Implementation:**
 
+- [ ] Add `model: Option<String>` to `Config` struct
+- [ ] Update `effective_compile_model()` / `effective_query_model()` to check `model` as middle fallback
 - [ ] Add `Config` subcommand to CLI:
   ```
-  bo config set <key> <value>
-  bo config get <key>
+  bo config set model <value>
+  bo config get model
   ```
-- [ ] Supported keys (v0.0.1): `compile_model`, `query_model`
 - [ ] `set` reads existing config, updates the field, writes back
-- [ ] `get` reads config and prints the current value (or default if unset)
+- [ ] `get` prints the current effective value
 - [ ] Unknown key → exit 2 with error listing valid keys
 - [ ] `--json` support on both subcommands
 - [ ] Unit tests:
   - Set/get round-trip
   - Unknown key rejection
-  - Set on fresh config (only `tree` section exists)
+  - Fallback hierarchy: `compile_model` > `model` > default
   - JSON output shape
 
-**Design notes:**
-- Config file location remains `~/.bo/config.json` (from `config::config_path()`)
-- Do not introduce a new config format — stay with the existing JSON structure
-- `get` on an unset key should show the effective default (e.g. `gpt-4o` for compile_model)
-
-**Done when:** `bo config set query_model gpt-4.1-mini && bo config get query_model` prints `gpt-4.1-mini`.
+**Done when:** `bo config set model gpt-4.1-mini && bo config get model` prints `gpt-4.1-mini`.
 
 ---
 
