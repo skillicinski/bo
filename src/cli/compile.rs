@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::domain::{branch, frontmatter, index, slug, tree::Tree};
-use crate::engine::config::Config;
+use crate::engine::config::SeededConfig;
 use crate::engine::llm::{
     complete_with_policy, FinishReason, LlmCallPolicy, LlmError, LlmProvider, Message,
     OpenAiProvider,
@@ -179,13 +179,13 @@ struct ValidatedBranch {
 
 // ── cmd_compile ───────────────────────────────────────────────────────────────
 
-pub fn cmd_compile(cfg: &Config) -> Result<(), String> {
+pub fn cmd_compile(cfg: &SeededConfig) -> Result<(), String> {
     let result = run_compile(cfg).map_err(|e| e.to_string())?;
     print_result(&result);
     Ok(())
 }
 
-pub fn run_compile(cfg: &Config) -> Result<CompileResult, CompileError> {
+pub fn run_compile(cfg: &SeededConfig) -> Result<CompileResult, CompileError> {
     // ── read index (guard: empty/single-leaf) ────────────────────────────────
     let index_path = cfg.tree.output_dir.join("index.jsonl");
     let all_entries = index::read_index(&index_path)
@@ -223,12 +223,7 @@ pub fn run_compile(cfg: &Config) -> Result<CompileResult, CompileError> {
     let schema = compile_response_schema();
 
     // ── LLM call ─────────────────────────────────────────────────────────────
-    let response = call_llm(
-        &api_key,
-        cfg.effective_compile_model(),
-        &user_message,
-        &schema,
-    )?;
+    let response = call_llm(&api_key, cfg.effective_model(), &user_message, &schema)?;
 
     // ── parse and validate ───────────────────────────────────────────────────
     let valid_filenames: HashSet<String> =
@@ -252,7 +247,7 @@ pub fn run_compile(cfg: &Config) -> Result<CompileResult, CompileError> {
 // ── read_valid_leaves ─────────────────────────────────────────────────────────
 
 fn read_valid_leaves(
-    cfg: &Config,
+    cfg: &SeededConfig,
     entries: &[index::IndexEntry],
 ) -> (Vec<LoadedLeaf>, Vec<String>) {
     let mut loaded = Vec::new();
@@ -505,7 +500,7 @@ fn parse_and_validate(
 
 fn execute_plan(
     plan: &CompilePlan,
-    cfg: &Config,
+    cfg: &SeededConfig,
     valid_filenames: &HashSet<String>,
     run_timestamp: &str,
     skipped_leaves: &[String],

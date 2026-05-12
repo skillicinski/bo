@@ -1,5 +1,6 @@
 use bo::cli::collect::{self, CollectError};
 use bo::cli::compile::{self, BranchResult, CompileError, CompileResult};
+use bo::cli::config as cli_config;
 use bo::cli::json::{self as json_output, JsonError, JsonWarning};
 use bo::cli::list::{self, ListOptions};
 use bo::cli::query;
@@ -7,7 +8,7 @@ use bo::cli::raze;
 use bo::cli::search::{self, SearchOptions, SearchQuery};
 use bo::cli::seed;
 use bo::cli::show::{self, ShowOptions};
-use bo::engine::config::{self, Config, ConfigError};
+use bo::engine::config::{self, ConfigError, SeededConfig};
 use clap::{error::ErrorKind as ClapErrorKind, Parser, Subcommand};
 use serde::Serialize;
 use serde_json::json;
@@ -19,7 +20,7 @@ use std::process;
 
 const NOT_SEEDED_MSG: &str = "bo hasn't been seeded yet — run: bo seed <output-dir>";
 const KNOWN_COMMANDS: &[&str] = &[
-    "seed", "collect", "compile", "list", "search", "show", "query", "raze",
+    "seed", "config", "collect", "compile", "list", "search", "show", "query", "raze",
 ];
 
 #[derive(Parser, Debug)]
@@ -47,6 +48,11 @@ enum Commands {
     Collect {
         /// URL to collect
         url: String,
+    },
+    /// Read or update bo configuration
+    Config {
+        #[command(subcommand)]
+        action: ConfigCommands,
     },
     /// Compile collected documents into a linked knowledge graph
     Compile,
@@ -92,6 +98,22 @@ enum Commands {
     Raze,
 }
 
+#[derive(Subcommand, Debug)]
+enum ConfigCommands {
+    /// Print a config value
+    Get {
+        /// Config key to read
+        key: String,
+    },
+    /// Set a config value
+    Set {
+        /// Config key to update
+        key: String,
+        /// Value to store
+        value: String,
+    },
+}
+
 // ── JSON payloads ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
@@ -132,12 +154,14 @@ enum CliError {
     Search(search::SearchError),
     Show(show::ShowError),
     Compile(CompileError),
+    ConfigCommand(cli_config::ConfigCommandError),
 }
 
 impl CliError {
     fn exit_code(&self) -> i32 {
         match self {
             CliError::Usage { exit_code, .. } => *exit_code,
+            CliError::ConfigCommand(error) => error.exit_code(),
             _ => 1,
         }
     }
@@ -158,6 +182,7 @@ impl CliError {
             CliError::Search(error) => JsonError::new(search_error_code(error), error.to_string()),
             CliError::Show(error) => show_json_error(error),
             CliError::Compile(error) => compile_json_error(error),
+            CliError::ConfigCommand(error) => config_command_json_error(error),
         }
     }
 }
@@ -175,6 +200,7 @@ impl fmt::Display for CliError {
             CliError::Search(error) => write!(f, "{}", error),
             CliError::Show(error) => write!(f, "{}", error),
             CliError::Compile(error) => write!(f, "{}", error),
+            CliError::ConfigCommand(error) => write!(f, "{}", error),
         }
     }
 }
@@ -259,6 +285,32 @@ fn compile_json_error(error: &CompileError) -> JsonError {
     JsonError::new(code, error.to_string())
 }
 
+fn config_command_json_error(error: &cli_config::ConfigCommandError) -> JsonError {
+    match error {
+        cli_config::ConfigCommandError::UnknownKey { key } => JsonError::with_details(
+            "usage_error",
+            error.to_string(),
+            json!({
+                "key": key,
+                "valid_keys": error.valid_keys().unwrap_or(&[]),
+                "exit_code": error.exit_code(),
+            }),
+        ),
+        cli_config::ConfigCommandError::UnsupportedModel { model } => JsonError::with_details(
+            "usage_error",
+            error.to_string(),
+            json!({
+                "model": model,
+                "supported_models": error.supported_models().unwrap_or_default(),
+                "exit_code": error.exit_code(),
+            }),
+        ),
+        cli_config::ConfigCommandError::Read(_) | cli_config::ConfigCommandError::Write(_) => {
+            JsonError::new("io_error", error.to_string())
+        }
+    }
+}
+
 // ── runner ───────────────────────────────────────────────────────────────────
 
 fn run_from<I, T, W, E>(args: I, stdout: &mut W, stderr: &mut E) -> i32
@@ -290,12 +342,20 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 Err(error) => emit_cli_error("seed", json, CliError::Seed(error), stdout, stderr),
             }
         }
+        Commands::Config { action } => match execute_config(action) {
+            Ok(result) if json => emit_json_success("config", &result, Vec::new(), stdout),
+            Ok(result) => write_human_or_error(
+                write!(stdout, "{}", cli_config::render_human(&result)),
+                stderr,
+            ),
+            Err(error) => emit_cli_error("config", json, error, stdout, stderr),
+        },
         Commands::Collect { url } => match execute_collect(url) {
             Ok(result) if json => emit_json_success("collect", &result, Vec::new(), stdout),
             Ok(result) => write_human_or_error(render_collect_human(&result, stdout), stderr),
             Err(error) => emit_cli_error("collect", json, error, stdout, stderr),
         },
-        Commands::Compile => match require_config()
+        Commands::Compile => match require_seeded_config()
             .and_then(|cfg| compile::run_compile(&cfg).map_err(CliError::Compile))
         {
             Ok(result) if json => {
@@ -356,7 +416,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
             }
             Err(error) => emit_cli_error("show", json, error, stdout, stderr),
         },
-        Commands::Raze => match require_config() {
+        Commands::Raze => match require_seeded_config() {
             Err(error) => emit_cli_error("raze", json, error, stdout, stderr),
             Ok(cfg) => match raze::raze(&cfg.tree.output_dir, &config::config_path()) {
                 Ok(output) if json => {
@@ -544,9 +604,9 @@ fn write_human_or_error<E: Write>(result: io::Result<()>, _stderr: &mut E) -> i3
 
 // ── command execution ────────────────────────────────────────────────────────
 
-fn require_config() -> Result<Config, CliError> {
+fn require_seeded_config() -> Result<SeededConfig, CliError> {
     match config::read_config(&config::config_path()) {
-        Ok(cfg) => Ok(cfg),
+        Ok(cfg) => cfg.into_seeded().ok_or(CliError::NotSeeded),
         Err(ConfigError::NotFound) => Err(CliError::NotSeeded),
         Err(error) => Err(CliError::ConfigRead(format!(
             "failed to read config: {}",
@@ -555,10 +615,20 @@ fn require_config() -> Result<Config, CliError> {
     }
 }
 
+fn execute_config(action: ConfigCommands) -> Result<cli_config::ConfigCommandResult, CliError> {
+    let result = match action {
+        ConfigCommands::Get { key } => cli_config::get(&key, &config::config_path()),
+        ConfigCommands::Set { key, value } => cli_config::set(&key, &value, &config::config_path()),
+    };
+
+    result.map_err(CliError::ConfigCommand)
+}
+
 fn execute_collect(url: String) -> Result<CollectResult, CliError> {
-    let cfg = require_config()?;
+    let cfg = require_seeded_config()?;
     eprintln!("fetching {}...", url);
-    let page = collect::collect_url(&url, &cfg.tree.output_dir).map_err(CliError::Collect)?;
+    let page = collect::collect_url_with_model(&url, &cfg.tree.output_dir, cfg.effective_model())
+        .map_err(CliError::Collect)?;
     let path = cfg.tree.output_dir.join(&page.filename);
 
     Ok(CollectResult {
@@ -573,7 +643,7 @@ fn execute_list(
     recent: bool,
     branch: Option<String>,
 ) -> Result<list::ListResult, CliError> {
-    let cfg = require_config()?;
+    let cfg = require_seeded_config()?;
     list::list_leaves(
         &cfg.tree.output_dir,
         &ListOptions {
@@ -597,7 +667,7 @@ fn execute_search(
         });
     }
 
-    let cfg = require_config()?;
+    let cfg = require_seeded_config()?;
     let query = SearchQuery {
         terms: terms.iter().map(|term| term.to_lowercase()).collect(),
     };
@@ -609,12 +679,12 @@ fn execute_search(
 }
 
 fn execute_show(title: String, full: bool) -> Result<show::ShowResult, CliError> {
-    let cfg = require_config()?;
+    let cfg = require_seeded_config()?;
     show::show_leaf(&cfg.tree.output_dir, &title, &ShowOptions { full }).map_err(CliError::Show)
 }
 
 fn execute_query(question: &str) -> Result<query::QueryResult, query::QueryError> {
-    let cfg = require_config().map_err(|e| {
+    let cfg = require_seeded_config().map_err(|e| {
         query::QueryError::NoProvider(format!("{}. Cannot query without a configured tree.", e))
     })?;
 
@@ -627,7 +697,7 @@ fn execute_query(question: &str) -> Result<query::QueryResult, query::QueryError
         }
     };
 
-    let model = cfg.effective_query_model().to_string();
+    let model = cfg.effective_model().to_string();
     query::run(&cfg.tree.output_dir, question, &api_key, &model)
 }
 

@@ -9,7 +9,7 @@ use std::fs;
 
 use bo::cli::compile;
 use bo::domain::index;
-use bo::engine::config::Config;
+use bo::engine::config::SeededConfig;
 
 struct FixtureDoc {
     file: &'static str,
@@ -75,15 +75,14 @@ fn setup_fixture_collection() -> tempfile::TempDir {
     dir
 }
 
-fn make_config(output_dir: &std::path::Path) -> Config {
-    Config {
+fn make_config(output_dir: &std::path::Path) -> SeededConfig {
+    SeededConfig {
         tree: bo::domain::tree::TreeConfig {
             output_dir: output_dir.to_path_buf(),
             name: None,
             created_at: None,
         },
-        compile_model: Some("gpt-4o-mini".to_string()), // cheaper model for tests
-        query_model: None,
+        model: Some("gpt-4o-mini".to_string()), // cheaper model for tests
     }
 }
 

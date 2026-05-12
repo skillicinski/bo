@@ -20,6 +20,7 @@ use std::path::Path;
 
 use crate::adapters::youtube::{self, YoutubeError, YoutubeUrlMatch};
 use crate::domain::{index, leaf, slug};
+use crate::engine::llm::models::DEFAULT_MODEL;
 use crate::engine::quality::RejectReason;
 use crate::engine::{extract, fetch, quality, summary};
 
@@ -108,15 +109,24 @@ impl From<std::io::Error> for CollectError {
 /// returned by `fetch_url`, preserving the canonicalisation that was previously
 /// done in `main.rs`.
 pub fn collect_url(url: &str, output_dir: &Path) -> Result<Document, CollectError> {
+    collect_url_with_model(url, output_dir, DEFAULT_MODEL)
+}
+
+pub fn collect_url_with_model(
+    url: &str,
+    output_dir: &Path,
+    model: &str,
+) -> Result<Document, CollectError> {
     match youtube::classify_url(url) {
         YoutubeUrlMatch::Supported(supported) => {
             ensure_not_duplicate(supported.normalized_url(), output_dir)?;
             let transcript = youtube::collect_transcript(url)?;
-            return write_new_document(
+            return write_new_document_with_model(
                 &transcript.url,
                 Some(&transcript.title),
                 &transcript.body_markdown,
                 output_dir,
+                model,
             );
         }
         YoutubeUrlMatch::Unsupported { url, reason } => {
@@ -138,7 +148,7 @@ pub fn collect_url(url: &str, output_dir: &Path) -> Result<Document, CollectErro
         }
         Err(e) => return Err(e.into()),
     };
-    collect_html(&fetched.url, &fetched.html, output_dir)
+    collect_html_with_model(&fetched.url, &fetched.html, output_dir, model)
 }
 
 /// Extract-write-ledger pipeline without network access. Accepts pre-fetched HTML.
@@ -149,6 +159,15 @@ pub fn collect_url(url: &str, output_dir: &Path) -> Result<Document, CollectErro
 /// This is the testable core of the pipeline: integration tests call it directly
 /// with fixture HTML to avoid network dependencies.
 pub fn collect_html(url: &str, html: &str, output_dir: &Path) -> Result<Document, CollectError> {
+    collect_html_with_model(url, html, output_dir, DEFAULT_MODEL)
+}
+
+pub fn collect_html_with_model(
+    url: &str,
+    html: &str,
+    output_dir: &Path,
+    model: &str,
+) -> Result<Document, CollectError> {
     // Duplicate check — reads index only (fast path).
     // If index.jsonl is absent, the URL is treated as new.
     ensure_not_duplicate(url, output_dir)?;
@@ -174,11 +193,12 @@ pub fn collect_html(url: &str, html: &str, output_dir: &Path) -> Result<Document
         });
     }
 
-    write_new_document(
+    write_new_document_with_model(
         url,
         content.title.as_deref(),
         &content.body_markdown,
         output_dir,
+        model,
     )
 }
 
@@ -193,18 +213,19 @@ fn ensure_not_duplicate(url: &str, output_dir: &Path) -> Result<(), CollectError
     Ok(())
 }
 
-fn write_new_document(
+fn write_new_document_with_model(
     url: &str,
     title: Option<&str>,
     body_markdown: &str,
     output_dir: &Path,
+    model: &str,
 ) -> Result<Document, CollectError> {
     write_new_document_with_summary_result(
         url,
         title,
         body_markdown,
         output_dir,
-        summary::generate(body_markdown, title, "gpt-4o"),
+        summary::generate(body_markdown, title, model),
     )
 }
 

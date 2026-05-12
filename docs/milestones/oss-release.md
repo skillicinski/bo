@@ -41,9 +41,9 @@ Committed scope. Ship this, get feedback, iterate.
 - [ ] Prevents hallucination when irrelevant OR-matched leaves reach synthesis
 
 ### 3. `bo config set` MVP (one session)
-- [ ] `bo config set <key> <value>` — at minimum: `compile_model`, `query_model`
-- [ ] `bo config get <key>` — show current value
-- [ ] Removes requirement to hand-edit `~/.bo/config.json`
+- [x] `bo config set model <value>` — set the global LLM model
+- [x] `bo config get model` — show current effective model
+- [x] Removes requirement to hand-edit `~/.bo/config.json`
 
 ### 4. README rewrite + tag (one session)
 - [ ] What bo is / is not

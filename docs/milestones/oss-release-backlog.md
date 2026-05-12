@@ -51,27 +51,27 @@ Ordered implementation work for the Experimental OSS release. Each section is on
 
 **Goal:** Users can change the model without hand-editing JSON.
 
-**Design decision (2026-05-11):** Single `model` field for v0.0.1. One knob, affects all LLM stages (compile, query, summary). Per-stage overrides (`compile_model`, `query_model`) remain in the config struct as internal fallback tiers but are not exposed in the CLI yet.
+**Design decision (2026-05-11, revised during implementation):** Single `model` field for v0.0.1. One knob, affects all LLM stages (compile, query, summary). Per-stage overrides (`compile_model`, `query_model`) are not retained for the unpublished pre-release config shape.
 
-Fallback hierarchy: `compile_model` > `model` > `"gpt-4o"` (same pattern for query).
+Fallback hierarchy: `model` > `"gpt-4o"`.
 
 **Implementation:**
 
-- [ ] Add `model: Option<String>` to `Config` struct
-- [ ] Update `effective_compile_model()` / `effective_query_model()` to check `model` as middle fallback
-- [ ] Add `Config` subcommand to CLI:
+- [x] Add `model: Option<String>` to `Config` struct
+- [x] Update LLM-backed commands to use `model` with `"gpt-4o"` default
+- [x] Add `Config` subcommand to CLI:
   ```
   bo config set model <value>
   bo config get model
   ```
-- [ ] `set` reads existing config, updates the field, writes back
-- [ ] `get` prints the current effective value
-- [ ] Unknown key → exit 2 with error listing valid keys
-- [ ] `--json` support on both subcommands
-- [ ] Unit tests:
+- [x] `set` reads existing config, updates the field, writes back
+- [x] `get` prints the current effective value
+- [x] Unknown key → exit 2 with error listing valid keys
+- [x] `--json` support on both subcommands
+- [x] Unit tests:
   - Set/get round-trip
   - Unknown key rejection
-  - Fallback hierarchy: `compile_model` > `model` > default
+  - `model` > default fallback
   - JSON output shape
 
 **Done when:** `bo config set model gpt-4.1-mini && bo config get model` prints `gpt-4.1-mini`.
@@ -89,7 +89,7 @@ Fallback hierarchy: `compile_model` > `model` > `"gpt-4o"` (same pattern for que
 - [ ] **Install** — `cargo install --path .` (and future crates.io once published)
 - [ ] **Quickstart** — seed → collect a URL → list → compile → query. Copy-pasteable commands.
 - [ ] **Command reference** — table or list of all commands with one-liner descriptions and key flags
-- [ ] **BYOK / provider setup** — OPENAI_API_KEY, `.env` file, `bo config set query_model`
+- [ ] **BYOK / provider setup** — OPENAI_API_KEY, `.env` file, `bo config set model`
 - [ ] **Storage format** — where files live, what frontmatter looks like, what index.jsonl is, what branches are
 - [ ] **Limitations + experimental caveat** — lexical retrieval, single provider, no offline/local model yet, tree size bounds, known failure modes
 - [ ] **Contributing** — minimal for now (PRs welcome, run CI locally)

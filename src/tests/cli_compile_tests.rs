@@ -4,20 +4,21 @@ use serde_json::Value;
 use serial_test::serial;
 use std::fs;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 use tempfile::TempDir;
 
+use crate::engine::config::SeededConfig;
 use crate::engine::llm::{LlmProvider, LlmResponse};
 
-fn make_test_config(output_dir: &std::path::Path) -> Config {
-    Config {
+fn make_test_config(output_dir: &std::path::Path) -> SeededConfig {
+    SeededConfig {
         tree: crate::domain::tree::TreeConfig {
             output_dir: output_dir.to_path_buf(),
             name: None,
             created_at: None,
         },
-        compile_model: Some("gpt-4o-mini".to_string()),
-        query_model: None,
+        model: Some("gpt-4o-mini".to_string()),
     }
 }
 
@@ -406,6 +407,39 @@ impl LlmProvider for CompileFakeProvider {
     }
 }
 
+struct CompileModelRecordingProvider {
+    model: Mutex<Option<String>>,
+}
+
+impl CompileModelRecordingProvider {
+    fn new() -> Self {
+        Self {
+            model: Mutex::new(None),
+        }
+    }
+
+    fn model(&self) -> Option<String> {
+        self.model.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl LlmProvider for CompileModelRecordingProvider {
+    async fn complete(
+        &self,
+        _messages: &[Message],
+        model: &str,
+        _max_tokens: u32,
+        _response_schema: Option<&Value>,
+    ) -> Result<LlmResponse, LlmError> {
+        *self.model.lock().unwrap() = Some(model.to_string());
+        Ok(LlmResponse {
+            content: r#"{"branches":[]}"#.to_string(),
+            finish_reason: FinishReason::Stop,
+        })
+    }
+}
+
 struct CompilePermanentFailureProvider {
     calls: AtomicUsize,
 }
@@ -495,6 +529,24 @@ async fn compile_retries_transient_failure_and_succeeds() {
 
     assert_eq!(provider.calls(), 2);
     assert_eq!(response, r#"{"branches":[]}"#);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn compile_provider_receives_requested_model() {
+    let provider = CompileModelRecordingProvider::new();
+    let schema = compile_response_schema();
+
+    call_llm_with_provider(
+        &provider,
+        "gpt-4.1-mini",
+        "compile this",
+        &schema,
+        short_compile_policy(1),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(provider.model().as_deref(), Some("gpt-4.1-mini"));
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -132,6 +132,7 @@ fn every_output_command_accepts_json_flag() {
 
     let cases: Vec<(Vec<&str>, &str)> = vec![
         (vec!["seed", "--json", output_dir.to_str().unwrap()], "seed"),
+        (vec!["--json", "config", "get", "model"], "config"),
         (vec!["collect", "--json", "https://example.com"], "collect"),
         (vec!["compile", "--json"], "compile"),
         (vec!["list", "--json"], "list"),
@@ -148,6 +149,68 @@ fn every_output_command_accepts_json_flag() {
         assert!(parsed.get("schema_version").is_some(), "args: {args:?}");
         assert!(parsed.get("warnings").is_some(), "args: {args:?}");
     }
+}
+
+// ── config ───────────────────────────────────────────────────────────────────
+
+#[test]
+fn config_set_json_payload() {
+    let home = TempDir::new().unwrap();
+
+    let out = run(
+        home.path(),
+        &["--json", "config", "set", "model", "gpt-4.1-mini"],
+    );
+
+    assert!(out.status.success());
+    assert!(out.stderr.is_empty());
+    let parsed = parse_json(&out);
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["command"], "config");
+    assert_eq!(parsed["data"]["action"], "set");
+    assert_eq!(parsed["data"]["key"], "model");
+    assert_eq!(parsed["data"]["value"], "gpt-4.1-mini");
+}
+
+#[test]
+fn config_get_json_payload() {
+    let home = TempDir::new().unwrap();
+    let set = run(home.path(), &["config", "set", "model", "gpt-4.1-mini"]);
+    assert!(set.status.success());
+
+    let out = run(home.path(), &["config", "get", "--json", "model"]);
+
+    assert!(out.status.success());
+    let parsed = parse_json(&out);
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["command"], "config");
+    assert_eq!(parsed["data"]["action"], "get");
+    assert_eq!(parsed["data"]["key"], "model");
+    assert_eq!(parsed["data"]["value"], "gpt-4.1-mini");
+}
+
+#[test]
+fn config_json_usage_error_preserves_exit_code_and_command() {
+    let home = TempDir::new().unwrap();
+
+    let out = run(
+        home.path(),
+        &["--json", "config", "set", "model", "unknown-model"],
+    );
+
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stderr.is_empty());
+    let parsed = parse_json(&out);
+    assert_eq!(parsed["ok"], false);
+    assert_eq!(parsed["command"], "config");
+    assert_eq!(parsed["error"]["code"], "usage_error");
+    assert_eq!(parsed["error"]["details"]["exit_code"], 2);
+    assert_eq!(parsed["error"]["details"]["model"], "unknown-model");
+    assert!(parsed["error"]["details"]["supported_models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| value == "gpt-4.1-mini"));
 }
 
 // ── search ───────────────────────────────────────────────────────────────────
