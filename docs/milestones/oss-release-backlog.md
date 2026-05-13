@@ -88,22 +88,22 @@ Fallback hierarchy: `model` > `"gpt-4o"`.
 
 **Implementation:**
 
-- [ ] Document the release install command:
+- [x] Document the release install command:
   ```bash
   cargo install --git https://github.com/jellysnake/bo --tag v0.0.1
   ```
-- [ ] Keep the contributor/local-dev install command distinct:
+- [x] Keep the contributor/local-dev install command distinct:
   ```bash
   cargo install --path .
   ```
-- [ ] Add an install smoke check or release checklist that validates an installed binary from outside the repo:
+- [x] Add an install smoke check or release checklist that validates an installed binary from outside the repo:
   - `bo --help`
   - `bo config get model`
   - `bo seed <temp-tree>`
   - `bo list`
-- [ ] Run the smoke check with a temporary `HOME` and arbitrary current working directory.
-- [ ] Verify installed bo does not require repo-relative files, `tmp-tree`, or a checked-out `.env`.
-- [ ] If using CI for this gate, approximate tag install with local install (`cargo install --path . --locked --root <tmp-root>`) and manually verify the `--git --tag v0.0.1` path after tagging.
+- [x] Run the smoke check with a temporary `HOME` and arbitrary current working directory.
+- [x] Verify installed bo does not require repo-relative files, `tmp-tree`, or a checked-out `.env`.
+- [x] If using CI for this gate, approximate tag install with local install (`cargo install --path . --locked --root <tmp-root>`) and manually verify the `--git --tag v0.0.1` path after tagging.
 
 **Done when:** From a clean shell with Rust installed, a user can run the documented install command, then `bo seed ~/bo-tree`, without being inside the bo repo.
 
