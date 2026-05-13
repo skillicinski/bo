@@ -30,27 +30,43 @@ Bo's CLI commands are reliable primitives. External agents (Claude Code, Cursor,
 
 Committed scope. Ship this, get feedback, iterate.
 
-### 1. Housekeeping (one quick session)
-- [ ] LICENSE file in repo root (MIT, matching Cargo.toml)
-- [ ] Cargo.toml metadata: description, repository, homepage, keywords
-- [ ] CI workflow: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`
+### 1. Housekeeping (done)
+- [x] LICENSE file in repo root (MIT, matching Cargo.toml)
+- [x] Cargo.toml metadata: description, repository, homepage, keywords
+- [x] CI workflow: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`
 
-### 2. Zero-citation = not-answered (one session)
-- [ ] If synthesis produces zero valid citations, treat result as "not answered from collected sources"
-- [ ] Surface clear human (`no answer from collected sources`) and JSON (`insufficient_sources`) behavior
-- [ ] Prevents hallucination when irrelevant OR-matched leaves reach synthesis
+### 2. Zero-citation = not-answered (done)
+- [x] If synthesis produces zero valid citations, treat result as "not answered from collected sources"
+- [x] Surface clear human (`no answer from collected sources`) and JSON (`insufficient_sources`) behavior
+- [x] Prevents hallucination when irrelevant OR-matched leaves reach synthesis
 
-### 3. `bo config set` MVP (one session)
+### 3. `bo config set` MVP (done)
 - [x] `bo config set model <value>` — set the global LLM model
 - [x] `bo config get model` — show current effective model
-- [x] Removes requirement to hand-edit `~/.bo/config.json`
+- [x] Removes requirement to hand-edit `~/.bo/config.json` for model selection
 
-### 4. README rewrite + tag (one session)
+### 4. Clean installation happy path (release gate, separate branch)
+- [ ] New user can install bo from GitHub without cloning the repo for contribution work
+- [ ] Document the release install command: `cargo install --git https://github.com/jellysnake/bo --tag v0.0.1`
+- [ ] Installed `bo` works from any local shell / arbitrary working directory, not just inside the repository
+- [ ] Validate at minimum: `bo --help`, `bo config get model`, and `bo seed <tree-dir>` from a temp `HOME`
+- [ ] Keep crates.io/Homebrew/binary artifacts out of v0.0.1 unless they become trivial; those remain post-release packaging
+
+### 5. Auth configuration happy path (release gate, separate branch)
+- [ ] `bo config auth --provider openai` prompts for an OpenAI API key without echoing it
+- [ ] Auth command writes/updates `~/.bo/auth.json` and creates `~/.bo` if needed
+- [ ] Stored auth file uses restrictive local permissions where supported (`0600` on Unix/macOS)
+- [ ] Re-running the auth command overwrites the existing OpenAI key without printing it
+- [ ] LLM-backed commands resolve API keys in order: `OPENAI_API_KEY` env var, then `~/.bo/auth.json`, then clear setup error
+- [ ] Error messages point users to `bo config auth --provider openai` instead of requiring `.env`/`source .env`
+- [ ] JSON mode works for success/errors and never includes the secret value
+
+### 6. README rewrite + tag (capstone session)
 - [ ] What bo is / is not
-- [ ] Install (`cargo install --path .` and future crates.io)
-- [ ] Quickstart walkthrough (seed → collect → list → query)
+- [ ] Install (`cargo install --git https://github.com/jellysnake/bo --tag v0.0.1`; future crates.io once published)
+- [ ] Quickstart walkthrough (install → auth → seed → collect → list → compile → query)
 - [ ] Command reference
-- [ ] BYOK / provider setup (OPENAI_API_KEY, .env, config set)
+- [ ] BYOK / provider setup (`bo config auth --provider openai`, `OPENAI_API_KEY` override, `bo config set model`)
 - [ ] Storage format overview
 - [ ] Limitations + experimental caveat
 - [ ] Tag v0.0.1, push
