@@ -310,6 +310,165 @@ fn collect_without_seed_fails_with_helpful_message() {
     );
 }
 
+// ── config ───────────────────────────────────────────────────────────────────
+
+#[test]
+fn config_get_without_config_prints_default_model() {
+    let home = TempDir::new().unwrap();
+
+    let out = bo(home.path())
+        .args(["config", "get", "model"])
+        .output()
+        .unwrap();
+
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "gpt-4o\n");
+    assert!(!config_path(&home).exists());
+}
+
+#[test]
+fn config_set_get_roundtrip() {
+    let home = TempDir::new().unwrap();
+
+    let set = bo(home.path())
+        .args(["config", "set", "model", "gpt-4.1-mini"])
+        .output()
+        .unwrap();
+    assert!(
+        set.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&set.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&set.stdout),
+        "model = gpt-4.1-mini\n"
+    );
+
+    let get = bo(home.path())
+        .args(["config", "get", "model"])
+        .output()
+        .unwrap();
+    assert!(get.status.success());
+    assert_eq!(String::from_utf8_lossy(&get.stdout), "gpt-4.1-mini\n");
+}
+
+#[test]
+fn config_set_before_seed_creates_config_only_file() {
+    let home = TempDir::new().unwrap();
+
+    let out = bo(home.path())
+        .args(["config", "set", "model", "gpt-4.1-mini"])
+        .output()
+        .unwrap();
+
+    assert!(out.status.success());
+    let contents = fs::read_to_string(config_path(&home)).unwrap();
+    let parsed: Value = serde_json::from_str(&contents).unwrap();
+    assert_eq!(parsed["model"], "gpt-4.1-mini");
+    assert!(parsed.get("tree").is_none());
+}
+
+#[test]
+fn seed_after_config_set_preserves_model() {
+    let home = TempDir::new().unwrap();
+    let tree = home.path().join("tree");
+
+    let set = bo(home.path())
+        .args(["config", "set", "model", "gpt-4.1-mini"])
+        .output()
+        .unwrap();
+    assert!(set.status.success());
+
+    let seeded = seed(home.path(), &tree);
+    assert!(
+        seeded.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&seeded.stderr)
+    );
+
+    let contents = fs::read_to_string(config_path(&home)).unwrap();
+    let parsed: Value = serde_json::from_str(&contents).unwrap();
+    assert_eq!(parsed["model"], "gpt-4.1-mini");
+    assert_eq!(parsed["tree"]["output_dir"], tree.to_str().unwrap());
+}
+
+#[test]
+fn config_only_file_still_counts_as_not_seeded_for_tree_commands() {
+    let cases: Vec<Vec<&str>> = vec![
+        vec!["collect", "https://example.com"],
+        vec!["compile"],
+        vec!["list"],
+        vec!["search", "rust"],
+        vec!["show", "Rust"],
+        vec!["query", "what", "is", "rust"],
+        vec!["raze"],
+    ];
+
+    for args in cases {
+        let home = TempDir::new().unwrap();
+        let set = bo(home.path())
+            .args(["config", "set", "model", "gpt-4.1-mini"])
+            .output()
+            .unwrap();
+        assert!(set.status.success());
+
+        let out = bo(home.path()).args(&args).output().unwrap();
+
+        assert!(!out.status.success(), "args: {args:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("bo hasn't been seeded yet"),
+            "args: {args:?}; stderr: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn config_get_unknown_key_exits_two_and_lists_valid_key() {
+    let home = TempDir::new().unwrap();
+
+    let out = bo(home.path())
+        .args(["config", "get", "query_model"])
+        .output()
+        .unwrap();
+
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("query_model"), "stderr: {stderr}");
+    assert!(stderr.contains("model"), "stderr: {stderr}");
+}
+
+#[test]
+fn config_set_unknown_key_exits_two_and_lists_valid_key() {
+    let home = TempDir::new().unwrap();
+
+    let out = bo(home.path())
+        .args(["config", "set", "compile_model", "gpt-4.1-mini"])
+        .output()
+        .unwrap();
+
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("compile_model"), "stderr: {stderr}");
+    assert!(stderr.contains("model"), "stderr: {stderr}");
+}
+
+#[test]
+fn config_set_unsupported_model_exits_two_and_lists_supported_models() {
+    let home = TempDir::new().unwrap();
+
+    let out = bo(home.path())
+        .args(["config", "set", "model", "unknown-model"])
+        .output()
+        .unwrap();
+
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("unknown-model"), "stderr: {stderr}");
+    assert!(stderr.contains("gpt-4o"), "stderr: {stderr}");
+    assert!(stderr.contains("gpt-4.1-mini"), "stderr: {stderr}");
+}
+
 // ── list ─────────────────────────────────────────────────────────────────────
 
 #[test]

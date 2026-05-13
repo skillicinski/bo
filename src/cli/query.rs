@@ -106,7 +106,7 @@ impl fmt::Display for QueryError {
             QueryError::Io(msg) => write!(f, "{}", msg),
             QueryError::UnknownModelContext { model } => write!(
                 f,
-                "unknown context window for query_model '{}' — choose a known model or add its context window",
+                "unknown context window for model '{}' — choose a known model or add its context window",
                 model
             ),
             QueryError::ContextBudgetExhausted {

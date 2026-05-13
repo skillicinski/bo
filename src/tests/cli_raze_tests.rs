@@ -12,13 +12,12 @@ fn setup_tree(tmp: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
 
     config::write_config(
         &config::Config {
-            tree: crate::domain::tree::TreeConfig {
+            tree: Some(crate::domain::tree::TreeConfig {
                 output_dir: tree_dir.clone(),
                 name: Some("tree".to_string()),
                 created_at: Some("2025-01-01T00:00:00Z".to_string()),
-            },
-            compile_model: None,
-            query_model: None,
+            }),
+            model: None,
         },
         &config_path,
     )

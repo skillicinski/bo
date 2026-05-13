@@ -114,6 +114,31 @@ fn test_policy(max_attempts: usize) -> LlmCallPolicy {
     }
 }
 
+#[test]
+fn model_catalog_exposes_default_model() {
+    assert_eq!(models::DEFAULT_MODEL, "gpt-4o");
+    assert!(models::is_supported_model(models::DEFAULT_MODEL));
+}
+
+#[test]
+fn model_catalog_lists_supported_models() {
+    let ids: Vec<&str> = models::supported_model_ids().collect();
+    assert!(ids.contains(&"gpt-4o"));
+    assert!(ids.contains(&"gpt-4.1-mini"));
+}
+
+#[test]
+fn context_window_lookup_returns_known_windows() {
+    assert_eq!(context_window_tokens("gpt-4o"), Some(128_000));
+    assert_eq!(context_window_tokens("gpt-4.1-mini"), Some(1_000_000));
+}
+
+#[test]
+fn model_catalog_rejects_unsupported_models() {
+    assert!(!models::is_supported_model("unknown-model"));
+    assert_eq!(context_window_tokens("unknown-model"), None);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn complete_with_policy_succeeds_after_one_transient_failure() {
     let provider = TransientThenSuccessProvider::new(1);

@@ -13,7 +13,8 @@ fn creates_output_directory_and_config() {
     assert_eq!(result.status, "created");
     assert!(output_dir.exists());
     let cfg = config::read_config(&config_path).unwrap();
-    assert_eq!(cfg.tree.output_dir, output_dir);
+    let tree = cfg.tree.unwrap();
+    assert_eq!(tree.output_dir, output_dir);
 }
 
 #[test]
@@ -26,7 +27,8 @@ fn derives_name_from_directory_basename() {
 
     assert_eq!(result.tree_name.as_deref(), Some("my-tree"));
     let cfg = config::read_config(&config_path).unwrap();
-    assert_eq!(cfg.tree.name.as_deref(), Some("my-tree"));
+    let tree = cfg.tree.unwrap();
+    assert_eq!(tree.name.as_deref(), Some("my-tree"));
 }
 
 #[test]
@@ -39,7 +41,8 @@ fn explicit_name_overrides_basename() {
 
     assert_eq!(result.tree_name.as_deref(), Some("custom"));
     let cfg = config::read_config(&config_path).unwrap();
-    assert_eq!(cfg.tree.name.as_deref(), Some("custom"));
+    let tree = cfg.tree.unwrap();
+    assert_eq!(tree.name.as_deref(), Some("custom"));
 }
 
 #[test]
@@ -51,7 +54,8 @@ fn sets_created_at_timestamp() {
     seed(output_dir, None, &config_path).unwrap();
 
     let cfg = config::read_config(&config_path).unwrap();
-    assert!(cfg.tree.created_at.is_some());
+    let tree = cfg.tree.unwrap();
+    assert!(tree.created_at.is_some());
 }
 
 #[test]
@@ -68,16 +72,47 @@ fn already_seeded_returns_existing_config() {
 }
 
 #[test]
+fn seeds_config_without_tree_and_preserves_model() {
+    let tmp = TempDir::new().unwrap();
+    let output_dir = tmp.path().join("tree");
+    let config_path = tmp.path().join("config.json");
+
+    config::write_config(
+        &config::Config {
+            tree: None,
+            model: Some("gpt-4.1-mini".to_string()),
+        },
+        &config_path,
+    )
+    .unwrap();
+
+    let result = seed(output_dir.clone(), None, &config_path).unwrap();
+
+    assert_eq!(result.status, "created");
+    let cfg = config::read_config(&config_path).unwrap();
+    assert_eq!(cfg.model.as_deref(), Some("gpt-4.1-mini"));
+    assert_eq!(cfg.tree.unwrap().output_dir, output_dir);
+}
+
+#[test]
 fn idempotent_does_not_update_created_at() {
     let tmp = TempDir::new().unwrap();
     let output_dir = tmp.path().join("tree");
     let config_path = tmp.path().join("config.json");
 
     seed(output_dir.clone(), None, &config_path).unwrap();
-    let first_ts = config::read_config(&config_path).unwrap().tree.created_at;
+    let first_ts = config::read_config(&config_path)
+        .unwrap()
+        .tree
+        .unwrap()
+        .created_at;
 
     seed(output_dir, None, &config_path).unwrap();
-    let second_ts = config::read_config(&config_path).unwrap().tree.created_at;
+    let second_ts = config::read_config(&config_path)
+        .unwrap()
+        .tree
+        .unwrap()
+        .created_at;
 
     assert_eq!(first_ts, second_ts);
 }
