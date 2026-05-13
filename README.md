@@ -1,6 +1,10 @@
 # bo
 
-Collect web pages into a local markdown knowledge tree. Compile topic branches via LLM. Query your collection and get answers with citations back to source material. No cloud service, no vector database — just local files and your own API key.
+Collect web content that you don't have time to read as a local markdown knowledge tree. Compile the content into common themes and topics using an LLM. Then, query your collection with natural language and get answers with citations back to source material.
+
+Your collection stays legible and can be viewed with any markdown reader. The idea is to skip RAG and vector databases altogether and just rely on local files and let LLMs do what they're best at. The CLI is intended to be machine-friendly for use via any coding assistant.
+
+All you need is to bring your own API key!
 
 > **Experimental** — v0.0.1. Expect rough edges and breaking changes.
 
@@ -26,6 +30,9 @@ bo collect https://example.com/blog/linked-data-fundamentals
 # See what you have
 bo list
 
+# Read a collected leaf
+bo show "Intro to Knowledge Graphs"
+
 # Compile into a linked knowledge graph
 bo compile
 
@@ -43,13 +50,13 @@ bo query "How do these concepts relate to each other?"
 | `bo query <question>` | Answer a question with citations from your tree |
 | `bo list` | List collected leaves |
 | `bo search <terms>` | Search leaves by content |
-| `bo show <title>` | Display a single leaf |
+| `bo show <title>` | Display a single leaf or branch |
 | `bo config auth --provider openai` | Store your API key |
 | `bo config get model` | Show the active model |
 | `bo config set model <id>` | Change the LLM model |
 | `bo raze` | Delete all bo-managed files and config |
 
-All commands support `--json` for machine-readable output.
+All commands support `--json` for machine-readable output, intended for use by coding assistants and scripts.
 
 ## Provider setup
 
@@ -78,9 +85,10 @@ Supported: `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`.
 
 ~/bo-tree/               # Your tree (location chosen at seed)
 ├── index.jsonl          # Ledger of collected leaves
-├── intro-to-knowledge-graphs.md
-├── linked-data-fundamentals.md
-└── branch-knowledge-graphs.md   # Branch: compiled topic summary
+├── intro-to-knowledge-graphs.md   # Leaf
+├── linked-data-fundamentals.md    # Leaf
+└── branches/
+    └── knowledge-graphs.md        # Compiled topic summary
 ```
 
 ## Limitations
