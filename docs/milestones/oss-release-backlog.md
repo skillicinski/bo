@@ -125,10 +125,10 @@ bo config auth --provider openai
 
 **Behavior:**
 
-- [ ] Prompts for the OpenAI API key without echoing input.
-- [ ] Creates `~/.bo/auth.json` if absent.
-- [ ] Stores OpenAI auth separately from `~/.bo/config.json`.
-- [ ] Uses a shape like:
+- [x] Prompts for the OpenAI API key without echoing input.
+- [x] Creates `~/.bo/auth.json` if absent.
+- [x] Stores OpenAI auth separately from `~/.bo/config.json`.
+- [x] Uses a shape like:
   ```json
   {
     "providers": {
@@ -138,31 +138,31 @@ bo config auth --provider openai
     }
   }
   ```
-- [ ] Applies restrictive file permissions where supported (`0600` on Unix/macOS).
-- [ ] Running the command again overwrites the stored OpenAI key.
-- [ ] Never prints the key in human output, JSON output, logs, or errors.
-- [ ] Unknown provider exits 2 and lists valid providers (`openai`).
-- [ ] Supports global `--json`; JSON success reports provider/status but never the secret.
+- [x] Applies restrictive file permissions where supported (`0600` on Unix/macOS).
+- [x] Running the command again overwrites the stored OpenAI key.
+- [x] Never prints the key in human output, JSON output, logs, or errors.
+- [x] Unknown provider exits 2 and lists valid providers (`openai`).
+- [x] Supports global `--json`; JSON success reports provider/status but never the secret.
 
 **API key resolution:**
 
-- [ ] LLM-backed commands resolve API keys in this order:
+- [x] LLM-backed commands resolve API keys in this order:
   1. `OPENAI_API_KEY` environment variable
   2. `~/.bo/auth.json`
   3. clear setup error
-- [ ] `OPENAI_API_KEY` remains supported as an override for CI, temporary sessions, and advanced users.
-- [ ] Compile/query missing-key errors point to `bo config auth --provider openai`.
-- [ ] Summary generation uses the same resolver while preserving deterministic fallback when no key is configured.
+- [x] `OPENAI_API_KEY` remains supported as an override for CI, temporary sessions, and advanced users.
+- [x] Compile/query missing-key errors point to `bo config auth --provider openai`.
+- [x] Summary generation uses the same resolver while preserving deterministic fallback when no key is configured.
 
 **Tests:**
 
-- [ ] Unit tests for auth read/write round-trip.
-- [ ] Unit tests for overwrite behavior.
-- [ ] Unit tests for malformed auth file behavior.
-- [ ] Unit or integration test that stored auth is used when `OPENAI_API_KEY` is absent.
-- [ ] Integration test for unknown provider exit 2.
-- [ ] JSON output tests for success/error shape with no leaked key.
-- [ ] Unix/macOS test or best-effort assertion for restrictive file permissions.
+- [x] Unit tests for auth read/write round-trip.
+- [x] Unit tests for overwrite behavior.
+- [x] Unit tests for malformed auth file behavior.
+- [x] Unit or integration test that stored auth is used when `OPENAI_API_KEY` is absent.
+- [x] Integration test for unknown provider exit 2.
+- [x] JSON output tests for success/error shape with no leaked key.
+- [x] Unix/macOS test or best-effort assertion for restrictive file permissions.
 
 **Done when:** A fresh user can install bo, run `bo config auth --provider openai`, then run LLM-backed bo commands without `.env` or `source .env`.
 
