@@ -12,9 +12,9 @@ Deterministic pipeline tool, not an autonomous agent. LLM commands (compile, que
 
 ```
 src/
-├── cli/          # CLI command implementations (collect, compile, list, search, show, query, raze, seed)
+├── cli/          # CLI command implementations (collect, compile, config, list, search, show, query, raze, seed)
 ├── domain/       # Core types: leaf, branch, tree, index, slug, frontmatter
-├── engine/       # Infrastructure: fetch, extract, config, quality, summary, llm/
+├── engine/       # Infrastructure: fetch, extract, config, auth, quality, summary, llm/
 ├── adapters/     # Source-specific adapters (youtube/)
 ├── tests/        # Unit/integration tests (one file per module)
 ├── lib.rs        # Library root (re-exports)
@@ -27,6 +27,7 @@ src/
 - `docs/milestones/` — release roadmap and backlog (tracked)
 - `docs/scratchpad/` — session notes, idea capture (gitignored)
 - `docs/specs/` — feature implementation specs (gitignored)
+- `CHANGELOG.md` — user-facing changelog (Keep a Changelog format)
 - `deny.toml` — cargo-deny config
 
 ## Conventions
@@ -36,14 +37,26 @@ src/
 - **Formatting:** `cargo fmt`
 - **No agent loops in bo itself** — LLM calls are single-shot structured output. Orchestration belongs to the calling agent, not bo.
 - **`--json` flag** on all commands for machine consumption.
-- **Config:** `~/.bo/config.json` — created by `bo seed`.
+- **Config:** `~/.bo/config.json` — created by `bo seed` or `bo config set`.
+- **Auth:** `~/.bo/auth.json` — created by `bo config auth`. Separate from config.
 
-## Current state (v0.0.1 in progress)
+## Changelog
 
-Commands shipping: `seed`, `collect`, `list`, `search`, `show`, `query`, `compile`, `raze`.
+`CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). When adding a release entry:
 
-Release backlog: `docs/milestones/oss-release-backlog.md`
+- Add a new `## [x.y.z] - YYYY-MM-DD` section at the top (below the header).
+- Group changes under `### Added`, `### Changed`, `### Fixed`, `### Removed` as applicable.
+- Write entries from the user's perspective, not implementation details.
+- Keep entries concise — one line per change.
+
+## Pull requests
+
+PRs don't need "Verification", "Tests", or "How to test" sections. CI gates every merge and PRs go through human review. A brief summary of what changed and why is sufficient.
+
+## Current state (v0.0.1)
+
+Commands shipping: `seed`, `collect`, `list`, `search`, `show`, `query`, `compile`, `config`, `raze`.
 
 ## LLM provider
 
-OpenAI-compatible only (for now). Requires `OPENAI_API_KEY` env var or `.env` file. Model configurable via config JSON (`compile_model`, `query_model`).
+OpenAI-compatible only (for now). Auth resolved via: `OPENAI_API_KEY` env var → `~/.bo/auth.json` → error. Single `model` config field (default `gpt-4o`), configurable via `bo config set model`.
