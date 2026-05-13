@@ -174,16 +174,16 @@ bo config auth --provider openai
 
 **Sections:**
 
-- [ ] **What bo is** — one paragraph. Collect web pages into a local markdown knowledge tree. Query it with citations. No cloud, no vector DB, BYOK.
-- [ ] **What bo is not** — not a web scraper, not a search engine, not an autonomous agent. It's a tool for humans and agents to compose.
-- [ ] **Install** — `cargo install --git https://github.com/jellysnake/bo --tag v0.0.1`; contributor path `cargo install --path .`; future crates.io once published.
-- [ ] **Quickstart** — install → `bo config auth --provider openai` → seed → collect a URL → list → compile → query. Copy-pasteable commands.
-- [ ] **Command reference** — table or list of all commands with one-liner descriptions and key flags.
-- [ ] **BYOK / provider setup** — `bo config auth --provider openai`, `OPENAI_API_KEY` override, `bo config set model`.
-- [ ] **Storage format** — where files live, what frontmatter looks like, what index.jsonl is, what branches are, where config/auth files live.
-- [ ] **Limitations + experimental caveat** — lexical retrieval, single provider, no offline/local model yet, tree size bounds, known failure modes.
-- [ ] **Contributing** — minimal for now (PRs welcome, run CI locally).
-- [ ] **License** — MIT.
+- [x] **What bo is** — one paragraph. Collect web pages into a local markdown knowledge tree. Query it with citations. No cloud, no vector DB, BYOK.
+- [x] **What bo is not** — not a web scraper, not a search engine, not an autonomous agent. It's a tool for humans and agents to compose.
+- [x] **Install** — `cargo install --git https://github.com/jellysnake/bo --tag v0.0.1`; contributor path `cargo install --path .`; future crates.io once published.
+- [x] **Quickstart** — install → `bo config auth --provider openai` → seed → collect a URL → list → compile → query. Copy-pasteable commands.
+- [x] **Command reference** — table or list of all commands with one-liner descriptions and key flags.
+- [x] **BYOK / provider setup** — `bo config auth --provider openai`, `OPENAI_API_KEY` override, `bo config set model`.
+- [x] **Storage format** — where files live, what frontmatter looks like, what index.jsonl is, what branches are, where config/auth files live.
+- [x] **Limitations + experimental caveat** — lexical retrieval, single provider, no offline/local model yet, tree size bounds, known failure modes.
+- [x] **Contributing** — minimal for now (PRs welcome, run CI locally).
+- [x] **License** — MIT.
 
 **After README is merged:**
 
