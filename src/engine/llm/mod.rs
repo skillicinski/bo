@@ -3,8 +3,10 @@
 // No agent or tool-calling concepts. This module provides a trait for sending
 // messages to an LLM and receiving structured responses.
 
+pub mod models;
 pub mod providers;
 
+pub use models::context_window_tokens;
 pub use providers::OpenAiProvider;
 
 use async_trait::async_trait;
@@ -51,44 +53,6 @@ impl fmt::Display for LlmError {
             ),
         }
     }
-}
-
-// ── Model metadata ───────────────────────────────────────────────────────────
-
-struct ModelContextWindow {
-    model: &'static str,
-    context_tokens: usize,
-}
-
-const MODEL_CONTEXT_WINDOWS: &[ModelContextWindow] = &[
-    ModelContextWindow {
-        model: "gpt-4o",
-        context_tokens: 128_000,
-    },
-    ModelContextWindow {
-        model: "gpt-4o-mini",
-        context_tokens: 128_000,
-    },
-    ModelContextWindow {
-        model: "gpt-4.1",
-        context_tokens: 1_000_000,
-    },
-    ModelContextWindow {
-        model: "gpt-4.1-mini",
-        context_tokens: 1_000_000,
-    },
-    ModelContextWindow {
-        model: "gpt-4.1-nano",
-        context_tokens: 1_000_000,
-    },
-];
-
-pub fn context_window_tokens(model: &str) -> Option<usize> {
-    let model = model.trim();
-    MODEL_CONTEXT_WINDOWS
-        .iter()
-        .find(|entry| entry.model == model)
-        .map(|entry| entry.context_tokens)
 }
 
 // ── Call policy ──────────────────────────────────────────────────────────────

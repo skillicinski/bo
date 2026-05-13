@@ -44,22 +44,25 @@ pub fn seed(
             .join(&output_dir)
     };
 
-    match config::read_config(config_path) {
+    let existing_model = match config::read_config(config_path) {
         Ok(existing) => {
-            return Ok(SeedResult {
-                status: "already_seeded".to_string(),
-                output_dir: path_string(&existing.tree.output_dir),
-                tree_name: existing.tree.name,
-            });
+            if let Some(tree) = existing.tree {
+                return Ok(SeedResult {
+                    status: "already_seeded".to_string(),
+                    output_dir: path_string(&tree.output_dir),
+                    tree_name: tree.name,
+                });
+            }
+            existing.model
         }
-        Err(ConfigError::NotFound) => {}
+        Err(ConfigError::NotFound) => None,
         Err(error) => {
             return Err(SeedError::ConfigRead(format!(
                 "failed to read config: {}",
                 error
             )));
         }
-    }
+    };
 
     std::fs::create_dir_all(&output_dir).map_err(|error| {
         SeedError::CreateOutputDir(format!("failed to create output directory: {error}"))
@@ -75,13 +78,12 @@ pub fn seed(
 
     config::write_config(
         &Config {
-            tree: TreeConfig {
+            tree: Some(TreeConfig {
                 output_dir: output_dir.clone(),
                 name: tree_name.clone(),
                 created_at: Some(created_at),
-            },
-            compile_model: None,
-            query_model: None,
+            }),
+            model: existing_model,
         },
         config_path,
     )

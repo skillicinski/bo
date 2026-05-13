@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 /// Serialised metadata for the active tree, stored under the `"tree"` key
 /// in `config.json`.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TreeConfig {
     pub output_dir: PathBuf,
 
