@@ -296,10 +296,10 @@ fn compile_json_missing_api_key_is_structured_error() {
     let parsed = parse_json(&out);
     assert_eq!(parsed["ok"], false);
     assert_eq!(parsed["error"]["code"], "io_error");
-    assert!(parsed["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("OPENAI_API_KEY"));
+    assert_eq!(
+        parsed["error"]["message"],
+        "OpenAI API key not configured. Run: bo config auth --provider openai"
+    );
 }
 
 // ── show ─────────────────────────────────────────────────────────────────────
@@ -355,6 +355,7 @@ fn raze_json_summary() {
     assert_eq!(parsed["data"]["output_dir"], tree.display().to_string());
     assert_eq!(parsed["data"]["removed_output_dir"], true);
     assert_eq!(parsed["data"]["deleted_config"], true);
+    assert_eq!(parsed["data"]["deleted_auth"], false);
 }
 
 #[test]

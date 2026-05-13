@@ -5,8 +5,9 @@
 
 use serde_json::Value;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use tempfile::TempDir;
 
 fn bo(home: &Path) -> Command {
@@ -47,6 +48,33 @@ fn raze(home: &Path) -> Output {
 
 fn config_path(home: &TempDir) -> std::path::PathBuf {
     home.path().join(".bo").join("config.json")
+}
+
+fn auth_path(home: &TempDir) -> std::path::PathBuf {
+    home.path().join(".bo").join("auth.json")
+}
+
+fn config_auth(home: &Path, args: &[&str], input: &str) -> Output {
+    let mut child = bo(home)
+        .arg("config")
+        .arg("auth")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to run bo config auth");
+
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin should be piped")
+        .write_all(input.as_bytes())
+        .expect("failed to write API key to stdin");
+
+    child
+        .wait_with_output()
+        .expect("failed to wait for bo config auth")
 }
 
 fn append_index_entry(tree: &Path, file: &str, title: &str) {
@@ -911,16 +939,196 @@ fn show_duplicate_title_reports_ambiguity_with_candidates() {
     assert!(stderr.contains("duplicate-b.md"), "stderr: {stderr}");
 }
 
+// ── config auth ──────────────────────────────────────────────────────────────
+
+#[test]
+fn config_auth_stores_openai_auth_separately_from_config() {
+    let home = TempDir::new().unwrap();
+    let secret = "sk-config-auth-one";
+
+    let out = config_auth(
+        home.path(),
+        &["--provider", "openai"],
+        &format!("{secret}\n"),
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stdout.contains("openai auth configured"),
+        "stdout: {stdout}"
+    );
+    assert!(!stdout.contains(secret));
+    assert!(!stderr.contains(secret));
+
+    assert!(auth_path(&home).exists());
+    assert!(!config_path(&home).exists());
+
+    let auth: Value = serde_json::from_str(&fs::read_to_string(auth_path(&home)).unwrap()).unwrap();
+    assert_eq!(auth["providers"]["openai"]["api_key"], secret);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(auth_path(&home)).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+}
+
+#[test]
+fn config_auth_overwrites_existing_key_without_printing_either_key() {
+    let home = TempDir::new().unwrap();
+    let first = "sk-config-auth-first";
+    let second = "sk-config-auth-second";
+
+    let first_out = config_auth(
+        home.path(),
+        &["--provider", "openai"],
+        &format!("{first}\n"),
+    );
+    assert!(first_out.status.success());
+
+    let second_out = config_auth(
+        home.path(),
+        &["--provider", "openai"],
+        &format!("{second}\n"),
+    );
+    assert!(second_out.status.success());
+
+    let auth = fs::read_to_string(auth_path(&home)).unwrap();
+    assert!(auth.contains(second));
+    assert!(!auth.contains(first));
+
+    for output in [&first_out, &second_out] {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stdout.contains(first));
+        assert!(!stdout.contains(second));
+        assert!(!stderr.contains(first));
+        assert!(!stderr.contains(second));
+    }
+}
+
+#[test]
+fn config_auth_json_success_has_expected_shape_and_no_secret() {
+    let home = TempDir::new().unwrap();
+    let secret = "sk-config-auth-json";
+    let mut child = bo(home.path())
+        .args(["--json", "config", "auth", "--provider", "openai"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to run bo config auth");
+
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(format!("{secret}\n").as_bytes())
+        .unwrap();
+
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stdout.contains(secret));
+    assert!(!stderr.contains(secret));
+
+    let payload: Value = serde_json::from_slice(&out.stdout).expect("stdout was not valid JSON");
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["command"], "config");
+    assert_eq!(payload["data"]["status"], "ok");
+    assert_eq!(payload["data"]["provider"], "openai");
+    assert_eq!(payload["data"]["auth"], "configured");
+    assert!(payload["data"].get("api_key").is_none());
+}
+
+#[test]
+fn config_auth_unknown_provider_exits_2_and_does_not_prompt() {
+    let home = TempDir::new().unwrap();
+
+    let out = bo(home.path())
+        .args(["config", "auth", "--provider", "OpenAI"])
+        .output()
+        .expect("failed to run bo config auth");
+
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("unknown provider"), "stderr: {stderr}");
+    assert!(stderr.contains("openai"), "stderr: {stderr}");
+    assert!(!stderr.contains("OpenAI API key"), "stderr: {stderr}");
+    assert!(!auth_path(&home).exists());
+}
+
+#[test]
+fn config_auth_json_unknown_provider_lists_valid_providers() {
+    let home = TempDir::new().unwrap();
+
+    let out = bo(home.path())
+        .args(["--json", "config", "auth", "--provider", "unknown"])
+        .output()
+        .expect("failed to run bo config auth");
+
+    assert_eq!(out.status.code(), Some(2));
+    let payload: Value = serde_json::from_slice(&out.stdout).expect("stdout was not valid JSON");
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["command"], "config");
+    assert_eq!(payload["error"]["code"], "usage_error");
+    assert_eq!(payload["error"]["details"]["valid_providers"][0], "openai");
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("OpenAI API key"));
+}
+
+// ── query auth ──────────────────────────────────────────────────────────────
+
+#[test]
+fn query_without_auth_points_to_config_auth() {
+    let home = TempDir::new().unwrap();
+    let tree = home.path().join("my-tree");
+    let seeded = seed(home.path(), &tree);
+    assert!(seeded.status.success());
+
+    let out = bo(home.path())
+        .args(["query", "what", "is", "collected?"])
+        .env_remove("OPENAI_API_KEY")
+        .output()
+        .expect("failed to run bo query");
+
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("OpenAI API key not configured. Run: bo config auth --provider openai"),
+        "stderr: {stderr}"
+    );
+}
+
 // ── raze ─────────────────────────────────────────────────────────────────────
 
 #[test]
-fn raze_removes_config_and_cleans_tree() {
+fn raze_removes_config_auth_and_cleans_tree() {
     let home = TempDir::new().unwrap();
     let tree = home.path().join("my-tree");
 
     // Seed
     seed(home.path(), &tree);
     assert!(config_path(&home).exists());
+    fs::create_dir_all(auth_path(&home).parent().unwrap()).unwrap();
+    fs::write(
+        auth_path(&home),
+        r#"{"providers":{"openai":{"api_key":"sk-raze"}}}"#,
+    )
+    .unwrap();
+    assert!(auth_path(&home).exists());
 
     // Manually write a tree file and index entry so raze has something to delete
     fs::create_dir_all(&tree).unwrap();
@@ -943,8 +1151,9 @@ fn raze_removes_config_and_cleans_tree() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    // Config deleted
+    // Config and auth deleted
     assert!(!config_path(&home).exists());
+    assert!(!auth_path(&home).exists());
 
     // Tree file and index deleted
     assert!(!tree.join("article.md").exists());
@@ -962,6 +1171,31 @@ fn raze_without_seed_fails_with_helpful_message() {
         stderr.contains("seed"),
         "expected hint to run seed, got: {stderr}"
     );
+}
+
+#[test]
+fn raze_auth_only_deletes_auth_and_succeeds_without_seed() {
+    let home = TempDir::new().unwrap();
+    fs::create_dir_all(auth_path(&home).parent().unwrap()).unwrap();
+    fs::write(
+        auth_path(&home),
+        r#"{"providers":{"openai":{"api_key":"sk-auth-only"}}}"#,
+    )
+    .unwrap();
+
+    let out = raze(home.path());
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stdout.contains("deleted auth"), "stdout: {stdout}");
+    assert!(!stdout.contains("sk-auth-only"));
+    assert!(!stderr.contains("sk-auth-only"));
+    assert!(!auth_path(&home).exists());
 }
 
 #[test]

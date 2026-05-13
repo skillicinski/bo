@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::domain::{branch, frontmatter, index, slug, tree::Tree};
+use crate::engine::auth::{self, AuthResolutionError};
 use crate::engine::config::SeededConfig;
 use crate::engine::llm::{
     complete_with_policy, FinishReason, LlmCallPolicy, LlmError, LlmProvider, Message,
@@ -197,12 +198,8 @@ pub fn run_compile(cfg: &SeededConfig) -> Result<CompileResult, CompileError> {
         _ => {}
     }
 
-    // ── check OPENAI_API_KEY ─────────────────────────────────────────────────
-    let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
-        CompileError::Io(
-            "OPENAI_API_KEY is not set — bo compile requires an OpenAI API key".to_string(),
-        )
-    })?;
+    // ── resolve OpenAI auth ──────────────────────────────────────────────────
+    let api_key = auth::resolve_openai_api_key(&auth::auth_path()).map_err(compile_auth_error)?;
 
     // ── load valid leaves ────────────────────────────────────────────────────
     let (loaded_leaves, skipped_leaves) = read_valid_leaves(cfg, &all_entries);
@@ -223,7 +220,12 @@ pub fn run_compile(cfg: &SeededConfig) -> Result<CompileResult, CompileError> {
     let schema = compile_response_schema();
 
     // ── LLM call ─────────────────────────────────────────────────────────────
-    let response = call_llm(&api_key, cfg.effective_model(), &user_message, &schema)?;
+    let response = call_llm(
+        api_key.api_key.as_str(),
+        cfg.effective_model(),
+        &user_message,
+        &schema,
+    )?;
 
     // ── parse and validate ───────────────────────────────────────────────────
     let valid_filenames: HashSet<String> =
@@ -386,6 +388,10 @@ async fn call_llm_with_provider(
             reason
         ))),
     }
+}
+
+fn compile_auth_error(error: AuthResolutionError) -> CompileError {
+    CompileError::Io(error.to_string())
 }
 
 fn map_compile_llm_error(error: LlmError) -> CompileError {

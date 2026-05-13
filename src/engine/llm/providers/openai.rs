@@ -95,19 +95,41 @@ impl LlmProvider for OpenAiProvider {
 
 fn map_openai_error(error: OpenAIError) -> LlmError {
     match error {
-        OpenAIError::Reqwest(e) => LlmError::Network(e.to_string()),
-        OpenAIError::ApiError(api_error) => map_api_error(api_error),
-        OpenAIError::JSONDeserialize(e, body) => LlmError::Parse(format!("{}; body: {}", e, body)),
-        OpenAIError::InvalidArgument(message) => LlmError::Parse(message),
-        OpenAIError::FileSaveError(message) | OpenAIError::FileReadError(message) => {
-            LlmError::Api(message)
+        OpenAIError::Reqwest(e) => {
+            LlmError::Network(sanitize_provider_error_message(e.to_string()))
         }
-        OpenAIError::StreamError(error) => LlmError::Network(error.to_string()),
+        OpenAIError::ApiError(api_error) => map_api_error(api_error),
+        OpenAIError::JSONDeserialize(e, body) => LlmError::Parse(sanitize_provider_error_message(
+            format!("{}; body: {}", e, body),
+        )),
+        OpenAIError::InvalidArgument(message) => {
+            LlmError::Parse(sanitize_provider_error_message(message))
+        }
+        OpenAIError::FileSaveError(message) | OpenAIError::FileReadError(message) => {
+            LlmError::Api(sanitize_provider_error_message(message))
+        }
+        OpenAIError::StreamError(error) => {
+            LlmError::Network(sanitize_provider_error_message(error.to_string()))
+        }
     }
 }
 
+fn sanitize_provider_error_message(message: String) -> String {
+    message
+        .split_whitespace()
+        .map(|token| {
+            if token.contains("sk-") {
+                "<redacted>".to_string()
+            } else {
+                token.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn map_api_error(error: ApiError) -> LlmError {
-    let message = error.to_string();
+    let message = sanitize_provider_error_message(error.to_string());
     let code = error.code.as_deref().unwrap_or_default();
     let error_type = error.r#type.as_deref().unwrap_or_default();
     let lower_message = message.to_lowercase();
@@ -150,3 +172,7 @@ fn to_api_message(m: &Message) -> Result<ChatCompletionRequestMessage, LlmError>
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/engine_llm_openai_provider_tests.rs"]
+mod tests;
