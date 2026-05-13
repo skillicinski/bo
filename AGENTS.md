@@ -53,6 +53,15 @@ src/
 
 PRs don't need "Verification", "Tests", or "How to test" sections. CI gates every merge and PRs go through human review. A brief summary of what changed and why is sufficient.
 
+## Releasing
+
+1. Update `CHANGELOG.md` with the new version section.
+2. Bump `version` in `Cargo.toml`.
+3. Commit, merge to main.
+4. `git tag v<version> && git push --tags`
+
+The `release.yml` workflow runs CI and creates a GitHub Release with notes extracted from CHANGELOG.md.
+
 ## Current state (v0.0.1)
 
 Commands shipping: `seed`, `collect`, `list`, `search`, `show`, `query`, `compile`, `config`, `raze`.
