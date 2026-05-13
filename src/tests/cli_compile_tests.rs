@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tempfile::TempDir;
 
+use crate::engine::auth::MISSING_OPENAI_AUTH_MESSAGE;
 use crate::engine::llm::{LlmProvider, LlmResponse};
 
 fn make_test_config(output_dir: &std::path::Path) -> Config {
@@ -18,6 +19,34 @@ fn make_test_config(output_dir: &std::path::Path) -> Config {
         },
         compile_model: Some("gpt-4o-mini".to_string()),
         query_model: None,
+    }
+}
+
+struct EnvGuard {
+    key: &'static str,
+    original: Option<String>,
+}
+
+impl EnvGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let original = std::env::var(key).ok();
+        std::env::set_var(key, value);
+        Self { key, original }
+    }
+
+    fn unset(key: &'static str) -> Self {
+        let original = std::env::var(key).ok();
+        std::env::remove_var(key);
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        match &self.original {
+            Some(value) => std::env::set_var(self.key, value),
+            None => std::env::remove_var(self.key),
+        }
     }
 }
 
@@ -70,16 +99,14 @@ fn compile_errors_without_api_key() {
         dir.path().join("b.md"),
         "---\ntitle: B\nurl: https://example.com/b\ncollected_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-01T00:00:00Z\n---\n\n# B\n\nBody B.\n",
     ).unwrap();
-    std::env::remove_var("OPENAI_API_KEY");
+    let home = TempDir::new().unwrap();
+    let _home_guard = EnvGuard::set("HOME", home.path().to_str().unwrap());
+    let _api_key_guard = EnvGuard::unset("OPENAI_API_KEY");
     let cfg = make_test_config(dir.path());
     let result = cmd_compile(&cfg);
     assert!(result.is_err());
     let msg = result.unwrap_err();
-    assert!(
-        msg.contains("OPENAI_API_KEY"),
-        "error message should mention OPENAI_API_KEY, got: {}",
-        msg
-    );
+    assert_eq!(msg, MISSING_OPENAI_AUTH_MESSAGE);
 }
 
 // ── parse_and_validate tests ──────────────────────────────────────────────

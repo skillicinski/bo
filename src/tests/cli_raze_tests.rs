@@ -27,6 +27,10 @@ fn setup_tree(tmp: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
     (tree_dir, config_path)
 }
 
+fn auth_path_for_config(config_path: &std::path::Path) -> std::path::PathBuf {
+    config_path.with_file_name("auth.json")
+}
+
 fn add_leaf(tree_dir: &std::path::Path, file: &str) {
     index::append_entry(
         &tree_dir.join("index.jsonl"),
@@ -99,6 +103,52 @@ fn deletes_config_file() {
 
     assert!(output.result.deleted_config);
     assert!(!config_path.exists());
+}
+
+#[test]
+fn deletes_auth_file() {
+    let tmp = TempDir::new().unwrap();
+    let (tree_dir, config_path) = setup_tree(&tmp);
+    let auth_path = auth_path_for_config(&config_path);
+    fs::write(
+        &auth_path,
+        r#"{"providers":{"openai":{"api_key":"sk-test"}}}"#,
+    )
+    .unwrap();
+
+    let output = raze(&tree_dir, &config_path).unwrap();
+
+    assert!(output.result.deleted_auth);
+    assert_eq!(output.result.auth_path, auth_path.display().to_string());
+    assert!(!auth_path.exists());
+}
+
+#[test]
+fn missing_auth_file_is_tolerated() {
+    let tmp = TempDir::new().unwrap();
+    let (tree_dir, config_path) = setup_tree(&tmp);
+
+    let output = raze(&tree_dir, &config_path).unwrap();
+
+    assert!(!output.result.deleted_auth);
+}
+
+#[test]
+fn auth_only_cleanup_deletes_auth_without_tree_config() {
+    let tmp = TempDir::new().unwrap();
+    let auth_path = tmp.path().join("auth.json");
+    fs::write(
+        &auth_path,
+        r#"{"providers":{"openai":{"api_key":"sk-test"}}}"#,
+    )
+    .unwrap();
+
+    let output = raze_auth_only(&auth_path).unwrap().unwrap();
+
+    assert!(output.result.deleted_auth);
+    assert!(!output.result.deleted_config);
+    assert!(!auth_path.exists());
+    assert!(render_human(&output.result).contains("deleted auth"));
 }
 
 #[test]
@@ -181,14 +231,17 @@ fn render_human_includes_file_count() {
         removed_output_dir: true,
         output_dir_left_in_place: false,
         deleted_config: true,
+        deleted_auth: true,
         output_dir: "/tmp/tree".to_string(),
         config_path: "/tmp/.bo/config.json".to_string(),
+        auth_path: "/tmp/.bo/auth.json".to_string(),
     };
     let output = render_human(&result);
     assert!(output.contains("3 markdown file(s)"));
     assert!(output.contains("deleted index"));
     assert!(output.contains("removed output directory"));
     assert!(output.contains("deleted config"));
+    assert!(output.contains("deleted auth"));
 }
 
 #[test]
@@ -199,8 +252,10 @@ fn render_human_shows_dir_left_in_place() {
         removed_output_dir: false,
         output_dir_left_in_place: true,
         deleted_config: false,
+        deleted_auth: false,
         output_dir: "/tmp/tree".to_string(),
         config_path: "/tmp/.bo/config.json".to_string(),
+        auth_path: "/tmp/.bo/auth.json".to_string(),
     };
     let output = render_human(&result);
     assert!(output.contains("left in place"));

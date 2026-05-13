@@ -1,5 +1,6 @@
 pub mod collect;
 pub mod compile;
+pub mod config;
 pub mod json;
 pub mod list;
 pub mod query;

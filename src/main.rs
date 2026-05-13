@@ -1,5 +1,6 @@
 use bo::cli::collect::{self, CollectError};
 use bo::cli::compile::{self, BranchResult, CompileError, CompileResult};
+use bo::cli::config as cli_config;
 use bo::cli::json::{self as json_output, JsonError, JsonWarning};
 use bo::cli::list::{self, ListOptions};
 use bo::cli::query;
@@ -7,19 +8,20 @@ use bo::cli::raze;
 use bo::cli::search::{self, SearchOptions, SearchQuery};
 use bo::cli::seed;
 use bo::cli::show::{self, ShowOptions};
+use bo::engine::auth;
 use bo::engine::config::{self, Config, ConfigError};
 use clap::{error::ErrorKind as ClapErrorKind, Parser, Subcommand};
 use serde::Serialize;
 use serde_json::json;
 use std::ffi::OsString;
 use std::fmt;
-use std::io::{self, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 use std::process;
 
 const NOT_SEEDED_MSG: &str = "bo hasn't been seeded yet — run: bo seed <output-dir>";
 const KNOWN_COMMANDS: &[&str] = &[
-    "seed", "collect", "compile", "list", "search", "show", "query", "raze",
+    "seed", "collect", "compile", "config", "list", "search", "show", "query", "raze",
 ];
 
 #[derive(Parser, Debug)]
@@ -50,6 +52,11 @@ enum Commands {
     },
     /// Compile collected documents into a linked knowledge graph
     Compile,
+    /// Configure bo settings and provider auth
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommands,
+    },
     /// List collected leaves in the current tree
     List {
         /// Maximum number of leaves to show
@@ -92,6 +99,16 @@ enum Commands {
     Raze,
 }
 
+#[derive(Subcommand, Debug)]
+enum ConfigCommands {
+    /// Configure provider authentication
+    Auth {
+        /// Provider to configure. Valid providers: openai
+        #[arg(long)]
+        provider: String,
+    },
+}
+
 // ── JSON payloads ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
@@ -125,6 +142,7 @@ enum CliError {
     Usage { message: String, exit_code: i32 },
     NotSeeded,
     ConfigRead(String),
+    ConfigAuth(cli_config::ConfigError),
     Seed(seed::SeedError),
     Raze(raze::RazeError),
     Collect(CollectError),
@@ -138,6 +156,7 @@ impl CliError {
     fn exit_code(&self) -> i32 {
         match self {
             CliError::Usage { exit_code, .. } => *exit_code,
+            CliError::ConfigAuth(error) => error.exit_code(),
             _ => 1,
         }
     }
@@ -151,6 +170,9 @@ impl CliError {
             ),
             CliError::NotSeeded => JsonError::new("not_seeded", NOT_SEEDED_MSG),
             CliError::ConfigRead(message) => JsonError::new("io_error", message.clone()),
+            CliError::ConfigAuth(error) => {
+                JsonError::with_details(error.code(), error.to_string(), error.details())
+            }
             CliError::Seed(error) => JsonError::new("io_error", error.to_string()),
             CliError::Raze(error) => JsonError::new("io_error", error.to_string()),
             CliError::Collect(error) => collect_json_error(error),
@@ -168,6 +190,7 @@ impl fmt::Display for CliError {
             CliError::Usage { message, .. } => write!(f, "{}", message),
             CliError::NotSeeded => write!(f, "{}", NOT_SEEDED_MSG),
             CliError::ConfigRead(message) => write!(f, "{}", message),
+            CliError::ConfigAuth(error) => write!(f, "{}", error),
             CliError::Seed(error) => write!(f, "{}", error),
             CliError::Raze(error) => write!(f, "{}", error),
             CliError::Collect(error) => write!(f, "{}", error),
@@ -305,6 +328,23 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
             Ok(result) => write_human_or_error(render_compile_human(&result, stdout), stderr),
             Err(error) => emit_cli_error("compile", json, error, stdout, stderr),
         },
+        Commands::Config { command } => match command {
+            ConfigCommands::Auth { provider } => match execute_config_auth(provider, stderr) {
+                Ok(output) if json => {
+                    emit_json_success("config", &output.result, output.warnings, stdout)
+                }
+                Ok(output) => {
+                    for warning in &output.warnings {
+                        let _ = writeln!(stderr, "warning: {}", warning.message);
+                    }
+                    write_human_or_error(
+                        write!(stdout, "{}", cli_config::render_auth_human(&output.result)),
+                        stderr,
+                    )
+                }
+                Err(error) => emit_cli_error("config", json, error, stdout, stderr),
+            },
+        },
         Commands::List {
             limit,
             recent,
@@ -356,23 +396,20 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
             }
             Err(error) => emit_cli_error("show", json, error, stdout, stderr),
         },
-        Commands::Raze => match require_config() {
+        Commands::Raze => match execute_raze() {
+            Ok(output) if json => {
+                emit_json_success("raze", &output.result, output.warnings, stdout)
+            }
+            Ok(output) => {
+                for warning in &output.warnings {
+                    let _ = writeln!(stderr, "warning: {}", warning.message);
+                }
+                write_human_or_error(
+                    write!(stdout, "{}", raze::render_human(&output.result)),
+                    stderr,
+                )
+            }
             Err(error) => emit_cli_error("raze", json, error, stdout, stderr),
-            Ok(cfg) => match raze::raze(&cfg.tree.output_dir, &config::config_path()) {
-                Ok(output) if json => {
-                    emit_json_success("raze", &output.result, output.warnings, stdout)
-                }
-                Ok(output) => {
-                    for warning in &output.warnings {
-                        let _ = writeln!(stderr, "warning: {}", warning.message);
-                    }
-                    write_human_or_error(
-                        write!(stdout, "{}", raze::render_human(&output.result)),
-                        stderr,
-                    )
-                }
-                Err(error) => emit_cli_error("raze", json, CliError::Raze(error), stdout, stderr),
-            },
         },
         Commands::Query { question } => {
             let question_str = question.join(" ");
@@ -555,6 +592,54 @@ fn require_config() -> Result<Config, CliError> {
     }
 }
 
+fn execute_raze() -> Result<raze::RazeOutput, CliError> {
+    let config_path = config::config_path();
+    let auth_path = auth::auth_path();
+
+    match config::read_config(&config_path) {
+        Ok(cfg) => raze::raze_with_auth(&cfg.tree.output_dir, &config_path, &auth_path)
+            .map_err(CliError::Raze),
+        Err(ConfigError::NotFound) => {
+            match raze::raze_auth_only(&auth_path).map_err(CliError::Raze)? {
+                Some(output) => Ok(output),
+                None => Err(CliError::NotSeeded),
+            }
+        }
+        Err(error) => Err(CliError::ConfigRead(format!(
+            "failed to read config: {}",
+            error
+        ))),
+    }
+}
+
+fn execute_config_auth<E: Write>(
+    provider: String,
+    stderr: &mut E,
+) -> Result<cli_config::ConfigAuthOutput, CliError> {
+    cli_config::validate_provider(&provider).map_err(CliError::ConfigAuth)?;
+    let api_key = read_openai_api_key(stderr).map_err(CliError::ConfigAuth)?;
+    cli_config::run_auth(&provider, api_key, &auth::auth_path()).map_err(CliError::ConfigAuth)
+}
+
+fn read_openai_api_key<E: Write>(stderr: &mut E) -> Result<String, cli_config::ConfigError> {
+    write!(stderr, "OpenAI API key: ")
+        .and_then(|()| stderr.flush())
+        .map_err(|error| cli_config::ConfigError::Auth(auth::AuthError::Io(error)))?;
+
+    if io::stdin().is_terminal() {
+        return rpassword::read_password()
+            .map_err(|error| cli_config::ConfigError::Auth(auth::AuthError::Io(error)));
+    }
+
+    let mut line = String::new();
+    io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .map_err(|error| cli_config::ConfigError::Auth(auth::AuthError::Io(error)))?;
+
+    Ok(line.trim_end_matches(['\r', '\n']).to_string())
+}
+
 fn execute_collect(url: String) -> Result<CollectResult, CliError> {
     let cfg = require_config()?;
     eprintln!("fetching {}...", url);
@@ -618,17 +703,16 @@ fn execute_query(question: &str) -> Result<query::QueryResult, query::QueryError
         query::QueryError::NoProvider(format!("{}. Cannot query without a configured tree.", e))
     })?;
 
-    let api_key = match std::env::var("OPENAI_API_KEY") {
-        Ok(key) if !key.is_empty() => key,
-        _ => {
-            return Err(query::QueryError::NoProvider(
-                "No API key configured. Set OPENAI_API_KEY or configure a provider.".to_string(),
-            ))
-        }
-    };
+    let api_key = auth::resolve_openai_api_key(&auth::auth_path())
+        .map_err(|error| query::QueryError::NoProvider(error.to_string()))?;
 
     let model = cfg.effective_query_model().to_string();
-    query::run(&cfg.tree.output_dir, question, &api_key, &model)
+    query::run(
+        &cfg.tree.output_dir,
+        question,
+        api_key.api_key.as_str(),
+        &model,
+    )
 }
 
 fn query_json_error(error: &query::QueryError) -> JsonError {
@@ -765,8 +849,6 @@ fn compile_warnings(result: &CompileResult) -> Vec<JsonWarning> {
 // ── main ─────────────────────────────────────────────────────────────────────
 
 fn main() {
-    let _ = dotenvy::dotenv();
-
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()

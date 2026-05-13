@@ -4,9 +4,10 @@
 //   generate_fallback(body) — deterministic, first ~200 words of body
 //   generate_llm(body, title, provider, model, policy) — async LLM structured-output call
 //
-// The orchestrator `generate` tries LLM when OPENAI_API_KEY is set,
+// The orchestrator `generate` tries LLM when OpenAI auth is configured,
 // falls back to deterministic only when no key/provider is configured.
 
+use crate::engine::auth::{self, AuthResolutionError};
 use crate::engine::llm::{
     complete_with_policy, FinishReason, LlmCallPolicy, LlmError, LlmProvider, Message,
 };
@@ -154,9 +155,10 @@ pub async fn generate_llm(
 /// Generate a summary for a leaf. Uses deterministic fallback when no provider
 /// is configured. If a provider call is attempted, provider failures are errors.
 pub fn generate(body: &str, title: Option<&str>, model: &str) -> Result<String, SummaryError> {
-    let api_key = match std::env::var("OPENAI_API_KEY") {
-        Ok(key) if !key.is_empty() => key,
-        _ => return Ok(generate_fallback(body)),
+    let api_key = match auth::resolve_openai_api_key(&auth::auth_path()) {
+        Ok(resolved) => resolved.api_key,
+        Err(AuthResolutionError::Missing) => return Ok(generate_fallback(body)),
+        Err(error) => return Err(SummaryError::Runtime(error.to_string())),
     };
 
     eprintln!("summarizing...");
@@ -166,7 +168,7 @@ pub fn generate(body: &str, title: Option<&str>, model: &str) -> Result<String, 
         .build()
         .map_err(|e| SummaryError::Runtime(format!("failed to create async runtime: {}", e)))?;
 
-    let provider = crate::engine::llm::OpenAiProvider::new(&api_key);
+    let provider = crate::engine::llm::OpenAiProvider::new(api_key.as_str());
     rt.block_on(generate_llm(
         body,
         title,

@@ -9,6 +9,34 @@ use crate::engine::llm::{
     FinishReason, LlmCallPolicy, LlmError, LlmProvider, LlmResponse, Message,
 };
 
+struct EnvGuard {
+    key: &'static str,
+    original: Option<String>,
+}
+
+impl EnvGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let original = std::env::var(key).ok();
+        std::env::set_var(key, value);
+        Self { key, original }
+    }
+
+    fn unset(key: &'static str) -> Self {
+        let original = std::env::var(key).ok();
+        std::env::remove_var(key);
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        match &self.original {
+            Some(value) => std::env::set_var(self.key, value),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
+
 #[test]
 fn fallback_empty_body() {
     assert_eq!(generate_fallback(""), "");
@@ -144,11 +172,30 @@ fn short_summary_policy(max_attempts: usize) -> LlmCallPolicy {
 #[test]
 #[serial]
 fn generate_without_api_key_returns_fallback() {
-    std::env::remove_var("OPENAI_API_KEY");
+    let home = tempfile::TempDir::new().unwrap();
+    let _home_guard = EnvGuard::set("HOME", home.path().to_str().unwrap());
+    let _api_key_guard = EnvGuard::unset("OPENAI_API_KEY");
 
     let summary = generate("one two three", Some("Title"), "gpt-4o").unwrap();
 
     assert_eq!(summary, "one two three");
+}
+
+#[test]
+#[serial]
+fn malformed_stored_auth_returns_non_secret_error() {
+    let home = tempfile::TempDir::new().unwrap();
+    let auth_path = home.path().join(".bo").join("auth.json");
+    std::fs::create_dir_all(auth_path.parent().unwrap()).unwrap();
+    std::fs::write(&auth_path, "sk-summary-leak-marker").unwrap();
+    let _home_guard = EnvGuard::set("HOME", home.path().to_str().unwrap());
+    let _api_key_guard = EnvGuard::unset("OPENAI_API_KEY");
+
+    let error = generate("one two three", Some("Title"), "gpt-4o").unwrap_err();
+    let message = error.to_string();
+
+    assert!(matches!(error, SummaryError::Runtime(_)));
+    assert!(!message.contains("sk-summary-leak-marker"));
 }
 
 #[tokio::test(flavor = "current_thread")]

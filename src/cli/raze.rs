@@ -13,8 +13,10 @@ pub struct RazeResult {
     pub removed_output_dir: bool,
     pub output_dir_left_in_place: bool,
     pub deleted_config: bool,
+    pub deleted_auth: bool,
     pub output_dir: String,
     pub config_path: String,
+    pub auth_path: String,
 }
 
 #[derive(Debug)]
@@ -37,6 +39,15 @@ impl std::fmt::Display for RazeError {
 }
 
 pub fn raze(output_dir: &Path, config_path: &Path) -> Result<RazeOutput, RazeError> {
+    let auth_path = config_path.with_file_name("auth.json");
+    raze_with_auth(output_dir, config_path, &auth_path)
+}
+
+pub fn raze_with_auth(
+    output_dir: &Path,
+    config_path: &Path,
+    auth_path: &Path,
+) -> Result<RazeOutput, RazeError> {
     let index_path = output_dir.join("index.jsonl");
     let entries = index::read_index(&index_path)
         .map_err(|error| RazeError::Io(format!("failed to read index: {error}")))?;
@@ -93,13 +104,8 @@ pub fn raze(output_dir: &Path, config_path: &Path) -> Result<RazeOutput, RazeErr
         }
     };
 
-    let deleted_config = match std::fs::remove_file(config_path) {
-        Ok(()) => true,
-        Err(error) if error.kind() == IoErrorKind::NotFound => false,
-        Err(error) => {
-            return Err(RazeError::Io(format!("failed to delete config: {}", error)));
-        }
-    };
+    let deleted_config = delete_optional_file(config_path, "config")?;
+    let deleted_auth = delete_optional_file(auth_path, "auth")?;
 
     Ok(RazeOutput {
         result: RazeResult {
@@ -108,15 +114,57 @@ pub fn raze(output_dir: &Path, config_path: &Path) -> Result<RazeOutput, RazeErr
             removed_output_dir,
             output_dir_left_in_place,
             deleted_config,
+            deleted_auth,
             output_dir: path_string(output_dir),
             config_path: path_string(config_path),
+            auth_path: path_string(auth_path),
         },
         warnings,
     })
 }
 
+pub fn raze_auth_only(auth_path: &Path) -> Result<Option<RazeOutput>, RazeError> {
+    let deleted_auth = delete_optional_file(auth_path, "auth")?;
+    if !deleted_auth {
+        return Ok(None);
+    }
+
+    Ok(Some(RazeOutput {
+        result: RazeResult {
+            deleted_files: 0,
+            deleted_index: false,
+            removed_output_dir: false,
+            output_dir_left_in_place: false,
+            deleted_config: false,
+            deleted_auth,
+            output_dir: String::new(),
+            config_path: String::new(),
+            auth_path: path_string(auth_path),
+        },
+        warnings: Vec::new(),
+    }))
+}
+
+fn delete_optional_file(path: &Path, label: &str) -> Result<bool, RazeError> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == IoErrorKind::NotFound => Ok(false),
+        Err(error) => Err(RazeError::Io(format!(
+            "failed to delete {}: {}",
+            label, error
+        ))),
+    }
+}
+
 pub fn render_human(result: &RazeResult) -> String {
-    let mut out = format!("deleted {} markdown file(s)\n", result.deleted_files);
+    let mut out = String::new();
+
+    if !result.output_dir.is_empty() {
+        out.push_str(&format!(
+            "deleted {} markdown file(s)\n",
+            result.deleted_files
+        ));
+    }
 
     if result.deleted_index {
         out.push_str("deleted index\n");
@@ -133,6 +181,10 @@ pub fn render_human(result: &RazeResult) -> String {
 
     if result.deleted_config {
         out.push_str("deleted config\n");
+    }
+
+    if result.deleted_auth {
+        out.push_str("deleted auth\n");
     }
 
     out
