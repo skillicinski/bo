@@ -6,7 +6,7 @@ Rust CLI tool. Collects web pages into a local markdown knowledge tree, compiles
 
 ## Architecture
 
-Deterministic pipeline tool, not an autonomous agent. LLM commands (compile, query, summary) follow: code gathers context → one structured-output LLM call → code writes results. See `docs/adrs/001-deterministic-pipelines-over-internal-agent.md`.
+Deterministic pipeline tool, not an autonomous agent. LLM commands (compile, query, summary) follow: code gathers context → one structured-output LLM call → code writes results. See `docs/adrs/001.md`.
 
 ## Project layout
 
