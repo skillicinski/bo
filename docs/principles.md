@@ -28,40 +28,40 @@ Agent loops are permitted for specific commands (query V2 per ADR-003) under str
 ### Two surfaces, one engine
 
 1. **CLI (now)** — discrete operations, user controls when things happen. Power users, agents, composability. Each release iterates on engine intelligence.
-2. **SaaS (future)** — the engine running continuously, ingest-triggered everything. Turnkey experience. GUI for managing trees. Platform-to-platform integrations over HTTP.
+2. **Hosted (future)** — the engine running continuously, ingest-triggered everything. Managed experience. GUI for managing trees. Platform-to-platform integrations over HTTP.
 
 ### The CLI's role
 
 - Proving ground for the engine. Compile gets smarter, quality gates improve, retrieval deepens — all validated through CLI dogfood and the test corpus.
 - Power-user / developer interface. Full control, `--json` for agents, composable with external tools.
-- Acquisition channel. Free with BYOK. Gets people into the ecosystem. Demonstrates the engine's value before they hit the managed tier.
+- Free with BYOK. Stays OSS and free forever.
 
-### The SaaS's role
+### The hosted deployment's role
 
 - The engine graduates to running unattended in a backend.
 - Ingest-triggered compilation — collecting a source immediately integrates it into the tree.
 - GUI for tree management, browsing, query.
 - HTTP integrations: RSS watchers, browser extensions, Slack/Discord bots feeding sources, API for third-party tools.
 - Hosted inference (Bedrock) with provisioned keys and spending caps.
-- The "turnkey" LLM wiki that non-technical users can operate.
+- The managed LLM wiki experience for non-technical users.
 
 ### Engine architecture implication
 
 The engine's operations must be cleanly separable from CLI invocation:
 - Composable primitives (`write_leaf`, `read_leaf`, etc.) usable by both CLI commands and a backend orchestrator.
-- The difference between CLI and SaaS is *who calls the engine* and *what triggers operations* — not the operations themselves.
+- The difference between CLI and hosted is *who calls the engine* and *what triggers operations* — not the operations themselves.
 - CLI: human types command → engine runs → output.
-- SaaS: event fires (new source, schedule, webhook) → orchestrator calls engine → result stored/notified.
+- Hosted: event fires (new source, schedule, webhook) → orchestrator calls engine → result stored/notified.
 
 ### Differentiation
 
-The product gap (per Karpathy's "LLM Wiki" gist, 2026): no standalone tool makes the persistent, compounding wiki pattern turnkey. People orchestrate it ad-hoc with LLM agents + Obsidian.
+The product gap (per Karpathy's "LLM Wiki" gist, 2026): no standalone tool makes the persistent, compounding wiki pattern easy to operate. People orchestrate it ad-hoc with LLM agents + Obsidian.
 
 Bo's path:
 1. **v0.0.x**: Engine intelligence through CLI iteration (incremental compile, quality gates, retrieval depth).
 2. **v0.1.x**: Provider flexibility + release polish. The CLI is good enough to show people.
 3. **v0.x**: Agentic retrieval (V2), bloom/grow, auto mode switching. The engine becomes genuinely intelligent.
-4. **v1.0+**: SaaS. The engine runs continuously. Ingest-triggered compilation. GUI. Integrations. Turnkey.
+4. **v1.0+**: Hosted deployment. The engine runs continuously. Ingest-triggered compilation. GUI. Integrations.
 
 ## References
 
