@@ -14,6 +14,7 @@ pub struct RazeResult {
     pub output_dir_left_in_place: bool,
     pub deleted_config: bool,
     pub deleted_auth: bool,
+    pub preserved_auth: bool,
     pub output_dir: String,
     pub config_path: String,
     pub auth_path: String,
@@ -23,6 +24,18 @@ pub struct RazeResult {
 pub struct RazeOutput {
     pub result: RazeResult,
     pub warnings: Vec<JsonWarning>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthCleanup {
+    Preserve,
+    Delete,
+}
+
+impl AuthCleanup {
+    fn deletes_auth(self) -> bool {
+        matches!(self, Self::Delete)
+    }
 }
 
 #[derive(Debug)]
@@ -40,13 +53,14 @@ impl std::fmt::Display for RazeError {
 
 pub fn raze(output_dir: &Path, config_path: &Path) -> Result<RazeOutput, RazeError> {
     let auth_path = config_path.with_file_name("auth.json");
-    raze_with_auth(output_dir, config_path, &auth_path)
+    raze_with_auth(output_dir, config_path, &auth_path, AuthCleanup::Preserve)
 }
 
 pub fn raze_with_auth(
     output_dir: &Path,
     config_path: &Path,
     auth_path: &Path,
+    auth_cleanup: AuthCleanup,
 ) -> Result<RazeOutput, RazeError> {
     let index_path = output_dir.join("index.jsonl");
     let entries = index::read_index(&index_path)
@@ -104,8 +118,14 @@ pub fn raze_with_auth(
         }
     };
 
+    let delete_auth = auth_cleanup.deletes_auth();
     let deleted_config = delete_optional_file(config_path, "config")?;
-    let deleted_auth = delete_optional_file(auth_path, "auth")?;
+    let preserved_auth = !delete_auth && auth_path.exists();
+    let deleted_auth = if delete_auth {
+        delete_optional_file(auth_path, "auth")?
+    } else {
+        false
+    };
 
     Ok(RazeOutput {
         result: RazeResult {
@@ -115,6 +135,7 @@ pub fn raze_with_auth(
             output_dir_left_in_place,
             deleted_config,
             deleted_auth,
+            preserved_auth,
             output_dir: path_string(output_dir),
             config_path: path_string(config_path),
             auth_path: path_string(auth_path),
@@ -137,6 +158,7 @@ pub fn raze_auth_only(auth_path: &Path) -> Result<Option<RazeOutput>, RazeError>
             output_dir_left_in_place: false,
             deleted_config: false,
             deleted_auth,
+            preserved_auth: false,
             output_dir: String::new(),
             config_path: String::new(),
             auth_path: path_string(auth_path),
@@ -185,6 +207,8 @@ pub fn render_human(result: &RazeResult) -> String {
 
     if result.deleted_auth {
         out.push_str("deleted auth\n");
+    } else if result.preserved_auth {
+        out.push_str(&format!("preserved auth: {}\n", result.auth_path));
     }
 
     out

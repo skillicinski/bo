@@ -356,6 +356,45 @@ fn raze_json_summary() {
     assert_eq!(parsed["data"]["removed_output_dir"], true);
     assert_eq!(parsed["data"]["deleted_config"], true);
     assert_eq!(parsed["data"]["deleted_auth"], false);
+    assert_eq!(parsed["data"]["preserved_auth"], false);
+}
+
+#[test]
+fn raze_json_preserves_auth_by_default() {
+    let home = TempDir::new().unwrap();
+    seed_tree(&home, "tree");
+    let auth_path = home.path().join(".bo").join("auth.json");
+    fs::write(
+        &auth_path,
+        r#"{"providers":{"openai":{"api_key":"sk-json-raze"}}}"#,
+    )
+    .unwrap();
+
+    let out = run(home.path(), &["raze", "--json"]);
+    assert!(out.status.success());
+    let parsed = parse_json(&out);
+    assert_eq!(parsed["data"]["deleted_auth"], false);
+    assert_eq!(parsed["data"]["preserved_auth"], true);
+    assert!(auth_path.exists());
+}
+
+#[test]
+fn raze_json_include_auth_deletes_auth() {
+    let home = TempDir::new().unwrap();
+    seed_tree(&home, "tree");
+    let auth_path = home.path().join(".bo").join("auth.json");
+    fs::write(
+        &auth_path,
+        r#"{"providers":{"openai":{"api_key":"sk-json-raze"}}}"#,
+    )
+    .unwrap();
+
+    let out = run(home.path(), &["raze", "--include-auth", "--json"]);
+    assert!(out.status.success());
+    let parsed = parse_json(&out);
+    assert_eq!(parsed["data"]["deleted_auth"], true);
+    assert_eq!(parsed["data"]["preserved_auth"], false);
+    assert!(!auth_path.exists());
 }
 
 #[test]

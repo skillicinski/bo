@@ -54,7 +54,8 @@ bo query "How do these concepts relate to each other?"
 | `bo config auth --provider openai` | Store your API key |
 | `bo config get model` | Show the active model |
 | `bo config set model <id>` | Change the LLM model |
-| `bo raze` | Delete all bo-managed files and config |
+| `bo raze` | Delete the seeded tree and config, preserving auth |
+| `bo raze --include-auth` | Also delete stored provider credentials |
 
 All commands support `--json` for machine-readable output, intended for use by coding assistants and scripts.
 

@@ -105,7 +105,7 @@ fn deletes_config_file() {
 }
 
 #[test]
-fn deletes_auth_file() {
+fn preserves_auth_file_by_default() {
     let tmp = TempDir::new().unwrap();
     let (tree_dir, config_path) = setup_tree(&tmp);
     let auth_path = auth_path_for_config(&config_path);
@@ -117,7 +117,27 @@ fn deletes_auth_file() {
 
     let output = raze(&tree_dir, &config_path).unwrap();
 
+    assert!(!output.result.deleted_auth);
+    assert!(output.result.preserved_auth);
+    assert_eq!(output.result.auth_path, auth_path.display().to_string());
+    assert!(auth_path.exists());
+}
+
+#[test]
+fn include_auth_deletes_auth_file() {
+    let tmp = TempDir::new().unwrap();
+    let (tree_dir, config_path) = setup_tree(&tmp);
+    let auth_path = auth_path_for_config(&config_path);
+    fs::write(
+        &auth_path,
+        r#"{"providers":{"openai":{"api_key":"sk-test"}}}"#,
+    )
+    .unwrap();
+
+    let output = raze_with_auth(&tree_dir, &config_path, &auth_path, AuthCleanup::Delete).unwrap();
+
     assert!(output.result.deleted_auth);
+    assert!(!output.result.preserved_auth);
     assert_eq!(output.result.auth_path, auth_path.display().to_string());
     assert!(!auth_path.exists());
 }
@@ -130,6 +150,7 @@ fn missing_auth_file_is_tolerated() {
     let output = raze(&tree_dir, &config_path).unwrap();
 
     assert!(!output.result.deleted_auth);
+    assert!(!output.result.preserved_auth);
 }
 
 #[test]
@@ -231,6 +252,7 @@ fn render_human_includes_file_count() {
         output_dir_left_in_place: false,
         deleted_config: true,
         deleted_auth: true,
+        preserved_auth: false,
         output_dir: "/tmp/tree".to_string(),
         config_path: "/tmp/.bo/config.json".to_string(),
         auth_path: "/tmp/.bo/auth.json".to_string(),
@@ -252,10 +274,30 @@ fn render_human_shows_dir_left_in_place() {
         output_dir_left_in_place: true,
         deleted_config: false,
         deleted_auth: false,
+        preserved_auth: false,
         output_dir: "/tmp/tree".to_string(),
         config_path: "/tmp/.bo/config.json".to_string(),
         auth_path: "/tmp/.bo/auth.json".to_string(),
     };
     let output = render_human(&result);
     assert!(output.contains("left in place"));
+}
+
+#[test]
+fn render_human_shows_preserved_auth() {
+    let result = RazeResult {
+        deleted_files: 0,
+        deleted_index: false,
+        removed_output_dir: false,
+        output_dir_left_in_place: false,
+        deleted_config: true,
+        deleted_auth: false,
+        preserved_auth: true,
+        output_dir: "/tmp/tree".to_string(),
+        config_path: "/tmp/.bo/config.json".to_string(),
+        auth_path: "/tmp/.bo/auth.json".to_string(),
+    };
+    let output = render_human(&result);
+    assert!(output.contains("preserved auth"));
+    assert!(output.contains("/tmp/.bo/auth.json"));
 }

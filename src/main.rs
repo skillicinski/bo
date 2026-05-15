@@ -95,8 +95,12 @@ enum Commands {
         #[arg(required = true, num_args = 1..)]
         question: Vec<String>,
     },
-    /// Delete all bo-managed files and config
-    Raze,
+    /// Delete the seeded tree and config
+    Raze {
+        /// Also delete stored provider credentials (~/.bo/auth.json)
+        #[arg(long)]
+        include_auth: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -454,7 +458,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
             }
             Err(error) => emit_cli_error("show", json, error, stdout, stderr),
         },
-        Commands::Raze => match execute_raze() {
+        Commands::Raze { include_auth } => match execute_raze(include_auth) {
             Ok(output) if json => {
                 emit_json_success("raze", &output.result, output.warnings, stdout)
             }
@@ -650,17 +654,31 @@ fn require_seeded_config() -> Result<SeededConfig, CliError> {
     }
 }
 
-fn execute_raze() -> Result<raze::RazeOutput, CliError> {
+fn execute_raze(include_auth: bool) -> Result<raze::RazeOutput, CliError> {
     let config_path = config::config_path();
     let auth_path = auth::auth_path();
 
     match config::read_config(&config_path) {
         Ok(cfg) => {
             let tree = cfg.into_seeded().ok_or(CliError::NotSeeded)?;
-            raze::raze_with_auth(&tree.tree.output_dir, &config_path, &auth_path)
-                .map_err(CliError::Raze)
+            let auth_cleanup = if include_auth {
+                raze::AuthCleanup::Delete
+            } else {
+                raze::AuthCleanup::Preserve
+            };
+            raze::raze_with_auth(
+                &tree.tree.output_dir,
+                &config_path,
+                &auth_path,
+                auth_cleanup,
+            )
+            .map_err(CliError::Raze)
         }
         Err(ConfigError::NotFound) => {
+            if !include_auth {
+                return Err(CliError::NotSeeded);
+            }
+
             match raze::raze_auth_only(&auth_path).map_err(CliError::Raze)? {
                 Some(output) => Ok(output),
                 None => Err(CliError::NotSeeded),
