@@ -40,8 +40,13 @@ fn show(home: &Path, args: &[&str]) -> Output {
 }
 
 fn raze(home: &Path) -> Output {
+    raze_with_args(home, &[])
+}
+
+fn raze_with_args(home: &Path, args: &[&str]) -> Output {
     bo(home)
         .arg("raze")
+        .args(args)
         .output()
         .expect("failed to run bo raze")
 }
@@ -1115,7 +1120,7 @@ fn query_without_auth_points_to_config_auth() {
 // ── raze ─────────────────────────────────────────────────────────────────────
 
 #[test]
-fn raze_removes_config_auth_and_cleans_tree() {
+fn raze_preserves_auth_and_cleans_tree() {
     let home = TempDir::new().unwrap();
     let tree = home.path().join("my-tree");
 
@@ -1151,13 +1156,47 @@ fn raze_removes_config_auth_and_cleans_tree() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    // Config and auth deleted
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stdout.contains("preserved auth"), "stdout: {stdout}");
+    assert!(!stdout.contains("sk-raze"));
+    assert!(!stderr.contains("sk-raze"));
+
+    // Config deleted, auth preserved
     assert!(!config_path(&home).exists());
-    assert!(!auth_path(&home).exists());
+    assert!(auth_path(&home).exists());
 
     // Tree file and index deleted
     assert!(!tree.join("article.md").exists());
     assert!(!tree.join("index.jsonl").exists());
+}
+
+#[test]
+fn raze_include_auth_deletes_auth_with_seeded_tree() {
+    let home = TempDir::new().unwrap();
+    let tree = home.path().join("my-tree");
+    seed(home.path(), &tree);
+    fs::create_dir_all(auth_path(&home).parent().unwrap()).unwrap();
+    fs::write(
+        auth_path(&home),
+        r#"{"providers":{"openai":{"api_key":"sk-raze-include"}}}"#,
+    )
+    .unwrap();
+
+    let out = raze_with_args(home.path(), &["--include-auth"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stdout.contains("deleted auth"), "stdout: {stdout}");
+    assert!(!stdout.contains("sk-raze-include"));
+    assert!(!stderr.contains("sk-raze-include"));
+    assert!(!config_path(&home).exists());
+    assert!(!auth_path(&home).exists());
 }
 
 #[test]
@@ -1174,7 +1213,7 @@ fn raze_without_seed_fails_with_helpful_message() {
 }
 
 #[test]
-fn raze_auth_only_deletes_auth_and_succeeds_without_seed() {
+fn raze_without_seed_preserves_auth_and_fails_without_include_auth() {
     let home = TempDir::new().unwrap();
     fs::create_dir_all(auth_path(&home).parent().unwrap()).unwrap();
     fs::write(
@@ -1184,6 +1223,30 @@ fn raze_auth_only_deletes_auth_and_succeeds_without_seed() {
     .unwrap();
 
     let out = raze(home.path());
+    assert!(!out.status.success());
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stdout.contains("sk-auth-only"));
+    assert!(!stderr.contains("sk-auth-only"));
+    assert!(
+        stderr.contains("bo hasn't been seeded yet"),
+        "stderr: {stderr}"
+    );
+    assert!(auth_path(&home).exists());
+}
+
+#[test]
+fn raze_include_auth_deletes_auth_and_succeeds_without_seed() {
+    let home = TempDir::new().unwrap();
+    fs::create_dir_all(auth_path(&home).parent().unwrap()).unwrap();
+    fs::write(
+        auth_path(&home),
+        r#"{"providers":{"openai":{"api_key":"sk-auth-only"}}}"#,
+    )
+    .unwrap();
+
+    let out = raze_with_args(home.path(), &["--include-auth"]);
     assert!(
         out.status.success(),
         "stderr: {}",
