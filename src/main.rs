@@ -8,6 +8,7 @@ use bo::cli::raze;
 use bo::cli::search::{self, SearchOptions, SearchQuery};
 use bo::cli::seed;
 use bo::cli::show::{self, ShowOptions};
+use bo::cli::status;
 use bo::engine::auth;
 use bo::engine::config::{self, ConfigError, SeededConfig};
 use clap::{error::ErrorKind as ClapErrorKind, Parser, Subcommand};
@@ -21,7 +22,7 @@ use std::process;
 
 const NOT_SEEDED_MSG: &str = "bo hasn't been seeded yet — run: bo seed <output-dir>";
 const KNOWN_COMMANDS: &[&str] = &[
-    "seed", "config", "collect", "compile", "list", "search", "show", "query", "raze",
+    "seed", "config", "collect", "compile", "list", "search", "show", "query", "status", "raze",
 ];
 
 #[derive(Parser, Debug)]
@@ -101,6 +102,8 @@ enum Commands {
         #[arg(long)]
         include_auth: bool,
     },
+    /// Show tree health and compile readiness
+    Status,
 }
 
 #[derive(Subcommand, Debug)]
@@ -165,6 +168,7 @@ enum CliError {
     Search(search::SearchError),
     Show(show::ShowError),
     Compile(CompileError),
+    Status(status::StatusError),
     ConfigCommand(cli_config::ConfigCommandError),
 }
 
@@ -197,6 +201,7 @@ impl CliError {
             CliError::Search(error) => JsonError::new(search_error_code(error), error.to_string()),
             CliError::Show(error) => show_json_error(error),
             CliError::Compile(error) => compile_json_error(error),
+            CliError::Status(error) => JsonError::new("io_error", error.to_string()),
             CliError::ConfigCommand(error) => config_command_json_error(error),
         }
     }
@@ -216,6 +221,7 @@ impl fmt::Display for CliError {
             CliError::Search(error) => write!(f, "{}", error),
             CliError::Show(error) => write!(f, "{}", error),
             CliError::Compile(error) => write!(f, "{}", error),
+            CliError::Status(error) => write!(f, "{}", error),
             CliError::ConfigCommand(error) => write!(f, "{}", error),
         }
     }
@@ -492,6 +498,13 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 }
             }
         }
+        Commands::Status => match execute_status() {
+            Ok(result) if json => emit_json_success("status", &result, Vec::new(), stdout),
+            Ok(result) => {
+                write_human_or_error(write!(stdout, "{}", status::render_human(&result)), stderr)
+            }
+            Err(error) => emit_cli_error("status", json, error, stdout, stderr),
+        },
     }
 }
 
@@ -644,14 +657,22 @@ fn write_human_or_error<E: Write>(result: io::Result<()>, _stderr: &mut E) -> i3
 // ── command execution ────────────────────────────────────────────────────────
 
 fn require_seeded_config() -> Result<SeededConfig, CliError> {
-    match config::read_config(&config::config_path()) {
+    let seeded = match config::read_config(&config::config_path()) {
         Ok(cfg) => cfg.into_seeded().ok_or(CliError::NotSeeded),
         Err(ConfigError::NotFound) => Err(CliError::NotSeeded),
         Err(error) => Err(CliError::ConfigRead(format!(
             "failed to read config: {}",
             error
         ))),
-    }
+    }?;
+    Ok(seeded)
+}
+
+fn execute_status() -> Result<status::StatusResult, CliError> {
+    let cfg = require_seeded_config()?;
+    let tree = bo::domain::tree::Tree::from_config(&cfg.tree);
+    let tree_name = tree.name.unwrap_or_else(|| "unnamed".to_string());
+    status::compute_status(&cfg.tree.output_dir, &tree_name).map_err(CliError::Status)
 }
 
 fn execute_raze(include_auth: bool) -> Result<raze::RazeOutput, CliError> {

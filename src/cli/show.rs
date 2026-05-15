@@ -1,6 +1,7 @@
 // bo show — deterministic inspection for a single collected leaf.
 
 use crate::domain::index;
+use crate::domain::tree;
 use serde::Serialize;
 use serde_yaml_ng::{Mapping, Value};
 use std::fmt;
@@ -127,7 +128,7 @@ pub fn show_leaf(
         });
     }
 
-    let index_path = tree_dir.join("index.jsonl");
+    let index_path = tree::index_path(tree_dir);
     let entries = index::read_index(&index_path)?;
     let canonical_tree_dir = fs::canonicalize(tree_dir).ok();
 

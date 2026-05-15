@@ -1,5 +1,5 @@
 use crate::cli::json::JsonWarning;
-use crate::domain::index;
+use crate::domain::{index, tree};
 
 use serde::Serialize;
 use serde_json::json;
@@ -62,7 +62,7 @@ pub fn raze_with_auth(
     auth_path: &Path,
     auth_cleanup: AuthCleanup,
 ) -> Result<RazeOutput, RazeError> {
-    let index_path = output_dir.join("index.jsonl");
+    let index_path = tree::index_path(output_dir);
     let entries = index::read_index(&index_path)
         .map_err(|error| RazeError::Io(format!("failed to read index: {error}")))?;
 
@@ -94,13 +94,13 @@ pub fn raze_with_auth(
         }
     }
 
-    let deleted_index = match std::fs::remove_file(&index_path) {
-        Ok(()) => true,
-        Err(error) if error.kind() == IoErrorKind::NotFound => false,
-        Err(error) => {
-            return Err(RazeError::Io(format!("failed to delete ledger: {}", error)));
-        }
-    };
+    // Delete .bo/ infra directory (index, state, version)
+    let infra = tree::infra_dir(output_dir);
+    if infra.is_dir() {
+        std::fs::remove_dir_all(&infra)
+            .map_err(|error| RazeError::Io(format!("failed to delete .bo directory: {}", error)))?;
+    }
+    let deleted_index = true;
 
     let (removed_output_dir, output_dir_left_in_place) = match std::fs::remove_dir(output_dir) {
         Ok(()) => (true, false),

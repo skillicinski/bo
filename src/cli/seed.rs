@@ -68,6 +68,12 @@ pub fn seed(
         SeedError::CreateOutputDir(format!("failed to create output directory: {error}"))
     })?;
 
+    // Create .bo/ infra directory
+    let infra_dir = output_dir.join(".bo");
+    std::fs::create_dir_all(&infra_dir).map_err(|error| {
+        SeedError::CreateOutputDir(format!("failed to create .bo directory: {error}"))
+    })?;
+
     let tree_name = name.or_else(|| {
         output_dir
             .file_name()

@@ -1,6 +1,6 @@
 // bo list — deterministic tree inspection for collected leaves.
 
-use crate::domain::{frontmatter, index};
+use crate::domain::{frontmatter, index, tree};
 use chrono::{DateTime, FixedOffset};
 use serde::Serialize;
 use serde_yaml_ng::{Mapping, Value};
@@ -69,7 +69,7 @@ impl From<serde_json::Error> for ListError {
 // ── list ─────────────────────────────────────────────────────────────────────
 
 pub fn list_leaves(tree_dir: &Path, options: &ListOptions) -> Result<ListResult, ListError> {
-    let index_path = tree_dir.join("index.jsonl");
+    let index_path = tree::index_path(tree_dir);
     let entries = index::read_index(&index_path)?;
     let total_index_entries = entries.len();
     let canonical_tree_dir = fs::canonicalize(tree_dir).ok();

@@ -8,3 +8,4 @@ pub mod raze;
 pub mod search;
 pub mod seed;
 pub mod show;
+pub mod status;

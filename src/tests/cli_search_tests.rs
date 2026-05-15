@@ -375,7 +375,9 @@ fn search_skips_missing_files() {
     // Write index referencing a file that doesn't exist
     let index_content = r#"{"file":"exists.md","title":"Exists","url":"https://example.com/exists"}
 {"file":"missing.md","title":"Missing","url":"https://example.com/missing"}"#;
-    fs::write(dir.path().join("index.jsonl"), index_content).unwrap();
+    let bo_dir = dir.path().join(".bo");
+    fs::create_dir_all(&bo_dir).unwrap();
+    fs::write(bo_dir.join("index.jsonl"), index_content).unwrap();
     write_leaf_file(
         dir.path(),
         "exists.md",
@@ -532,11 +534,9 @@ fn setup_tree(leaves: &[(&str, &str, &str)]) -> TempDir {
         ));
     }
 
-    fs::write(
-        dir.path().join("index.jsonl"),
-        index_lines.join("\n") + "\n",
-    )
-    .unwrap();
+    let bo_dir = dir.path().join(".bo");
+    fs::create_dir_all(&bo_dir).unwrap();
+    fs::write(bo_dir.join("index.jsonl"), index_lines.join("\n") + "\n").unwrap();
 
     dir
 }
@@ -553,11 +553,9 @@ fn setup_tree_with_dates(leaves: &[(&str, &str, &str, &str)]) -> TempDir {
         ));
     }
 
-    fs::write(
-        dir.path().join("index.jsonl"),
-        index_lines.join("\n") + "\n",
-    )
-    .unwrap();
+    let bo_dir = dir.path().join(".bo");
+    fs::create_dir_all(&bo_dir).unwrap();
+    fs::write(bo_dir.join("index.jsonl"), index_lines.join("\n") + "\n").unwrap();
 
     dir
 }

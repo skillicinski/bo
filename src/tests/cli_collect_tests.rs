@@ -1,4 +1,5 @@
 use super::*;
+use std::fs;
 use tempfile::TempDir;
 
 const ARTICLE_HTML: &str = r#"<html><head><title>Plain Article</title></head>
@@ -10,10 +11,11 @@ filtering. It remains an ordinary HTML collection fixture after refactoring.</p>
 #[test]
 fn unsupported_youtube_embed_rejected_without_writes() {
     let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let result = collect_url("https://www.youtube.com/embed/a1mhk7mAetk", dir.path());
 
     assert!(matches!(result, Err(CollectError::Youtube(_))));
-    assert!(!dir.path().join("index.jsonl").exists());
+    assert!(!dir.path().join(".bo/index.jsonl").exists());
     let markdown_files = std::fs::read_dir(dir.path())
         .unwrap()
         .filter_map(Result::ok)
@@ -25,10 +27,11 @@ fn unsupported_youtube_embed_rejected_without_writes() {
 #[test]
 fn ordinary_html_collection_still_writes_leaf_and_index() {
     let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let document = collect_html("https://example.com/article", ARTICLE_HTML, dir.path()).unwrap();
 
     assert!(dir.path().join(&document.filename).exists());
-    let entries = index::read_index(&dir.path().join("index.jsonl")).unwrap();
+    let entries = index::read_index(&dir.path().join(".bo/index.jsonl")).unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].url, "https://example.com/article");
 }
@@ -36,6 +39,7 @@ fn ordinary_html_collection_still_writes_leaf_and_index() {
 #[test]
 fn summary_failure_writes_no_leaf_or_index_entry() {
     let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".bo")).unwrap();
 
     let result = write_new_document_with_summary_result(
         "https://example.com/article",
@@ -52,9 +56,10 @@ fn summary_failure_writes_no_leaf_or_index_entry() {
 #[test]
 fn collect_url_rejects_duplicate_youtube_url_before_network_fetch() {
     let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let url = "https://www.youtube.com/watch?v=a1mhk7mAetk";
     index::append_entry(
-        &dir.path().join("index.jsonl"),
+        &dir.path().join(".bo/index.jsonl"),
         &index::IndexEntry {
             file: "existing.md".to_string(),
             title: "Existing Video".to_string(),
@@ -72,6 +77,7 @@ fn collect_url_rejects_duplicate_youtube_url_before_network_fetch() {
 #[test]
 fn collect_html_keeps_exact_match_duplicate_semantics_for_youtube_urls() {
     let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".bo")).unwrap();
 
     collect_html(
         "https://www.youtube.com/watch?v=a1mhk7mAetk",
@@ -81,7 +87,7 @@ fn collect_html_keeps_exact_match_duplicate_semantics_for_youtube_urls() {
     .unwrap();
     collect_html("https://youtu.be/a1mhk7mAetk", ARTICLE_HTML, dir.path()).unwrap();
 
-    let entries = index::read_index(&dir.path().join("index.jsonl")).unwrap();
+    let entries = index::read_index(&dir.path().join(".bo/index.jsonl")).unwrap();
     assert_eq!(entries.len(), 2);
 }
 
@@ -175,7 +181,7 @@ fn assert_no_collection_artifacts(dir: &TempDir) {
         "rejected collection wrote markdown files"
     );
 
-    let index_path = dir.path().join("index.jsonl");
+    let index_path = dir.path().join(".bo/index.jsonl");
     assert!(
         !index_path.exists() || std::fs::read_to_string(&index_path).unwrap().is_empty(),
         "rejected collection wrote index entries"
@@ -195,6 +201,7 @@ fn assert_rejected_with(result: Result<Document, CollectError>, url: &str, reaso
 #[test]
 fn full_pipeline_happy_path() {
     let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let page = collect_html("https://example.com/article", SAMPLE_HTML, dir.path()).unwrap();
 
     assert!(dir.path().join(&page.filename).exists());
@@ -210,7 +217,7 @@ fn full_pipeline_happy_path() {
     // Summary field is present (fallback: first ~200 words)
     assert!(content.contains("summary:"));
 
-    let entries = index::read_index(&dir.path().join("index.jsonl")).unwrap();
+    let entries = index::read_index(&dir.path().join(".bo/index.jsonl")).unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].url, "https://example.com/article");
 }
@@ -218,6 +225,7 @@ fn full_pipeline_happy_path() {
 #[test]
 fn duplicate_rejected() {
     let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".bo")).unwrap();
     collect_html("https://example.com/article", SAMPLE_HTML, dir.path()).unwrap();
 
     let result = collect_html("https://example.com/article", SAMPLE_HTML, dir.path());
@@ -227,13 +235,14 @@ fn duplicate_rejected() {
         .to_string()
         .contains("already collected"));
 
-    let entries = index::read_index(&dir.path().join("index.jsonl")).unwrap();
+    let entries = index::read_index(&dir.path().join(".bo/index.jsonl")).unwrap();
     assert_eq!(entries.len(), 1);
 }
 
 #[test]
 fn slug_collision_disambiguated() {
     let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".bo")).unwrap();
 
     let page1 = collect_html("https://example.com/intro1", COLLISION_HTML_1, dir.path()).unwrap();
     let page2 = collect_html("https://example.com/intro2", COLLISION_HTML_2, dir.path()).unwrap();
@@ -250,13 +259,14 @@ fn slug_collision_disambiguated() {
         page2.filename
     );
 
-    let entries = index::read_index(&dir.path().join("index.jsonl")).unwrap();
+    let entries = index::read_index(&dir.path().join(".bo/index.jsonl")).unwrap();
     assert_eq!(entries.len(), 2);
 }
 
 #[test]
 fn empty_extraction_no_artifacts() {
     let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let empty_html = "<html><body></body></html>";
 
     let result = collect_html("https://example.com/empty", empty_html, dir.path());
@@ -268,6 +278,7 @@ fn empty_extraction_no_artifacts() {
 #[test]
 fn redirect_stub_rejected_without_artifacts() {
     let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let url = "https://blog.rust-lang.org/2015/05/11/traits.html";
 
     let result = collect_html(url, REDIRECT_STUB_HTML, dir.path());
@@ -279,6 +290,7 @@ fn redirect_stub_rejected_without_artifacts() {
 #[test]
 fn x_js_shell_rejected_without_artifacts() {
     let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let url = "https://x.com/lifeof_jer/status/2048103471019434248";
 
     let result = collect_html(url, X_JS_SHELL_HTML, dir.path());
@@ -290,6 +302,7 @@ fn x_js_shell_rejected_without_artifacts() {
 #[test]
 fn openreview_footer_only_rejected_without_artifacts() {
     let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let url = "https://openreview.net/forum?id=OAudWSf7aH";
 
     let result = collect_html(url, OPENREVIEW_FOOTER_HTML, dir.path());
@@ -301,6 +314,7 @@ fn openreview_footer_only_rejected_without_artifacts() {
 #[test]
 fn cloudflare_block_rejected_without_artifacts() {
     let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let url = "https://medium.com/@loci.ai/deploying-vllm-on-ecs-with-ec2-82d58b482125";
 
     let result = collect_html(url, CLOUDFLARE_BLOCK_HTML, dir.path());
@@ -312,6 +326,7 @@ fn cloudflare_block_rejected_without_artifacts() {
 #[test]
 fn mdbook_page_with_bad_ui_title_and_substantive_body_is_accepted() {
     let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".bo")).unwrap();
 
     let result = collect_html(
         "https://doc.rust-lang.org/book/ch04-00-understanding-ownership.html",
@@ -331,7 +346,7 @@ fn mdbook_page_with_bad_ui_title_and_substantive_body_is_accepted() {
     assert!(content.contains("title: \"Understanding Ownership\""));
     assert!(!content.contains("title: \"Keyboard shortcuts\""));
 
-    let entries = index::read_index(&dir.path().join("index.jsonl")).unwrap();
+    let entries = index::read_index(&dir.path().join(".bo/index.jsonl")).unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].title, "Understanding Ownership");
 }
@@ -339,6 +354,7 @@ fn mdbook_page_with_bad_ui_title_and_substantive_body_is_accepted() {
 #[test]
 fn failed_url_can_be_resubmitted() {
     let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let empty_html = "<html><body></body></html>";
 
     let result = collect_html("https://example.com/flaky", empty_html, dir.path());
@@ -351,6 +367,7 @@ fn failed_url_can_be_resubmitted() {
 #[test]
 fn near_duplicate_urls_both_stored() {
     let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".bo")).unwrap();
 
     collect_html("https://example.com/article", SAMPLE_HTML, dir.path()).unwrap();
     collect_html(
@@ -360,6 +377,6 @@ fn near_duplicate_urls_both_stored() {
     )
     .unwrap();
 
-    let entries = index::read_index(&dir.path().join("index.jsonl")).unwrap();
+    let entries = index::read_index(&dir.path().join(".bo/index.jsonl")).unwrap();
     assert_eq!(entries.len(), 2);
 }

@@ -12,7 +12,7 @@
 // and derived path helpers; all persistence is delegated to `config.rs`.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // ── TreeConfig ─────────────────────────────────────────────────────────────────
 
@@ -82,6 +82,41 @@ impl Tree {
     pub fn branches_dir(&self) -> PathBuf {
         self.output_dir.join("branches")
     }
+
+    /// Path to the tree-local infrastructure directory: `{output_dir}/.bo/`.
+    ///
+    /// Holds operational metadata (index, state, version) separate from
+    /// content files.
+    pub fn infra_dir(&self) -> PathBuf {
+        self.output_dir.join(".bo")
+    }
+
+    /// Path to the JSONL index file: `{output_dir}/.bo/index.jsonl`.
+    pub fn index_path(&self) -> PathBuf {
+        self.infra_dir().join("index.jsonl")
+    }
+
+    /// Path to the compile state file: `{output_dir}/.bo/state.json`.
+    pub fn state_path(&self) -> PathBuf {
+        self.infra_dir().join("state.json")
+    }
+}
+
+// ── Free path helpers ──────────────────────────────────────────────────────────
+
+/// Index path from a bare tree directory (for callers that don't have a Tree).
+pub fn index_path(tree_dir: &Path) -> PathBuf {
+    tree_dir.join(".bo").join("index.jsonl")
+}
+
+/// State path from a bare tree directory.
+pub fn state_path(tree_dir: &Path) -> PathBuf {
+    tree_dir.join(".bo").join("state.json")
+}
+
+/// Infra directory from a bare tree directory.
+pub fn infra_dir(tree_dir: &Path) -> PathBuf {
+    tree_dir.join(".bo")
 }
 
 #[cfg(test)]

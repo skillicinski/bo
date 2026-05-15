@@ -19,7 +19,7 @@ use std::fmt;
 use std::path::Path;
 
 use crate::adapters::youtube::{self, YoutubeError, YoutubeUrlMatch};
-use crate::domain::{index, leaf, slug};
+use crate::domain::{index, leaf, slug, tree};
 use crate::engine::llm::models::DEFAULT_MODEL;
 use crate::engine::quality::RejectReason;
 use crate::engine::{extract, fetch, quality, summary};
@@ -203,7 +203,7 @@ pub fn collect_html_with_model(
 }
 
 fn ensure_not_duplicate(url: &str, output_dir: &Path) -> Result<(), CollectError> {
-    let index_path = output_dir.join("index.jsonl");
+    let index_path = tree::index_path(output_dir);
     let entries = index::read_index(&index_path)?;
     if let Some(existing) = index::is_duplicate(&entries, url) {
         return Err(CollectError::DuplicateUrl {
@@ -237,7 +237,7 @@ fn write_new_document_with_summary_result(
     summary_text: Result<String, summary::SummaryError>,
 ) -> Result<Document, CollectError> {
     let summary_text = summary_text?;
-    let index_path = output_dir.join("index.jsonl");
+    let index_path = tree::index_path(output_dir);
     let title_ref = title.unwrap_or("");
     let base_slug = slug::slugify(title_ref, url);
     let filename = slug::resolve_slug(&base_slug, url, output_dir);

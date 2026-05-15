@@ -7,6 +7,7 @@
 
 use crate::domain::frontmatter;
 use crate::domain::index;
+use crate::domain::tree;
 use crate::engine::llm::{
     complete_with_policy, context_window_tokens, FinishReason, LlmCallPolicy, LlmError,
     LlmProvider, Message, OpenAiProvider,
@@ -219,7 +220,7 @@ fn strip_possessive(word: &str) -> String {
 
 /// Retrieve top-k leaves scored by term density (OR semantics).
 fn retrieve_leaves(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedLeaf>, QueryError> {
-    let index_path = tree_dir.join("index.jsonl");
+    let index_path = tree::index_path(tree_dir);
     let entries =
         index::read_index(&index_path).map_err(|e| QueryError::Io(format!("index: {}", e)))?;
 
