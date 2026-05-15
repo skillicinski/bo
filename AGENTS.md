@@ -53,6 +53,8 @@ src/
 
 PRs don't need "Verification", "Tests", or "How to test" sections. CI gates every merge and PRs go through human review. A brief summary of what changed and why is sufficient.
 
+When creating new PRs, the body should begin with a itemised list that describe the core functional changes to the project. Each item should begin with a null-subject verb, eg. "added", "removed", "updated", "refactored", "bumped" to describe the type of operation on the code, followed by a one-line summary of the change itself.
+
 ## Releasing
 
 1. Update `CHANGELOG.md` with the new version section.

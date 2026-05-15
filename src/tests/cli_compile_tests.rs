@@ -152,7 +152,68 @@ fn parse_empty_branches_is_valid() {
 }
 
 #[test]
-fn parse_filters_unknown_leaves() {
+fn validation_error_display_includes_actionable_hint() {
+    let message = CompileError::Validation("invalid compile response".to_string()).to_string();
+    assert!(message.contains("invalid compile response"));
+    assert!(message.contains(VALIDATION_NEXT_STEP));
+}
+
+#[test]
+fn parse_rejects_missing_required_fields() {
+    let json = r##"{"branches":[{"title":"Concept","body":"# Concept\n\nBody."}]}"##;
+
+    let err = parse_and_validate(json, &sample_valid_filenames()).unwrap_err();
+    assert!(err.to_string().contains("invalid compile response shape"));
+}
+
+#[test]
+fn parse_rejects_wrong_field_types() {
+    let json =
+        r##"{"branches":[{"title":"Concept","body":"# Concept\n\nBody.","leaves":"leaf-a.md"}]}"##;
+
+    let err = parse_and_validate(json, &sample_valid_filenames()).unwrap_err();
+    assert!(err.to_string().contains("invalid compile response shape"));
+}
+
+#[test]
+fn parse_rejects_extra_fields() {
+    let json = serde_json::json!({
+        "branches": [
+            {
+                "title": "Concept",
+                "body": "# Concept\n\nBody.",
+                "leaves": ["leaf-a.md", "leaf-b.md"],
+                "confidence": 0.9
+            }
+        ]
+    })
+    .to_string();
+    let json = &json;
+
+    let err = parse_and_validate(json, &sample_valid_filenames()).unwrap_err();
+    assert!(err.to_string().contains("invalid compile response shape"));
+}
+
+#[test]
+fn parse_rejects_absurdly_large_branch_bodies() {
+    let json = serde_json::json!({
+        "branches": [
+            {
+                "title": "Concept",
+                "body": "x".repeat(MAX_COMPILED_BODY_BYTES_MIN + 1),
+                "leaves": ["leaf-a.md", "leaf-b.md"]
+            }
+        ]
+    })
+    .to_string();
+    let json = &json;
+
+    let err = parse_and_validate_with_input_size(json, &sample_valid_filenames(), 1).unwrap_err();
+    assert!(err.to_string().contains("exceeding"));
+}
+
+#[test]
+fn parse_rejects_unknown_leaves() {
     let json = serde_json::json!({
         "branches": [
             {
@@ -165,8 +226,10 @@ fn parse_filters_unknown_leaves() {
     .to_string();
     let json = &json;
 
-    let plan = parse_and_validate(json, &sample_valid_filenames()).unwrap();
-    assert_eq!(plan.branches[0].leaves, vec!["leaf-a.md", "leaf-b.md"]);
+    let err = parse_and_validate(json, &sample_valid_filenames()).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("references unknown leaf 'invented.md'"));
 }
 
 #[test]
@@ -195,12 +258,12 @@ fn parse_rejects_duplicate_slugs() {
             {
                 "title": "Rust Ownership",
                 "body": "# Rust Ownership\n\nBody.",
-                "leaves": ["leaf-a.md"]
+                "leaves": ["leaf-a.md", "leaf-b.md"]
             },
             {
                 "title": "Rust: Ownership",
                 "body": "# Rust: Ownership\n\nBody.",
-                "leaves": ["leaf-b.md"]
+                "leaves": ["leaf-b.md", "leaf-c.md"]
             }
         ]
     })
@@ -214,7 +277,7 @@ fn parse_rejects_duplicate_slugs() {
 }
 
 #[test]
-fn parse_skips_branch_with_all_unknown_leaves() {
+fn parse_rejects_branch_with_all_unknown_leaves() {
     let json = serde_json::json!({
         "branches": [
             {
@@ -227,12 +290,14 @@ fn parse_skips_branch_with_all_unknown_leaves() {
     .to_string();
     let json = &json;
 
-    let plan = parse_and_validate(json, &sample_valid_filenames()).unwrap();
-    assert!(plan.branches.is_empty());
+    let err = parse_and_validate(json, &sample_valid_filenames()).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("references unknown leaf 'nonexistent.md'"));
 }
 
 #[test]
-fn parse_skips_branch_with_single_leaf() {
+fn parse_rejects_branch_with_single_leaf() {
     let json = serde_json::json!({
         "branches": [
             {
@@ -245,12 +310,14 @@ fn parse_skips_branch_with_single_leaf() {
     .to_string();
     let json = &json;
 
-    let plan = parse_and_validate(json, &sample_valid_filenames()).unwrap();
-    assert!(plan.branches.is_empty());
+    let err = parse_and_validate(json, &sample_valid_filenames()).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("branches must reference at least 2 leaves"));
 }
 
 #[test]
-fn parse_skips_branch_with_empty_title() {
+fn parse_rejects_branch_with_empty_title() {
     let json = serde_json::json!({
         "branches": [
             {
@@ -263,26 +330,68 @@ fn parse_skips_branch_with_empty_title() {
     .to_string();
     let json = &json;
 
-    let plan = parse_and_validate(json, &sample_valid_filenames()).unwrap();
-    assert!(plan.branches.is_empty());
+    let err = parse_and_validate(json, &sample_valid_filenames()).unwrap_err();
+    assert!(err.to_string().contains("empty title"));
 }
 
 #[test]
-fn parse_skips_branch_with_empty_body() {
+fn parse_rejects_branch_with_empty_body() {
     let json = serde_json::json!({
         "branches": [
             {
                 "title": "Concept",
                 "body": "",
-                "leaves": ["leaf-a.md"]
+                "leaves": ["leaf-a.md", "leaf-b.md"]
             }
         ]
     })
     .to_string();
     let json = &json;
 
-    let plan = parse_and_validate(json, &sample_valid_filenames()).unwrap();
-    assert!(plan.branches.is_empty());
+    let err = parse_and_validate(json, &sample_valid_filenames()).unwrap_err();
+    assert!(err.to_string().contains("empty body"));
+}
+
+#[test]
+fn validation_failure_does_not_mutate_tree() {
+    let dir = TempDir::new().unwrap();
+    let cfg = make_test_config(dir.path());
+
+    let leaf_a_path = dir.path().join("leaf-a.md");
+    let leaf_b_path = dir.path().join("leaf-b.md");
+    let leaf_a_before = "---\ntitle: A\nurl: https://example.com/a\ncollected_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-01T00:00:00Z\n---\n\n# A\n\nBody A.\n";
+    let leaf_b_before = "---\ntitle: B\nurl: https://example.com/b\ncollected_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-01T00:00:00Z\n---\n\n# B\n\nBody B.\n";
+    fs::write(&leaf_a_path, leaf_a_before).unwrap();
+    fs::write(&leaf_b_path, leaf_b_before).unwrap();
+
+    let valid_filenames: HashSet<String> = ["leaf-a.md", "leaf-b.md"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let bad_response = serde_json::json!({
+        "branches": [
+            {
+                "title": "Concept",
+                "body": "# Concept\n\nBody.",
+                "leaves": ["leaf-a.md", "invented.md"]
+            }
+        ]
+    })
+    .to_string();
+
+    let result = validate_and_execute_plan(
+        &bad_response,
+        &cfg,
+        &valid_filenames,
+        leaf_a_before.len() + leaf_b_before.len(),
+        "2025-06-01T12:00:00Z",
+        &[],
+    );
+
+    assert!(matches!(result, Err(CompileError::Validation(_))));
+    assert!(!dir.path().join("branches").exists());
+    assert_eq!(fs::read_to_string(&leaf_a_path).unwrap(), leaf_a_before);
+    assert_eq!(fs::read_to_string(&leaf_b_path).unwrap(), leaf_b_before);
 }
 
 // ── execute_plan tests ────────────────────────────────────────────────────
