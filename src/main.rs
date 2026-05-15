@@ -290,15 +290,22 @@ fn show_error_code(error: &show::ShowError) -> &'static str {
 }
 
 fn compile_json_error(error: &CompileError) -> JsonError {
-    let code = match error {
-        CompileError::ContextOverflow => "context_overflow",
-        CompileError::Truncated => "truncated",
-        CompileError::ContentFilter => "content_filter",
-        CompileError::Llm(_) => "llm_error",
-        CompileError::Io(_) => "io_error",
-        CompileError::Validation(_) => "validation_error",
-    };
-    JsonError::new(code, error.to_string())
+    match error {
+        CompileError::ContextOverflow => JsonError::new("context_overflow", error.to_string()),
+        CompileError::Truncated => JsonError::new("truncated", error.to_string()),
+        CompileError::ContentFilter => JsonError::new("content_filter", error.to_string()),
+        CompileError::Llm(_) => JsonError::new("llm_error", error.to_string()),
+        CompileError::Io(_) => JsonError::new("io_error", error.to_string()),
+        CompileError::Validation(message) => JsonError::with_details(
+            "validation_error",
+            message.clone(),
+            json!({
+                "phase": "compile_validation",
+                "files_changed": false,
+                "next_step": compile::VALIDATION_NEXT_STEP
+            }),
+        ),
+    }
 }
 
 fn config_command_json_error(error: &cli_config::ConfigCommandError) -> JsonError {

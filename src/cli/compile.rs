@@ -25,6 +25,10 @@ use crate::engine::llm::{
 // ── constants ─────────────────────────────────────────────────────────────────
 
 const MAX_COMPLETION_TOKENS: u32 = 16384;
+const MAX_COMPILED_BODY_BYTES_MIN: usize = 16 * 1024;
+const MAX_COMPILED_BODY_BYTES_PER_INPUT_BYTE: usize = 8;
+
+pub const VALIDATION_NEXT_STEP: &str = "No files were changed. Try `bo compile` again; if this repeats, switch models with `bo config set model <model>` or report the validation message.";
 
 const COMPILE_LLM_POLICY: LlmCallPolicy = LlmCallPolicy {
     timeout: Duration::from_secs(180),
@@ -66,7 +70,7 @@ impl std::fmt::Display for CompileError {
             CompileError::ContentFilter => write!(f, "compile was blocked by content filter"),
             CompileError::Llm(msg) => write!(f, "LLM error: {}", msg),
             CompileError::Io(msg) => write!(f, "{}", msg),
-            CompileError::Validation(msg) => write!(f, "{}", msg),
+            CompileError::Validation(msg) => write!(f, "{}\n{}", msg, VALIDATION_NEXT_STEP),
         }
     }
 }
@@ -151,11 +155,13 @@ struct LoadedLeaf {
 
 /// Deserialized LLM response.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CompileResponse {
     branches: Vec<RawBranch>,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawBranch {
     title: String,
     body: String,
@@ -230,14 +236,15 @@ pub fn run_compile(cfg: &SeededConfig) -> Result<CompileResult, CompileError> {
     // ── parse and validate ───────────────────────────────────────────────────
     let valid_filenames: HashSet<String> =
         loaded_leaves.iter().map(|l| l.filename.clone()).collect();
-    let plan = parse_and_validate(&response, &valid_filenames)?;
+    let input_body_bytes = loaded_leaves.iter().map(|l| l.body.len()).sum();
 
-    // ── execute plan ─────────────────────────────────────────────────────────
+    // ── execute validated plan ───────────────────────────────────────────────
     let run_timestamp = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let summary = execute_plan(
-        &plan,
+    let summary = validate_and_execute_plan(
+        &response,
         cfg,
         &valid_filenames,
+        input_body_bytes,
         &run_timestamp,
         &skipped_leaves,
     )?;
@@ -407,14 +414,23 @@ fn map_compile_llm_error(error: LlmError) -> CompileError {
 
 // ── parse_and_validate ────────────────────────────────────────────────────────
 
+#[cfg(test)]
 fn parse_and_validate(
     response: &str,
     valid_filenames: &HashSet<String>,
 ) -> Result<CompilePlan, CompileError> {
-    let parsed: CompileResponse = serde_json::from_str(response)
-        .map_err(|e| CompileError::Validation(format!("failed to parse LLM response: {}", e)))?;
+    parse_and_validate_with_input_size(response, valid_filenames, usize::MAX)
+}
 
-    // Empty branches is valid — means no cross-cutting concepts found
+fn parse_and_validate_with_input_size(
+    response: &str,
+    valid_filenames: &HashSet<String>,
+    input_body_bytes: usize,
+) -> Result<CompilePlan, CompileError> {
+    let parsed: CompileResponse = serde_json::from_str(response)
+        .map_err(|e| validation_error(format!("invalid compile response shape: {}", e)))?;
+
+    // Empty branches is valid — means no cross-cutting concepts found.
     if parsed.branches.is_empty() {
         return Ok(CompilePlan {
             branches: Vec::new(),
@@ -426,61 +442,68 @@ fn parse_and_validate(
     let mut seen_slugs: HashSet<String> = HashSet::new();
     let mut leaf_assignments: HashMap<String, Vec<String>> = HashMap::new();
 
-    for raw in parsed.branches {
-        // Validate non-empty title and body
-        if raw.title.trim().is_empty() {
-            eprintln!("warning: skipping branch with empty title");
-            continue;
+    for (index, raw) in parsed.branches.into_iter().enumerate() {
+        let branch_number = index + 1;
+        let title = raw.title.trim().to_string();
+        if title.is_empty() {
+            return Err(validation_error(format!(
+                "invalid compile response: branch #{} has empty title",
+                branch_number
+            )));
         }
         if raw.body.trim().is_empty() {
-            eprintln!("warning: skipping branch '{}' with empty body", raw.title);
-            continue;
+            return Err(validation_error(format!(
+                "invalid compile response: branch '{}' has empty body",
+                title
+            )));
         }
 
-        // Generate slug and check uniqueness post-slugification
-        let branch_slug = slug::slugify(&raw.title, "");
+        // Generate slug and check uniqueness post-slugification.
+        let branch_slug = slug::slugify(&title, "");
         if branch_slug.is_empty() {
-            eprintln!(
-                "warning: skipping branch '{}' — title produces empty slug",
-                raw.title
-            );
-            continue;
+            return Err(validation_error(format!(
+                "invalid compile response: branch '{}' title produces empty file slug",
+                title
+            )));
         }
         if seen_slugs.contains(&branch_slug) {
-            return Err(CompileError::Validation(format!(
-                "duplicate branch slug '{}' (from title '{}') — titles must be distinct",
-                branch_slug, raw.title
+            return Err(validation_error(format!(
+                "invalid compile response: duplicate branch slug '{}' (from title '{}') — titles must be distinct",
+                branch_slug, title
             )));
         }
         seen_slugs.insert(branch_slug.clone());
 
-        // Filter and deduplicate leaves
+        // Validate and deduplicate leaves.
         let mut branch_leaves: Vec<String> = Vec::new();
         let mut seen_leaves: HashSet<String> = HashSet::new();
         for leaf_file in &raw.leaves {
+            if leaf_file.trim().is_empty() {
+                return Err(validation_error(format!(
+                    "invalid compile response: branch '{}' contains an empty leaf reference",
+                    title
+                )));
+            }
             if !valid_filenames.contains(leaf_file) {
-                eprintln!(
-                    "warning: branch '{}' references unknown leaf '{}' — skipped",
-                    raw.title, leaf_file
-                );
-                continue;
+                return Err(validation_error(format!(
+                    "invalid compile response: branch '{}' references unknown leaf '{}'",
+                    title, leaf_file
+                )));
             }
             if seen_leaves.insert(leaf_file.clone()) {
                 branch_leaves.push(leaf_file.clone());
             }
         }
 
-        // Skip branches with fewer than 2 valid leaves (must be cross-cutting)
         if branch_leaves.len() < 2 {
-            eprintln!(
-                "warning: skipping branch '{}' — only {} leaf (must span at least 2)",
-                raw.title,
+            return Err(validation_error(format!(
+                "invalid compile response: branch '{}' references {} leaf; branches must reference at least 2 leaves",
+                title,
                 branch_leaves.len()
-            );
-            continue;
+            )));
         }
 
-        // Record leaf assignments
+        // Record leaf assignments.
         for leaf_file in &branch_leaves {
             leaf_assignments
                 .entry(leaf_file.clone())
@@ -490,16 +513,56 @@ fn parse_and_validate(
 
         validated_branches.push(ValidatedBranch {
             slug: branch_slug,
-            title: raw.title,
+            title,
             body: raw.body,
             leaves: branch_leaves,
         });
     }
 
+    let output_body_bytes = validated_branches
+        .iter()
+        .map(|branch| branch.body.len())
+        .fold(0usize, usize::saturating_add);
+    validate_compiled_body_size(input_body_bytes, output_body_bytes)?;
+
     Ok(CompilePlan {
         branches: validated_branches,
         leaf_assignments,
     })
+}
+
+fn validate_compiled_body_size(
+    input_body_bytes: usize,
+    output_body_bytes: usize,
+) -> Result<(), CompileError> {
+    let limit = input_body_bytes
+        .saturating_mul(MAX_COMPILED_BODY_BYTES_PER_INPUT_BYTE)
+        .max(MAX_COMPILED_BODY_BYTES_MIN);
+
+    if output_body_bytes > limit {
+        return Err(validation_error(format!(
+            "invalid compile response: branch bodies total {} bytes, exceeding {} byte limit for {} bytes of input",
+            output_body_bytes, limit, input_body_bytes
+        )));
+    }
+
+    Ok(())
+}
+
+fn validation_error(message: impl Into<String>) -> CompileError {
+    CompileError::Validation(message.into())
+}
+
+fn validate_and_execute_plan(
+    response: &str,
+    cfg: &SeededConfig,
+    valid_filenames: &HashSet<String>,
+    input_body_bytes: usize,
+    run_timestamp: &str,
+    skipped_leaves: &[String],
+) -> Result<CompileSummary, CompileError> {
+    let plan = parse_and_validate_with_input_size(response, valid_filenames, input_body_bytes)?;
+    execute_plan(&plan, cfg, valid_filenames, run_timestamp, skipped_leaves)
 }
 
 // ── execute_plan ──────────────────────────────────────────────────────────────
