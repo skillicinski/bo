@@ -1,6 +1,6 @@
 // bo search — deterministic lexical search over collected leaves.
 
-use crate::domain::{frontmatter, index};
+use crate::domain::{frontmatter, index, tree};
 use chrono::{DateTime, FixedOffset};
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -214,7 +214,7 @@ pub fn search_leaves(
     query: &SearchQuery,
     options: &SearchOptions,
 ) -> Result<SearchResult, SearchError> {
-    let index_path = tree_dir.join("index.jsonl");
+    let index_path = tree::index_path(tree_dir);
     let entries = index::read_index(&index_path)?;
 
     let mut scored: Vec<ScoredLeaf> = Vec::new();

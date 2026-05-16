@@ -77,7 +77,9 @@ fn make_index(dir: &std::path::Path, entries: &[(&str, &str, &str)]) {
             file, title, url
         ));
     }
-    fs::write(dir.join("index.jsonl"), lines).unwrap();
+    let bo_dir = dir.join(".bo");
+    fs::create_dir_all(&bo_dir).unwrap();
+    fs::write(bo_dir.join("index.jsonl"), lines).unwrap();
 }
 
 fn setup_test_tree() -> TempDir {

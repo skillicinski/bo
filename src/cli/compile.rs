@@ -14,13 +14,14 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::domain::{branch, frontmatter, index, slug, tree::Tree};
+use crate::domain::{branch, frontmatter, index, slug, tree, tree::Tree};
 use crate::engine::auth::{self, AuthResolutionError};
 use crate::engine::config::SeededConfig;
 use crate::engine::llm::{
     complete_with_policy, FinishReason, LlmCallPolicy, LlmError, LlmProvider, Message,
     OpenAiProvider,
 };
+use crate::engine::state;
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
@@ -194,7 +195,7 @@ pub fn cmd_compile(cfg: &SeededConfig) -> Result<(), String> {
 
 pub fn run_compile(cfg: &SeededConfig) -> Result<CompileResult, CompileError> {
     // ── read index (guard: empty/single-leaf) ────────────────────────────────
-    let index_path = cfg.tree.output_dir.join("index.jsonl");
+    let index_path = tree::index_path(&cfg.tree.output_dir);
     let all_entries = index::read_index(&index_path)
         .map_err(|e| CompileError::Io(format!("failed to read index: {}", e)))?;
 
@@ -250,6 +251,20 @@ pub fn run_compile(cfg: &SeededConfig) -> Result<CompileResult, CompileError> {
     )?;
 
     // ── output ───────────────────────────────────────────────────────────────
+
+    // Persist compiled leaf slugs to state.json
+    let state_path = tree::state_path(&cfg.tree.output_dir);
+    let mut tree_state = state::read_state(&state_path);
+    for filename in &valid_filenames {
+        let slug = state::slug_from_filename(filename);
+        tree_state
+            .compiled_leaves
+            .insert(slug.to_string(), run_timestamp.clone());
+    }
+    if let Err(e) = state::write_state(&state_path, &tree_state) {
+        eprintln!("warning: failed to write compile state: {}", e);
+    }
+
     Ok(CompileResult::compiled(summary))
 }
 

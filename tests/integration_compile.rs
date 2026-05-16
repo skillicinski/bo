@@ -48,7 +48,9 @@ const FIXTURE_DOCS: &[FixtureDoc] = &[
 /// Build a small synthetic tree in a temp directory and return the path.
 fn setup_fixture_collection() -> tempfile::TempDir {
     let dir = tempfile::TempDir::new().unwrap();
-    let index_path = dir.path().join("index.jsonl");
+    let bo_dir = dir.path().join(".bo");
+    fs::create_dir_all(&bo_dir).unwrap();
+    let index_path = bo_dir.join("index.jsonl");
 
     for doc in FIXTURE_DOCS {
         bo::domain::leaf::write(
@@ -157,7 +159,7 @@ fn compile_gives_every_leaf_a_branches_field() {
 
     compile::cmd_compile(&cfg).unwrap();
 
-    let index_path = dir.path().join("index.jsonl");
+    let index_path = dir.path().join(".bo/index.jsonl");
     let entries = index::read_index(&index_path).unwrap();
 
     for entry in &entries {
@@ -178,11 +180,11 @@ fn compile_does_not_modify_index_jsonl() {
     let dir = setup_fixture_collection();
     let cfg = make_config(dir.path());
 
-    let index_before = fs::read_to_string(dir.path().join("index.jsonl")).unwrap();
+    let index_before = fs::read_to_string(dir.path().join(".bo/index.jsonl")).unwrap();
 
     compile::cmd_compile(&cfg).unwrap();
 
-    let index_after = fs::read_to_string(dir.path().join("index.jsonl")).unwrap();
+    let index_after = fs::read_to_string(dir.path().join(".bo/index.jsonl")).unwrap();
     assert_eq!(
         index_before, index_after,
         "index.jsonl was modified by bo compile"

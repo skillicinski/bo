@@ -84,7 +84,7 @@ fn config_auth(home: &Path, args: &[&str], input: &str) -> Output {
 
 fn append_index_entry(tree: &Path, file: &str, title: &str) {
     bo::domain::index::append_entry(
-        &tree.join("index.jsonl"),
+        &tree.join(".bo/index.jsonl"),
         &bo::domain::index::IndexEntry {
             file: file.to_string(),
             title: title.to_string(),
@@ -1144,7 +1144,7 @@ fn raze_preserves_auth_and_cleans_tree() {
         "url": "https://example.com/article"
     });
     fs::write(
-        tree.join("index.jsonl"),
+        tree.join(".bo/index.jsonl"),
         serde_json::to_string(&entry).unwrap(),
     )
     .unwrap();
@@ -1168,7 +1168,7 @@ fn raze_preserves_auth_and_cleans_tree() {
 
     // Tree file and index deleted
     assert!(!tree.join("article.md").exists());
-    assert!(!tree.join("index.jsonl").exists());
+    assert!(!tree.join(".bo").exists());
 }
 
 #[test]
@@ -1276,7 +1276,7 @@ fn raze_tolerates_already_deleted_files() {
         "url": "https://example.com/gone"
     });
     fs::write(
-        tree.join("index.jsonl"),
+        tree.join(".bo/index.jsonl"),
         serde_json::to_string(&entry).unwrap(),
     )
     .unwrap();

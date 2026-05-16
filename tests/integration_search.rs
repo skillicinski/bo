@@ -44,11 +44,9 @@ impl TestTree {
                 file, title, file
             ));
         }
-        fs::write(
-            tree_dir.path().join("index.jsonl"),
-            index_lines.join("\n") + "\n",
-        )
-        .unwrap();
+        let bo_dir = tree_dir.path().join(".bo");
+        fs::create_dir_all(&bo_dir).unwrap();
+        fs::write(bo_dir.join("index.jsonl"), index_lines.join("\n") + "\n").unwrap();
 
         TestTree {
             _home: home,

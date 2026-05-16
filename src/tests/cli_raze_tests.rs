@@ -8,7 +8,9 @@ fn setup_tree(tmp: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
     let tree_dir = tmp.path().join("tree");
     let config_path = tmp.path().join("config.json");
     fs::create_dir_all(&tree_dir).unwrap();
-    fs::write(tree_dir.join("index.jsonl"), "").unwrap();
+    let bo_dir = tree_dir.join(".bo");
+    fs::create_dir_all(&bo_dir).unwrap();
+    fs::write(bo_dir.join("index.jsonl"), "").unwrap();
 
     config::write_config(
         &config::Config {
@@ -32,7 +34,7 @@ fn auth_path_for_config(config_path: &std::path::Path) -> std::path::PathBuf {
 
 fn add_leaf(tree_dir: &std::path::Path, file: &str) {
     index::append_entry(
-        &tree_dir.join("index.jsonl"),
+        &tree_dir.join(".bo").join("index.jsonl"),
         &IndexEntry {
             file: file.to_string(),
             title: file.trim_end_matches(".md").to_string(),
@@ -65,7 +67,7 @@ fn deletes_index_file() {
     let output = raze(&tree_dir, &config_path).unwrap();
 
     assert!(output.result.deleted_index);
-    assert!(!tree_dir.join("index.jsonl").exists());
+    assert!(!tree_dir.join(".bo").exists());
 }
 
 #[test]
@@ -176,7 +178,7 @@ fn skips_missing_files_without_error() {
     let tmp = TempDir::new().unwrap();
     let (tree_dir, config_path) = setup_tree(&tmp);
     index::append_entry(
-        &tree_dir.join("index.jsonl"),
+        &tree_dir.join(".bo").join("index.jsonl"),
         &IndexEntry {
             file: "ghost.md".to_string(),
             title: "Ghost".to_string(),
@@ -196,7 +198,7 @@ fn warns_on_suspicious_path_traversal() {
     let tmp = TempDir::new().unwrap();
     let (tree_dir, config_path) = setup_tree(&tmp);
     index::append_entry(
-        &tree_dir.join("index.jsonl"),
+        &tree_dir.join(".bo").join("index.jsonl"),
         &IndexEntry {
             file: "../escape.md".to_string(),
             title: "Escape".to_string(),
@@ -217,7 +219,7 @@ fn warns_on_absolute_path_in_index() {
     let tmp = TempDir::new().unwrap();
     let (tree_dir, config_path) = setup_tree(&tmp);
     index::append_entry(
-        &tree_dir.join("index.jsonl"),
+        &tree_dir.join(".bo").join("index.jsonl"),
         &IndexEntry {
             file: "/etc/passwd".to_string(),
             title: "Bad".to_string(),

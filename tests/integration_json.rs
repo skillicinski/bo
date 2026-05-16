@@ -33,7 +33,7 @@ fn seed_tree(home: &TempDir, name: &str) -> std::path::PathBuf {
 
 fn write_compile_leaf(tree: &Path, file: &str, title: &str) {
     bo::domain::index::append_entry(
-        &tree.join("index.jsonl"),
+        &tree.join(".bo/index.jsonl"),
         &bo::domain::index::IndexEntry {
             file: file.to_string(),
             title: title.to_string(),
@@ -402,7 +402,7 @@ fn raze_json_reports_suspicious_ledger_entries_as_warnings() {
     let home = TempDir::new().unwrap();
     let tree = seed_tree(&home, "tree");
     bo::domain::index::append_entry(
-        &tree.join("index.jsonl"),
+        &tree.join(".bo/index.jsonl"),
         &bo::domain::index::IndexEntry {
             file: "../outside.md".to_string(),
             title: "Suspicious".to_string(),
@@ -426,7 +426,7 @@ fn collect_json_duplicate_url_is_structured_error() {
     let tree = seed_tree(&home, "tree");
     let url = "https://www.youtube.com/watch?v=a1mhk7mAetk";
     bo::domain::index::append_entry(
-        &tree.join("index.jsonl"),
+        &tree.join(".bo/index.jsonl"),
         &bo::domain::index::IndexEntry {
             file: "existing.md".to_string(),
             title: "Existing Video".to_string(),

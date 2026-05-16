@@ -295,7 +295,9 @@ fn write_index(tree: &Path, entries: &[(&str, &str)]) {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    fs::write(tree.join("index.jsonl"), format!("{content}\n")).unwrap();
+    let bo_dir = tree.join(".bo");
+    fs::create_dir_all(&bo_dir).unwrap();
+    fs::write(bo_dir.join("index.jsonl"), format!("{content}\n")).unwrap();
 }
 
 fn write_leaf(tree: &Path, file: &str, frontmatter_fields: &str, body: &str) {

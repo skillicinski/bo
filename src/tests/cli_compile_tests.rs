@@ -59,7 +59,9 @@ fn compile_exits_cleanly_on_empty_collection() {
     let dir = TempDir::new().unwrap();
     let cfg = make_test_config(dir.path());
     std::env::remove_var("OPENAI_API_KEY");
-    fs::write(dir.path().join("index.jsonl"), "").unwrap();
+    let bo_dir = dir.path().join(".bo");
+    fs::create_dir_all(&bo_dir).unwrap();
+    fs::write(bo_dir.join("index.jsonl"), "").unwrap();
     let result = cmd_compile(&cfg);
     assert!(result.is_ok());
 }
@@ -68,8 +70,10 @@ fn compile_exits_cleanly_on_empty_collection() {
 #[serial]
 fn compile_exits_cleanly_on_single_leaf() {
     let dir = TempDir::new().unwrap();
+    let bo_dir = dir.path().join(".bo");
+    fs::create_dir_all(&bo_dir).unwrap();
     fs::write(
-        dir.path().join("index.jsonl"),
+        bo_dir.join("index.jsonl"),
         r#"{"file":"only.md","title":"Only","url":"https://example.com"}"#,
     )
     .unwrap();
@@ -83,7 +87,9 @@ fn compile_exits_cleanly_on_single_leaf() {
 #[serial]
 fn compile_errors_without_api_key() {
     let dir = TempDir::new().unwrap();
-    let index_path = dir.path().join("index.jsonl");
+    let bo_dir = dir.path().join(".bo");
+    fs::create_dir_all(&bo_dir).unwrap();
+    let index_path = bo_dir.join("index.jsonl");
     // Write two valid leaves so we pass the guard
     fs::write(
         &index_path,
