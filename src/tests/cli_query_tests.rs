@@ -55,6 +55,54 @@ fn extract_unicode_possessive() {
     assert_eq!(terms, vec!["rust", "ownership"]);
 }
 
+// ── query error metadata tests ───────────────────────────────────────
+
+#[test]
+fn no_answer_errors_expose_codes_exit_codes_next_steps_and_details() {
+    let cases = vec![
+        (QueryError::EmptyTree, "empty_tree"),
+        (QueryError::NoResults, "no_results"),
+        (
+            QueryError::LowRelevance {
+                reason: LowRelevanceReason::WeakMatches,
+                matched_sources: 2,
+            },
+            "low_relevance",
+        ),
+        (
+            QueryError::InsufficientSources {
+                leaves_consulted: 3,
+            },
+            "insufficient_sources",
+        ),
+    ];
+
+    for (error, code) in cases {
+        assert_eq!(error.code(), code);
+        assert_eq!(error.exit_code(), 1);
+        assert!(error.next_step().is_some(), "{error:?} missing next step");
+        assert!(
+            error.details().get("next_step").is_some(),
+            "{error:?} missing JSON next_step"
+        );
+    }
+}
+
+#[test]
+fn low_relevance_details_include_reason_and_matched_sources() {
+    let error = QueryError::LowRelevance {
+        reason: LowRelevanceReason::GenericQuery,
+        matched_sources: 8,
+    };
+
+    let details = error.details();
+
+    assert_eq!(error.code(), "low_relevance");
+    assert_eq!(details["reason"], "generic_query");
+    assert_eq!(details["matched_sources"], 8);
+    assert!(details["next_step"].as_str().unwrap().contains("specific"));
+}
+
 // ── retrieval tests ──────────────────────────────────────────────────
 
 fn make_leaf(
@@ -221,6 +269,36 @@ fn retrieve_missing_summary_uses_body_fallback() {
     assert!(results[0].summary.contains("Rust programming"));
 }
 
+#[test]
+fn diagnostics_use_token_matches_not_substrings() {
+    let terms = vec!["rust".to_string()];
+    let diagnostics = compute_retrieval_diagnostics(
+        "Trust Building",
+        "Trustworthy teams",
+        "A trust exercise",
+        &terms,
+    );
+
+    assert_eq!(diagnostics.total_hits, 0);
+    assert_eq!(diagnostics.matched_terms, 0);
+}
+
+#[test]
+fn diagnostics_capture_focused_title_and_summary_matches() {
+    let terms = vec!["rust".to_string(), "safety".to_string()];
+    let diagnostics = compute_retrieval_diagnostics(
+        "Rust Safety",
+        "Rust ownership safety",
+        "Memory safety without a garbage collector",
+        &terms,
+    );
+
+    assert_eq!(diagnostics.matched_terms, 2);
+    assert_eq!(diagnostics.title_hits, 2);
+    assert_eq!(diagnostics.summary_hits, 2);
+    assert_eq!(diagnostics.matched_non_generic_terms, 2);
+}
+
 // ── helper tests ─────────────────────────────────────────────────────
 
 #[test]
@@ -241,6 +319,7 @@ fn retrieved_leaf(slug: &str) -> RetrievedLeaf {
         summary: "summary".to_string(),
         body: "body".to_string(),
         score: 1.0,
+        diagnostics: RetrievalDiagnostics::default(),
     }
 }
 
@@ -269,6 +348,7 @@ fn validate_strips_invalid_citations() {
         summary: "summary".to_string(),
         body: "body".to_string(),
         score: 1.0,
+        diagnostics: RetrievalDiagnostics::default(),
     }];
 
     let response = SynthesisResponse {
@@ -379,6 +459,7 @@ fn validate_preserves_all_valid_citations() {
             summary: "s".to_string(),
             body: "b".to_string(),
             score: 1.0,
+            diagnostics: RetrievalDiagnostics::default(),
         },
         RetrievedLeaf {
             slug: "leaf-b".to_string(),
@@ -388,6 +469,7 @@ fn validate_preserves_all_valid_citations() {
             summary: "s".to_string(),
             body: "b".to_string(),
             score: 0.5,
+            diagnostics: RetrievalDiagnostics::default(),
         },
     ];
 
@@ -470,11 +552,16 @@ impl LlmProvider for CountingProvider {
 
 #[test]
 fn unknown_model_fails_before_provider_invocation() {
-    let dir = TempDir::new().unwrap();
+    let dir = single_leaf_query_tree();
     let provider = CountingProvider::new();
 
-    let err =
-        run_with_provider(dir.path(), "what is rust", &provider, "unknown-model").unwrap_err();
+    let err = run_with_provider(
+        dir.path(),
+        "what is rust safety",
+        &provider,
+        "unknown-model",
+    )
+    .unwrap_err();
 
     assert!(matches!(err, QueryError::UnknownModelContext { .. }));
     assert_eq!(provider.calls(), 0);
@@ -665,6 +752,110 @@ fn query_content_filter_finish_reason_fails_before_parse() {
     assert!(matches!(err, QueryError::ContentFilter));
 }
 
+#[test]
+fn weak_incidental_match_returns_low_relevance_before_provider_call() {
+    let dir = TempDir::new().unwrap();
+    make_leaf(
+        dir.path(),
+        "trust.md",
+        "Trust Building",
+        "https://example.com/trust",
+        Some("Trustworthy teams"),
+        "Trust grows slowly through repeated collaboration.",
+    );
+    make_index(
+        dir.path(),
+        &[(
+            "leaves/trust.md",
+            "Trust Building",
+            "https://example.com/trust",
+        )],
+    );
+    let provider = CountingProvider::new();
+
+    let err = run_with_provider(dir.path(), "rust", &provider, "gpt-4o").unwrap_err();
+
+    match err {
+        QueryError::LowRelevance {
+            reason,
+            matched_sources,
+        } => {
+            assert_eq!(reason, LowRelevanceReason::WeakMatches);
+            assert_eq!(matched_sources, 1);
+        }
+        other => panic!("expected weak-match low relevance, got: {other:?}"),
+    }
+    assert_eq!(provider.calls(), 0);
+}
+
+#[test]
+fn generic_query_returns_low_relevance_before_provider_call() {
+    let dir = TempDir::new().unwrap();
+    make_leaf(
+        dir.path(),
+        "one.md",
+        "First Notes",
+        "https://example.com/one",
+        Some("Misc notes"),
+        "Important systems use patterns in daily work.",
+    );
+    make_leaf(
+        dir.path(),
+        "two.md",
+        "Second Notes",
+        "https://example.com/two",
+        Some("Misc notes"),
+        "Patterns across systems are important for teams.",
+    );
+    make_index(
+        dir.path(),
+        &[
+            ("leaves/one.md", "First Notes", "https://example.com/one"),
+            ("leaves/two.md", "Second Notes", "https://example.com/two"),
+        ],
+    );
+    let provider = CountingProvider::new();
+
+    let err = run_with_provider(
+        dir.path(),
+        "important systems patterns",
+        &provider,
+        "gpt-4o",
+    )
+    .unwrap_err();
+
+    match err {
+        QueryError::LowRelevance {
+            reason,
+            matched_sources,
+        } => {
+            assert_eq!(reason, LowRelevanceReason::GenericQuery);
+            assert_eq!(matched_sources, 2);
+        }
+        other => panic!("expected generic-query low relevance, got: {other:?}"),
+    }
+    assert_eq!(provider.calls(), 0);
+}
+
+#[test]
+fn answerable_one_source_query_invokes_provider_and_succeeds() {
+    let dir = single_leaf_query_tree();
+    let provider = FlakyQueryProvider::new(0, FinishReason::Stop);
+
+    let result = run_with_provider_and_policy(
+        dir.path(),
+        "what is rust safety",
+        &provider,
+        "gpt-4o",
+        short_query_policy(1),
+    )
+    .unwrap();
+
+    assert_eq!(provider.calls(), 1);
+    assert_eq!(result.citations.len(), 1);
+    assert_eq!(result.citations[0].slug, "only-leaf");
+}
+
 // ── context assembly tests ───────────────────────────────────────────
 
 #[test]
@@ -678,6 +869,7 @@ fn assemble_respects_depth_limit() {
             summary: "Short summary.".to_string(),
             body: "Some body content here.".to_string(),
             score: 10.0 - i as f64,
+            diagnostics: RetrievalDiagnostics::default(),
         })
         .collect();
 
@@ -707,6 +899,7 @@ fn assemble_truncates_on_word_budget() {
         summary: "Summary.".to_string(),
         body: big_body,
         score: 10.0,
+        diagnostics: RetrievalDiagnostics::default(),
     }];
 
     let (context, consulted) = assemble_context(&leaves, test_budget_words);

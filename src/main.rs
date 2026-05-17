@@ -11,6 +11,7 @@ use bo::cli::show::{self, ShowOptions};
 use bo::cli::status;
 use bo::engine::auth;
 use bo::engine::config::{self, ConfigError, SeededConfig};
+use bo::engine::llm::{LlmProvider, OpenAiProvider};
 use clap::{error::ErrorKind as ClapErrorKind, Parser, Subcommand};
 use serde::Serialize;
 use serde_json::json;
@@ -492,8 +493,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                     if json {
                         emit_json_error("query", json_error, Vec::new(), stdout, exit_code)
                     } else {
-                        let _ = writeln!(stderr, "error: {}", error);
-                        exit_code
+                        render_query_error_human(&error, stderr, exit_code)
                     }
                 }
             }
@@ -652,6 +652,24 @@ fn write_human_or_error<E: Write>(result: io::Result<()>, _stderr: &mut E) -> i3
         Ok(()) => 0,
         Err(_) => 1,
     }
+}
+
+fn render_query_error_human<E: Write>(
+    error: &query::QueryError,
+    stderr: &mut E,
+    exit_code: i32,
+) -> i32 {
+    if writeln!(stderr, "error: {}", error).is_err() {
+        return 1;
+    }
+
+    if let Some(next_step) = error.next_step() {
+        if writeln!(stderr, "next step: {}", next_step).is_err() {
+            return 1;
+        }
+    }
+
+    exit_code
 }
 
 // ── command execution ────────────────────────────────────────────────────────
@@ -813,33 +831,29 @@ fn execute_query(question: &str) -> Result<query::QueryResult, query::QueryError
         query::QueryError::NoProvider(format!("{}. Cannot query without a configured tree.", e))
     })?;
 
-    let api_key = auth::resolve_openai_api_key(&auth::auth_path())
-        .map_err(|error| query::QueryError::NoProvider(error.to_string()))?;
+    execute_query_with_provider_resolver(&cfg, question, || {
+        let api_key = auth::resolve_openai_api_key(&auth::auth_path())
+            .map_err(|error| query::QueryError::NoProvider(error.to_string()))?;
+        Ok(Box::new(OpenAiProvider::new(api_key.api_key.as_str())) as Box<dyn LlmProvider>)
+    })
+}
 
+fn execute_query_with_provider_resolver<F>(
+    cfg: &SeededConfig,
+    question: &str,
+    resolve_provider: F,
+) -> Result<query::QueryResult, query::QueryError>
+where
+    F: FnOnce() -> Result<Box<dyn LlmProvider>, query::QueryError>,
+{
     let model = cfg.effective_model().to_string();
-    query::run(
-        &cfg.tree.output_dir,
-        question,
-        api_key.api_key.as_str(),
-        &model,
-    )
+    let prepared = query::prepare(&cfg.tree.output_dir, question, &model)?;
+    let provider = resolve_provider()?;
+    query::run_prepared_with_provider(prepared, provider.as_ref())
 }
 
 fn query_json_error(error: &query::QueryError) -> JsonError {
-    let code = match error {
-        query::QueryError::NoProvider(_) => "no_provider",
-        query::QueryError::NoTerms => "no_terms",
-        query::QueryError::NoResults => "no_results",
-        query::QueryError::EmptyTree => "empty_tree",
-        query::QueryError::Io(_) => "io_error",
-        query::QueryError::UnknownModelContext { .. } => "unknown_model_context",
-        query::QueryError::ContextBudgetExhausted { .. } => "context_budget_exhausted",
-        query::QueryError::Truncated | query::QueryError::ContentFilter => "llm_error",
-        query::QueryError::Llm(_) => "llm_error",
-        query::QueryError::Parse(_) => "parse_error",
-        query::QueryError::InsufficientSources { .. } => "insufficient_sources",
-    };
-    JsonError::new(code, error.to_string())
+    JsonError::with_details(error.code(), error.to_string(), error.details())
 }
 
 // ── human rendering ──────────────────────────────────────────────────────────

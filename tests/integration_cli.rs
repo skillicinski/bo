@@ -1097,7 +1097,7 @@ fn config_auth_json_unknown_provider_lists_valid_providers() {
 // ── query auth ──────────────────────────────────────────────────────────────
 
 #[test]
-fn query_without_auth_points_to_config_auth() {
+fn query_empty_tree_reports_no_sources_before_auth() {
     let home = TempDir::new().unwrap();
     let tree = home.path().join("my-tree");
     let seeded = seed(home.path(), &tree);
@@ -1109,10 +1109,15 @@ fn query_without_auth_points_to_config_auth() {
         .output()
         .expect("failed to run bo query");
 
-    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("OpenAI API key not configured. Run: bo config auth --provider openai"),
+        stderr.contains("no sources collected yet"),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains("next step:"), "stderr: {stderr}");
+    assert!(
+        !stderr.contains("OpenAI API key not configured"),
         "stderr: {stderr}"
     );
 }
