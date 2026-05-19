@@ -39,17 +39,31 @@ fn status_json(home: &Path) -> Output {
 
 fn write_leaf(tree_dir: &Path, slug: &str, url: &str) {
     let filename = format!("{}.md", slug);
+    let collected_at = "2026-05-14T10:00:00Z";
     let content = format!(
-        "---\ntitle: \"{slug}\"\nurl: {url}\ncollected_at: 2026-05-14T10:00:00Z\nupdated_at: 2026-05-14T10:00:00Z\n---\n\n# {slug}\n\nContent for {slug}.\n"
+        "---\ntitle: \"{slug}\"\nurl: {url}\ncollected_at: {collected_at}\nupdated_at: {collected_at}\n---\n\n# {slug}\n\nContent for {slug}.\n"
     );
     fs::write(tree_dir.join(&filename), content).unwrap();
 
-    // Append to index
+    // Append to index (kept for parity assertions; the manifest is canonical).
     let index_path = tree_dir.join(".bo/index.jsonl");
     let entry = format!("{{\"file\":\"{filename}\",\"title\":\"{slug}\",\"url\":\"{url}\"}}\n");
     let mut existing = fs::read_to_string(&index_path).unwrap_or_default();
     existing.push_str(&entry);
-    fs::write(index_path, existing).unwrap();
+    fs::write(&index_path, existing).unwrap();
+
+    // Append to manifest so manifest-driven reads see the leaf.
+    let manifest_path = tree_dir.join(".bo/manifest.json");
+    let mut m = bo::domain::manifest::read(&manifest_path).unwrap();
+    m.leaves.push(bo::domain::manifest::LeafRecord {
+        slug: slug.to_string(),
+        file: filename,
+        title: slug.to_string(),
+        url: url.to_string(),
+        collected_at: collected_at.to_string(),
+        summary: None,
+    });
+    bo::domain::manifest::write(&manifest_path, &m).unwrap();
 }
 
 fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
@@ -59,6 +73,21 @@ fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
         "---\ntitle: \"{slug}\"\ncreated_at: {created_at}\nupdated_at: {created_at}\nleaves:\n  - some-leaf\n---\n\n# {slug}\n\nBranch body.\n"
     );
     fs::write(branches_dir.join(format!("{}.md", slug)), content).unwrap();
+
+    // Append to manifest.
+    let manifest_path = tree_dir.join(".bo/manifest.json");
+    let mut m = bo::domain::manifest::read(&manifest_path).unwrap();
+    m.branches.push(bo::domain::manifest::BranchRecord {
+        slug: slug.to_string(),
+        file: format!("branches/{}.md", slug),
+        title: slug.to_string(),
+        created_at: created_at.to_string(),
+        updated_at: created_at.to_string(),
+        stale: false,
+        leaves: vec!["some-leaf".to_string()],
+    });
+    m.tree.last_compiled_at = Some(created_at.to_string());
+    bo::domain::manifest::write(&manifest_path, &m).unwrap();
 }
 
 fn write_state(tree_dir: &Path, slugs: &[&str], timestamp: &str) {

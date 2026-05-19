@@ -1,7 +1,5 @@
 use super::*;
-use crate::domain::index::IndexEntry;
-use crate::engine::state::{self, TreeState};
-use std::collections::HashMap;
+use crate::domain::manifest::{self, BranchRecord, LeafRecord, Manifest, TreeMeta};
 use std::fs;
 use tempfile::TempDir;
 
@@ -12,32 +10,50 @@ fn setup_tree(dir: &Path) {
     fs::create_dir_all(&bo_dir).unwrap();
 }
 
-fn write_index(dir: &Path, entries: &[IndexEntry]) {
-    let index_path = dir.join(".bo/index.jsonl");
-    let lines: Vec<String> = entries
-        .iter()
-        .map(|e| serde_json::to_string(e).unwrap())
-        .collect();
-    fs::write(index_path, lines.join("\n") + "\n").unwrap();
+fn write_manifest(dir: &Path, leaves: &[LeafRecord], branches: &[BranchRecord], last_compiled_at: Option<&str>) {
+    fs::create_dir_all(dir.join(".bo")).unwrap();
+    let m = Manifest {
+        tree: TreeMeta {
+            name: "test".to_string(),
+            created_at: "2026-05-14T09:00:00Z".to_string(),
+            last_compiled_at: last_compiled_at.map(str::to_string),
+        },
+        leaves: leaves.to_vec(),
+        branches: branches.to_vec(),
+    };
+    manifest::write(&dir.join(".bo/manifest.json"), &m).unwrap();
 }
 
-fn write_leaf(dir: &Path, filename: &str, url: &str) {
+fn leaf(slug: &str, url: &str, collected_at: &str) -> LeafRecord {
+    LeafRecord {
+        slug: slug.to_string(),
+        file: format!("{}.md", slug),
+        title: slug.to_string(),
+        url: url.to_string(),
+        collected_at: collected_at.to_string(),
+        summary: None,
+    }
+}
+
+fn branch_record(slug: &str, ts: &str, leaf_slugs: &[&str]) -> BranchRecord {
+    BranchRecord {
+        slug: slug.to_string(),
+        file: format!("branches/{}.md", slug),
+        title: slug.to_string(),
+        created_at: ts.to_string(),
+        updated_at: ts.to_string(),
+        stale: false,
+        leaves: leaf_slugs.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+fn write_leaf_file(dir: &Path, filename: &str, url: &str) {
     let content = format!(
         "---\ntitle: \"{}\"\nurl: {}\ncollected_at: 2026-05-14T10:00:00Z\nupdated_at: 2026-05-14T10:00:00Z\n---\n\n# Test\n\nBody content here.\n",
         filename.trim_end_matches(".md"),
         url
     );
     fs::write(dir.join(filename), content).unwrap();
-}
-
-fn write_branch(dir: &Path, slug: &str, created_at: &str) {
-    let branches_dir = dir.join("branches");
-    fs::create_dir_all(&branches_dir).unwrap();
-    let content = format!(
-        "---\ntitle: \"{}\"\ncreated_at: {}\nupdated_at: {}\nleaves:\n  - some-leaf\n---\n\n# {}\n\nBranch body.\n",
-        slug, created_at, created_at, slug
-    );
-    fs::write(branches_dir.join(format!("{}.md", slug)), content).unwrap();
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -62,27 +78,19 @@ fn uncompiled_leaves_detected() {
     let dir = TempDir::new().unwrap();
     setup_tree(dir.path());
 
-    let entries = vec![
-        IndexEntry {
-            file: "a.md".to_string(),
-            title: "A".to_string(),
-            url: "https://a.com".to_string(),
-        },
-        IndexEntry {
-            file: "b.md".to_string(),
-            title: "B".to_string(),
-            url: "https://b.com".to_string(),
-        },
-        IndexEntry {
-            file: "c.md".to_string(),
-            title: "C".to_string(),
-            url: "https://c.com".to_string(),
-        },
-    ];
-    write_index(dir.path(), &entries);
-    write_leaf(dir.path(), "a.md", "https://a.com");
-    write_leaf(dir.path(), "b.md", "https://b.com");
-    write_leaf(dir.path(), "c.md", "https://c.com");
+    write_manifest(
+        dir.path(),
+        &[
+            leaf("a", "https://a.com", "2026-05-14T10:00:00Z"),
+            leaf("b", "https://b.com", "2026-05-14T10:00:00Z"),
+            leaf("c", "https://c.com", "2026-05-14T10:00:00Z"),
+        ],
+        &[],
+        None, // never compiled → all uncompiled
+    );
+    write_leaf_file(dir.path(), "a.md", "https://a.com");
+    write_leaf_file(dir.path(), "b.md", "https://b.com");
+    write_leaf_file(dir.path(), "c.md", "https://c.com");
 
     let result = compute_status(dir.path(), "test").unwrap();
 
@@ -97,29 +105,19 @@ fn compiled_leaves_not_flagged() {
     let dir = TempDir::new().unwrap();
     setup_tree(dir.path());
 
-    let entries = vec![
-        IndexEntry {
-            file: "a.md".to_string(),
-            title: "A".to_string(),
-            url: "https://a.com".to_string(),
-        },
-        IndexEntry {
-            file: "b.md".to_string(),
-            title: "B".to_string(),
-            url: "https://b.com".to_string(),
-        },
-    ];
-    write_index(dir.path(), &entries);
-    write_leaf(dir.path(), "a.md", "https://a.com");
-    write_leaf(dir.path(), "b.md", "https://b.com");
-
-    // Mark 'a' as compiled in state
-    let mut compiled = HashMap::new();
-    compiled.insert("a".to_string(), "2026-05-14T10:00:00Z".to_string());
-    let tree_state = TreeState {
-        compiled_leaves: compiled,
-    };
-    state::write_state(&dir.path().join(".bo/state.json"), &tree_state).unwrap();
+    // 'a' was collected before last_compiled_at → compiled.
+    // 'b' was collected after  → uncompiled.
+    write_manifest(
+        dir.path(),
+        &[
+            leaf("a", "https://a.com", "2026-05-14T08:00:00Z"),
+            leaf("b", "https://b.com", "2026-05-14T12:00:00Z"),
+        ],
+        &[],
+        Some("2026-05-14T10:00:00Z"),
+    );
+    write_leaf_file(dir.path(), "a.md", "https://a.com");
+    write_leaf_file(dir.path(), "b.md", "https://b.com");
 
     let result = compute_status(dir.path(), "test").unwrap();
 
@@ -132,10 +130,15 @@ fn compiled_leaves_not_flagged() {
 fn branch_count_and_last_compiled() {
     let dir = TempDir::new().unwrap();
     setup_tree(dir.path());
-    write_index(dir.path(), &[]);
-
-    write_branch(dir.path(), "branch-one", "2026-05-13T10:00:00Z");
-    write_branch(dir.path(), "branch-two", "2026-05-14T20:00:00Z");
+    write_manifest(
+        dir.path(),
+        &[],
+        &[
+            branch_record("branch-one", "2026-05-13T10:00:00Z", &[]),
+            branch_record("branch-two", "2026-05-14T20:00:00Z", &[]),
+        ],
+        Some("2026-05-14T20:00:00Z"),
+    );
 
     let result = compute_status(dir.path(), "test").unwrap();
 
@@ -147,24 +150,20 @@ fn branch_count_and_last_compiled() {
 }
 
 #[test]
-fn orphan_index_entry_detected() {
+fn orphan_manifest_entry_detected() {
     let dir = TempDir::new().unwrap();
     setup_tree(dir.path());
 
-    let entries = vec![
-        IndexEntry {
-            file: "exists.md".to_string(),
-            title: "Exists".to_string(),
-            url: "https://e.com".to_string(),
-        },
-        IndexEntry {
-            file: "gone.md".to_string(),
-            title: "Gone".to_string(),
-            url: "https://g.com".to_string(),
-        },
-    ];
-    write_index(dir.path(), &entries);
-    write_leaf(dir.path(), "exists.md", "https://e.com");
+    write_manifest(
+        dir.path(),
+        &[
+            leaf("exists", "https://e.com", "2026-05-14T10:00:00Z"),
+            leaf("gone", "https://g.com", "2026-05-14T10:00:00Z"),
+        ],
+        &[],
+        None,
+    );
+    write_leaf_file(dir.path(), "exists.md", "https://e.com");
     // Don't create gone.md
 
     let result = compute_status(dir.path(), "test").unwrap();
@@ -178,10 +177,10 @@ fn orphan_index_entry_detected() {
 fn missing_from_index_detected() {
     let dir = TempDir::new().unwrap();
     setup_tree(dir.path());
-    write_index(dir.path(), &[]);
+    write_manifest(dir.path(), &[], &[], None);
 
-    // Create a leaf file that's not in the index
-    write_leaf(dir.path(), "orphan-leaf.md", "https://orphan.com");
+    // Create a leaf file that's not in the manifest
+    write_leaf_file(dir.path(), "orphan-leaf.md", "https://orphan.com");
 
     let result = compute_status(dir.path(), "test").unwrap();
 
@@ -194,7 +193,7 @@ fn missing_from_index_detected() {
 fn non_leaf_md_not_flagged_as_missing() {
     let dir = TempDir::new().unwrap();
     setup_tree(dir.path());
-    write_index(dir.path(), &[]);
+    write_manifest(dir.path(), &[], &[], None);
 
     // Create a non-leaf .md file (no url: in frontmatter)
     fs::write(
@@ -212,9 +211,8 @@ fn non_leaf_md_not_flagged_as_missing() {
 fn size_computed_correctly() {
     let dir = TempDir::new().unwrap();
     setup_tree(dir.path());
-    write_index(dir.path(), &[]);
+    write_manifest(dir.path(), &[], &[], None);
 
-    // Write a known-size leaf
     let content = "x".repeat(400);
     fs::write(dir.path().join("test.md"), &content).unwrap();
 
@@ -229,13 +227,13 @@ fn single_uncompiled_leaf_produces_correct_result() {
     let dir = TempDir::new().unwrap();
     setup_tree(dir.path());
 
-    let entries = vec![IndexEntry {
-        file: "a.md".to_string(),
-        title: "A".to_string(),
-        url: "https://a.com".to_string(),
-    }];
-    write_index(dir.path(), &entries);
-    write_leaf(dir.path(), "a.md", "https://a.com");
+    write_manifest(
+        dir.path(),
+        &[leaf("a", "https://a.com", "2026-05-14T10:00:00Z")],
+        &[],
+        None,
+    );
+    write_leaf_file(dir.path(), "a.md", "https://a.com");
 
     let result = compute_status(dir.path(), "my-research").unwrap();
 
