@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 use std::time::SystemTime;
 use tempfile::TempDir;
 
+use crate::domain::manifest::{self, BranchRecord, LeafRecord, Manifest, TreeMeta};
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct FileSnapshot {
     len: u64,
@@ -20,38 +22,25 @@ fn empty_index_returns_empty_result() {
 }
 
 #[test]
-fn default_order_follows_index_order() {
+fn default_order_follows_collection_order() {
     let dir = TempDir::new().unwrap();
-    write_index(
+    write_manifest(
         dir.path(),
         &[
-            ("second.md", "Second Index Title"),
-            ("first.md", "First Index Title"),
-            ("third.md", "Third Index Title"),
+            leaf("second", "Second Leaf", "2025-01-02T00:00:00Z"),
+            leaf("first", "First Leaf", "2025-01-01T00:00:00Z"),
+            leaf("third", "Third Leaf", "2025-01-03T00:00:00Z"),
         ],
+        &[],
     );
-    write_leaf(
-        dir.path(),
-        "second.md",
-        "title: Second Leaf\ncollected_at: 2025-01-02T00:00:00Z\n",
-    );
-    write_leaf(
-        dir.path(),
-        "first.md",
-        "title: First Leaf\ncollected_at: 2025-01-01T00:00:00Z\n",
-    );
-    write_leaf(
-        dir.path(),
-        "third.md",
-        "title: Third Leaf\ncollected_at: 2025-01-03T00:00:00Z\n",
-    );
+    write_leaf_files(dir.path(), &["second", "first", "third"]);
 
     let result = list_leaves(dir.path(), &ListOptions::default()).unwrap();
 
-    assert_eq!(result.total_index_entries, 3);
     assert_eq!(
         files(&result.leaves),
-        vec!["second.md", "first.md", "third.md"]
+        vec!["second.md", "first.md", "third.md"],
+        "leaves preserve manifest insertion order"
     );
     assert_eq!(index_positions(&result.leaves), vec![0, 1, 2]);
 }
@@ -61,27 +50,42 @@ fn suspicious_path_is_degraded_and_never_read() {
     let sandbox = TempDir::new().unwrap();
     let tree_dir = sandbox.path().join("tree");
     fs::create_dir_all(&tree_dir).unwrap();
-    write_index(&tree_dir, &[("../outside.md", "Index Title")]);
+    // LeafRecord.file traverses out of the tree.
+    write_manifest(
+        &tree_dir,
+        &[LeafRecord {
+            slug: "outside".to_string(),
+            file: "../outside.md".to_string(),
+            title: "Outside Title".to_string(),
+            url: "https://example.com/outside".to_string(),
+            collected_at: "2025-01-01T00:00:00Z".to_string(),
+            summary: None,
+        }],
+        &[],
+    );
     fs::write(
         sandbox.path().join("outside.md"),
-        "---\ntitle: Outside Title\ncollected_at: 2025-01-01T00:00:00Z\n---\n\noutside\n",
+        "doesn't matter, list won't read me\n",
     )
     .unwrap();
 
     let result = list_leaves(&tree_dir, &ListOptions::default()).unwrap();
     let row = &result.leaves[0];
 
-    assert_eq!(row.display_title, "Index Title");
+    assert_eq!(row.display_title, "Outside Title");
     assert!(row.degraded);
     assert_eq!(row.degradation_reasons, vec!["suspicious path"]);
-    assert!(row.collected_at.is_none());
-    assert!(row.branches.is_empty());
 }
 
 #[test]
 fn missing_file_yields_degraded_row() {
     let dir = TempDir::new().unwrap();
-    write_index(dir.path(), &[("missing.md", "Index Title")]);
+    write_manifest(
+        dir.path(),
+        &[leaf("missing", "Index Title", "2025-01-01T00:00:00Z")],
+        &[],
+    );
+    // Note: no leaf .md file written.
 
     let result = list_leaves(dir.path(), &ListOptions::default()).unwrap();
     let row = &result.leaves[0];
@@ -93,81 +97,33 @@ fn missing_file_yields_degraded_row() {
 }
 
 #[test]
-fn invalid_frontmatter_yields_degraded_row_with_fallback_title() {
+fn display_title_falls_back_to_filename_when_manifest_title_empty() {
     let dir = TempDir::new().unwrap();
-    write_index(dir.path(), &[("broken.md", "Index Title")]);
-    write_raw_file(
-        dir.path(),
-        "broken.md",
-        "---\n: invalid: yaml\n---\n\nbody\n",
-    );
-
-    let result = list_leaves(dir.path(), &ListOptions::default()).unwrap();
-    let row = &result.leaves[0];
-
-    assert_eq!(row.display_title, "Index Title");
-    assert!(row.degraded);
-    assert_eq!(row.degradation_reasons, vec!["invalid frontmatter"]);
-    assert!(row.collected_at.is_none());
-    assert!(row.branches.is_empty());
-}
-
-#[test]
-fn display_title_falls_back_leaf_then_index_then_filename() {
-    let dir = TempDir::new().unwrap();
-    write_index(
+    write_manifest(
         dir.path(),
         &[
-            ("leaf-title.md", "Index Title 1"),
-            ("index-title.md", "Index Title 2"),
-            ("filename-only.md", ""),
+            leaf("with-title", "Has Title", "2025-01-01T00:00:00Z"),
+            leaf("filename-only", "", "2025-01-02T00:00:00Z"),
         ],
+        &[],
     );
-    write_leaf(
-        dir.path(),
-        "leaf-title.md",
-        "title: Leaf Title\ncollected_at: 2025-01-01T00:00:00Z\n",
-    );
-    write_leaf(
-        dir.path(),
-        "index-title.md",
-        "title: \"\"\ncollected_at: 2025-01-02T00:00:00Z\n",
-    );
-    write_leaf(
-        dir.path(),
-        "filename-only.md",
-        "title: \"\"\ncollected_at: 2025-01-03T00:00:00Z\n",
-    );
+    write_leaf_files(dir.path(), &["with-title", "filename-only"]);
 
     let result = list_leaves(dir.path(), &ListOptions::default()).unwrap();
 
-    assert_eq!(result.leaves[0].display_title, "Leaf Title");
-    assert_eq!(result.leaves[1].display_title, "Index Title 2");
-    assert_eq!(result.leaves[2].display_title, "filename-only");
+    assert_eq!(result.leaves[0].display_title, "Has Title");
+    assert_eq!(result.leaves[1].display_title, "filename-only");
 }
 
 #[test]
-fn collected_at_valid_missing_and_invalid_are_handled() {
+fn collected_at_is_taken_directly_from_manifest() {
     let dir = TempDir::new().unwrap();
-    write_index(
+    write_manifest(
         dir.path(),
-        &[
-            ("valid.md", "Valid"),
-            ("missing.md", "Missing"),
-            ("invalid.md", "Invalid"),
-        ],
+        &[leaf("only", "Only", "2025-06-01T10:00:00Z")],
+        &[],
     );
-    write_leaf(
-        dir.path(),
-        "valid.md",
-        "title: Valid\ncollected_at: 2025-06-01T10:00:00Z\n",
-    );
-    write_leaf(dir.path(), "missing.md", "title: Missing\n");
-    write_leaf(
-        dir.path(),
-        "invalid.md",
-        "title: Invalid\ncollected_at: not-a-date\n",
-    );
+    write_leaf_files(dir.path(), &["only"]);
 
     let result = list_leaves(dir.path(), &ListOptions::default()).unwrap();
 
@@ -176,119 +132,49 @@ fn collected_at_valid_missing_and_invalid_are_handled() {
         Some("2025-06-01T10:00:00Z")
     );
     assert!(!result.leaves[0].degraded);
-
-    assert!(result.leaves[1].collected_at.is_none());
-    assert!(result.leaves[1].degraded);
-    assert_eq!(
-        result.leaves[1].degradation_reasons,
-        vec!["missing collected_at"]
-    );
-
-    assert!(result.leaves[2].collected_at.is_none());
-    assert!(result.leaves[2].degraded);
-    assert_eq!(
-        result.leaves[2].degradation_reasons,
-        vec!["invalid collected_at"]
-    );
 }
 
 #[test]
-fn branches_are_normalized_and_invalid_shapes_degrade() {
+fn branches_for_leaf_come_from_manifest_inverse() {
     let dir = TempDir::new().unwrap();
-    write_index(
+    write_manifest(
         dir.path(),
         &[
-            ("missing-branches.md", "Missing Branches"),
-            ("empty-branches.md", "Empty Branches"),
-            ("string-branches.md", "String Branches"),
-            ("mixed-branches.md", "Mixed Branches"),
-            ("scalar-branches.md", "Scalar Branches"),
+            leaf("alpha", "Alpha", "2025-01-01T00:00:00Z"),
+            leaf("beta", "Beta", "2025-01-01T00:00:00Z"),
+            leaf("orphan", "Orphan", "2025-01-01T00:00:00Z"),
         ],
+        &[("topic-x", &["alpha", "beta"]), ("topic-y", &["beta"])],
     );
-    write_leaf(
-        dir.path(),
-        "missing-branches.md",
-        "title: Missing Branches\ncollected_at: 2025-01-01T00:00:00Z\n",
-    );
-    write_leaf(
-        dir.path(),
-        "empty-branches.md",
-        "title: Empty Branches\ncollected_at: 2025-01-01T00:00:00Z\nbranches: []\n",
-    );
-    write_leaf(
-        dir.path(),
-        "string-branches.md",
-        "title: String Branches\ncollected_at: 2025-01-01T00:00:00Z\nbranches:\n  - branch_a\n  - branch_b\n",
-    );
-    write_leaf(
-        dir.path(),
-        "mixed-branches.md",
-        "title: Mixed Branches\ncollected_at: 2025-01-01T00:00:00Z\nbranches:\n  - branch_a\n  - 7\n  - branch_b\n",
-    );
-    write_leaf(
-        dir.path(),
-        "scalar-branches.md",
-        "title: Scalar Branches\ncollected_at: 2025-01-01T00:00:00Z\nbranches: nope\n",
-    );
+    write_leaf_files(dir.path(), &["alpha", "beta", "orphan"]);
 
     let result = list_leaves(dir.path(), &ListOptions::default()).unwrap();
 
-    assert!(result.leaves[0].branches.is_empty());
-    assert!(!result.leaves[0].degraded);
-
-    assert!(result.leaves[1].branches.is_empty());
-    assert!(!result.leaves[1].degraded);
-
+    assert_eq!(result.leaves[0].branches, vec!["topic-x".to_string()]);
     assert_eq!(
-        result.leaves[2].branches,
-        vec!["branch_a".to_string(), "branch_b".to_string()]
+        result.leaves[1].branches,
+        vec!["topic-x".to_string(), "topic-y".to_string()]
     );
-    assert!(!result.leaves[2].degraded);
-
-    assert_eq!(
-        result.leaves[3].branches,
-        vec!["branch_a".to_string(), "branch_b".to_string()]
-    );
-    assert!(result.leaves[3].degraded);
-    assert_eq!(
-        result.leaves[3].degradation_reasons,
-        vec!["invalid branches"]
-    );
-
-    assert!(result.leaves[4].branches.is_empty());
-    assert!(result.leaves[4].degraded);
-    assert_eq!(
-        result.leaves[4].degradation_reasons,
-        vec!["invalid branches"]
-    );
+    assert!(result.leaves[2].branches.is_empty());
 }
 
 #[test]
 fn branch_filter_is_exact() {
     let dir = TempDir::new().unwrap();
-    write_index(
+    write_manifest(
         dir.path(),
         &[
-            ("exact.md", "Exact"),
-            ("partial.md", "Partial"),
-            ("second-exact.md", "Second Exact"),
+            leaf("exact", "Exact", "2025-01-01T00:00:00Z"),
+            leaf("partial", "Partial", "2025-01-01T00:00:00Z"),
+            leaf("second-exact", "Second Exact", "2025-01-01T00:00:00Z"),
+        ],
+        &[
+            ("rust", &["exact", "second-exact"]),
+            ("rustacean", &["partial"]),
+            ("systems", &["second-exact"]),
         ],
     );
-    write_leaf(
-        dir.path(),
-        "exact.md",
-        "title: Exact\ncollected_at: 2025-01-01T00:00:00Z\nbranches:\n  - rust\n",
-    );
-    write_leaf(
-        dir.path(),
-        "partial.md",
-        "title: Partial\ncollected_at: 2025-01-01T00:00:00Z\nbranches:\n  - rustacean\n",
-    );
-    write_leaf(
-        dir.path(),
-        "second-exact.md",
-        "title: Second Exact\ncollected_at: 2025-01-01T00:00:00Z\nbranches:\n  - systems\n  - rust\n",
-    );
+    write_leaf_files(dir.path(), &["exact", "partial", "second-exact"]);
 
     let result = list_leaves(
         dir.path(),
@@ -305,12 +191,12 @@ fn branch_filter_is_exact() {
 #[test]
 fn branch_filter_can_return_no_matches() {
     let dir = TempDir::new().unwrap();
-    write_index(dir.path(), &[("only.md", "Only")]);
-    write_leaf(
+    write_manifest(
         dir.path(),
-        "only.md",
-        "title: Only\ncollected_at: 2025-01-01T00:00:00Z\nbranches:\n  - rust\n",
+        &[leaf("only", "Only", "2025-01-01T00:00:00Z")],
+        &[("rust", &["only"])],
     );
+    write_leaf_files(dir.path(), &["only"]);
 
     let result = list_leaves(
         dir.path(),
@@ -329,36 +215,20 @@ fn branch_filter_can_return_no_matches() {
 #[test]
 fn recent_sorting_puts_valid_dates_first_and_preserves_index_ties() {
     let dir = TempDir::new().unwrap();
-    write_index(
+    write_manifest(
         dir.path(),
         &[
-            ("old-a.md", "Old A"),
-            ("missing.md", "Missing"),
-            ("newest.md", "Newest"),
-            ("invalid.md", "Invalid"),
-            ("old-b.md", "Old B"),
+            leaf("old-a", "Old A", "2025-01-01T00:00:00Z"),
+            leaf("missing-ts", "Missing", ""),
+            leaf("newest", "Newest", "2025-02-01T00:00:00Z"),
+            leaf("invalid", "Invalid", "not-a-date"),
+            leaf("old-b", "Old B", "2025-01-01T00:00:00Z"),
         ],
+        &[],
     );
-    write_leaf(
+    write_leaf_files(
         dir.path(),
-        "old-a.md",
-        "title: Old A\ncollected_at: 2025-01-01T00:00:00Z\n",
-    );
-    write_leaf(dir.path(), "missing.md", "title: Missing\n");
-    write_leaf(
-        dir.path(),
-        "newest.md",
-        "title: Newest\ncollected_at: 2025-02-01T00:00:00Z\n",
-    );
-    write_leaf(
-        dir.path(),
-        "invalid.md",
-        "title: Invalid\ncollected_at: not-a-date\n",
-    );
-    write_leaf(
-        dir.path(),
-        "old-b.md",
-        "title: Old B\ncollected_at: 2025-01-01T00:00:00Z\n",
+        &["old-a", "missing-ts", "newest", "invalid", "old-b"],
     );
 
     let result = list_leaves(
@@ -376,8 +246,8 @@ fn recent_sorting_puts_valid_dates_first_and_preserves_index_ties() {
             "newest.md",
             "old-a.md",
             "old-b.md",
-            "missing.md",
-            "invalid.md"
+            "missing-ts.md",
+            "invalid.md",
         ]
     );
 }
@@ -385,35 +255,20 @@ fn recent_sorting_puts_valid_dates_first_and_preserves_index_ties() {
 #[test]
 fn limit_is_applied_after_filtering_and_sorting() {
     let dir = TempDir::new().unwrap();
-    write_index(
+    write_manifest(
         dir.path(),
         &[
-            ("mid.md", "Mid"),
-            ("ignored.md", "Ignored"),
-            ("newest.md", "Newest"),
-            ("oldest.md", "Oldest"),
+            leaf("mid", "Mid", "2025-01-02T00:00:00Z"),
+            leaf("ignored", "Ignored", "2025-01-04T00:00:00Z"),
+            leaf("newest", "Newest", "2025-01-03T00:00:00Z"),
+            leaf("oldest", "Oldest", "2025-01-01T00:00:00Z"),
+        ],
+        &[
+            ("keep", &["mid", "newest", "oldest"]),
+            ("skip", &["ignored"]),
         ],
     );
-    write_leaf(
-        dir.path(),
-        "mid.md",
-        "title: Mid\ncollected_at: 2025-01-02T00:00:00Z\nbranches:\n  - keep\n",
-    );
-    write_leaf(
-        dir.path(),
-        "ignored.md",
-        "title: Ignored\ncollected_at: 2025-01-04T00:00:00Z\nbranches:\n  - skip\n",
-    );
-    write_leaf(
-        dir.path(),
-        "newest.md",
-        "title: Newest\ncollected_at: 2025-01-03T00:00:00Z\nbranches:\n  - keep\n",
-    );
-    write_leaf(
-        dir.path(),
-        "oldest.md",
-        "title: Oldest\ncollected_at: 2025-01-01T00:00:00Z\nbranches:\n  - keep\n",
-    );
+    write_leaf_files(dir.path(), &["mid", "ignored", "newest", "oldest"]);
 
     let result = list_leaves(
         dir.path(),
@@ -431,17 +286,24 @@ fn limit_is_applied_after_filtering_and_sorting() {
 #[test]
 fn list_leaves_is_read_only() {
     let dir = TempDir::new().unwrap();
-    write_index(dir.path(), &[("one.md", "One"), ("nested/two.md", "Two")]);
-    write_leaf(
+    write_manifest(
         dir.path(),
-        "one.md",
-        "title: One\ncollected_at: 2025-01-01T00:00:00Z\nbranches:\n  - branch_a\n",
+        &[
+            leaf("one", "One", "2025-01-01T00:00:00Z"),
+            LeafRecord {
+                slug: "two".to_string(),
+                file: "nested/two.md".to_string(),
+                title: "Two".to_string(),
+                url: "https://example.com/two".to_string(),
+                collected_at: "2025-01-02T00:00:00Z".to_string(),
+                summary: None,
+            },
+        ],
+        &[("branch_a", &["one"])],
     );
-    write_leaf(
-        dir.path(),
-        "nested/two.md",
-        "title: Two\ncollected_at: 2025-01-02T00:00:00Z\nbranches: []\n",
-    );
+    write_leaf_files(dir.path(), &["one"]);
+    fs::create_dir_all(dir.path().join("nested")).unwrap();
+    fs::write(dir.path().join("nested/two.md"), "body\n").unwrap();
 
     let before = snapshot_tree(dir.path());
     let _ = list_leaves(
@@ -535,7 +397,7 @@ fn render_json_is_pretty_parseable_and_omits_index_position() {
             Some("2025-06-01T10:00:00Z"),
             &["branch_a"],
             true,
-            &["invalid branches"],
+            &["missing file"],
             7,
         )],
         total_index_entries: 1,
@@ -552,44 +414,58 @@ fn render_json_is_pretty_parseable_and_omits_index_position() {
     assert_eq!(row["collected_at"], "2025-06-01T10:00:00Z");
     assert_eq!(row["branches"][0], "branch_a");
     assert_eq!(row["degraded"], true);
-    assert_eq!(row["degradation_reasons"][0], "invalid branches");
+    assert_eq!(row["degradation_reasons"][0], "missing file");
     assert!(row.get("index_position").is_none());
     assert!(parsed.get("leaves").is_some());
 }
 
-fn write_index(tree_dir: &Path, entries: &[(&str, &str)]) {
-    let lines = entries
-        .iter()
-        .map(|(file, title)| {
-            serde_json::json!({
-                "file": file,
-                "title": title,
-                "url": format!("https://example.com/{file}"),
-            })
-            .to_string()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+// ── helpers ──────────────────────────────────────────────────────────────────
 
-    let bo_dir = tree_dir.join(".bo");
-    fs::create_dir_all(&bo_dir).unwrap();
-    fs::write(bo_dir.join("index.jsonl"), format!("{lines}\n")).unwrap();
-}
-
-fn write_leaf(tree_dir: &Path, relative_path: &str, yaml_fields: &str) {
-    write_raw_file(
-        tree_dir,
-        relative_path,
-        &format!("---\n{yaml_fields}---\n\nbody\n"),
-    );
-}
-
-fn write_raw_file(tree_dir: &Path, relative_path: &str, contents: &str) {
-    let path = tree_dir.join(relative_path);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).unwrap();
+fn leaf(slug: &str, title: &str, collected_at: &str) -> LeafRecord {
+    LeafRecord {
+        slug: slug.to_string(),
+        file: format!("{}.md", slug),
+        title: title.to_string(),
+        url: format!("https://example.com/{slug}"),
+        collected_at: collected_at.to_string(),
+        summary: None,
     }
-    fs::write(path, contents).unwrap();
+}
+
+fn write_manifest(tree_dir: &Path, leaves: &[LeafRecord], branches: &[(&str, &[&str])]) {
+    fs::create_dir_all(tree_dir.join(".bo")).unwrap();
+    let branch_records: Vec<BranchRecord> = branches
+        .iter()
+        .map(|(slug, leaf_slugs)| BranchRecord {
+            slug: slug.to_string(),
+            file: format!("branches/{}.md", slug),
+            title: slug.to_string(),
+            created_at: "2025-01-01T00:00:00Z".to_string(),
+            updated_at: "2025-01-01T00:00:00Z".to_string(),
+            stale: false,
+            leaves: leaf_slugs.iter().map(|s| s.to_string()).collect(),
+        })
+        .collect();
+    let m = Manifest {
+        tree: TreeMeta {
+            name: "test".to_string(),
+            created_at: "2025-01-01T00:00:00Z".to_string(),
+            last_compiled_at: None,
+        },
+        leaves: leaves.to_vec(),
+        branches: branch_records,
+    };
+    manifest::write(&tree_dir.join(".bo/manifest.json"), &m).unwrap();
+}
+
+fn write_leaf_files(tree_dir: &Path, slugs: &[&str]) {
+    for slug in slugs {
+        fs::write(
+            tree_dir.join(format!("{}.md", slug)),
+            "---\ntitle: x\n---\n\nbody\n",
+        )
+        .unwrap();
+    }
 }
 
 fn files(rows: &[ListLeafRow]) -> Vec<&str> {
@@ -653,7 +529,7 @@ fn collect_snapshots(root: &Path, dir: &Path, snapshot: &mut BTreeMap<String, Fi
             FileSnapshot {
                 len: metadata.len(),
                 modified: metadata.modified().ok(),
-                contents: fs::read_to_string(&path).unwrap(),
+                contents: fs::read_to_string(&path).unwrap_or_default(),
             },
         );
     }

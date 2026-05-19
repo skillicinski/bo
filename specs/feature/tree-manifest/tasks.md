@@ -24,7 +24,7 @@ Each task is one focused session. Each follows test-first authoring within itsel
 
 ## Phase 5: Read migration (simplest-first)
 
-- [ ] **T5.1 — `bo list` reads from manifest.** Update tests in `src/tests/cli_list_tests.rs` to set up the fixture using manifest writes (or rely on T4.* coverage). Modify `src/cli/list.rs` to consume `Manifest::leaves` (`&[LeafRecord]`) instead of `read_index(...)`. Per-leaf branch membership comes from `Manifest::branches_for_leaf` rather than the leaf's frontmatter `branches:` field. Remove the `IndexEntry` import and any conversions. Existing list tests pass against the new code path. Done when: list source no longer references `index::*`; list tests green.
+- [x] **T5.1 — `bo list` reads from manifest.** Update tests in `src/tests/cli_list_tests.rs` to set up the fixture using manifest writes (or rely on T4.* coverage). Modify `src/cli/list.rs` to consume `Manifest::leaves` (`&[LeafRecord]`) instead of `read_index(...)`. Per-leaf branch membership comes from `Manifest::branches_for_leaf` rather than the leaf's frontmatter `branches:` field. Remove the `IndexEntry` import and any conversions. Existing list tests pass against the new code path. Done when: list source no longer references `index::*`; list tests green.
 
 - [ ] **T5.2 — `bo show` reads from manifest.** Extend tests in `src/tests/cli_show_tests.rs` covering: show by title returns the same content as before. Modify `src/cli/show.rs` to use `manifest::read` and iterate `Manifest::leaves` (consuming `LeafRecord` directly) instead of `read_index`. Show remains leaf-only — branches are not in scope for this task. Done when: show tests pass; show source no longer references `index::*`.
 

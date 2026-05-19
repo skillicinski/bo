@@ -247,6 +247,7 @@ fn list_error_code(error: &list::ListError) -> &'static str {
     match error {
         list::ListError::Io(_) => "io_error",
         list::ListError::Json(_) => "json_error",
+        list::ListError::Manifest(_) => "manifest_error",
     }
 }
 

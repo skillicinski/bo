@@ -1,13 +1,12 @@
 // bo list — deterministic tree inspection for collected leaves.
 
-use crate::domain::{frontmatter, index, tree};
+use crate::domain::manifest::{self, LeafRecord, Manifest};
+use crate::domain::tree::Tree;
 use chrono::{DateTime, FixedOffset};
 use serde::Serialize;
-use serde_yaml_ng::{Mapping, Value};
 use std::cmp::Ordering;
 use std::fmt;
 use std::fs;
-use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 
 // ── public types ─────────────────────────────────────────────────────────────
@@ -43,6 +42,7 @@ pub struct ListResult {
 pub enum ListError {
     Io(std::io::Error),
     Json(serde_json::Error),
+    Manifest(manifest::ManifestError),
 }
 
 impl fmt::Display for ListError {
@@ -50,6 +50,7 @@ impl fmt::Display for ListError {
         match self {
             ListError::Io(e) => write!(f, "I/O error: {}", e),
             ListError::Json(e) => write!(f, "JSON error: {}", e),
+            ListError::Manifest(e) => write!(f, "{}", e),
         }
     }
 }
@@ -66,26 +67,40 @@ impl From<serde_json::Error> for ListError {
     }
 }
 
+impl From<manifest::ManifestError> for ListError {
+    fn from(e: manifest::ManifestError) -> Self {
+        ListError::Manifest(e)
+    }
+}
+
 // ── list ─────────────────────────────────────────────────────────────────────
 
 pub fn list_leaves(tree_dir: &Path, options: &ListOptions) -> Result<ListResult, ListError> {
-    let index_path = tree::index_path(tree_dir);
-    let entries = index::read_index(&index_path)?;
-    let total_index_entries = entries.len();
+    let tree = Tree {
+        name: None,
+        created_at: None,
+        output_dir: tree_dir.to_path_buf(),
+    };
+    let m = match manifest::read_or_reconstruct(&tree) {
+        Ok(m) => m,
+        Err(manifest::ManifestError::TreeNotInitialized) => {
+            return Ok(ListResult {
+                leaves: Vec::new(),
+                total_index_entries: 0,
+                branch_filter: options.branch.clone(),
+            });
+        }
+        Err(e) => return Err(ListError::Manifest(e)),
+    };
+    let total_index_entries = m.leaves.len();
     let canonical_tree_dir = fs::canonicalize(tree_dir).ok();
 
-    let mut leaves = entries
+    let mut leaves: Vec<ListLeafRow> = m
+        .leaves
         .iter()
         .enumerate()
-        .map(|(index_position, entry)| {
-            build_row(
-                tree_dir,
-                canonical_tree_dir.as_deref(),
-                entry,
-                index_position,
-            )
-        })
-        .collect::<Vec<_>>();
+        .map(|(i, leaf)| build_row(tree_dir, canonical_tree_dir.as_deref(), leaf, &m, i))
+        .collect();
 
     if let Some(branch) = &options.branch {
         leaves.retain(|row| row.branches.iter().any(|candidate| candidate == branch));
@@ -109,20 +124,41 @@ pub fn list_leaves(tree_dir: &Path, options: &ListOptions) -> Result<ListResult,
 fn build_row(
     tree_dir: &Path,
     canonical_tree_dir: Option<&Path>,
-    entry: &index::IndexEntry,
+    leaf: &LeafRecord,
+    manifest: &Manifest,
     index_position: usize,
 ) -> ListLeafRow {
+    let display_title = if leaf.title.trim().is_empty() {
+        filename_fallback(&leaf.file)
+    } else {
+        leaf.title.clone()
+    };
+    let collected_at = if leaf.collected_at.trim().is_empty() {
+        None
+    } else {
+        Some(leaf.collected_at.clone())
+    };
+    let branches: Vec<String> = manifest
+        .branches_for_leaf(&leaf.slug)
+        .iter()
+        .map(|b| b.slug.clone())
+        .collect();
+
     let mut row = ListLeafRow {
-        file: entry.file.clone(),
-        display_title: fallback_display_title(None, &entry.title, &entry.file),
-        collected_at: None,
-        branches: Vec::new(),
+        file: leaf.file.clone(),
+        display_title,
+        collected_at,
+        branches,
         degraded: false,
         degradation_reasons: Vec::new(),
         index_position,
     };
 
-    let path = match resolve_leaf_path(tree_dir, canonical_tree_dir, &entry.file) {
+    // Path safety + file-existence checks remain the only degradation signals
+    // post-manifest. Frontmatter-derived issues are obsolete; if invalid data
+    // ever reached the manifest, it indicates a writer bug, not a runtime
+    // condition list should soft-handle.
+    let path = match resolve_leaf_path(tree_dir, canonical_tree_dir, &leaf.file) {
         Ok(path) => path,
         Err(reason) => {
             push_degradation_reason(&mut row, reason);
@@ -130,38 +166,8 @@ fn build_row(
         }
     };
 
-    let content = match fs::read_to_string(&path) {
-        Ok(content) => content,
-        Err(e) if e.kind() == ErrorKind::NotFound => {
-            push_degradation_reason(&mut row, "missing file");
-            return row;
-        }
-        Err(_) => {
-            push_degradation_reason(&mut row, "unreadable file");
-            return row;
-        }
-    };
-
-    let mapping = match frontmatter::parse(&content) {
-        Ok((mapping, _)) => mapping,
-        Err(_) => {
-            push_degradation_reason(&mut row, "invalid frontmatter");
-            return row;
-        }
-    };
-
-    row.display_title =
-        fallback_display_title(frontmatter_title(&mapping), &entry.title, &entry.file);
-
-    match extract_collected_at(&mapping) {
-        Ok(value) => row.collected_at = value,
-        Err(reason) => push_degradation_reason(&mut row, reason),
-    }
-
-    let (branches, branch_reason) = extract_branches(&mapping);
-    row.branches = branches;
-    if let Some(reason) = branch_reason {
-        push_degradation_reason(&mut row, reason);
+    if !path.exists() {
+        push_degradation_reason(&mut row, "missing file");
     }
 
     row
@@ -214,25 +220,6 @@ fn has_disallowed_components(path: &Path) -> bool {
         .any(|component| matches!(component, Component::ParentDir))
 }
 
-fn frontmatter_title(mapping: &Mapping) -> Option<&str> {
-    mapping
-        .get("title")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|title| !title.is_empty())
-}
-
-fn fallback_display_title(leaf_title: Option<&str>, index_title: &str, file: &str) -> String {
-    leaf_title
-        .filter(|title| !title.trim().is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            let trimmed = index_title.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_string())
-        })
-        .unwrap_or_else(|| filename_fallback(file))
-}
-
 fn filename_fallback(file: &str) -> String {
     let path = Path::new(file);
 
@@ -247,41 +234,6 @@ fn filename_fallback(file: &str) -> String {
                 .map(str::to_string)
         })
         .unwrap_or_else(|| file.to_string())
-}
-
-fn extract_collected_at(mapping: &Mapping) -> Result<Option<String>, &'static str> {
-    let value = mapping.get("collected_at").ok_or("missing collected_at")?;
-    let raw = value.as_str().ok_or("invalid collected_at")?.trim();
-
-    if raw.is_empty() {
-        return Err("invalid collected_at");
-    }
-
-    DateTime::parse_from_rfc3339(raw)
-        .map(|_| Some(raw.to_string()))
-        .map_err(|_| "invalid collected_at")
-}
-
-fn extract_branches(mapping: &Mapping) -> (Vec<String>, Option<&'static str>) {
-    let Some(value) = mapping.get("branches") else {
-        return (Vec::new(), None);
-    };
-
-    let Some(sequence) = value.as_sequence() else {
-        return (Vec::new(), Some("invalid branches"));
-    };
-
-    let mut branches = Vec::new();
-    let mut invalid = false;
-
-    for item in sequence {
-        match item.as_str() {
-            Some(branch) => branches.push(branch.to_string()),
-            None => invalid = true,
-        }
-    }
-
-    (branches, invalid.then_some("invalid branches"))
 }
 
 fn push_degradation_reason(row: &mut ListLeafRow, reason: &'static str) {
