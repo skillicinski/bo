@@ -1,4 +1,5 @@
 use super::*;
+use crate::domain::manifest;
 use std::fs;
 use tempfile::TempDir;
 
@@ -493,4 +494,106 @@ fn near_duplicate_urls_both_stored() {
 
     let entries = index::read_index(&dir.path().join(".bo/index.jsonl")).unwrap();
     assert_eq!(entries.len(), 2);
+}
+
+// ── manifest dual-write (T4.2) ────────────────────────────────────────────────────
+//
+// These tests bypass `collect_html` (which calls `summary::generate` and so
+// requires real OpenAI auth) by invoking the post-extraction pipeline
+// `write_new_document_with_summary_result` with a synthetic `Ok` summary.
+
+fn seed_for_collect(dir: &TempDir, name: &str) {
+    use crate::domain::manifest::TreeMeta;
+    fs::create_dir_all(dir.path().join(".bo")).unwrap();
+    let manifest_path = dir.path().join(".bo/manifest.json");
+    let m = manifest::Manifest {
+        tree: TreeMeta {
+            name: name.to_string(),
+            created_at: "2026-05-19T12:00:00Z".to_string(),
+            last_compiled_at: None,
+        },
+        leaves: Vec::new(),
+        branches: Vec::new(),
+    };
+    manifest::write(&manifest_path, &m).unwrap();
+}
+
+#[test]
+fn collect_appends_leaf_record_to_manifest_with_full_metadata() {
+    let dir = TempDir::new().unwrap();
+    seed_for_collect(&dir, "manifest-collect-tree");
+
+    let doc = write_new_document_with_summary_result(
+        "https://example.com/article",
+        Some("Test Article"),
+        "Substantial body about a topic.",
+        dir.path(),
+        Ok("A summary of the article.".to_string()),
+    )
+    .unwrap();
+
+    let manifest_path = dir.path().join(".bo/manifest.json");
+    let m = manifest::read(&manifest_path).unwrap();
+    assert_eq!(m.leaves.len(), 1);
+    let rec = &m.leaves[0];
+    assert_eq!(rec.slug, doc.filename.strip_suffix(".md").unwrap());
+    assert_eq!(rec.file, doc.filename);
+    assert_eq!(rec.title, "Test Article");
+    assert_eq!(rec.url, "https://example.com/article");
+    assert!(
+        rec.collected_at.contains('T'),
+        "collected_at iso8601: {}",
+        rec.collected_at
+    );
+    assert_eq!(rec.summary.as_deref(), Some("A summary of the article."));
+    // Tree metadata preserved across the dual-write.
+    assert_eq!(m.tree.name, "manifest-collect-tree");
+    assert!(m.tree.last_compiled_at.is_none());
+}
+
+#[test]
+fn collect_dual_write_keeps_manifest_and_index_in_parity() {
+    let dir = TempDir::new().unwrap();
+    seed_for_collect(&dir, "parity-tree");
+
+    for n in 1..=3 {
+        let url = format!("https://example.com/page{n}");
+        write_new_document_with_summary_result(
+            &url,
+            Some(&format!("Page {n}")),
+            &format!("Body for page {n}."),
+            dir.path(),
+            Ok(format!("Summary {n}")),
+        )
+        .unwrap();
+    }
+
+    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let entries = index::read_index(&dir.path().join(".bo/index.jsonl")).unwrap();
+
+    assert_eq!(m.leaves.len(), 3);
+    assert_eq!(entries.len(), 3);
+    for (rec, entry) in m.leaves.iter().zip(entries.iter()) {
+        assert_eq!(rec.file, entry.file);
+        assert_eq!(rec.url, entry.url);
+        assert_eq!(rec.title, entry.title);
+    }
+}
+
+#[test]
+fn collect_omits_summary_field_when_empty_string() {
+    let dir = TempDir::new().unwrap();
+    seed_for_collect(&dir, "empty-summary-tree");
+
+    write_new_document_with_summary_result(
+        "https://example.com/article",
+        Some("Article"),
+        "Body.",
+        dir.path(),
+        Ok(String::new()),
+    )
+    .unwrap();
+
+    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    assert!(m.leaves[0].summary.is_none());
 }

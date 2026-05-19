@@ -22,6 +22,8 @@ use std::fs;
 use std::path::Path;
 
 use crate::adapters::youtube::{self, YoutubeError, YoutubeUrlMatch};
+use crate::domain::manifest::{self, LeafRecord, Manifest, TreeMeta};
+use crate::domain::tree::Tree;
 use crate::domain::{index, leaf, slug, tree};
 use crate::engine::llm::models::DEFAULT_MODEL;
 use crate::engine::quality::RejectReason;
@@ -54,6 +56,7 @@ pub enum CollectError {
         reason: RejectReason,
     },
     Io(std::io::Error),
+    Manifest(manifest::ManifestError),
 }
 
 impl fmt::Display for CollectError {
@@ -70,6 +73,7 @@ impl fmt::Display for CollectError {
                 write!(f, "{} was not collected: {}", url, reason)
             }
             CollectError::Io(e) => write!(f, "I/O error: {}", e),
+            CollectError::Manifest(e) => write!(f, "{}", e),
         }
     }
 }
@@ -104,6 +108,12 @@ impl From<std::io::Error> for CollectError {
     }
 }
 
+impl From<manifest::ManifestError> for CollectError {
+    fn from(e: manifest::ManifestError) -> Self {
+        CollectError::Manifest(e)
+    }
+}
+
 pub fn error_code(error: &CollectError) -> &'static str {
     match error {
         CollectError::DuplicateUrl { .. } => "duplicate_url",
@@ -113,6 +123,7 @@ pub fn error_code(error: &CollectError) -> &'static str {
         CollectError::Youtube(_) => "youtube_error",
         CollectError::Summary(_) => "llm_error",
         CollectError::Io(_) => "io_error",
+        CollectError::Manifest(_) => "manifest_error",
     }
 }
 
@@ -629,6 +640,47 @@ fn write_new_document_with_summary_result(
         Some(&summary_text),
     )?;
 
+    // Primary write: manifest. Append the LeafRecord to the canonical roster.
+    // If the manifest is missing, recover from the secondary store; if the
+    // secondary store is also empty (truly fresh tree), bootstrap an empty
+    // manifest from the synthesised tree metadata.
+    let leaf_record = LeafRecord {
+        slug: filename.clone(),
+        file: format!("{}.md", filename),
+        title: title.unwrap_or_default().to_string(),
+        url: url.to_string(),
+        collected_at: now_str.clone(),
+        summary: if summary_text.is_empty() {
+            None
+        } else {
+            Some(summary_text.clone())
+        },
+    };
+    let synthetic_tree = Tree {
+        name: None,
+        created_at: None,
+        output_dir: output_dir.to_path_buf(),
+    };
+    let mut current = match manifest::read_or_reconstruct(&synthetic_tree) {
+        Ok(m) => m,
+        Err(manifest::ManifestError::TreeNotInitialized) => Manifest {
+            tree: TreeMeta {
+                name: output_dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "unnamed".to_string()),
+                created_at: now_str.clone(),
+                last_compiled_at: None,
+            },
+            leaves: Vec::new(),
+            branches: Vec::new(),
+        },
+        Err(e) => return Err(CollectError::Manifest(e)),
+    };
+    current.leaves.push(leaf_record);
+    manifest::write(&tree::manifest_path(output_dir), &current)?;
+
+    // Secondary write: index.jsonl. Removed in 3b.
     let entry = index::IndexEntry {
         file: format!("{}.md", filename),
         title: title.unwrap_or_default().to_string(),
