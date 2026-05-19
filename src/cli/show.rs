@@ -1,7 +1,7 @@
 // bo show — deterministic inspection for a single collected leaf.
 
-use crate::domain::index;
-use crate::domain::tree;
+use crate::domain::manifest::{self, LeafRecord};
+use crate::domain::tree::Tree;
 use serde::Serialize;
 use serde_yaml_ng::{Mapping, Value};
 use std::fmt;
@@ -43,6 +43,7 @@ pub struct ShowResult {
 pub enum ShowError {
     Io(io::Error),
     Json(serde_json::Error),
+    Manifest(manifest::ManifestError),
     NotFound {
         title: String,
     },
@@ -71,6 +72,7 @@ impl fmt::Display for ShowError {
         match self {
             ShowError::Io(e) => write!(f, "I/O error: {}", e),
             ShowError::Json(e) => write!(f, "JSON error: {}", e),
+            ShowError::Manifest(e) => write!(f, "{}", e),
             ShowError::NotFound { title } => write!(
                 f,
                 "leaf title '{title}' not found; run `bo list` to inspect available leaves"
@@ -128,16 +130,28 @@ pub fn show_leaf(
         });
     }
 
-    let index_path = tree::index_path(tree_dir);
-    let entries = index::read_index(&index_path)?;
+    let tree = Tree {
+        name: None,
+        created_at: None,
+        output_dir: tree_dir.to_path_buf(),
+    };
+    let manifest = match manifest::read_or_reconstruct(&tree) {
+        Ok(m) => m,
+        Err(manifest::ManifestError::TreeNotInitialized) => {
+            return Err(ShowError::NotFound {
+                title: title.to_string(),
+            });
+        }
+        Err(e) => return Err(ShowError::Manifest(e)),
+    };
     let canonical_tree_dir = fs::canonicalize(tree_dir).ok();
 
     let mut matches = Vec::new();
-    for entry in &entries {
-        match load_candidate(tree_dir, canonical_tree_dir.as_deref(), entry) {
-            CandidateLoad::Loaded(leaf) => {
-                if normalize_title(&leaf.summary.title) == requested_title {
-                    matches.push(MatchedCandidate::Loaded(leaf));
+    for leaf in &manifest.leaves {
+        match load_candidate(tree_dir, canonical_tree_dir.as_deref(), leaf) {
+            CandidateLoad::Loaded(loaded) => {
+                if normalize_title(&loaded.summary.title) == requested_title {
+                    matches.push(MatchedCandidate::Loaded(loaded));
                 }
             }
             CandidateLoad::Broken { summary, error } => {
@@ -166,24 +180,24 @@ pub fn show_leaf(
 fn load_candidate(
     tree_dir: &Path,
     canonical_tree_dir: Option<&Path>,
-    entry: &index::IndexEntry,
+    leaf: &LeafRecord,
 ) -> CandidateLoad {
-    let fallback_title = entry.title.trim().to_string();
-    let fallback_url = non_empty_trimmed(&entry.url);
+    let fallback_title = leaf.title.trim().to_string();
+    let fallback_url = non_empty_trimmed(&leaf.url);
     let unresolved_summary = ShowCandidateSummary {
-        file: entry.file.clone(),
+        file: leaf.file.clone(),
         title: fallback_title.clone(),
-        path: entry.file.clone(),
+        path: leaf.file.clone(),
         url: fallback_url.clone(),
     };
 
-    let path = match resolve_leaf_path(tree_dir, canonical_tree_dir, &entry.file) {
+    let path = match resolve_leaf_path(tree_dir, canonical_tree_dir, &leaf.file) {
         Ok(path) => path,
         Err(_) => {
             return CandidateLoad::Broken {
                 summary: unresolved_summary,
                 error: ShowError::SuspiciousPath {
-                    file: entry.file.clone(),
+                    file: leaf.file.clone(),
                 },
             };
         }
@@ -201,7 +215,7 @@ fn load_candidate(
             return CandidateLoad::Broken {
                 summary: fallback_summary,
                 error: ShowError::MissingFile {
-                    file: entry.file.clone(),
+                    file: leaf.file.clone(),
                 },
             };
         }
@@ -209,7 +223,7 @@ fn load_candidate(
             return CandidateLoad::Broken {
                 summary: fallback_summary,
                 error: ShowError::UnreadableFile {
-                    file: entry.file.clone(),
+                    file: leaf.file.clone(),
                     source: e,
                 },
             };
@@ -222,7 +236,7 @@ fn load_candidate(
             return CandidateLoad::Broken {
                 summary: fallback_summary,
                 error: ShowError::InvalidFrontmatter {
-                    file: entry.file.clone(),
+                    file: leaf.file.clone(),
                     reason,
                 },
             };
@@ -230,13 +244,13 @@ fn load_candidate(
     };
 
     let title = frontmatter_string(&document.frontmatter, "title")
-        .or_else(|| non_empty_trimmed(&entry.title))
+        .or_else(|| non_empty_trimmed(&leaf.title))
         .unwrap_or_default();
     let url = frontmatter_string(&document.frontmatter, "url").or(fallback_url);
 
     CandidateLoad::Loaded(LoadedLeaf {
         summary: ShowCandidateSummary {
-            file: entry.file.clone(),
+            file: leaf.file.clone(),
             title,
             path: path_string,
             url,

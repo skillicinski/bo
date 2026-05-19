@@ -283,21 +283,29 @@ fn fixture_result(body: &str, truncated: bool, full: bool) -> ShowResult {
 
 fn write_index(tree: &Path, entries: &[(&str, &str)]) {
     fs::create_dir_all(tree).unwrap();
-    let content = entries
+    let leaves: Vec<crate::domain::manifest::LeafRecord> = entries
         .iter()
-        .map(|(file, title)| {
-            serde_json::to_string(&index::IndexEntry {
-                file: (*file).to_string(),
-                title: (*title).to_string(),
-                url: format!("https://example.com/{}", file.trim_end_matches(".md")),
-            })
-            .unwrap()
+        .map(|(file, title)| crate::domain::manifest::LeafRecord {
+            slug: file.trim_end_matches(".md").to_string(),
+            file: (*file).to_string(),
+            title: (*title).to_string(),
+            url: format!("https://example.com/{}", file.trim_end_matches(".md")),
+            collected_at: "2025-01-01T00:00:00Z".to_string(),
+            summary: None,
         })
-        .collect::<Vec<_>>()
-        .join("\n");
+        .collect();
+    let m = crate::domain::manifest::Manifest {
+        tree: crate::domain::manifest::TreeMeta {
+            name: "test".to_string(),
+            created_at: "2025-01-01T00:00:00Z".to_string(),
+            last_compiled_at: None,
+        },
+        leaves,
+        branches: Vec::new(),
+    };
     let bo_dir = tree.join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    fs::write(bo_dir.join("index.jsonl"), format!("{content}\n")).unwrap();
+    crate::domain::manifest::write(&bo_dir.join("manifest.json"), &m).unwrap();
 }
 
 fn write_leaf(tree: &Path, file: &str, frontmatter_fields: &str, body: &str) {

@@ -270,6 +270,7 @@ fn show_json_error(error: &show::ShowError) -> JsonError {
         ),
         show::ShowError::Io(_) => JsonError::new("io_error", error.to_string()),
         show::ShowError::Json(_) => JsonError::new("json_error", error.to_string()),
+        show::ShowError::Manifest(_) => JsonError::new("manifest_error", error.to_string()),
         show::ShowError::SuspiciousPath { file }
         | show::ShowError::MissingFile { file }
         | show::ShowError::InvalidFrontmatter { file, .. } => JsonError::with_details(
