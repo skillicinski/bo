@@ -178,6 +178,11 @@ impl CliError {
             CliError::Usage { exit_code, .. } => *exit_code,
             CliError::ConfigAuth(error) => error.exit_code(),
             CliError::ConfigCommand(error) => error.exit_code(),
+            CliError::Collect(CollectError::Pending(bo::engine::pending::PendingError::Busy {
+                ..
+            }))
+            | CliError::Compile(CompileError::Busy(_))
+            | CliError::Raze(raze::RazeError::Busy(_)) => 2,
             _ => 1,
         }
     }
@@ -301,6 +306,7 @@ fn compile_json_error(error: &CompileError) -> JsonError {
         CompileError::ContentFilter => JsonError::new("content_filter", error.to_string()),
         CompileError::Llm(_) => JsonError::new("llm_error", error.to_string()),
         CompileError::Io(_) => JsonError::new("io_error", error.to_string()),
+        CompileError::Busy(_) => JsonError::new("tree_busy", error.to_string()),
         CompileError::Validation(message) => JsonError::with_details(
             "validation_error",
             message.clone(),

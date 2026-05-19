@@ -372,12 +372,14 @@ fn search_no_results() {
 #[test]
 fn search_skips_missing_files() {
     let dir = TempDir::new().unwrap();
-    // Write index referencing a file that doesn't exist
-    let index_content = r#"{"file":"exists.md","title":"Exists","url":"https://example.com/exists"}
-{"file":"missing.md","title":"Missing","url":"https://example.com/missing"}"#;
-    let bo_dir = dir.path().join(".bo");
-    fs::create_dir_all(&bo_dir).unwrap();
-    fs::write(bo_dir.join("index.jsonl"), index_content).unwrap();
+    // Write manifest referencing a file that doesn't exist
+    write_manifest(
+        dir.path(),
+        vec![
+            manifest_leaf("exists.md", "Exists", "2025-01-01T00:00:00Z"),
+            manifest_leaf("missing.md", "Missing", "2025-01-01T00:00:00Z"),
+        ],
+    );
     write_leaf_file(
         dir.path(),
         "exists.md",
@@ -524,38 +526,32 @@ fn query(terms: &[&str]) -> SearchQuery {
 
 fn setup_tree(leaves: &[(&str, &str, &str)]) -> TempDir {
     let dir = TempDir::new().unwrap();
-    let mut index_lines = Vec::new();
+    let manifest_leaves: Vec<_> = leaves
+        .iter()
+        .map(|(file, title, _body)| manifest_leaf(file, title, "2025-01-01T00:00:00Z"))
+        .collect();
 
     for (file, title, body) in leaves {
         write_leaf_file(dir.path(), file, title, body, "2025-01-01T00:00:00Z");
-        index_lines.push(format!(
-            r#"{{"file":"{}","title":"{}","url":"https://example.com/{}"}}"#,
-            file, title, file
-        ));
     }
 
-    let bo_dir = dir.path().join(".bo");
-    fs::create_dir_all(&bo_dir).unwrap();
-    fs::write(bo_dir.join("index.jsonl"), index_lines.join("\n") + "\n").unwrap();
+    write_manifest(dir.path(), manifest_leaves);
 
     dir
 }
 
 fn setup_tree_with_dates(leaves: &[(&str, &str, &str, &str)]) -> TempDir {
     let dir = TempDir::new().unwrap();
-    let mut index_lines = Vec::new();
+    let manifest_leaves: Vec<_> = leaves
+        .iter()
+        .map(|(file, title, _body, date)| manifest_leaf(file, title, date))
+        .collect();
 
     for (file, title, body, date) in leaves {
         write_leaf_file(dir.path(), file, title, body, date);
-        index_lines.push(format!(
-            r#"{{"file":"{}","title":"{}","url":"https://example.com/{}"}}"#,
-            file, title, file
-        ));
     }
 
-    let bo_dir = dir.path().join(".bo");
-    fs::create_dir_all(&bo_dir).unwrap();
-    fs::write(bo_dir.join("index.jsonl"), index_lines.join("\n") + "\n").unwrap();
+    write_manifest(dir.path(), manifest_leaves);
 
     dir
 }
@@ -571,6 +567,35 @@ fn make_many_leaves(count: usize, term: &str) -> Vec<(&'static str, &'static str
             (file, title, body)
         })
         .collect()
+}
+
+fn write_manifest(tree_dir: &Path, leaves: Vec<crate::domain::manifest::LeafRecord>) {
+    let bo_dir = tree_dir.join(".bo");
+    fs::create_dir_all(&bo_dir).unwrap();
+    crate::domain::manifest::write(
+        &bo_dir.join("manifest.json"),
+        &crate::domain::manifest::Manifest {
+            tree: crate::domain::manifest::TreeMeta {
+                name: "search".to_string(),
+                created_at: "2025-01-01T00:00:00Z".to_string(),
+                last_compiled_at: None,
+            },
+            leaves,
+            branches: Vec::new(),
+        },
+    )
+    .unwrap();
+}
+
+fn manifest_leaf(file: &str, title: &str, date: &str) -> crate::domain::manifest::LeafRecord {
+    crate::domain::manifest::LeafRecord {
+        slug: file.trim_end_matches(".md").to_string(),
+        file: file.to_string(),
+        title: title.to_string(),
+        url: format!("https://example.com/{file}"),
+        collected_at: date.to_string(),
+        summary: None,
+    }
 }
 
 fn write_leaf_file(tree_dir: &Path, file: &str, title: &str, body: &str, date: &str) {

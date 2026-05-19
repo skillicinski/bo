@@ -314,64 +314,32 @@ fn read_or_reconstruct_returns_existing_manifest_when_present() {
 }
 
 #[test]
-fn read_or_reconstruct_rebuilds_from_secondary_when_manifest_absent() {
+fn read_or_reconstruct_does_not_rebuild_from_secondary_when_manifest_absent() {
     let dir = TempDir::new().unwrap();
     write_secondary_tree(dir.path());
     let tree = fixture_tree(&dir);
 
     let mut warner = Vec::new();
-    let m = read_or_reconstruct_into(&tree, &mut warner).unwrap();
+    let err = read_or_reconstruct_into(&tree, &mut warner).unwrap_err();
 
-    assert_eq!(m.tree.name, "fixture");
-    assert_eq!(m.tree.created_at, "2026-05-19T13:00:00Z");
-    assert_eq!(m.leaves.len(), 3);
-    assert_eq!(m.branches.len(), 2);
-
-    // Cross-references intact.
-    let topic_x = m.branch_by_slug("topic-x").unwrap();
-    assert_eq!(topic_x.leaves, vec!["alpha", "beta"]);
-    let topic_y = m.branch_by_slug("topic-y").unwrap();
-    assert_eq!(topic_y.leaves, vec!["beta"]);
-
-    // last_compiled_at = max(branch.updated_at).
-    assert_eq!(
-        m.tree.last_compiled_at.as_deref(),
-        Some("2026-05-19T15:30:00Z")
-    );
-
-    // Leaf metadata round-trips from frontmatter.
-    let alpha = m.leaf_by_slug("alpha").unwrap();
-    assert_eq!(alpha.title, "Alpha");
-    assert_eq!(alpha.url, "https://example.com/a");
-    assert_eq!(alpha.collected_at, "2026-05-19T14:00:00Z");
-    assert_eq!(alpha.summary.as_deref(), Some("sum-alpha"));
-    let beta = m.leaf_by_slug("beta").unwrap();
-    assert!(beta.summary.is_none(), "beta has no summary in fixture");
-
-    // Stderr warning emitted.
-    let warning = String::from_utf8(warner).unwrap();
-    assert!(
-        warning.contains("manifest missing; reconstructed from secondary store"),
-        "unexpected warning: {warning}"
-    );
+    assert!(matches!(err, ManifestError::TreeNotInitialized));
+    assert!(!tree.manifest_path().exists());
+    assert!(warner.is_empty());
 }
 
 #[test]
-fn read_or_reconstruct_persists_reconstructed_manifest() {
+fn read_or_reconstruct_does_not_persist_when_manifest_absent() {
     let dir = TempDir::new().unwrap();
     write_secondary_tree(dir.path());
     let tree = fixture_tree(&dir);
 
     assert!(!tree.manifest_path().exists());
     let mut warner = Vec::new();
-    let first = read_or_reconstruct_into(&tree, &mut warner).unwrap();
-    assert!(tree.manifest_path().exists(), "manifest persisted to disk");
+    let err = read_or_reconstruct_into(&tree, &mut warner).unwrap_err();
 
-    // Second call returns the persisted manifest without warning.
-    let mut warner2 = Vec::new();
-    let second = read_or_reconstruct_into(&tree, &mut warner2).unwrap();
-    assert_eq!(first, second);
-    assert!(warner2.is_empty());
+    assert!(matches!(err, ManifestError::TreeNotInitialized));
+    assert!(!tree.manifest_path().exists());
+    assert!(warner.is_empty());
 }
 
 #[test]
@@ -409,7 +377,7 @@ fn read_or_reconstruct_propagates_parse_error_without_reconstructing() {
 }
 
 #[test]
-fn reconstruction_falls_back_to_dir_basename_when_tree_name_missing() {
+fn missing_manifest_does_not_use_tree_name_fallbacks() {
     let dir = TempDir::new().unwrap();
     write_secondary_tree(dir.path());
     let tree = Tree::from_config(&TreeConfig {
@@ -417,31 +385,22 @@ fn reconstruction_falls_back_to_dir_basename_when_tree_name_missing() {
         name: None,
         created_at: Some("2026-05-19T13:00:00Z".to_string()),
     });
-    // Tree::from_config derives name from basename when None — simulate
-    // a truly nameless tree by zeroing the field after construction.
-    let mut tree = tree;
-    tree.name = None;
 
     let mut warner = Vec::new();
-    let m = read_or_reconstruct_into(&tree, &mut warner).unwrap();
-    let basename = dir
-        .path()
-        .file_name()
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
-    assert_eq!(m.tree.name, basename);
+    let err = read_or_reconstruct_into(&tree, &mut warner).unwrap_err();
+    assert!(matches!(err, ManifestError::TreeNotInitialized));
+    assert!(warner.is_empty());
 }
 
 #[test]
-fn reconstruction_round_trips_through_write_read() {
+fn missing_manifest_does_not_round_trip_secondary_store() {
     let dir = TempDir::new().unwrap();
     write_secondary_tree(dir.path());
     let tree = fixture_tree(&dir);
     let mut warner = Vec::new();
-    let recovered = read_or_reconstruct_into(&tree, &mut warner).unwrap();
-    let reread = read(&tree.manifest_path()).unwrap();
-    assert_eq!(recovered, reread);
+    let err = read_or_reconstruct_into(&tree, &mut warner).unwrap_err();
+    assert!(matches!(err, ManifestError::TreeNotInitialized));
+    assert!(read(&tree.manifest_path()).is_err());
 }
 
 // ── round-trip ───────────────────────────────────────────────────────────────

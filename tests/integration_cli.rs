@@ -83,15 +83,67 @@ fn config_auth(home: &Path, args: &[&str], input: &str) -> Output {
 }
 
 fn append_index_entry(tree: &Path, file: &str, title: &str) {
-    bo::domain::index::append_entry(
-        &tree.join(".bo/index.jsonl"),
-        &bo::domain::index::IndexEntry {
+    upsert_manifest_leaf(tree, file, title, "");
+}
+
+fn upsert_manifest_leaf(tree: &Path, file: &str, title: &str, collected_at: &str) {
+    let manifest_path = tree.join(".bo/manifest.json");
+    let mut manifest = bo::domain::manifest::read(&manifest_path).unwrap();
+    let slug = file.trim_end_matches(".md").to_string();
+    let url = format!("https://example.com/{}", file.trim_end_matches(".md"));
+    if let Some(existing) = manifest.leaves.iter_mut().find(|leaf| leaf.file == file) {
+        existing.title = title.to_string();
+        existing.url = url;
+        existing.collected_at = collected_at.to_string();
+    } else {
+        manifest.leaves.push(bo::domain::manifest::LeafRecord {
+            slug,
             file: file.to_string(),
             title: title.to_string(),
-            url: format!("https://example.com/{}", file.trim_end_matches(".md")),
-        },
-    )
-    .unwrap();
+            url,
+            collected_at: collected_at.to_string(),
+            summary: None,
+        });
+    }
+    bo::domain::manifest::write(&manifest_path, &manifest).unwrap();
+}
+
+fn set_manifest_branches_for_leaf(tree: &Path, file: &str, branches: &[&str], timestamp: &str) {
+    let manifest_path = tree.join(".bo/manifest.json");
+    let mut manifest = bo::domain::manifest::read(&manifest_path).unwrap();
+    let leaf_slug = file.trim_end_matches(".md").to_string();
+
+    for branch in &mut manifest.branches {
+        branch.leaves.retain(|slug| slug != &leaf_slug);
+    }
+
+    for branch_slug in branches {
+        if branch_slug.is_empty() {
+            continue;
+        }
+        if let Some(branch) = manifest
+            .branches
+            .iter_mut()
+            .find(|branch| branch.slug == *branch_slug)
+        {
+            if !branch.leaves.iter().any(|slug| slug == &leaf_slug) {
+                branch.leaves.push(leaf_slug.clone());
+            }
+        } else {
+            manifest.branches.push(bo::domain::manifest::BranchRecord {
+                slug: (*branch_slug).to_string(),
+                file: format!("branches/{branch_slug}.md"),
+                title: (*branch_slug).to_string(),
+                created_at: timestamp.to_string(),
+                updated_at: timestamp.to_string(),
+                stale: false,
+                leaves: vec![leaf_slug.clone()],
+            });
+        }
+    }
+
+    manifest.branches.retain(|branch| !branch.leaves.is_empty());
+    bo::domain::manifest::write(&manifest_path, &manifest).unwrap();
 }
 
 fn write_leaf(tree: &Path, file: &str, title: &str, collected_at: &str, branches: Option<&[&str]>) {
@@ -117,6 +169,8 @@ fn write_leaf(tree: &Path, file: &str, title: &str, collected_at: &str, branches
 
     content.push_str(&format!("---\n\n# {title}\n\nBody.\n"));
     fs::write(tree.join(file), content).unwrap();
+    upsert_manifest_leaf(tree, file, title, collected_at);
+    set_manifest_branches_for_leaf(tree, file, branches.unwrap_or(&[]), collected_at);
 }
 
 fn write_basic_list_tree(tree: &Path) {
@@ -1156,19 +1210,10 @@ fn raze_preserves_auth_and_cleans_tree() {
     .unwrap();
     assert!(auth_path(&home).exists());
 
-    // Manually write a tree file and index entry so raze has something to delete
+    // Manually write a tree file and manifest entry so raze has something to delete
     fs::create_dir_all(&tree).unwrap();
     fs::write(tree.join("article.md"), "# Article").unwrap();
-    let entry = serde_json::json!({
-        "file": "article.md",
-        "title": "Article",
-        "url": "https://example.com/article"
-    });
-    fs::write(
-        tree.join(".bo/index.jsonl"),
-        serde_json::to_string(&entry).unwrap(),
-    )
-    .unwrap();
+    upsert_manifest_leaf(&tree, "article.md", "Article", "2026-01-01T00:00:00Z");
 
     let out = raze(home.path());
     assert!(
@@ -1289,18 +1334,9 @@ fn raze_tolerates_already_deleted_files() {
 
     seed(home.path(), &tree);
 
-    // Ledger references a file that doesn't exist on disk
+    // Manifest references a file that doesn't exist on disk
     fs::create_dir_all(&tree).unwrap();
-    let entry = serde_json::json!({
-        "file": "gone.md",
-        "title": "Gone",
-        "url": "https://example.com/gone"
-    });
-    fs::write(
-        tree.join(".bo/index.jsonl"),
-        serde_json::to_string(&entry).unwrap(),
-    )
-    .unwrap();
+    append_index_entry(&tree, "gone.md", "Gone");
 
     // Should not error — missing files are silently skipped
     let out = raze(home.path());

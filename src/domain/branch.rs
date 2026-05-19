@@ -38,6 +38,21 @@ pub fn write(
     created_at: &str,
     updated_at: &str,
 ) -> io::Result<()> {
+    let content = format_content(title, body, leaves, created_at, updated_at);
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, content)
+}
+
+pub(crate) fn format_content(
+    title: &str,
+    body: &str,
+    leaves: &[String],
+    created_at: &str,
+    updated_at: &str,
+) -> String {
     // Build frontmatter mapping
     let mut mapping = Mapping::new();
     frontmatter::set_field(&mut mapping, "title", Value::String(title.to_string()));
@@ -63,12 +78,7 @@ pub fn write(
         format!("{}\n\n{}", expected_heading, body)
     };
 
-    let content = frontmatter::render(&mapping, &full_body);
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, content)
+    frontmatter::render(&mapping, &full_body)
 }
 
 #[cfg(test)]

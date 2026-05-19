@@ -14,15 +14,15 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::domain::manifest::{self, BranchRecord, Manifest, TreeMeta};
-use crate::domain::{branch, frontmatter, index, slug, tree, tree::Tree};
+use crate::domain::manifest::{self, BranchRecord, LeafRecord, Manifest, TreeMeta};
+use crate::domain::{branch, frontmatter, slug, tree::Tree};
 use crate::engine::auth::{self, AuthResolutionError};
 use crate::engine::config::SeededConfig;
 use crate::engine::llm::{
     complete_with_policy, FinishReason, LlmCallPolicy, LlmError, LlmProvider, Message,
     OpenAiProvider,
 };
-use crate::engine::state;
+use crate::engine::pending::{self, CompileMode, OpKind, PendingWrite};
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
@@ -50,8 +50,10 @@ pub enum CompileError {
     ContentFilter,
     /// LLM API or network error.
     Llm(String),
-    /// I/O or index error.
+    /// I/O or manifest/pending error.
     Io(String),
+    /// Another bo process is mutating this tree.
+    Busy(String),
     /// Validation error in the LLM response.
     Validation(String),
 }
@@ -72,6 +74,7 @@ impl std::fmt::Display for CompileError {
             CompileError::ContentFilter => write!(f, "compile was blocked by content filter"),
             CompileError::Llm(msg) => write!(f, "LLM error: {}", msg),
             CompileError::Io(msg) => write!(f, "{}", msg),
+            CompileError::Busy(msg) => write!(f, "{}", msg),
             CompileError::Validation(msg) => write!(f, "{}\n{}", msg, VALIDATION_NEXT_STEP),
         }
     }
@@ -186,6 +189,24 @@ struct ValidatedBranch {
     leaves: Vec<String>,
 }
 
+struct StagedWrite {
+    pending: PendingWrite,
+    bytes: Vec<u8>,
+}
+
+impl StagedWrite {
+    fn new(path: String, content: String) -> Self {
+        let bytes = content.into_bytes();
+        Self {
+            pending: PendingWrite {
+                path,
+                content_hash: pending::content_hash(&bytes),
+            },
+            bytes,
+        }
+    }
+}
+
 // ── cmd_compile ───────────────────────────────────────────────────────────────
 
 pub fn cmd_compile(cfg: &SeededConfig) -> Result<(), String> {
@@ -195,12 +216,14 @@ pub fn cmd_compile(cfg: &SeededConfig) -> Result<(), String> {
 }
 
 pub fn run_compile(cfg: &SeededConfig) -> Result<CompileResult, CompileError> {
-    // ── read index (guard: empty/single-leaf) ────────────────────────────────
-    let index_path = tree::index_path(&cfg.tree.output_dir);
-    let all_entries = index::read_index(&index_path)
-        .map_err(|e| CompileError::Io(format!("failed to read index: {}", e)))?;
+    let tree = Tree::from_config(&cfg.tree);
+    recover_pending_if_needed(&tree.output_dir)?;
 
-    match all_entries.len() {
+    // ── read manifest (guard: empty/single-leaf) ────────────────────────────
+    let manifest = manifest::read(&tree.manifest_path())
+        .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
+
+    match manifest.leaves.len() {
         0 => return Ok(CompileResult::noop("empty_tree")),
         1 => return Ok(CompileResult::noop("single_leaf")),
         _ => {}
@@ -210,7 +233,7 @@ pub fn run_compile(cfg: &SeededConfig) -> Result<CompileResult, CompileError> {
     let api_key = auth::resolve_openai_api_key(&auth::auth_path()).map_err(compile_auth_error)?;
 
     // ── load valid leaves ────────────────────────────────────────────────────
-    let (loaded_leaves, skipped_leaves) = read_valid_leaves(cfg, &all_entries);
+    let (loaded_leaves, skipped_leaves) = read_valid_leaves(cfg, &manifest.leaves);
 
     if loaded_leaves.is_empty() {
         return Err(CompileError::Io(format!(
@@ -251,30 +274,12 @@ pub fn run_compile(cfg: &SeededConfig) -> Result<CompileResult, CompileError> {
         &skipped_leaves,
     )?;
 
-    // ── output ───────────────────────────────────────────────────────────────
-
-    // Persist compiled leaf slugs to state.json
-    let state_path = tree::state_path(&cfg.tree.output_dir);
-    let mut tree_state = state::read_state(&state_path);
-    for filename in &valid_filenames {
-        let slug = state::slug_from_filename(filename);
-        tree_state
-            .compiled_leaves
-            .insert(slug.to_string(), run_timestamp.clone());
-    }
-    if let Err(e) = state::write_state(&state_path, &tree_state) {
-        eprintln!("warning: failed to write compile state: {}", e);
-    }
-
     Ok(CompileResult::compiled(summary))
 }
 
 // ── read_valid_leaves ─────────────────────────────────────────────────────────
 
-fn read_valid_leaves(
-    cfg: &SeededConfig,
-    entries: &[index::IndexEntry],
-) -> (Vec<LoadedLeaf>, Vec<String>) {
+fn read_valid_leaves(cfg: &SeededConfig, entries: &[LeafRecord]) -> (Vec<LoadedLeaf>, Vec<String>) {
     let mut loaded = Vec::new();
     let mut skipped = Vec::new();
 
@@ -286,8 +291,9 @@ fn read_valid_leaves(
                     let title = mapping
                         .get("title")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
+                        .filter(|title| !title.trim().is_empty())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| entry.title.clone());
                     loaded.push(LoadedLeaf {
                         filename: entry.file.clone(),
                         title,
@@ -415,6 +421,25 @@ async fn call_llm_with_provider(
 
 fn compile_auth_error(error: AuthResolutionError) -> CompileError {
     CompileError::Io(error.to_string())
+}
+
+impl From<pending::PendingError> for CompileError {
+    fn from(error: pending::PendingError) -> Self {
+        match error {
+            pending::PendingError::Busy { .. } => CompileError::Busy(error.to_string()),
+            other => CompileError::Io(other.to_string()),
+        }
+    }
+}
+
+fn recover_pending_if_needed(output_dir: &std::path::Path) -> Result<(), CompileError> {
+    if let Some(report) = pending::recover_or_refuse(output_dir)? {
+        eprintln!(
+            "recovered {} changes from interrupted {}",
+            report.changes, report.op
+        );
+    }
+    Ok(())
 }
 
 fn map_compile_llm_error(error: LlmError) -> CompileError {
@@ -592,11 +617,11 @@ fn execute_plan(
 ) -> Result<CompileSummary, CompileError> {
     let tree = Tree::from_config(&cfg.tree);
     let branches_dir = tree.branches_dir();
+    recover_pending_if_needed(&tree.output_dir)?;
 
-    // Load current manifest. Used to (i) preserve `created_at` for branches
-    // that already exist and (ii) carry leaf records and tree metadata
-    // forward into the new manifest.
-    let current = match manifest::read_or_reconstruct(&tree) {
+    // Load current manifest. Used to preserve branch `created_at` and carry
+    // leaf records / tree metadata forward into the new manifest.
+    let current = match manifest::read(&tree.manifest_path()) {
         Ok(m) => m,
         Err(manifest::ManifestError::TreeNotInitialized) => Manifest {
             tree: TreeMeta {
@@ -613,7 +638,6 @@ fn execute_plan(
         Err(e) => return Err(CompileError::Io(format!("failed to read manifest: {}", e))),
     };
 
-    // Materialize Vec<BranchRecord> from the validated plan.
     let new_branches: Vec<BranchRecord> = plan
         .branches
         .iter()
@@ -639,7 +663,6 @@ fn execute_plan(
         })
         .collect();
 
-    // Primary write: manifest. The commit point.
     let new_manifest = Manifest {
         tree: TreeMeta {
             last_compiled_at: Some(run_timestamp.to_string()),
@@ -648,32 +671,22 @@ fn execute_plan(
         leaves: current.leaves,
         branches: new_branches,
     };
-    manifest::write(&tree.manifest_path(), &new_manifest)
-        .map_err(|e| CompileError::Io(format!("failed to write manifest: {}", e)))?;
 
-    // Secondary: write branch .md files. created_at is sourced from the
-    // manifest record we just wrote so the two on-disk shapes agree.
     let mut branch_results: Vec<BranchResult> = Vec::new();
+    let mut staged: Vec<StagedWrite> = Vec::new();
 
     for vb in &plan.branches {
-        let branch_path = branches_dir.join(format!("{}.md", vb.slug));
-        let created_at = new_manifest
+        let record = new_manifest
             .branch_by_slug(&vb.slug)
-            .expect("branch was just inserted into manifest")
-            .created_at
-            .clone();
-
-        branch::write(
-            &branch_path,
+            .expect("branch was just inserted into manifest");
+        let content = branch::format_content(
             &vb.title,
             &vb.body,
             &vb.leaves,
-            &created_at,
+            &record.created_at,
             run_timestamp,
-        )
-        .map_err(|e| CompileError::Io(format!("failed to write branch '{}': {}", vb.slug, e)))?;
-
-        eprintln!("writing branch: {}", vb.slug);
+        );
+        staged.push(StagedWrite::new(record.file.clone(), content));
 
         branch_results.push(BranchResult {
             slug: vb.slug.clone(),
@@ -682,13 +695,9 @@ fn execute_plan(
         });
     }
 
-    // ── update leaf frontmatter ──────────────────────────────────────────────
     let mut leaves_updated: usize = 0;
-
     for filename in valid_filenames {
         let leaf_path = cfg.tree.output_dir.join(filename);
-
-        // Get this leaf's branch assignments (empty if not in any branch)
         let branches: Vec<String> = plan
             .leaf_assignments
             .get(filename)
@@ -718,12 +727,31 @@ fn execute_plan(
             }
         };
 
-        if let Err(e) = fs::write(&leaf_path, &updated) {
-            eprintln!("warning: could not write '{}': {} — skipping", filename, e);
-            continue;
-        }
-
+        staged.push(StagedWrite::new(filename.clone(), updated));
         leaves_updated += 1;
+    }
+
+    let writes: Vec<PendingWrite> = staged.iter().map(|write| write.pending.clone()).collect();
+    let operation = pending::new_operation(
+        &tree.output_dir,
+        OpKind::Compile {
+            mode: CompileMode::Full,
+        },
+        writes.clone(),
+        Vec::new(),
+    )?;
+    let pending_path = pending::pending_path(&tree.output_dir);
+    pending::write(&pending_path, &operation)?;
+    for write in &staged {
+        pending::write_staged(&tree.output_dir, &write.pending, &write.bytes)?;
+    }
+    manifest::write(&tree.manifest_path(), &new_manifest)
+        .map_err(|e| CompileError::Io(format!("failed to write manifest: {}", e)))?;
+    pending::apply_writes(&tree.output_dir, &writes)?;
+    pending::clear(&pending_path)?;
+
+    for branch in &branch_results {
+        eprintln!("writing branch: {}", branch.slug);
     }
 
     Ok(CompileSummary {

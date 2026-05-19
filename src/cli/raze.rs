@@ -1,5 +1,6 @@
 use crate::cli::json::JsonWarning;
-use crate::domain::{index, tree};
+use crate::domain::{manifest, tree};
+use crate::engine::pending::{self, OpKind};
 
 use serde::Serialize;
 use serde_json::json;
@@ -41,12 +42,14 @@ impl AuthCleanup {
 #[derive(Debug)]
 pub enum RazeError {
     Io(String),
+    Busy(String),
 }
 
 impl std::fmt::Display for RazeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(msg) => write!(f, "{}", msg),
+            Self::Busy(msg) => write!(f, "{}", msg),
         }
     }
 }
@@ -62,44 +65,64 @@ pub fn raze_with_auth(
     auth_path: &Path,
     auth_cleanup: AuthCleanup,
 ) -> Result<RazeOutput, RazeError> {
-    let index_path = tree::index_path(output_dir);
-    let entries = index::read_index(&index_path)
-        .map_err(|error| RazeError::Io(format!("failed to read index: {error}")))?;
+    recover_pending_if_needed(output_dir)?;
 
-    let mut deleted_files = 0usize;
+    let manifest_path = tree::manifest_path(output_dir);
+    let manifest = match manifest::read(&manifest_path) {
+        Ok(manifest) => Some(manifest),
+        Err(manifest::ManifestError::TreeNotInitialized) => None,
+        Err(error) => return Err(RazeError::Io(format!("failed to read manifest: {error}"))),
+    };
+
     let mut warnings = Vec::new();
+    let mut deletes: Vec<String> = Vec::new();
 
-    for entry in &entries {
-        if is_suspicious_relative_path(&entry.file) {
-            warnings.push(JsonWarning::with_details(
-                "suspicious_ledger_entry",
-                format!("skipping ledger entry with suspicious path: {}", entry.file),
-                json!({ "file": entry.file }),
-            ));
-            continue;
+    if let Some(manifest) = &manifest {
+        for leaf in &manifest.leaves {
+            push_manifest_delete(&mut deletes, &mut warnings, &leaf.file);
         }
-
-        let resolved = output_dir.join(&entry.file);
-
-        match std::fs::remove_file(&resolved) {
-            Ok(()) => deleted_files += 1,
-            Err(error) if error.kind() == IoErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(RazeError::Io(format!(
-                    "failed to delete {}: {}",
-                    resolved.display(),
-                    error
-                )));
-            }
+        for branch in &manifest.branches {
+            push_manifest_delete(&mut deletes, &mut warnings, &branch.file);
         }
     }
 
-    // Delete .bo/ infra directory (index, state, version)
-    let infra = tree::infra_dir(output_dir);
-    if infra.is_dir() {
-        std::fs::remove_dir_all(&infra)
-            .map_err(|error| RazeError::Io(format!("failed to delete .bo directory: {}", error)))?;
+    let deleted_files = deletes
+        .iter()
+        .filter(|relative| output_dir.join(relative).is_file())
+        .count();
+
+    if output_dir.join("branches").exists() {
+        deletes.push("branches".to_string());
     }
+    if tree::infra_dir(output_dir).exists() {
+        deletes.push(".bo".to_string());
+    }
+
+    let operation = pending::new_operation(
+        output_dir,
+        OpKind::Raze {
+            include_auth: auth_cleanup.deletes_auth(),
+        },
+        Vec::new(),
+        deletes.clone(),
+    )
+    .map_err(map_pending_error)?;
+    let pending_path = pending::pending_path(output_dir);
+    pending::write(&pending_path, &operation).map_err(map_pending_error)?;
+
+    match std::fs::remove_file(&manifest_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == IoErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(RazeError::Io(format!(
+                "failed to delete manifest: {}",
+                error
+            )));
+        }
+    }
+
+    pending::apply_deletes(output_dir, &deletes).map_err(map_pending_error)?;
+    pending::clear(&pending_path).map_err(map_pending_error)?;
     let deleted_index = true;
 
     let (removed_output_dir, output_dir_left_in_place) = match std::fs::remove_dir(output_dir) {
@@ -165,6 +188,35 @@ pub fn raze_auth_only(auth_path: &Path) -> Result<Option<RazeOutput>, RazeError>
         },
         warnings: Vec::new(),
     }))
+}
+
+fn recover_pending_if_needed(output_dir: &Path) -> Result<(), RazeError> {
+    if let Some(report) = pending::recover_or_refuse(output_dir).map_err(map_pending_error)? {
+        eprintln!(
+            "recovered {} changes from interrupted {}",
+            report.changes, report.op
+        );
+    }
+    Ok(())
+}
+
+fn map_pending_error(error: pending::PendingError) -> RazeError {
+    match error {
+        pending::PendingError::Busy { .. } => RazeError::Busy(error.to_string()),
+        other => RazeError::Io(other.to_string()),
+    }
+}
+
+fn push_manifest_delete(deletes: &mut Vec<String>, warnings: &mut Vec<JsonWarning>, file: &str) {
+    if is_suspicious_relative_path(file) {
+        warnings.push(JsonWarning::with_details(
+            "suspicious_manifest_entry",
+            format!("skipping manifest entry with suspicious path: {file}"),
+            json!({ "file": file }),
+        ));
+        return;
+    }
+    deletes.push(file.to_string());
 }
 
 fn delete_optional_file(path: &Path, label: &str) -> Result<bool, RazeError> {

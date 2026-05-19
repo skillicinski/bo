@@ -86,13 +86,12 @@ fn batch_collect_deduplicates_repeated_input_urls() {
 }
 
 #[test]
-fn batch_collect_skips_existing_index_duplicates_without_fetching() {
+fn batch_collect_skips_existing_manifest_duplicates_without_fetching() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let url = "https://example.com/already";
 
-    // Write the URL into the manifest (dedup source post-T5.6) AND into
-    // index.jsonl (the secondary store still mirrored on collect).
+    // Write the URL into the manifest, the dedup source.
     let manifest_path = dir.path().join(".bo/manifest.json");
     manifest::write(
         &manifest_path,
@@ -114,16 +113,6 @@ fn batch_collect_skips_existing_index_duplicates_without_fetching() {
         },
     )
     .unwrap();
-    index::append_entry(
-        &dir.path().join(".bo/index.jsonl"),
-        &index::IndexEntry {
-            file: "already.md".to_string(),
-            title: "Already".to_string(),
-            url: url.to_string(),
-        },
-    )
-    .unwrap();
-
     let result =
         collect_inputs_with_collector(vec![url.to_string(), url.to_string()], dir.path(), |_url| {
             panic!("duplicate URL should not be fetched")
@@ -164,15 +153,16 @@ fn unsupported_youtube_embed_rejected_without_writes() {
 }
 
 #[test]
-fn ordinary_html_collection_still_writes_leaf_and_index() {
+fn ordinary_html_collection_writes_leaf_and_manifest() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let document = collect_html("https://example.com/article", ARTICLE_HTML, dir.path()).unwrap();
 
     assert!(dir.path().join(&document.filename).exists());
-    let entries = index::read_index(&dir.path().join(".bo/index.jsonl")).unwrap();
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].url, "https://example.com/article");
+    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    assert_eq!(m.leaves.len(), 1);
+    assert_eq!(m.leaves[0].url, "https://example.com/article");
+    assert!(!dir.path().join(".bo/index.jsonl").exists());
 }
 
 #[test]
@@ -219,16 +209,6 @@ fn collect_url_rejects_duplicate_youtube_url_before_network_fetch() {
         },
     )
     .unwrap();
-    index::append_entry(
-        &dir.path().join(".bo/index.jsonl"),
-        &index::IndexEntry {
-            file: "existing.md".to_string(),
-            title: "Existing Video".to_string(),
-            url: url.to_string(),
-        },
-    )
-    .unwrap();
-
     let duplicate = collect_url(url, dir.path());
 
     assert!(matches!(duplicate, Err(CollectError::DuplicateUrl { .. })));
@@ -248,8 +228,8 @@ fn collect_html_keeps_exact_match_duplicate_semantics_for_youtube_urls() {
     .unwrap();
     collect_html("https://youtu.be/a1mhk7mAetk", ARTICLE_HTML, dir.path()).unwrap();
 
-    let entries = index::read_index(&dir.path().join(".bo/index.jsonl")).unwrap();
-    assert_eq!(entries.len(), 2);
+    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    assert_eq!(m.leaves.len(), 2);
 }
 
 // ── pipeline integration tests (moved from tests/integration.rs) ─────────
@@ -378,9 +358,9 @@ fn full_pipeline_happy_path() {
     // Summary field is present (fallback: first ~200 words)
     assert!(content.contains("summary:"));
 
-    let entries = index::read_index(&dir.path().join(".bo/index.jsonl")).unwrap();
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].url, "https://example.com/article");
+    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    assert_eq!(m.leaves.len(), 1);
+    assert_eq!(m.leaves[0].url, "https://example.com/article");
 }
 
 #[test]
@@ -396,8 +376,8 @@ fn duplicate_rejected() {
         .to_string()
         .contains("already collected"));
 
-    let entries = index::read_index(&dir.path().join(".bo/index.jsonl")).unwrap();
-    assert_eq!(entries.len(), 1);
+    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    assert_eq!(m.leaves.len(), 1);
 }
 
 #[test]
@@ -420,8 +400,8 @@ fn slug_collision_disambiguated() {
         page2.filename
     );
 
-    let entries = index::read_index(&dir.path().join(".bo/index.jsonl")).unwrap();
-    assert_eq!(entries.len(), 2);
+    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    assert_eq!(m.leaves.len(), 2);
 }
 
 #[test]
@@ -507,9 +487,9 @@ fn mdbook_page_with_bad_ui_title_and_substantive_body_is_accepted() {
     assert!(content.contains("title: \"Understanding Ownership\""));
     assert!(!content.contains("title: \"Keyboard shortcuts\""));
 
-    let entries = index::read_index(&dir.path().join(".bo/index.jsonl")).unwrap();
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].title, "Understanding Ownership");
+    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    assert_eq!(m.leaves.len(), 1);
+    assert_eq!(m.leaves[0].title, "Understanding Ownership");
 }
 
 #[test]
@@ -538,8 +518,8 @@ fn near_duplicate_urls_both_stored() {
     )
     .unwrap();
 
-    let entries = index::read_index(&dir.path().join(".bo/index.jsonl")).unwrap();
-    assert_eq!(entries.len(), 2);
+    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    assert_eq!(m.leaves.len(), 2);
 }
 
 // ── manifest dual-write (T4.2) ────────────────────────────────────────────────────
@@ -598,7 +578,7 @@ fn collect_appends_leaf_record_to_manifest_with_full_metadata() {
 }
 
 #[test]
-fn collect_dual_write_keeps_manifest_and_index_in_parity() {
+fn collect_writes_only_manifest_records() {
     let dir = TempDir::new().unwrap();
     seed_for_collect(&dir, "parity-tree");
 
@@ -615,14 +595,14 @@ fn collect_dual_write_keeps_manifest_and_index_in_parity() {
     }
 
     let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
-    let entries = index::read_index(&dir.path().join(".bo/index.jsonl")).unwrap();
 
     assert_eq!(m.leaves.len(), 3);
-    assert_eq!(entries.len(), 3);
-    for (rec, entry) in m.leaves.iter().zip(entries.iter()) {
-        assert_eq!(rec.file, entry.file);
-        assert_eq!(rec.url, entry.url);
-        assert_eq!(rec.title, entry.title);
+    assert!(!dir.path().join(".bo/index.jsonl").exists());
+    for (n, rec) in m.leaves.iter().enumerate() {
+        let n = n + 1;
+        assert_eq!(rec.file, format!("page-{n}.md"));
+        assert_eq!(rec.url, format!("https://example.com/page{n}"));
+        assert_eq!(rec.title, format!("Page {n}"));
     }
 }
 
@@ -673,7 +653,7 @@ fn dedup_uses_manifest_not_index_jsonl() {
 }
 
 #[test]
-fn fresh_collect_after_t5_6_still_writes_index_secondary() {
+fn fresh_collect_after_3b_does_not_write_index_secondary() {
     let dir = TempDir::new().unwrap();
     seed_for_collect(&dir, "secondary-still-written-tree");
 
@@ -686,7 +666,8 @@ fn fresh_collect_after_t5_6_still_writes_index_secondary() {
     )
     .unwrap();
 
-    let entries = index::read_index(&dir.path().join(".bo/index.jsonl")).unwrap();
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].url, "https://example.com/page");
+    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    assert_eq!(m.leaves.len(), 1);
+    assert_eq!(m.leaves[0].url, "https://example.com/page");
+    assert!(!dir.path().join(".bo/index.jsonl").exists());
 }

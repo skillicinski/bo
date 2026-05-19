@@ -135,7 +135,7 @@ pub fn show_leaf(
         created_at: None,
         output_dir: tree_dir.to_path_buf(),
     };
-    let manifest = match manifest::read_or_reconstruct(&tree) {
+    let manifest = match manifest::read(&tree.manifest_path()) {
         Ok(m) => m,
         Err(manifest::ManifestError::TreeNotInitialized) => {
             return Err(ShowError::NotFound {

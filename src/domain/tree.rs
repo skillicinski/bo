@@ -91,16 +91,6 @@ impl Tree {
         self.output_dir.join(".bo")
     }
 
-    /// Path to the JSONL index file: `{output_dir}/.bo/index.jsonl`.
-    pub fn index_path(&self) -> PathBuf {
-        self.infra_dir().join("index.jsonl")
-    }
-
-    /// Path to the compile state file: `{output_dir}/.bo/state.json`.
-    pub fn state_path(&self) -> PathBuf {
-        self.infra_dir().join("state.json")
-    }
-
     /// Path to the manifest file: `{output_dir}/.bo/manifest.json`.
     pub fn manifest_path(&self) -> PathBuf {
         self.infra_dir().join("manifest.json")
@@ -108,16 +98,6 @@ impl Tree {
 }
 
 // ── Free path helpers ──────────────────────────────────────────────────────────
-
-/// Index path from a bare tree directory (for callers that don't have a Tree).
-pub fn index_path(tree_dir: &Path) -> PathBuf {
-    tree_dir.join(".bo").join("index.jsonl")
-}
-
-/// State path from a bare tree directory.
-pub fn state_path(tree_dir: &Path) -> PathBuf {
-    tree_dir.join(".bo").join("state.json")
-}
 
 /// Manifest path from a bare tree directory.
 pub fn manifest_path(tree_dir: &Path) -> PathBuf {

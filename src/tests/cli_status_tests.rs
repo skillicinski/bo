@@ -8,6 +8,7 @@ use tempfile::TempDir;
 fn setup_tree(dir: &Path) {
     let bo_dir = dir.join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
+    write_manifest(dir, &[], &[], None);
 }
 
 fn write_manifest(

@@ -202,16 +202,32 @@ fn write_leaf(tree: &Path, filename: &str, title: &str, body: &str) {
 fn write_index(tree: &Path, entries: &[(&str, &str, &str)]) {
     let bo_dir = tree.join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    let content = entries
+    let leaves = entries
         .iter()
-        .map(|(file, title, url)| {
-            format!(
-                r#"{{"file":"{}","title":"{}","url":"{}"}}"#,
-                file, title, url
-            )
+        .map(|(file, title, url)| bo::domain::manifest::LeafRecord {
+            slug: Path::new(file)
+                .file_stem()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            file: file.to_string(),
+            title: title.to_string(),
+            url: url.to_string(),
+            collected_at: "2026-01-01T00:00:00Z".to_string(),
+            summary: Some(title.to_string()),
         })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let suffix = if content.is_empty() { "" } else { "\n" };
-    fs::write(bo_dir.join("index.jsonl"), format!("{content}{suffix}")).unwrap();
+        .collect();
+    bo::domain::manifest::write(
+        &bo_dir.join("manifest.json"),
+        &bo::domain::manifest::Manifest {
+            tree: bo::domain::manifest::TreeMeta {
+                name: "test-tree".to_string(),
+                created_at: "2026-05-17T00:00:00Z".to_string(),
+                last_compiled_at: None,
+            },
+            leaves,
+            branches: Vec::new(),
+        },
+    )
+    .unwrap();
 }

@@ -59,7 +59,7 @@ pub fn write(
 ///
 /// Kept private; callers should use `write`. Separated only so that the
 /// formatting logic can be exercised in tests without touching the filesystem.
-fn format_content(
+pub(crate) fn format_content(
     title: Option<&str>,
     url: &str,
     collected_at: &str,

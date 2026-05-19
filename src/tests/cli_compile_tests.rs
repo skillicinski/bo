@@ -61,7 +61,7 @@ fn compile_exits_cleanly_on_empty_collection() {
     std::env::remove_var("OPENAI_API_KEY");
     let bo_dir = dir.path().join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    fs::write(bo_dir.join("index.jsonl"), "").unwrap();
+    seed_manifest_for_compile(dir.path(), &[]);
     let result = cmd_compile(&cfg);
     assert!(result.is_ok());
 }
@@ -72,11 +72,7 @@ fn compile_exits_cleanly_on_single_leaf() {
     let dir = TempDir::new().unwrap();
     let bo_dir = dir.path().join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    fs::write(
-        bo_dir.join("index.jsonl"),
-        r#"{"file":"only.md","title":"Only","url":"https://example.com"}"#,
-    )
-    .unwrap();
+    seed_manifest_for_compile(dir.path(), &[("only", "Only", "https://example.com")]);
     std::env::remove_var("OPENAI_API_KEY");
     let cfg = make_test_config(dir.path());
     let result = cmd_compile(&cfg);
@@ -89,14 +85,13 @@ fn compile_errors_without_api_key() {
     let dir = TempDir::new().unwrap();
     let bo_dir = dir.path().join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    let index_path = bo_dir.join("index.jsonl");
-    // Write two valid leaves so we pass the guard
-    fs::write(
-        &index_path,
-        r#"{"file":"a.md","title":"A","url":"https://example.com/a"}
-{"file":"b.md","title":"B","url":"https://example.com/b"}"#,
-    )
-    .unwrap();
+    seed_manifest_for_compile(
+        dir.path(),
+        &[
+            ("a", "A", "https://example.com/a"),
+            ("b", "B", "https://example.com/b"),
+        ],
+    );
     // Write actual leaf files with valid frontmatter
     fs::write(
         dir.path().join("a.md"),

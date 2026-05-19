@@ -483,7 +483,7 @@ fn retrieve_leaves(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedLea
         created_at: None,
         output_dir: tree_dir.to_path_buf(),
     };
-    let manifest = match crate::domain::manifest::read_or_reconstruct(&tree) {
+    let manifest = match crate::domain::manifest::read(&tree.manifest_path()) {
         Ok(m) => m,
         Err(crate::domain::manifest::ManifestError::TreeNotInitialized) => {
             return Err(QueryError::EmptyTree);

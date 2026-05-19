@@ -4,7 +4,6 @@
 // by directly constructing files (no network/LLM required).
 
 use serde_json::Value;
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
@@ -45,14 +44,7 @@ fn write_leaf(tree_dir: &Path, slug: &str, url: &str) {
     );
     fs::write(tree_dir.join(&filename), content).unwrap();
 
-    // Append to index (kept for parity assertions; the manifest is canonical).
-    let index_path = tree_dir.join(".bo/index.jsonl");
-    let entry = format!("{{\"file\":\"{filename}\",\"title\":\"{slug}\",\"url\":\"{url}\"}}\n");
-    let mut existing = fs::read_to_string(&index_path).unwrap_or_default();
-    existing.push_str(&entry);
-    fs::write(&index_path, existing).unwrap();
-
-    // Append to manifest so manifest-driven reads see the leaf.
+    // Append to manifest so reads see the leaf.
     let manifest_path = tree_dir.join(".bo/manifest.json");
     let mut m = bo::domain::manifest::read(&manifest_path).unwrap();
     m.leaves.push(bo::domain::manifest::LeafRecord {
@@ -88,16 +80,6 @@ fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
     });
     m.tree.last_compiled_at = Some(created_at.to_string());
     bo::domain::manifest::write(&manifest_path, &m).unwrap();
-}
-
-fn write_state(tree_dir: &Path, slugs: &[&str], timestamp: &str) {
-    let compiled: HashMap<&str, &str> = slugs.iter().map(|s| (*s, timestamp)).collect();
-    let state = serde_json::json!({ "compiled_leaves": compiled });
-    fs::write(
-        tree_dir.join(".bo/state.json"),
-        serde_json::to_string_pretty(&state).unwrap(),
-    )
-    .unwrap();
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -151,8 +133,7 @@ fn status_after_compile_shows_zero_uncompiled() {
     write_leaf(&tree_dir, "leaf-a", "https://a.com");
     write_leaf(&tree_dir, "leaf-b", "https://b.com");
 
-    // Simulate compile: write state + branch
-    write_state(&tree_dir, &["leaf-a", "leaf-b"], "2026-05-15T10:00:00Z");
+    // Simulate compile: write branch + update manifest timestamp.
     write_branch(&tree_dir, "topic-one", "2026-05-15T10:00:00Z");
 
     let out = status(tmp.path());
@@ -165,7 +146,7 @@ fn status_after_compile_shows_zero_uncompiled() {
 }
 
 #[test]
-fn status_detects_orphan_index_entry() {
+fn status_detects_orphan_manifest_entry() {
     let tmp = TempDir::new().unwrap();
     let tree_dir = tmp.path().join("tree");
 
@@ -174,7 +155,7 @@ fn status_detects_orphan_index_entry() {
     write_leaf(&tree_dir, "exists", "https://exists.com");
     write_leaf(&tree_dir, "will-delete", "https://deleted.com");
 
-    // Now delete the file but leave index entry
+    // Now delete the file but leave the manifest entry
     fs::remove_file(tree_dir.join("will-delete.md")).unwrap();
 
     let out = status_json(tmp.path());

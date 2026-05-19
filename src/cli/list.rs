@@ -81,7 +81,7 @@ pub fn list_leaves(tree_dir: &Path, options: &ListOptions) -> Result<ListResult,
         created_at: None,
         output_dir: tree_dir.to_path_buf(),
     };
-    let m = match manifest::read_or_reconstruct(&tree) {
+    let m = match manifest::read(&tree.manifest_path()) {
         Ok(m) => m,
         Err(manifest::ManifestError::TreeNotInitialized) => {
             return Ok(ListResult {

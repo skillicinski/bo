@@ -5,17 +5,10 @@
 // leaf slugs; the inverse (which branches contain a given leaf) is computed
 // in-memory at call time.
 //
-// In 3a the manifest coexists with the secondary store (`index.jsonl`,
-// `state.json`, branch frontmatter). Reads come from the manifest;
-// mutations write the manifest first as the commit point and then mirror
-// to the secondary store. 3b removes the secondary store.
-//
-// Crash-safety beyond filesystem rename atomicity is 3b's domain.
+// As of 3b, `manifest.json` is the only tree-state store. Missing or corrupt
+// manifests are surfaced as errors; there is no secondary reconstruction path.
 
-use crate::domain::frontmatter;
-use crate::domain::index;
-use crate::domain::leaf;
-use crate::domain::tree::{self, Tree};
+use crate::domain::tree::Tree;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
@@ -78,8 +71,7 @@ pub struct BranchRecord {
 pub enum ManifestError {
     Io(io::Error),
     Parse(serde_json::Error),
-    /// `manifest.json` does not exist at the requested path. After T2.1 ships,
-    /// this is only returned when the secondary store is also absent.
+    /// `manifest.json` does not exist at the requested path.
     TreeNotInitialized,
 }
 
@@ -171,10 +163,8 @@ impl Manifest {
 /// Read a manifest from disk.
 ///
 /// - File present + valid JSON  → `Ok(Manifest)`
-/// - File present + invalid JSON → `Err(Parse)` (does **not** trigger reconstruction;
-///   auto-rebuilding over a corrupt file would silently destroy whatever the user broke).
-/// - File absent                → `Err(TreeNotInitialized)` for now; T2.1 inserts a
-///   reconstruction branch from the secondary store.
+/// - File present + invalid JSON → `Err(Parse)`
+/// - File absent                → `Err(TreeNotInitialized)`
 pub fn read(path: &Path) -> Result<Manifest, ManifestError> {
     match fs::read_to_string(path) {
         Ok(s) => serde_json::from_str(&s).map_err(ManifestError::Parse),
@@ -197,203 +187,20 @@ pub fn write(path: &Path, manifest: &Manifest) -> Result<(), ManifestError> {
     Ok(())
 }
 
-/// Read the manifest with reconstruction fallback.
-///
-/// If `manifest.json` is present, behaves like `read`. If absent, attempts to
-/// rebuild the manifest from the secondary store (`index.jsonl`, leaf
-/// frontmatter, `branches/`) and persists the result. Emits a one-line warning
-/// to stderr when reconstruction succeeds.
-///
-/// Parse errors are surfaced unchanged — reconstruction never overwrites a
-/// corrupt manifest. The user must `rm manifest.json` to opt into recovery.
-///
-/// Removed in 3b: the secondary store is gone, so missing-manifest becomes
-/// unrecoverable.
+/// Convenience: read from a `Tree`'s manifest path.
 pub fn read_or_reconstruct(tree: &Tree) -> Result<Manifest, ManifestError> {
-    let mut stderr = io::stderr();
-    read_or_reconstruct_into(tree, &mut stderr)
+    read(&tree.manifest_path())
 }
 
-/// Internal entry point used by [`read_or_reconstruct`] and tests. Allows the
-/// recovery warning destination to be injected.
+#[cfg(test)]
 pub(crate) fn read_or_reconstruct_into<W: Write>(
     tree: &Tree,
-    warner: &mut W,
+    _warner: &mut W,
 ) -> Result<Manifest, ManifestError> {
-    match read(&tree.manifest_path()) {
-        Ok(m) => Ok(m),
-        Err(ManifestError::TreeNotInitialized) => {
-            let m = reconstruct_from_secondary(tree, warner)?;
-            write(&tree.manifest_path(), &m)?;
-            let _ = writeln!(
-                warner,
-                "manifest missing; reconstructed from secondary store"
-            );
-            Ok(m)
-        }
-        Err(e) => Err(e),
-    }
+    read(&tree.manifest_path())
 }
 
 // ── internals ─────────────────────────────────────────────────────────────────
-
-// ── internals ───────────────────────────────────────────────────────────────────
-
-// Removed in 3b: secondary store is gone, manifest becomes unrecoverable.
-fn reconstruct_from_secondary<W: Write>(
-    tree: &Tree,
-    warner: &mut W,
-) -> Result<Manifest, ManifestError> {
-    let leaves = reconstruct_leaves(&tree.output_dir)?;
-    let branches = reconstruct_branches(&tree.branches_dir())?;
-
-    if leaves.is_empty() && branches.is_empty() {
-        return Err(ManifestError::TreeNotInitialized);
-    }
-
-    let last_compiled_at = branches.iter().map(|b| b.updated_at.clone()).max();
-
-    let name = tree.name.clone().unwrap_or_else(|| {
-        tree.output_dir
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "unnamed".to_string())
-    });
-    let created_at = tree.created_at.clone().unwrap_or_else(|| {
-        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let _ = writeln!(
-            warner,
-            "tree config missing created_at; using current time {now}"
-        );
-        now
-    });
-
-    Ok(Manifest {
-        tree: TreeMeta {
-            name,
-            created_at,
-            last_compiled_at,
-        },
-        leaves,
-        branches,
-    })
-}
-
-fn reconstruct_leaves(tree_dir: &Path) -> Result<Vec<LeafRecord>, ManifestError> {
-    let index_path = tree::index_path(tree_dir);
-    if !index_path.exists() {
-        return Ok(Vec::new());
-    }
-    let entries = index::read_index(&index_path)?;
-    let mut out = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let leaf_path = tree_dir.join(&entry.file);
-        // Skip entries whose .md file is gone or unreadable. Reconstruction
-        // reflects what's actually on disk; missing leaves are dropped
-        // from the manifest rather than aborting the whole rebuild.
-        let mapping = match leaf::read_frontmatter(&leaf_path) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        let slug = std::path::Path::new(&entry.file)
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| entry.file.clone());
-        let title = mapping
-            .get("title")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-            .unwrap_or_else(|| entry.title.clone());
-        let url = mapping
-            .get("url")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-            .unwrap_or_else(|| entry.url.clone());
-        let collected_at = mapping
-            .get("collected_at")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let summary = mapping
-            .get("summary")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        out.push(LeafRecord {
-            slug,
-            file: entry.file,
-            title,
-            url,
-            collected_at,
-            summary,
-        });
-    }
-    Ok(out)
-}
-
-fn reconstruct_branches(branches_dir: &Path) -> Result<Vec<BranchRecord>, ManifestError> {
-    if !branches_dir.exists() {
-        return Ok(Vec::new());
-    }
-    let mut out = Vec::new();
-    for entry in fs::read_dir(branches_dir)?.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("md") {
-            continue;
-        }
-        let content = fs::read_to_string(&path)?;
-        let (mapping, _) = frontmatter::parse(&content).map_err(|e| {
-            ManifestError::Io(io::Error::other(format!(
-                "reconstruct branch {}: {e}",
-                path.display()
-            )))
-        })?;
-        let filename = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let slug = filename
-            .strip_suffix(".md")
-            .unwrap_or(&filename)
-            .to_string();
-        let title = mapping
-            .get("title")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let created_at = mapping
-            .get("created_at")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let updated_at = mapping
-            .get("updated_at")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&created_at)
-            .to_string();
-        let leaves: Vec<String> = mapping
-            .get("leaves")
-            .and_then(|v| v.as_sequence())
-            .map(|seq| {
-                seq.iter()
-                    .filter_map(|v| v.as_str())
-                    .map(|s| s.strip_suffix(".md").unwrap_or(s).to_string())
-                    .collect()
-            })
-            .unwrap_or_default();
-        out.push(BranchRecord {
-            slug,
-            file: format!("branches/{filename}"),
-            title,
-            created_at,
-            updated_at,
-            stale: false,
-            leaves,
-        });
-    }
-    // Deterministic order — fs::read_dir is OS-dependent.
-    out.sort_by(|a, b| a.slug.cmp(&b.slug));
-    Ok(out)
-}
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {

@@ -3,8 +3,7 @@
 // Pipeline: read manifest → derive metrics → scan filesystem for size and
 //           orphan/missing checks → return StatusResult.
 //
-// Read-only: never modifies any file. Reads consult the manifest, falling
-// back to reconstruction from the secondary store on a missing manifest.
+// Read-only: never modifies any file. Reads consult the manifest.
 
 use crate::domain::frontmatter;
 use crate::domain::manifest;
@@ -91,39 +90,7 @@ pub fn compute_status(tree_dir: &Path, tree_name: &str) -> Result<StatusResult, 
     };
     let branches_dir = tree_dir.join("branches");
 
-    let manifest = match manifest::read_or_reconstruct(&tree) {
-        Ok(m) => m,
-        Err(manifest::ManifestError::TreeNotInitialized) => {
-            // No manifest, no secondary store — treat as empty tree, but still
-            // surface stray .md files via missing_from_index.
-            let leaves = LeafStatus {
-                total: 0,
-                uncompiled: 0,
-                uncompiled_slugs: Vec::new(),
-            };
-            let branches = BranchStatus {
-                total: 0,
-                last_compiled_at: None,
-            };
-            let size = compute_size(tree_dir, &branches_dir);
-            let manifest_files: HashSet<&str> = HashSet::new();
-            let missing_from_index = scan_missing_from_index(tree_dir, &manifest_files);
-            let health = HealthReport {
-                orphan_index_entries: Vec::new(),
-                missing_from_index,
-            };
-            let hints = generate_hints(&leaves, &branches, &health);
-            return Ok(StatusResult {
-                tree_name: tree_name.to_string(),
-                leaves,
-                branches,
-                size,
-                health,
-                hints,
-            });
-        }
-        Err(e) => return Err(StatusError::Manifest(e)),
-    };
+    let manifest = manifest::read(&tree.manifest_path()).map_err(StatusError::Manifest)?;
 
     // Leaf metrics straight from the manifest.
     let uncompiled_slugs: Vec<String> = manifest
