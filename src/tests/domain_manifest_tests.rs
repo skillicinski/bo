@@ -1,6 +1,7 @@
 use super::*;
+use crate::domain::tree::{Tree, TreeConfig};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 fn sample_manifest() -> Manifest {
@@ -203,6 +204,244 @@ fn branches_for_leaf_returns_singleton_when_only_one_branch_owns_it() {
 fn branches_for_leaf_returns_empty_for_unknown_leaf() {
     let m = resolution_fixture();
     assert!(m.branches_for_leaf("nope").is_empty());
+}
+
+// ── reconstruction (T2.1) ───────────────────────────────────────────────────────
+
+fn write_secondary_tree(root: &Path) {
+    let bo_dir = root.join(".bo");
+    fs::create_dir_all(&bo_dir).unwrap();
+
+    // Three leaves: alpha, beta, gamma. alpha+beta in branch topic-x;
+    // beta also in branch topic-y; gamma uncompiled.
+    let index = r#"{"file":"alpha.md","title":"Alpha","url":"https://example.com/a"}
+{"file":"beta.md","title":"Beta","url":"https://example.com/b"}
+{"file":"gamma.md","title":"Gamma","url":"https://example.com/g"}
+"#;
+    fs::write(bo_dir.join("index.jsonl"), index).unwrap();
+
+    let leaf = |slug: &str, title: &str, url: &str, collected_at: &str, summary: Option<&str>| {
+        let mut s = String::new();
+        s.push_str("---\n");
+        s.push_str(&format!("title: \"{title}\"\n"));
+        s.push_str(&format!("url: {url}\n"));
+        s.push_str(&format!("collected_at: {collected_at}\n"));
+        s.push_str(&format!("updated_at: {collected_at}\n"));
+        if let Some(sum) = summary {
+            s.push_str(&format!("summary: \"{sum}\"\n"));
+        }
+        s.push_str("---\n\n# ");
+        s.push_str(title);
+        s.push_str("\n\nbody.\n");
+        fs::write(root.join(format!("{slug}.md")), s).unwrap();
+    };
+    leaf(
+        "alpha",
+        "Alpha",
+        "https://example.com/a",
+        "2026-05-19T14:00:00Z",
+        Some("sum-alpha"),
+    );
+    leaf(
+        "beta",
+        "Beta",
+        "https://example.com/b",
+        "2026-05-19T14:30:00Z",
+        None,
+    );
+    leaf(
+        "gamma",
+        "Gamma",
+        "https://example.com/g",
+        "2026-05-19T16:00:00Z",
+        Some("sum-gamma"),
+    );
+
+    // Two branches.
+    let branches_dir = root.join("branches");
+    fs::create_dir_all(&branches_dir).unwrap();
+    let branch = |slug: &str, title: &str, created_at: &str, updated_at: &str, leaves: &[&str]| {
+        let mut s = String::new();
+        s.push_str("---\n");
+        s.push_str(&format!("title: {title}\n"));
+        s.push_str(&format!("created_at: {created_at}\n"));
+        s.push_str(&format!("updated_at: {updated_at}\n"));
+        s.push_str("leaves:\n");
+        for l in leaves {
+            s.push_str(&format!("- {l}\n"));
+        }
+        s.push_str("---\n\n# ");
+        s.push_str(title);
+        s.push_str("\n\nbody.\n");
+        fs::write(branches_dir.join(format!("{slug}.md")), s).unwrap();
+    };
+    branch(
+        "topic-x",
+        "Topic X",
+        "2026-05-19T15:00:00Z",
+        "2026-05-19T15:00:00Z",
+        &["alpha.md", "beta.md"],
+    );
+    branch(
+        "topic-y",
+        "Topic Y",
+        "2026-05-19T15:30:00Z",
+        "2026-05-19T15:30:00Z",
+        &["beta.md"],
+    );
+}
+
+fn fixture_tree(td: &TempDir) -> Tree {
+    Tree::from_config(&TreeConfig {
+        output_dir: PathBuf::from(td.path()),
+        name: Some("fixture".to_string()),
+        created_at: Some("2026-05-19T13:00:00Z".to_string()),
+    })
+}
+
+#[test]
+fn read_or_reconstruct_returns_existing_manifest_when_present() {
+    let dir = TempDir::new().unwrap();
+    let tree = fixture_tree(&dir);
+    let original = sample_manifest();
+    write(&tree.manifest_path(), &original).unwrap();
+
+    let mut warner = Vec::new();
+    let loaded = read_or_reconstruct_into(&tree, &mut warner).unwrap();
+
+    assert_eq!(loaded, original);
+    assert!(warner.is_empty(), "no warning when manifest exists");
+}
+
+#[test]
+fn read_or_reconstruct_rebuilds_from_secondary_when_manifest_absent() {
+    let dir = TempDir::new().unwrap();
+    write_secondary_tree(dir.path());
+    let tree = fixture_tree(&dir);
+
+    let mut warner = Vec::new();
+    let m = read_or_reconstruct_into(&tree, &mut warner).unwrap();
+
+    assert_eq!(m.tree.name, "fixture");
+    assert_eq!(m.tree.created_at, "2026-05-19T13:00:00Z");
+    assert_eq!(m.leaves.len(), 3);
+    assert_eq!(m.branches.len(), 2);
+
+    // Cross-references intact.
+    let topic_x = m.branch_by_slug("topic-x").unwrap();
+    assert_eq!(topic_x.leaves, vec!["alpha", "beta"]);
+    let topic_y = m.branch_by_slug("topic-y").unwrap();
+    assert_eq!(topic_y.leaves, vec!["beta"]);
+
+    // last_compiled_at = max(branch.updated_at).
+    assert_eq!(
+        m.tree.last_compiled_at.as_deref(),
+        Some("2026-05-19T15:30:00Z")
+    );
+
+    // Leaf metadata round-trips from frontmatter.
+    let alpha = m.leaf_by_slug("alpha").unwrap();
+    assert_eq!(alpha.title, "Alpha");
+    assert_eq!(alpha.url, "https://example.com/a");
+    assert_eq!(alpha.collected_at, "2026-05-19T14:00:00Z");
+    assert_eq!(alpha.summary.as_deref(), Some("sum-alpha"));
+    let beta = m.leaf_by_slug("beta").unwrap();
+    assert!(beta.summary.is_none(), "beta has no summary in fixture");
+
+    // Stderr warning emitted.
+    let warning = String::from_utf8(warner).unwrap();
+    assert!(
+        warning.contains("manifest missing; reconstructed from secondary store"),
+        "unexpected warning: {warning}"
+    );
+}
+
+#[test]
+fn read_or_reconstruct_persists_reconstructed_manifest() {
+    let dir = TempDir::new().unwrap();
+    write_secondary_tree(dir.path());
+    let tree = fixture_tree(&dir);
+
+    assert!(!tree.manifest_path().exists());
+    let mut warner = Vec::new();
+    let first = read_or_reconstruct_into(&tree, &mut warner).unwrap();
+    assert!(tree.manifest_path().exists(), "manifest persisted to disk");
+
+    // Second call returns the persisted manifest without warning.
+    let mut warner2 = Vec::new();
+    let second = read_or_reconstruct_into(&tree, &mut warner2).unwrap();
+    assert_eq!(first, second);
+    assert!(warner2.is_empty());
+}
+
+#[test]
+fn read_or_reconstruct_returns_tree_not_initialized_when_secondary_also_empty() {
+    let dir = TempDir::new().unwrap();
+    let tree = fixture_tree(&dir);
+    fs::create_dir_all(dir.path().join(".bo")).unwrap();
+
+    let mut warner = Vec::new();
+    let err = read_or_reconstruct_into(&tree, &mut warner).unwrap_err();
+    assert!(
+        matches!(err, ManifestError::TreeNotInitialized),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn read_or_reconstruct_propagates_parse_error_without_reconstructing() {
+    let dir = TempDir::new().unwrap();
+    write_secondary_tree(dir.path()); // ensure secondary exists
+    let tree = fixture_tree(&dir);
+    fs::create_dir_all(tree.manifest_path().parent().unwrap()).unwrap();
+    fs::write(tree.manifest_path(), "{not valid").unwrap();
+
+    let mut warner = Vec::new();
+    let err = read_or_reconstruct_into(&tree, &mut warner).unwrap_err();
+    assert!(matches!(err, ManifestError::Parse(_)), "got: {err}");
+    assert!(
+        warner.is_empty(),
+        "reconstruction warning must NOT fire on parse error"
+    );
+    // The corrupt file should still be on disk — we did not silently overwrite.
+    let raw = fs::read_to_string(tree.manifest_path()).unwrap();
+    assert_eq!(raw, "{not valid");
+}
+
+#[test]
+fn reconstruction_falls_back_to_dir_basename_when_tree_name_missing() {
+    let dir = TempDir::new().unwrap();
+    write_secondary_tree(dir.path());
+    let tree = Tree::from_config(&TreeConfig {
+        output_dir: PathBuf::from(dir.path()),
+        name: None,
+        created_at: Some("2026-05-19T13:00:00Z".to_string()),
+    });
+    // Tree::from_config derives name from basename when None — simulate
+    // a truly nameless tree by zeroing the field after construction.
+    let mut tree = tree;
+    tree.name = None;
+
+    let mut warner = Vec::new();
+    let m = read_or_reconstruct_into(&tree, &mut warner).unwrap();
+    let basename = dir
+        .path()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(m.tree.name, basename);
+}
+
+#[test]
+fn reconstruction_round_trips_through_write_read() {
+    let dir = TempDir::new().unwrap();
+    write_secondary_tree(dir.path());
+    let tree = fixture_tree(&dir);
+    let mut warner = Vec::new();
+    let recovered = read_or_reconstruct_into(&tree, &mut warner).unwrap();
+    let reread = read(&tree.manifest_path()).unwrap();
+    assert_eq!(recovered, reread);
 }
 
 // ── round-trip ───────────────────────────────────────────────────────────────
