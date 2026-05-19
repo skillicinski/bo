@@ -295,11 +295,10 @@ fn reconstruct_leaves(tree_dir: &Path) -> Result<Vec<LeafRecord>, ManifestError>
             Ok(m) => m,
             Err(_) => continue,
         };
-        let slug = entry
-            .file
-            .strip_suffix(".md")
-            .unwrap_or(&entry.file)
-            .to_string();
+        let slug = std::path::Path::new(&entry.file)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| entry.file.clone());
         let title = mapping
             .get("title")
             .and_then(|v| v.as_str())

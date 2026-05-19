@@ -301,12 +301,7 @@ fn diagnostics_capture_focused_title_and_summary_matches() {
 
 // ── helper tests ─────────────────────────────────────────────────────
 
-#[test]
-fn slug_from_file_strips_dir_and_extension() {
-    assert_eq!(slug_from_file("leaves/foo-bar.md"), "foo-bar");
-    assert_eq!(slug_from_file("leaves/sub/deep.md"), "deep");
-    assert_eq!(slug_from_file("simple.md"), "simple");
-}
+// (slug_from_file removed: slugs now come from manifest LeafRecord.slug)
 
 // ── citation validation tests ────────────────────────────────────────
 
