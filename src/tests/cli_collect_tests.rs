@@ -90,6 +90,30 @@ fn batch_collect_skips_existing_index_duplicates_without_fetching() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let url = "https://example.com/already";
+
+    // Write the URL into the manifest (dedup source post-T5.6) AND into
+    // index.jsonl (the secondary store still mirrored on collect).
+    let manifest_path = dir.path().join(".bo/manifest.json");
+    manifest::write(
+        &manifest_path,
+        &manifest::Manifest {
+            tree: manifest::TreeMeta {
+                name: "test".to_string(),
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+                last_compiled_at: None,
+            },
+            leaves: vec![manifest::LeafRecord {
+                slug: "already".to_string(),
+                file: "already.md".to_string(),
+                title: "Already".to_string(),
+                url: url.to_string(),
+                collected_at: "2026-01-01T00:00:00Z".to_string(),
+                summary: None,
+            }],
+            branches: Vec::new(),
+        },
+    )
+    .unwrap();
     index::append_entry(
         &dir.path().join(".bo/index.jsonl"),
         &index::IndexEntry {
@@ -173,6 +197,28 @@ fn collect_url_rejects_duplicate_youtube_url_before_network_fetch() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let url = "https://www.youtube.com/watch?v=a1mhk7mAetk";
+
+    // Dedup source after T5.6 is the manifest. Pre-populate it with the URL.
+    manifest::write(
+        &dir.path().join(".bo/manifest.json"),
+        &manifest::Manifest {
+            tree: manifest::TreeMeta {
+                name: "test".to_string(),
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+                last_compiled_at: None,
+            },
+            leaves: vec![manifest::LeafRecord {
+                slug: "existing".to_string(),
+                file: "existing.md".to_string(),
+                title: "Existing Video".to_string(),
+                url: url.to_string(),
+                collected_at: "2026-01-01T00:00:00Z".to_string(),
+                summary: None,
+            }],
+            branches: Vec::new(),
+        },
+    )
+    .unwrap();
     index::append_entry(
         &dir.path().join(".bo/index.jsonl"),
         &index::IndexEntry {
@@ -596,4 +642,51 @@ fn collect_omits_summary_field_when_empty_string() {
 
     let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert!(m.leaves[0].summary.is_none());
+}
+
+#[test]
+fn dedup_uses_manifest_not_index_jsonl() {
+    let dir = TempDir::new().unwrap();
+    seed_for_collect(&dir, "manifest-dedup-tree");
+
+    // Pre-populate the manifest with a leaf, but NOT the index. The dedup
+    // path used by ensure_not_duplicate must consult the manifest now.
+    let manifest_path = dir.path().join(".bo/manifest.json");
+    let mut m = manifest::read(&manifest_path).unwrap();
+    m.leaves.push(crate::domain::manifest::LeafRecord {
+        slug: "already-collected".to_string(),
+        file: "already-collected.md".to_string(),
+        title: "Already".to_string(),
+        url: "https://example.com/article".to_string(),
+        collected_at: "2026-01-01T00:00:00Z".to_string(),
+        summary: None,
+    });
+    manifest::write(&manifest_path, &m).unwrap();
+
+    // Verify duplicate_file (the dedup helper) finds it via manifest only.
+    let existing = duplicate_file("https://example.com/article", dir.path()).unwrap();
+    assert_eq!(existing.as_deref(), Some("already-collected.md"));
+
+    // Sanity: a different URL is not flagged.
+    let none = duplicate_file("https://example.com/other", dir.path()).unwrap();
+    assert!(none.is_none());
+}
+
+#[test]
+fn fresh_collect_after_t5_6_still_writes_index_secondary() {
+    let dir = TempDir::new().unwrap();
+    seed_for_collect(&dir, "secondary-still-written-tree");
+
+    write_new_document_with_summary_result(
+        "https://example.com/page",
+        Some("Page"),
+        "Body.",
+        dir.path(),
+        Ok("Summary".to_string()),
+    )
+    .unwrap();
+
+    let entries = index::read_index(&dir.path().join(".bo/index.jsonl")).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].url, "https://example.com/page");
 }

@@ -10,7 +10,12 @@ fn setup_tree(dir: &Path) {
     fs::create_dir_all(&bo_dir).unwrap();
 }
 
-fn write_manifest(dir: &Path, leaves: &[LeafRecord], branches: &[BranchRecord], last_compiled_at: Option<&str>) {
+fn write_manifest(
+    dir: &Path,
+    leaves: &[LeafRecord],
+    branches: &[BranchRecord],
+    last_compiled_at: Option<&str>,
+) {
     fs::create_dir_all(dir.join(".bo")).unwrap();
     let m = Manifest {
         tree: TreeMeta {

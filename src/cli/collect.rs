@@ -585,9 +585,22 @@ fn summarize_collect_items(items: &[CollectItemResult]) -> BatchCollectSummary {
 }
 
 pub fn duplicate_file(url: &str, output_dir: &Path) -> Result<Option<String>, CollectError> {
-    let index_path = tree::index_path(output_dir);
-    let entries = index::read_index(&index_path)?;
-    Ok(index::is_duplicate(&entries, url).map(|existing| existing.file.clone()))
+    let synthetic_tree = Tree {
+        name: None,
+        created_at: None,
+        output_dir: output_dir.to_path_buf(),
+    };
+    let manifest = match manifest::read_or_reconstruct(&synthetic_tree) {
+        Ok(m) => m,
+        // No manifest and no secondary store — nothing has been collected yet.
+        Err(manifest::ManifestError::TreeNotInitialized) => return Ok(None),
+        Err(e) => return Err(CollectError::Manifest(e)),
+    };
+    Ok(manifest
+        .leaves
+        .iter()
+        .find(|l| l.url == url)
+        .map(|l| l.file.clone()))
 }
 
 fn ensure_not_duplicate(url: &str, output_dir: &Path) -> Result<(), CollectError> {
