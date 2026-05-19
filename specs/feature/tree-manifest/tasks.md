@@ -38,7 +38,7 @@ Each task is one focused session. Each follows test-first authoring within itsel
 
 ## Phase 6: Raze cleanup
 
-- [ ] **T6.1 — `bo raze` deletes manifest.** Extend tests in `src/tests/cli_raze_tests.rs`: after raze on a tree containing a manifest, `manifest.json` is gone alongside the existing artifacts. Modify `src/cli/raze.rs` to remove `manifest.json` as part of teardown. Done when: raze tests assert manifest absence; existing raze coverage (auth preservation etc.) unaffected.
+- [x] **T6.1 — `bo raze` deletes manifest.** Extend tests in `src/tests/cli_raze_tests.rs`: after raze on a tree containing a manifest, `manifest.json` is gone alongside the existing artifacts. Modify `src/cli/raze.rs` to remove `manifest.json` as part of teardown. Done when: raze tests assert manifest absence; existing raze coverage (auth preservation etc.) unaffected.
 
 ## Phase 7: Read robustness
 

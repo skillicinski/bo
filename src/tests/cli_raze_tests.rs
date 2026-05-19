@@ -71,6 +71,37 @@ fn deletes_index_file() {
 }
 
 #[test]
+fn deletes_manifest_alongside_other_infra() {
+    let tmp = TempDir::new().unwrap();
+    let (tree_dir, config_path) = setup_tree(&tmp);
+    // Pre-T6.1, raze removes the entire .bo/ directory which incidentally
+    // wipes the manifest. This test pins the behaviour and guards against
+    // anyone reintroducing a manifest path that escapes infra teardown.
+    let manifest_path = tree_dir.join(".bo/manifest.json");
+    crate::domain::manifest::write(
+        &manifest_path,
+        &crate::domain::manifest::Manifest {
+            tree: crate::domain::manifest::TreeMeta {
+                name: "raze-test".to_string(),
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+                last_compiled_at: None,
+            },
+            leaves: Vec::new(),
+            branches: Vec::new(),
+        },
+    )
+    .unwrap();
+    assert!(manifest_path.exists());
+
+    let _ = raze(&tree_dir, &config_path).unwrap();
+
+    assert!(
+        !manifest_path.exists(),
+        "manifest.json must be deleted by raze"
+    );
+}
+
+#[test]
 fn removes_empty_output_directory() {
     let tmp = TempDir::new().unwrap();
     let (tree_dir, config_path) = setup_tree(&tmp);
