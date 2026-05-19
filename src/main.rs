@@ -1,4 +1,6 @@
-use bo::cli::collect::{self, CollectError};
+use bo::cli::collect::{
+    self, BatchCollectResult, CollectError, CollectItemStatus, CollectOutput, CollectResult,
+};
 use bo::cli::compile::{self, BranchResult, CompileError, CompileResult};
 use bo::cli::config as cli_config;
 use bo::cli::json::{self as json_output, JsonError, JsonWarning};
@@ -46,10 +48,14 @@ enum Commands {
         #[arg(long)]
         name: Option<String>,
     },
-    /// Fetch a URL and collect it
+    /// Fetch one or more URLs and collect them
+    #[command(
+        after_help = "Examples:\n  bo collect https://example.com/a https://example.com/b\n  bo collect urls.txt\n\nURL list files must use .txt and contain one URL per non-empty line."
+    )]
     Collect {
-        /// URL to collect
-        url: String,
+        /// URL(s) or a .txt file containing URLs, one per non-empty line
+        #[arg(required = true, value_name = "URL_OR_URLS_FILE", num_args = 1..)]
+        inputs: Vec<String>,
     },
     /// Read or update bo configuration
     Config {
@@ -128,13 +134,6 @@ enum ConfigCommands {
     },
 }
 // ── JSON payloads ────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize)]
-struct CollectResult {
-    url: String,
-    file: String,
-    path: String,
-}
 
 #[derive(Debug, Clone, Serialize)]
 struct SearchJsonData<'a> {
@@ -230,20 +229,16 @@ impl fmt::Display for CliError {
 fn collect_json_error(error: &CollectError) -> JsonError {
     match error {
         CollectError::DuplicateUrl { existing_file } => JsonError::with_details(
-            "duplicate_url",
+            collect::error_code(error),
             error.to_string(),
             json!({ "existing_file": existing_file }),
         ),
         CollectError::Rejected { url, reason } => JsonError::with_details(
-            "rejected",
+            collect::error_code(error),
             error.to_string(),
             json!({ "url": url, "reason": reason.to_string() }),
         ),
-        CollectError::Fetch(_) => JsonError::new("fetch_error", error.to_string()),
-        CollectError::Extract(_) => JsonError::new("extract_error", error.to_string()),
-        CollectError::Youtube(_) => JsonError::new("youtube_error", error.to_string()),
-        CollectError::Summary(_) => JsonError::new("llm_error", error.to_string()),
-        CollectError::Io(_) => JsonError::new("io_error", error.to_string()),
+        _ => JsonError::new(collect::error_code(error), error.to_string()),
     }
 }
 
@@ -398,9 +393,21 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 }
             }
         },
-        Commands::Collect { url } => match execute_collect(url) {
-            Ok(result) if json => emit_json_success("collect", &result, Vec::new(), stdout),
-            Ok(result) => write_human_or_error(render_collect_human(&result, stdout), stderr),
+        Commands::Collect { inputs } => match execute_collect(inputs) {
+            Ok(CollectOutput::Single(result)) if json => {
+                emit_json_success("collect", &result, Vec::new(), stdout)
+            }
+            Ok(CollectOutput::Single(result)) => {
+                write_human_or_error(render_collect_human(&result, stdout), stderr)
+            }
+            Ok(CollectOutput::Batch(result)) if json => emit_batch_collect_json(&result, stdout),
+            Ok(CollectOutput::Batch(result)) => {
+                let exit_code = if result.has_failures() { 1 } else { 0 };
+                match render_batch_collect_human(&result, stdout) {
+                    Ok(()) => exit_code,
+                    Err(_) => 1,
+                }
+            }
             Err(error) => emit_cli_error("collect", json, error, stdout, stderr),
         },
         Commands::Compile => match require_seeded_config()
@@ -607,6 +614,20 @@ fn emit_json_success<W: Write, T: Serialize>(
     }
 }
 
+fn emit_batch_collect_json<W: Write>(result: &BatchCollectResult, stdout: &mut W) -> i32 {
+    if result.has_failures() {
+        return emit_json_error(
+            "collect",
+            JsonError::with_details("batch_failed", result.failure_message(), json!(result)),
+            Vec::new(),
+            stdout,
+            1,
+        );
+    }
+
+    emit_json_success("collect", result, Vec::new(), stdout)
+}
+
 fn emit_json_error<W: Write>(
     command: &str,
     error: JsonError,
@@ -749,18 +770,17 @@ fn execute_config(action: ConfigCommands) -> Result<cli_config::ConfigCommandRes
 
     result.map_err(CliError::ConfigCommand)
 }
-fn execute_collect(url: String) -> Result<CollectResult, CliError> {
+fn execute_collect(inputs: Vec<String>) -> Result<CollectOutput, CliError> {
     let cfg = require_seeded_config()?;
-    eprintln!("fetching {}...", url);
-    let page = collect::collect_url_with_model(&url, &cfg.tree.output_dir, cfg.effective_model())
-        .map_err(CliError::Collect)?;
-    let path = cfg.tree.output_dir.join(&page.filename);
+    let output_dir = cfg.tree.output_dir.clone();
+    let collect_dir = output_dir.clone();
+    let model = cfg.effective_model().to_string();
 
-    Ok(CollectResult {
-        url: page.url,
-        file: page.filename,
-        path: path.display().to_string(),
+    collect::collect_inputs_with_collector(inputs, &output_dir, |url| {
+        eprintln!("fetching {}...", url);
+        collect::collect_url_with_model(url, &collect_dir, &model)
     })
+    .map_err(CliError::Collect)
 }
 
 fn execute_list(
@@ -846,6 +866,41 @@ fn query_json_error(error: &query::QueryError) -> JsonError {
 
 fn render_collect_human<W: Write>(result: &CollectResult, stdout: &mut W) -> io::Result<()> {
     writeln!(stdout, "✓ collected: {} → {}", result.url, result.file)
+}
+
+fn render_batch_collect_human<W: Write>(
+    result: &BatchCollectResult,
+    stdout: &mut W,
+) -> io::Result<()> {
+    for item in &result.items {
+        let label = item.url.as_deref().unwrap_or(&item.input);
+        match item.status {
+            CollectItemStatus::Collected => writeln!(
+                stdout,
+                "✓ collected: {} → {}",
+                label,
+                item.file.as_deref().unwrap_or("")
+            )?,
+            CollectItemStatus::Skipped => writeln!(
+                stdout,
+                "↷ skipped: {} ({})",
+                label,
+                item.message.as_deref().unwrap_or("skipped")
+            )?,
+            CollectItemStatus::Failed => writeln!(
+                stdout,
+                "✗ failed: {} ({})",
+                label,
+                item.message.as_deref().unwrap_or("failed")
+            )?,
+        }
+    }
+
+    writeln!(
+        stdout,
+        "collect summary: {} collected, {} skipped, {} failed",
+        result.summary.collected, result.summary.skipped, result.summary.failed
+    )
 }
 
 fn render_compile_human<W: Write>(result: &CompileResult, stdout: &mut W) -> io::Result<()> {

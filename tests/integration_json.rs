@@ -443,3 +443,56 @@ fn collect_json_duplicate_url_is_structured_error() {
     assert_eq!(parsed["error"]["code"], "duplicate_url");
     assert_eq!(parsed["error"]["details"]["existing_file"], "existing.md");
 }
+
+#[test]
+fn collect_json_batch_reports_skipped_duplicates_per_input() {
+    let home = TempDir::new().unwrap();
+    let tree = seed_tree(&home, "tree");
+    let url = "https://example.com/already";
+    bo::domain::index::append_entry(
+        &tree.join(".bo/index.jsonl"),
+        &bo::domain::index::IndexEntry {
+            file: "existing.md".to_string(),
+            title: "Existing".to_string(),
+            url: url.to_string(),
+        },
+    )
+    .unwrap();
+
+    let out = run(home.path(), &["collect", "--json", url, url]);
+    assert!(out.status.success());
+    let parsed = parse_json(&out);
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["command"], "collect");
+    assert_eq!(parsed["data"]["summary"]["collected"], 0);
+    assert_eq!(parsed["data"]["summary"]["skipped"], 2);
+    assert_eq!(parsed["data"]["summary"]["failed"], 0);
+    assert_eq!(parsed["data"]["items"][0]["status"], "skipped");
+    assert_eq!(parsed["data"]["items"][0]["code"], "duplicate_url");
+    assert_eq!(parsed["data"]["items"][0]["existing_file"], "existing.md");
+    assert_eq!(parsed["data"]["items"][1]["code"], "duplicate_input");
+}
+
+#[test]
+fn collect_json_batch_failure_includes_per_input_details() {
+    let home = TempDir::new().unwrap();
+    seed_tree(&home, "tree");
+    let urls_file = home.path().join("empty.txt");
+    fs::write(&urls_file, "\n\n").unwrap();
+
+    let out = run(
+        home.path(),
+        &["collect", "--json", urls_file.to_str().unwrap()],
+    );
+    assert!(!out.status.success());
+    let parsed = parse_json(&out);
+    assert_eq!(parsed["ok"], false);
+    assert_eq!(parsed["command"], "collect");
+    assert_eq!(parsed["error"]["code"], "batch_failed");
+    assert_eq!(parsed["error"]["details"]["summary"]["failed"], 1);
+    assert_eq!(parsed["error"]["details"]["items"][0]["status"], "failed");
+    assert_eq!(
+        parsed["error"]["details"]["items"][0]["code"],
+        "empty_url_list"
+    );
+}
