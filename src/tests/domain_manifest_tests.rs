@@ -42,6 +42,169 @@ fn empty_manifest() -> Manifest {
     }
 }
 
+fn resolution_fixture() -> Manifest {
+    // last compile at T=15:00
+    // alpha + beta collected before → "compiled"
+    // gamma collected after  → "uncompiled"
+    // topic-x: [alpha, beta], topic-y: [beta] (shared with topic-x)
+    Manifest {
+        tree: TreeMeta {
+            name: "fixture".to_string(),
+            created_at: "2026-05-19T13:00:00Z".to_string(),
+            last_compiled_at: Some("2026-05-19T15:00:00Z".to_string()),
+        },
+        leaves: vec![
+            LeafRecord {
+                slug: "alpha".to_string(),
+                file: "alpha.md".to_string(),
+                title: "Alpha".to_string(),
+                url: "https://example.com/a".to_string(),
+                collected_at: "2026-05-19T14:00:00Z".to_string(),
+                summary: None,
+            },
+            LeafRecord {
+                slug: "beta".to_string(),
+                file: "beta.md".to_string(),
+                title: "Beta".to_string(),
+                url: "https://example.com/b".to_string(),
+                collected_at: "2026-05-19T14:30:00Z".to_string(),
+                summary: None,
+            },
+            LeafRecord {
+                slug: "gamma".to_string(),
+                file: "gamma.md".to_string(),
+                title: "Gamma".to_string(),
+                url: "https://example.com/g".to_string(),
+                collected_at: "2026-05-19T16:00:00Z".to_string(),
+                summary: None,
+            },
+        ],
+        branches: vec![
+            BranchRecord {
+                slug: "topic-x".to_string(),
+                file: "branches/topic-x.md".to_string(),
+                title: "Topic X".to_string(),
+                created_at: "2026-05-19T15:00:00Z".to_string(),
+                updated_at: "2026-05-19T15:00:00Z".to_string(),
+                stale: false,
+                leaves: vec!["alpha".to_string(), "beta".to_string()],
+            },
+            BranchRecord {
+                slug: "topic-y".to_string(),
+                file: "branches/topic-y.md".to_string(),
+                title: "Topic Y".to_string(),
+                created_at: "2026-05-19T15:00:00Z".to_string(),
+                updated_at: "2026-05-19T15:00:00Z".to_string(),
+                stale: false,
+                leaves: vec!["beta".to_string()],
+            },
+        ],
+    }
+}
+
+// ── resolution helpers ───────────────────────────────────────────────────────
+
+#[test]
+fn leaf_by_slug_returns_record_for_known_slug() {
+    let m = resolution_fixture();
+    let leaf = m.leaf_by_slug("beta").unwrap();
+    assert_eq!(leaf.title, "Beta");
+}
+
+#[test]
+fn leaf_by_slug_returns_none_for_unknown_slug() {
+    let m = resolution_fixture();
+    assert!(m.leaf_by_slug("nope").is_none());
+}
+
+#[test]
+fn branch_by_slug_returns_record_for_known_slug() {
+    let m = resolution_fixture();
+    let b = m.branch_by_slug("topic-x").unwrap();
+    assert_eq!(b.title, "Topic X");
+}
+
+#[test]
+fn branch_by_slug_returns_none_for_unknown_slug() {
+    let m = resolution_fixture();
+    assert!(m.branch_by_slug("missing").is_none());
+}
+
+#[test]
+fn uncompiled_leaves_returns_only_those_collected_after_last_compile() {
+    let m = resolution_fixture();
+    let uncompiled = m.uncompiled_leaves();
+    assert_eq!(uncompiled.len(), 1);
+    assert_eq!(uncompiled[0].slug, "gamma");
+}
+
+#[test]
+fn uncompiled_leaves_returns_all_when_never_compiled() {
+    let mut m = resolution_fixture();
+    m.tree.last_compiled_at = None;
+    let uncompiled = m.uncompiled_leaves();
+    assert_eq!(uncompiled.len(), 3);
+}
+
+#[test]
+fn uncompiled_leaves_empty_when_all_predate_last_compile() {
+    let mut m = resolution_fixture();
+    m.leaves.retain(|l| l.slug != "gamma");
+    let uncompiled = m.uncompiled_leaves();
+    assert!(uncompiled.is_empty());
+}
+
+#[test]
+fn stale_branches_empty_when_no_branch_marked_stale() {
+    let m = resolution_fixture();
+    assert!(m.stale_branches().is_empty());
+}
+
+#[test]
+fn stale_branches_returns_marked_records() {
+    let mut m = resolution_fixture();
+    m.branches[0].stale = true;
+    let stale = m.stale_branches();
+    assert_eq!(stale.len(), 1);
+    assert_eq!(stale[0].slug, "topic-x");
+}
+
+#[test]
+fn leaves_for_branch_resolves_slugs_to_records() {
+    let m = resolution_fixture();
+    let leaves = m.leaves_for_branch("topic-x");
+    let slugs: Vec<&str> = leaves.iter().map(|l| l.slug.as_str()).collect();
+    assert_eq!(slugs, vec!["alpha", "beta"]);
+}
+
+#[test]
+fn leaves_for_branch_returns_empty_for_unknown_branch() {
+    let m = resolution_fixture();
+    assert!(m.leaves_for_branch("missing").is_empty());
+}
+
+#[test]
+fn branches_for_leaf_returns_multiple_when_shared() {
+    let m = resolution_fixture();
+    let branches = m.branches_for_leaf("beta");
+    let slugs: Vec<&str> = branches.iter().map(|b| b.slug.as_str()).collect();
+    assert_eq!(slugs, vec!["topic-x", "topic-y"]);
+}
+
+#[test]
+fn branches_for_leaf_returns_singleton_when_only_one_branch_owns_it() {
+    let m = resolution_fixture();
+    let branches = m.branches_for_leaf("alpha");
+    let slugs: Vec<&str> = branches.iter().map(|b| b.slug.as_str()).collect();
+    assert_eq!(slugs, vec!["topic-x"]);
+}
+
+#[test]
+fn branches_for_leaf_returns_empty_for_unknown_leaf() {
+    let m = resolution_fixture();
+    assert!(m.branches_for_leaf("nope").is_empty());
+}
+
 // ── round-trip ───────────────────────────────────────────────────────────────
 
 #[test]

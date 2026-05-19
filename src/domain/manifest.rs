@@ -103,6 +103,65 @@ impl From<serde_json::Error> for ManifestError {
     }
 }
 
+// ── resolution helpers ────────────────────────────────────────────────────────
+
+impl Manifest {
+    /// Look up a leaf by slug. `None` if no such leaf exists.
+    pub fn leaf_by_slug(&self, slug: &str) -> Option<&LeafRecord> {
+        self.leaves.iter().find(|l| l.slug == slug)
+    }
+
+    /// Look up a branch by slug. `None` if no such branch exists.
+    pub fn branch_by_slug(&self, slug: &str) -> Option<&BranchRecord> {
+        self.branches.iter().find(|b| b.slug == slug)
+    }
+
+    /// Leaves that have not been seen by a compile pass.
+    ///
+    /// A leaf is uncompiled iff `tree.last_compiled_at` is `None` or
+    /// `leaf.collected_at > tree.last_compiled_at`. RFC 3339 timestamps
+    /// in UTC compare correctly under lexicographic ordering.
+    pub fn uncompiled_leaves(&self) -> Vec<&LeafRecord> {
+        match self.tree.last_compiled_at.as_deref() {
+            None => self.leaves.iter().collect(),
+            Some(last) => self
+                .leaves
+                .iter()
+                .filter(|l| l.collected_at.as_str() > last)
+                .collect(),
+        }
+    }
+
+    /// Branches whose `stale` flag is set. Always empty in 3a; populated by
+    /// incremental compile (item 4) when a referenced leaf has been removed.
+    pub fn stale_branches(&self) -> Vec<&BranchRecord> {
+        self.branches.iter().filter(|b| b.stale).collect()
+    }
+
+    /// Resolve a branch's leaf-slug list to full `LeafRecord`s. Empty when
+    /// the branch is unknown or owns no leaves.
+    pub fn leaves_for_branch(&self, branch_slug: &str) -> Vec<&LeafRecord> {
+        let Some(branch) = self.branch_by_slug(branch_slug) else {
+            return Vec::new();
+        };
+        branch
+            .leaves
+            .iter()
+            .filter_map(|s| self.leaf_by_slug(s))
+            .collect()
+    }
+
+    /// Inverse of `leaves_for_branch`: which branches contain a given leaf.
+    /// Computed in-memory at call time; the manifest does not persist this
+    /// direction of the cross-reference.
+    pub fn branches_for_leaf(&self, leaf_slug: &str) -> Vec<&BranchRecord> {
+        self.branches
+            .iter()
+            .filter(|b| b.leaves.iter().any(|s| s == leaf_slug))
+            .collect()
+    }
+}
+
 // ── public I/O ────────────────────────────────────────────────────────────────
 
 /// Read a manifest from disk.
