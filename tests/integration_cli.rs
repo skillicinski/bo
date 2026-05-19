@@ -315,6 +315,22 @@ fn collect_without_seed_fails_with_helpful_message() {
     );
 }
 
+#[test]
+fn collect_help_documents_batch_url_inputs() {
+    let home = TempDir::new().unwrap();
+
+    let out = bo(home.path())
+        .args(["collect", "--help"])
+        .output()
+        .unwrap();
+
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("bo collect https://example.com/a https://example.com/b"));
+    assert!(stdout.contains("bo collect urls.txt"));
+    assert!(stdout.contains("one URL per non-empty line"));
+}
+
 // ── config ───────────────────────────────────────────────────────────────────
 
 #[test]
