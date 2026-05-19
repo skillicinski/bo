@@ -4,8 +4,8 @@ version = "0.0.1"
 edition = "2021"
 license = "MIT"
 description = "Collect web pages into a local markdown knowledge tree"
-repository = "https://github.com/jellysnake/bo"
-homepage = "https://github.com/jellysnake/bo"
+repository = "https://github.com/skillicinski/bo"
+homepage = "https://github.com/skillicinski/bo"
 keywords = ["cli", "knowledge-base", "markdown", "rag", "web"]
 categories = ["command-line-utilities"]
 

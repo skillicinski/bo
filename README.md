@@ -11,7 +11,7 @@ All you need is to bring your own API key!
 ## Install
 
 ```bash
-cargo install --git https://github.com/jellysnake/bo --tag v0.0.1
+cargo install --git https://github.com/skillicinski/bo --tag v0.0.1
 ```
 
 ## Quickstart
