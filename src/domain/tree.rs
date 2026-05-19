@@ -100,6 +100,11 @@ impl Tree {
     pub fn state_path(&self) -> PathBuf {
         self.infra_dir().join("state.json")
     }
+
+    /// Path to the manifest file: `{output_dir}/.bo/manifest.json`.
+    pub fn manifest_path(&self) -> PathBuf {
+        self.infra_dir().join("manifest.json")
+    }
 }
 
 // ── Free path helpers ──────────────────────────────────────────────────────────
@@ -112,6 +117,11 @@ pub fn index_path(tree_dir: &Path) -> PathBuf {
 /// State path from a bare tree directory.
 pub fn state_path(tree_dir: &Path) -> PathBuf {
     tree_dir.join(".bo").join("state.json")
+}
+
+/// Manifest path from a bare tree directory.
+pub fn manifest_path(tree_dir: &Path) -> PathBuf {
+    tree_dir.join(".bo").join("manifest.json")
 }
 
 /// Infra directory from a bare tree directory.

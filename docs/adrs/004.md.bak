@@ -1,0 +1,344 @@
+# ADR-004: Normalized Manifest, Materialized Views, and Write-Intent Recovery
+
+**Status:** Proposed  
+**Date:** 2026-05-16
+
+---
+
+## Context
+
+Bo's tree state is currently spread across multiple files:
+
+- `{tree}/.bo/index.jsonl` — append-only leaf roster (URL, title, filename)
+- `{tree}/.bo/state.json` — compile timestamp
+- `{tree}/branches/` directory — branch existence discovered by filesystem scan
+- Individual file frontmatter — authoritative per-entity metadata
+
+This works but has compounding problems:
+
+1. **No single source of truth.** Tree topology is reconstructed by joining index + filesystem scan + frontmatter reads. Status, compile, and query all re-derive the same state differently.
+
+2. **No crash safety.** A compile that writes 3 branch files and updates 10 leaf frontmatter entries can fail mid-way, leaving the tree in an inconsistent state with no recovery path.
+
+3. **Branch metadata is invisible to the index.** Incremental compile needs to know which branches exist, which leaves they contain, and whether they're stale — information that currently requires scanning the branches directory and parsing every branch's frontmatter.
+
+4. **Schema evolution is painful across multiple files.** Adding a field to the index requires migrating JSONL parsing; adding branch tracking requires a new file format entirely.
+
+The Iceberg table format and Kimball's One Big Table pattern demonstrate that for datasets well below millions of rows, full denormalization into a single manifest eliminates join complexity, simplifies schema evolution, and maps cleanly to future storage backends (SQLite, cloud KV stores) without relational overhead.
+
+---
+
+## Decision
+
+### 1. Single denormalized manifest
+
+All tree topology and metadata lives in `{tree}/.bo/manifest.json`. This file is the single source of truth for what exists in the tree, how entities relate, and what state they're in.
+
+Each record is **self-contained for its own data** but uses **slug-only cross-references** to other entities. A branch record lists its leaf slugs; a leaf record lists its branch slugs. Resolution to full records happens in-memory at the point of use — the full manifest is always loaded, so lookups are trivial linear scans over small collections.
+
+This is inspired by Iceberg manifest files (each entry carries its own metadata) and Kimball denormalization (optimize for reads), but refined by a key insight: since the entire manifest is in memory for every operation, inlining cross-referenced data into the storage format provides no read benefit while creating consistency maintenance burden. Denormalization happens at materialization — when an operation needs a resolved view, it builds one from the normalized records.
+
+**The manifest replaces:** `index.jsonl`, `state.json`, and filesystem scanning of the `branches/` directory.
+
+**The manifest does NOT replace:** the actual `.md` content files. Content lives on disk as markdown; the manifest tracks structure and metadata.
+
+### 2. Write-intent recovery
+
+Every mutating operation follows a write-ahead pattern:
+
+1. Write `{tree}/.bo/pending.json` describing the intended mutations
+2. Execute file mutations (write/delete .md files)
+3. Write updated `manifest.json`
+4. Delete `pending.json`
+
+If `pending.json` exists when any bo command starts, the previous operation was interrupted. Recovery can roll forward or back depending on whether the manifest was updated.
+
+---
+
+## Manifest Schema
+
+```rust
+/// {tree}/.bo/manifest.json
+///
+/// Normalized core data model. Each record is self-contained for its
+/// own fields; cross-references use slugs (resolved in-memory at point of use).
+/// Rewritten atomically on every mutation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Manifest {
+    /// Schema version. Incremented on breaking changes.
+    /// Non-breaking additions use #[serde(default)].
+    pub version: u32,
+
+    pub tree: TreeMeta,
+
+    /// All collected leaves. Vec, not map — iteration order is stable
+    /// (insertion order / collected_at). Slug lookups are linear but
+    /// the list is small enough that this doesn't matter (<1000 entries).
+    pub leaves: Vec<LeafRecord>,
+
+    /// All compiled branches.
+    pub branches: Vec<BranchRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TreeMeta {
+    pub name: String,
+    pub created_at: String,
+    /// Set on successful compile. None if never compiled.
+    pub last_compiled_at: Option<String>,
+}
+
+/// A leaf record — self-contained for its own data.
+/// Cross-references to branches are slug-only.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LeafRecord {
+    pub slug: String,
+    pub file: String,
+    pub title: String,
+    pub url: String,
+    pub collected_at: String,
+    #[serde(default)]
+    pub summary: Option<String>,
+
+    /// Branch slugs this leaf is assigned to. Empty = uncompiled.
+    #[serde(default)]
+    pub branches: Vec<String>,
+}
+
+/// A branch record — self-contained for its own data.
+/// Cross-references to leaves are slug-only.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BranchRecord {
+    pub slug: String,
+    pub file: String,
+    pub title: String,
+    pub compiled_at: String,
+    /// Whether a referenced leaf has been deleted or modified
+    /// since this branch was last compiled.
+    #[serde(default)]
+    pub stale: bool,
+
+    /// Leaf slugs in this branch.
+    pub leaves: Vec<String>,
+}
+```
+
+### Domain primitives (resolution helpers)
+
+Operations that need resolved/denormalized data use methods on `Manifest`:
+
+```rust
+impl Manifest {
+    pub fn leaf_by_slug(&self, slug: &str) -> Option<&LeafRecord> { ... }
+    pub fn branch_by_slug(&self, slug: &str) -> Option<&BranchRecord> { ... }
+    pub fn uncompiled_leaves(&self) -> Vec<&LeafRecord> { ... }
+    pub fn stale_branches(&self) -> Vec<&BranchRecord> { ... }
+    pub fn leaves_for_branch(&self, branch_slug: &str) -> Vec<&LeafRecord> { ... }
+    pub fn branches_for_leaf(&self, leaf_slug: &str) -> Vec<&BranchRecord> { ... }
+}
+```
+
+These are the composable primitives that `compile`, `query`, `status`, and future commands use. Each operation builds its own ephemeral materialized view from these primitives as needed (e.g., compile resolves branch slugs into full leaf data for the LLM prompt).
+
+### Architectural stance: normalized domain, denormalized views
+
+The manifest stores the **normalized core data model** — the pure domain representation. Cross-references between entities use slugs (stable identifiers), not inlined copies of referenced data.
+
+**Denormalization is a property of consumers, not of the domain.** Each operation materializes the view it needs at the point of use:
+
+| Consumer | Materializes |
+|----------|-------------|
+| `bo compile` (LLM prompt) | Resolved view: branch structure + full leaf summaries |
+| `bo query` (retrieval) | Context window: relevant leaf content + branch summaries |
+| `bo status --json` | Projection: counts, staleness, hints derived from records |
+| Branch `.md` files | Persistent artifact: synthesised prose |
+
+The domain model is read → an ephemeral view is constructed → the operation produces output → the ephemeral view is discarded. Only the domain model (manifest) and content artifacts (.md files) persist.
+
+This means:
+- **One place to understand the domain** — `src/domain/manifest.rs`
+- **No intermediate ref/DTO types** between domain and consumers
+- **Schema evolution only touches domain types** — consumers adapt to whatever the domain exposes
+- **Each operation owns its materialization logic** — no shared view layer to version
+
+### Schema evolution strategy
+
+- **Non-breaking additions:** new fields use `#[serde(default)]`. Old manifests deserialize cleanly; new manifests carry the extra data.
+- **Breaking changes:** increment `version`. Migration code reads old version, writes new version. Only needed for field removals or type changes (expected to be rare).
+- **Future DB migration:** each `LeafRecord` / `BranchRecord` maps 1:1 to a row. `branches`/`leaves` Vec<String> fields serialize as JSON columns or are split into a single junction table if needed. No complex relational schema required.
+
+---
+
+## Write-Intent Schema
+
+```rust
+/// {tree}/.bo/pending.json
+///
+/// Exists on disk only during an active mutation.
+/// Presence = incomplete operation requiring recovery.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingOperation {
+    pub op: OpKind,
+    pub started_at: String,
+    /// SHA-256 of manifest.json bytes before the operation.
+    /// Used by recovery to determine if mutations partially landed.
+    pub pre_manifest_hash: String,
+    /// Files this operation intends to write (relative to tree root).
+    pub writes: Vec<PendingWrite>,
+    /// Files this operation intends to delete.
+    #[serde(default)]
+    pub deletes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum OpKind {
+    Collect { url: String },
+    Compile { mode: CompileMode },
+    Raze { include_auth: bool },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum CompileMode {
+    Incremental,
+    Full,
+    RebuildStale,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingWrite {
+    /// Path relative to tree root.
+    pub path: String,
+    /// SHA-256 of intended content. Used to verify writes landed correctly.
+    pub content_hash: String,
+}
+```
+
+### Recovery logic
+
+On startup of any mutating command, if `pending.json` exists:
+
+1. Compute current SHA-256 of `manifest.json`.
+2. **If `current_hash == pre_manifest_hash`:** the manifest was never updated → the operation crashed before completing. All pending writes may or may not have landed, but the manifest doesn't reflect them. **Action:** delete any pending write files that exist on disk but aren't in the manifest (rollback), then delete `pending.json`. Warn the user.
+3. **If `current_hash != pre_manifest_hash`:** the manifest was updated → the operation completed but crashed before deleting `pending.json`. **Action:** delete `pending.json`. No data loss.
+
+This gives crash safety with ~zero complexity. The manifest is the commit point — either it reflects the new state or it doesn't.
+
+---
+
+## Operation Flows
+
+### `bo collect <url>`
+
+```
+1. Read manifest.json
+2. Check url against leaves[].url → reject if duplicate
+3. Write pending.json { op: Collect{url}, writes: [{path: "slug.md", hash}], pre_manifest_hash }
+4. Write {tree}/{slug}.md
+5. Append LeafRecord to manifest.leaves, write manifest.json
+6. Delete pending.json
+```
+
+### `bo compile` (incremental)
+
+```
+1. Read manifest.json
+2. Filter leaves where branches vec is empty (uncompiled)
+3. If none: exit "nothing to compile"
+4. Build LLM prompt: resolve existing branches (from manifest) + new leaf summaries
+5. LLM call → validate response
+6. Write pending.json { op: Compile{Incremental}, writes: [branch files + manifest], pre_manifest_hash }
+7. Write/update branch .md files
+8. Update manifest: add/update BranchRecords, set leaf branch slugs, set last_compiled_at
+9. Write manifest.json
+10. Delete pending.json
+```
+
+### `bo compile --all` (full recompile)
+
+```
+Same as incremental but step 2 selects ALL leaves regardless of branch_assignments.
+Existing branches are overwritten, not appended to.
+```
+
+### `bo status`
+
+```
+1. Read manifest.json
+2. Derive all metrics directly from manifest (no filesystem scan needed):
+   - Leaf count: manifest.leaves.len()
+   - Branch count: manifest.branches.len()
+   - Uncompiled: leaves where branches vec is empty
+   - Last compiled: manifest.tree.last_compiled_at
+   - Stale branches: branches where stale == true
+3. Filesystem scan only for: total bytes (content size), health checks (orphan detection)
+```
+
+### `bo raze`
+
+```
+1. Write pending.json { op: Raze{include_auth}, deletes: [all tree files], pre_manifest_hash }
+2. Delete tree content files
+3. Delete manifest.json
+4. Delete pending.json
+5. Delete config.json (and auth.json if --include-auth)
+```
+
+---
+
+## Migration from v0.0.1 layout
+
+On first run after upgrade, if `index.jsonl` exists and `manifest.json` does not:
+
+1. Read `index.jsonl` → populate `manifest.leaves` (slug derived from filename)
+2. Scan `branches/` directory → parse frontmatter → populate `manifest.branches`
+3. Cross-reference: for each branch's `leaves` frontmatter field, populate both `branch.leaves` and `leaf.branches`
+4. Read `state.json` if present → set `tree.last_compiled_at`
+5. Write `manifest.json`
+6. Rename `index.jsonl` → `index.jsonl.bak`, `state.json` → `state.json.bak`
+7. Log: "migrated tree to manifest format (v1)"
+
+---
+
+## Consequences
+
+**Positive:**
+
+- Single source of truth — all tree topology answered from one file read
+- Crash-safe mutations — no partial state possible
+- O(1) file reads for status/compile planning — no directory scanning
+- Schema evolution via serde defaults — additive changes are free
+- Clean DB migration path — flat records with slug references, trivial junction table if needed
+- Enables dry-run trivially (write pending.json, print it, stop)
+- Enables incremental compile (manifest knows exactly what's uncompiled/stale)
+- No consistency maintenance — slug references never go stale (only the target record can be deleted, detectable by failed lookup)
+- No intermediate types (LeafRef, BranchRef) to maintain in parallel with domain types
+
+**Negative:**
+
+- Slug resolution requires linear scan over Vec — irrelevant at target scale, O(1) HashMap upgrade available if needed later
+- Manifest must be read into memory in full on every command — fine at target scale (<1MB), would need revisiting only at 10K+ entries
+- Branch content lives in .md files while branch metadata lives in manifest — two locations for one logical entity (manifest is canonical for metadata; .md file is canonical for content)
+
+**Neutral:**
+
+- Loss of append-only semantics from JSONL — acceptable because atomic rewrite + pending.json provides stronger guarantees
+- Branch .md files retain frontmatter as convenience projection — manifest wins on conflict, `bo status` can flag divergence
+
+---
+
+## Alternatives Considered
+
+1. **Extend index.jsonl with branch entries** — preserves append-only but doesn't solve crash safety, still requires filesystem scanning for branch metadata, and JSONL is awkward for updates/deletions.
+
+2. **Fully denormalized manifest with inlined cross-references** (LeafRef/BranchRef types carrying full metadata of referenced entities) — eliminates lookups but creates consistency maintenance burden (renaming a branch means updating it everywhere), requires parallel DTO types that mirror domain types, and provides no real benefit when the full manifest is loaded into memory anyway. Denormalization should happen at materialization, not at storage.
+
+3. **SQLite from day one** — correct eventually but premature now. Adds a build dependency, complicates the "it's just files" mental model, and the manifest can migrate to SQLite later when scale demands it. The normalized records map directly to tables.
+
+---
+
+## References
+
+- Apache Iceberg manifest files: fully self-contained per-file metadata, no joins against other manifests
+- Kimball dimensional modeling / One Big Table: denormalize for read performance when write amplification is acceptable
+- Write-ahead logging (WAL): intent-before-mutation for crash recovery, simplified here to a single pending.json file
