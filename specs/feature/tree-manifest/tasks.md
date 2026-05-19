@@ -42,9 +42,9 @@ Each task is one focused session. Each follows test-first authoring within itsel
 
 ## Phase 7: Read robustness
 
-- [ ] **T7.1 — Reads survive secondary-store deletion.** Add a new integration test (file: `tests/integration_manifest_reads.rs` if a crate-root tests dir convention exists, otherwise `src/tests/cli_manifest_reads_tests.rs`): build a fixture tree via the public commands (`seed` + `collect` + `compile`); delete `.bo/index.jsonl` and `.bo/state.json` from disk; run `bo status --json`, `bo list --json`, `bo show <slug> --json`, `bo query "..." --json` (mock provider) and assert each produces output identical to a control run with the secondary files present. Done when: the test passes, demonstrating reads have actually moved to the manifest.
+- [x] **T7.1 — Reads survive secondary-store deletion.** Add a new integration test (file: `tests/integration_manifest_reads.rs` if a crate-root tests dir convention exists, otherwise `src/tests/cli_manifest_reads_tests.rs`): build a fixture tree via the public commands (`seed` + `collect` + `compile`); delete `.bo/index.jsonl` and `.bo/state.json` from disk; run `bo status --json`, `bo list --json`, `bo show <slug> --json`, `bo query "..." --json` (mock provider) and assert each produces output identical to a control run with the secondary files present. Done when: the test passes, demonstrating reads have actually moved to the manifest.
 
-- [ ] **T7.2 — Reads survive manifest deletion via reconstruction.** Add a test (same file as T7.1): build a fixture tree; delete `.bo/manifest.json`; run a read command; assert: command exits 0; output matches control; stderr contains `manifest missing; reconstructed from secondary store`; `.bo/manifest.json` exists again after the run. Done when: reconstruction integration is exercised end-to-end.
+- [x] **T7.2 — Reads survive manifest deletion via reconstruction.** Add a test (same file as T7.1): build a fixture tree; delete `.bo/manifest.json`; run a read command; assert: command exits 0; output matches control; stderr contains `manifest missing; reconstructed from secondary store`; `.bo/manifest.json` exists again after the run. Done when: reconstruction integration is exercised end-to-end.
 
 ## Phase 8: Final pass
 
