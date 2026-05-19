@@ -15,7 +15,10 @@
 // Dependency direction: collect → adapters, fetch, quality, extract, leaf, slug, index.
 
 use chrono::Utc;
+use serde::Serialize;
+use std::collections::HashMap;
 use std::fmt;
+use std::fs;
 use std::path::Path;
 
 use crate::adapters::youtube::{self, YoutubeError, YoutubeUrlMatch};
@@ -98,6 +101,108 @@ impl From<summary::SummaryError> for CollectError {
 impl From<std::io::Error> for CollectError {
     fn from(e: std::io::Error) -> Self {
         CollectError::Io(e)
+    }
+}
+
+pub fn error_code(error: &CollectError) -> &'static str {
+    match error {
+        CollectError::DuplicateUrl { .. } => "duplicate_url",
+        CollectError::Rejected { .. } => "rejected",
+        CollectError::Fetch(_) => "fetch_error",
+        CollectError::Extract(_) => "extract_error",
+        CollectError::Youtube(_) => "youtube_error",
+        CollectError::Summary(_) => "llm_error",
+        CollectError::Io(_) => "io_error",
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CollectResult {
+    pub url: String,
+    pub file: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BatchCollectResult {
+    pub summary: BatchCollectSummary,
+    pub items: Vec<CollectItemResult>,
+}
+
+impl BatchCollectResult {
+    pub fn has_failures(&self) -> bool {
+        self.summary.failed > 0
+    }
+
+    pub fn failure_message(&self) -> String {
+        format!(
+            "{} of {} collect inputs failed",
+            self.summary.failed, self.summary.total
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BatchCollectSummary {
+    pub total: usize,
+    pub collected: usize,
+    pub skipped: usize,
+    pub failed: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CollectItemResult {
+    pub input: String,
+    pub status: CollectItemStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub existing_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollectItemStatus {
+    Collected,
+    Skipped,
+    Failed,
+}
+
+#[derive(Debug, Clone)]
+pub enum CollectOutput {
+    Single(CollectResult),
+    Batch(BatchCollectResult),
+}
+
+#[derive(Debug, Clone)]
+enum ExpandedCollectInput {
+    Url {
+        input: String,
+        url: String,
+        from_file: bool,
+    },
+    Failure {
+        item: CollectItemResult,
+        from_file: bool,
+    },
+}
+
+impl ExpandedCollectInput {
+    fn is_from_file(&self) -> bool {
+        match self {
+            ExpandedCollectInput::Url { from_file, .. }
+            | ExpandedCollectInput::Failure { from_file, .. } => *from_file,
+        }
     }
 }
 
@@ -200,6 +305,272 @@ pub fn collect_html_with_model(
         output_dir,
         model,
     )
+}
+
+pub fn collect_inputs_with_collector<F>(
+    inputs: Vec<String>,
+    output_dir: &Path,
+    mut collector: F,
+) -> Result<CollectOutput, CollectError>
+where
+    F: FnMut(&str) -> Result<Document, CollectError>,
+{
+    let expanded = expand_collect_inputs(&inputs);
+    let batch_mode = inputs.len() > 1 || expanded.iter().any(ExpandedCollectInput::is_from_file);
+
+    if !batch_mode {
+        let Some(ExpandedCollectInput::Url { url, .. }) = expanded.first() else {
+            return Ok(CollectOutput::Batch(collect_batch(
+                expanded,
+                output_dir,
+                &mut collector,
+            )));
+        };
+        let page = collector(url)?;
+        return Ok(CollectOutput::Single(collect_result_from_document(
+            output_dir, page,
+        )));
+    }
+
+    Ok(CollectOutput::Batch(collect_batch(
+        expanded,
+        output_dir,
+        &mut collector,
+    )))
+}
+
+fn expand_collect_inputs(inputs: &[String]) -> Vec<ExpandedCollectInput> {
+    inputs
+        .iter()
+        .flat_map(|input| expand_collect_input(input))
+        .collect()
+}
+
+fn expand_collect_input(input: &str) -> Vec<ExpandedCollectInput> {
+    if !is_url_list_file(input) {
+        return vec![ExpandedCollectInput::Url {
+            input: input.to_string(),
+            url: input.to_string(),
+            from_file: false,
+        }];
+    }
+
+    let contents = match fs::read_to_string(input) {
+        Ok(contents) => contents,
+        Err(error) => {
+            return vec![ExpandedCollectInput::Failure {
+                item: collect_failure_item(
+                    input,
+                    None,
+                    "url_list_read_error",
+                    format!("failed to read URL list: {error}"),
+                ),
+                from_file: true,
+            }]
+        }
+    };
+
+    let mut urls = Vec::new();
+    for (line_index, line) in contents.lines().enumerate() {
+        let url = line.trim();
+        if url.is_empty() {
+            continue;
+        }
+        urls.push(ExpandedCollectInput::Url {
+            input: format!("{}:{}", input, line_index + 1),
+            url: url.to_string(),
+            from_file: true,
+        });
+    }
+
+    if urls.is_empty() {
+        urls.push(ExpandedCollectInput::Failure {
+            item: collect_failure_item(
+                input,
+                None,
+                "empty_url_list",
+                "URL list file contains no URLs",
+            ),
+            from_file: true,
+        });
+    }
+
+    urls
+}
+
+fn is_url_list_file(input: &str) -> bool {
+    let path = Path::new(input);
+    let has_txt_extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("txt"));
+
+    has_txt_extension && (path.is_file() || !input.contains("://"))
+}
+
+fn collect_batch<F>(
+    expanded: Vec<ExpandedCollectInput>,
+    output_dir: &Path,
+    collector: &mut F,
+) -> BatchCollectResult
+where
+    F: FnMut(&str) -> Result<Document, CollectError>,
+{
+    let mut items = Vec::new();
+    let mut seen: HashMap<String, String> = HashMap::new();
+
+    for input in expanded {
+        let (input, url) = match input {
+            ExpandedCollectInput::Url { input, url, .. } => (input, url),
+            ExpandedCollectInput::Failure { item, .. } => {
+                items.push(item);
+                continue;
+            }
+        };
+
+        if let Some(first_input) = seen.get(&url) {
+            items.push(collect_skipped_item(
+                &input,
+                &url,
+                "duplicate_input",
+                format!("duplicate input URL first listed at {first_input}"),
+                None,
+            ));
+            continue;
+        }
+        seen.insert(url.clone(), input.clone());
+
+        match duplicate_file(&url, output_dir) {
+            Ok(Some(existing_file)) => {
+                items.push(collect_skipped_item(
+                    &input,
+                    &url,
+                    "duplicate_url",
+                    format!("already collected → {existing_file}"),
+                    Some(existing_file),
+                ));
+                continue;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                items.push(collect_item_from_error(&input, &url, error));
+                continue;
+            }
+        }
+
+        match collector(&url) {
+            Ok(page) => items.push(collect_success_item(
+                &input,
+                collect_result_from_document(output_dir, page),
+            )),
+            Err(CollectError::DuplicateUrl { existing_file }) => items.push(collect_skipped_item(
+                &input,
+                &url,
+                "duplicate_url",
+                format!("already collected → {existing_file}"),
+                Some(existing_file),
+            )),
+            Err(error) => items.push(collect_item_from_error(&input, &url, error)),
+        }
+    }
+
+    let summary = summarize_collect_items(&items);
+    BatchCollectResult { summary, items }
+}
+
+fn collect_result_from_document(output_dir: &Path, page: Document) -> CollectResult {
+    let path = output_dir.join(&page.filename);
+    CollectResult {
+        url: page.url,
+        file: page.filename,
+        path: path.display().to_string(),
+    }
+}
+
+fn collect_success_item(input: &str, result: CollectResult) -> CollectItemResult {
+    CollectItemResult {
+        input: input.to_string(),
+        status: CollectItemStatus::Collected,
+        url: Some(result.url),
+        file: Some(result.file),
+        path: Some(result.path),
+        code: None,
+        message: None,
+        existing_file: None,
+        reason: None,
+    }
+}
+
+fn collect_skipped_item(
+    input: &str,
+    url: &str,
+    code: &str,
+    message: String,
+    existing_file: Option<String>,
+) -> CollectItemResult {
+    CollectItemResult {
+        input: input.to_string(),
+        status: CollectItemStatus::Skipped,
+        url: Some(url.to_string()),
+        file: None,
+        path: None,
+        code: Some(code.to_string()),
+        message: Some(message),
+        existing_file,
+        reason: None,
+    }
+}
+
+fn collect_failure_item(
+    input: &str,
+    url: Option<&str>,
+    code: &str,
+    message: impl Into<String>,
+) -> CollectItemResult {
+    CollectItemResult {
+        input: input.to_string(),
+        status: CollectItemStatus::Failed,
+        url: url.map(str::to_string),
+        file: None,
+        path: None,
+        code: Some(code.to_string()),
+        message: Some(message.into()),
+        existing_file: None,
+        reason: None,
+    }
+}
+
+fn collect_item_from_error(input: &str, url: &str, error: CollectError) -> CollectItemResult {
+    let mut item = collect_failure_item(input, Some(url), error_code(&error), error.to_string());
+    match error {
+        CollectError::DuplicateUrl { existing_file } => {
+            item.status = CollectItemStatus::Skipped;
+            item.existing_file = Some(existing_file);
+        }
+        CollectError::Rejected { reason, .. } => {
+            item.reason = Some(reason.to_string());
+        }
+        _ => {}
+    }
+    item
+}
+
+fn summarize_collect_items(items: &[CollectItemResult]) -> BatchCollectSummary {
+    BatchCollectSummary {
+        total: items.len(),
+        collected: items
+            .iter()
+            .filter(|item| item.status == CollectItemStatus::Collected)
+            .count(),
+        skipped: items
+            .iter()
+            .filter(|item| item.status == CollectItemStatus::Skipped)
+            .count(),
+        failed: items
+            .iter()
+            .filter(|item| item.status == CollectItemStatus::Failed)
+            .count(),
+    }
 }
 
 pub fn duplicate_file(url: &str, output_dir: &Path) -> Result<Option<String>, CollectError> {
