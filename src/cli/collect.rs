@@ -202,13 +202,15 @@ pub fn collect_html_with_model(
     )
 }
 
-fn ensure_not_duplicate(url: &str, output_dir: &Path) -> Result<(), CollectError> {
+pub fn duplicate_file(url: &str, output_dir: &Path) -> Result<Option<String>, CollectError> {
     let index_path = tree::index_path(output_dir);
     let entries = index::read_index(&index_path)?;
-    if let Some(existing) = index::is_duplicate(&entries, url) {
-        return Err(CollectError::DuplicateUrl {
-            existing_file: existing.file.clone(),
-        });
+    Ok(index::is_duplicate(&entries, url).map(|existing| existing.file.clone()))
+}
+
+fn ensure_not_duplicate(url: &str, output_dir: &Path) -> Result<(), CollectError> {
+    if let Some(existing_file) = duplicate_file(url, output_dir)? {
+        return Err(CollectError::DuplicateUrl { existing_file });
     }
     Ok(())
 }
