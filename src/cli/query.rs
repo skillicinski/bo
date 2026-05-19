@@ -13,6 +13,7 @@ use crate::engine::llm::{
     LlmProvider, Message, OpenAiProvider,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashSet;
 use std::fmt;
 use std::fs;
@@ -29,6 +30,10 @@ const MIN_QUERY_SOURCE_WORDS: usize = 1000;
 const TOKENS_TO_WORDS_NUMERATOR: usize = 3;
 const TOKENS_TO_WORDS_DENOMINATOR: usize = 4;
 const SUMMARY_FALLBACK_WORDS: usize = 200;
+const MIN_SINGLE_TERM_DENSITY: f64 = 20.0;
+const MIN_MULTI_TERM_DENSITY: f64 = 8.0;
+const MOSTLY_GENERIC_RATIO_NUMERATOR: usize = 2;
+const MOSTLY_GENERIC_RATIO_DENOMINATOR: usize = 3;
 
 const QUERY_LLM_POLICY: LlmCallPolicy = LlmCallPolicy {
     timeout: Duration::from_secs(60),
@@ -62,6 +67,21 @@ pub struct Citation {
     pub file: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LowRelevanceReason {
+    WeakMatches,
+    GenericQuery,
+}
+
+impl LowRelevanceReason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LowRelevanceReason::WeakMatches => "weak_matches",
+            LowRelevanceReason::GenericQuery => "generic_query",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum QueryError {
     /// No API key / provider configured
@@ -90,6 +110,11 @@ pub enum QueryError {
     Llm(LlmError),
     /// LLM response could not be parsed
     Parse(String),
+    /// Retrieved matches are too weak or generic to support synthesis
+    LowRelevance {
+        reason: LowRelevanceReason,
+        matched_sources: usize,
+    },
     /// Synthesis produced zero valid citations — tree doesn't cover the question
     InsufficientSources { leaves_consulted: usize },
 }
@@ -126,6 +151,16 @@ impl fmt::Display for QueryError {
             QueryError::ContentFilter => write!(f, "query synthesis was blocked by content filter"),
             QueryError::Llm(e) => write!(f, "{}", e),
             QueryError::Parse(msg) => write!(f, "synthesis failed — {}", msg),
+            QueryError::LowRelevance { reason, .. } => match reason {
+                LowRelevanceReason::WeakMatches => write!(
+                    f,
+                    "found matching sources, but they were not relevant enough to answer"
+                ),
+                LowRelevanceReason::GenericQuery => write!(
+                    f,
+                    "query terms were too generic to identify relevant sources"
+                ),
+            },
             QueryError::InsufficientSources { leaves_consulted } => write!(
                 f,
                 "searched {} sources but could not produce a grounded answer",
@@ -136,13 +171,73 @@ impl fmt::Display for QueryError {
 }
 
 impl QueryError {
-    /// Exit code per spec: 1 = no results, 2 = provider/config/system error
+    /// Exit code per spec: 1 = no-answer, 2 = provider/config/system error.
     pub fn exit_code(&self) -> i32 {
         match self {
             QueryError::NoResults
             | QueryError::EmptyTree
+            | QueryError::LowRelevance { .. }
             | QueryError::InsufficientSources { .. } => 1,
             _ => 2,
+        }
+    }
+
+    pub fn code(&self) -> &'static str {
+        match self {
+            QueryError::NoProvider(_) => "no_provider",
+            QueryError::NoTerms => "no_terms",
+            QueryError::NoResults => "no_results",
+            QueryError::EmptyTree => "empty_tree",
+            QueryError::Io(_) => "io_error",
+            QueryError::UnknownModelContext { .. } => "unknown_model_context",
+            QueryError::ContextBudgetExhausted { .. } => "context_budget_exhausted",
+            QueryError::Truncated | QueryError::ContentFilter => "llm_error",
+            QueryError::Llm(_) => "llm_error",
+            QueryError::Parse(_) => "parse_error",
+            QueryError::LowRelevance { .. } => "low_relevance",
+            QueryError::InsufficientSources { .. } => "insufficient_sources",
+        }
+    }
+
+    pub fn next_step(&self) -> Option<&'static str> {
+        match self {
+            QueryError::EmptyTree => Some("collect sources first with `bo collect <url>`"),
+            QueryError::NoResults => Some(
+                "collect relevant material or rephrase with terms likely to appear in the tree",
+            ),
+            QueryError::LowRelevance { reason, .. } => match reason {
+                LowRelevanceReason::WeakMatches => Some(
+                    "ask a more specific question, use more specific terms, or collect sources on this topic",
+                ),
+                LowRelevanceReason::GenericQuery => {
+                    Some("ask with more specific terms from the topic you expect to find")
+                }
+            },
+            QueryError::InsufficientSources { .. } => {
+                Some("collect more material on this topic or rephrase your question")
+            }
+            _ => None,
+        }
+    }
+
+    pub fn details(&self) -> serde_json::Value {
+        match self {
+            QueryError::LowRelevance {
+                reason,
+                matched_sources,
+            } => json!({
+                "reason": reason.as_str(),
+                "matched_sources": matched_sources,
+                "next_step": self.next_step().expect("low relevance has next step"),
+            }),
+            QueryError::InsufficientSources { leaves_consulted } => json!({
+                "leaves_consulted": leaves_consulted,
+                "next_step": self.next_step().expect("insufficient sources has next step"),
+            }),
+            QueryError::EmptyTree | QueryError::NoResults => json!({
+                "next_step": self.next_step().expect("no-answer error has next step"),
+            }),
+            _ => json!({}),
         }
     }
 }
@@ -158,6 +253,18 @@ pub struct QueryContextBudget {
     pub source_words: usize,
 }
 
+#[derive(Debug, Clone, Default)]
+struct RetrievalDiagnostics {
+    matched_terms: usize,
+    matched_non_generic_terms: usize,
+    total_hits: usize,
+    title_hits: usize,
+    summary_hits: usize,
+    body_hits: usize,
+    title_summary_non_generic_hits: usize,
+    token_count: usize,
+}
+
 #[derive(Debug, Clone)]
 struct RetrievedLeaf {
     slug: String,
@@ -167,6 +274,15 @@ struct RetrievedLeaf {
     summary: String,
     body: String,
     score: f64,
+    diagnostics: RetrievalDiagnostics,
+}
+
+pub struct PreparedQuery {
+    question: String,
+    context: String,
+    retrieved: Vec<RetrievedLeaf>,
+    leaves_consulted: usize,
+    model: String,
 }
 
 // ── term extraction ──────────────────────────────────────────────────────────
@@ -214,6 +330,150 @@ fn strip_possessive(word: &str) -> String {
         }
     }
     word.to_string()
+}
+
+fn tokenize_for_query(input: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+
+    for ch in input.chars() {
+        for lower in ch.to_lowercase() {
+            if lower.is_alphanumeric() {
+                current.push(lower);
+            } else if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+        }
+    }
+
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    tokens
+}
+
+fn unique_terms(terms: &[String]) -> Vec<&str> {
+    let mut seen = HashSet::new();
+    let mut unique = Vec::new();
+
+    for term in terms {
+        if seen.insert(term.as_str()) {
+            unique.push(term.as_str());
+        }
+    }
+
+    unique
+}
+
+fn count_term_hits_in_tokens(tokens: &[String], term: &str) -> usize {
+    let term_tokens = tokenize_for_query(term);
+    match term_tokens.len() {
+        0 => 0,
+        1 => tokens
+            .iter()
+            .filter(|token| token.as_str() == term_tokens[0].as_str())
+            .count(),
+        n if n <= tokens.len() => tokens
+            .windows(n)
+            .filter(|window| {
+                window
+                    .iter()
+                    .map(String::as_str)
+                    .eq(term_tokens.iter().map(String::as_str))
+            })
+            .count(),
+        _ => 0,
+    }
+}
+
+fn is_generic_term(term: &str) -> bool {
+    matches!(
+        term,
+        "important"
+            | "system"
+            | "systems"
+            | "pattern"
+            | "patterns"
+            | "concept"
+            | "concepts"
+            | "model"
+            | "models"
+            | "approach"
+            | "approaches"
+            | "method"
+            | "methods"
+            | "topic"
+            | "topics"
+            | "source"
+            | "sources"
+            | "information"
+            | "details"
+            | "example"
+            | "examples"
+            | "data"
+            | "content"
+            | "use"
+            | "uses"
+            | "using"
+            | "used"
+            | "work"
+            | "works"
+            | "benefit"
+            | "benefits"
+            | "tradeoff"
+            | "tradeoffs"
+            | "good"
+            | "bad"
+            | "best"
+            | "common"
+            | "general"
+            | "overview"
+            | "summary"
+            | "guide"
+    )
+}
+
+fn compute_retrieval_diagnostics(
+    title: &str,
+    summary: &str,
+    body: &str,
+    terms: &[String],
+) -> RetrievalDiagnostics {
+    let title_tokens = tokenize_for_query(title);
+    let summary_tokens = tokenize_for_query(summary);
+    let body_tokens = tokenize_for_query(body);
+    let unique_terms = unique_terms(terms);
+
+    let mut diagnostics = RetrievalDiagnostics {
+        token_count: title_tokens.len() + summary_tokens.len() + body_tokens.len(),
+        ..RetrievalDiagnostics::default()
+    };
+
+    for term in unique_terms {
+        let title_hits = count_term_hits_in_tokens(&title_tokens, term);
+        let summary_hits = count_term_hits_in_tokens(&summary_tokens, term);
+        let body_hits = count_term_hits_in_tokens(&body_tokens, term);
+        let term_hits = title_hits + summary_hits + body_hits;
+
+        if term_hits > 0 {
+            diagnostics.matched_terms += 1;
+            if !is_generic_term(term) {
+                diagnostics.matched_non_generic_terms += 1;
+            }
+        }
+
+        if !is_generic_term(term) {
+            diagnostics.title_summary_non_generic_hits += title_hits + summary_hits;
+        }
+
+        diagnostics.title_hits += title_hits;
+        diagnostics.summary_hits += summary_hits;
+        diagnostics.body_hits += body_hits;
+        diagnostics.total_hits += term_hits;
+    }
+
+    diagnostics
 }
 
 // ── retrieval ────────────────────────────────────────────────────────────────
@@ -266,6 +526,7 @@ fn retrieve_leaves(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedLea
         }
 
         let score = (total_hits as f64 * 1000.0) / word_count as f64;
+        let diagnostics = compute_retrieval_diagnostics(&title, &summary, &body, terms);
 
         scored.push(RetrievedLeaf {
             slug,
@@ -275,6 +536,7 @@ fn retrieve_leaves(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedLea
             summary,
             body,
             score,
+            diagnostics,
         });
     }
 
@@ -291,6 +553,109 @@ fn retrieve_leaves(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedLea
     scored.truncate(RETRIEVAL_TOP_K);
 
     Ok(scored)
+}
+
+fn validate_relevance(terms: &[String], leaves: &[RetrievedLeaf]) -> Result<(), QueryError> {
+    if leaves.is_empty() {
+        return Err(QueryError::NoResults);
+    }
+
+    let matched_sources = leaves.len();
+
+    if is_mostly_generic_query(terms)
+        && !leaves
+            .iter()
+            .any(|leaf| is_focused_generic_match(leaf, terms))
+    {
+        return Err(QueryError::LowRelevance {
+            reason: LowRelevanceReason::GenericQuery,
+            matched_sources,
+        });
+    }
+
+    if !leaves
+        .iter()
+        .any(|leaf| is_strong_relevance_match(leaf, terms))
+    {
+        return Err(QueryError::LowRelevance {
+            reason: LowRelevanceReason::WeakMatches,
+            matched_sources,
+        });
+    }
+
+    Ok(())
+}
+
+fn is_mostly_generic_query(terms: &[String]) -> bool {
+    let unique_terms = unique_terms(terms);
+    if unique_terms.is_empty() {
+        return false;
+    }
+
+    let generic_terms = unique_terms
+        .iter()
+        .filter(|term| is_generic_term(term))
+        .count();
+
+    generic_terms * MOSTLY_GENERIC_RATIO_DENOMINATOR
+        >= unique_terms.len() * MOSTLY_GENERIC_RATIO_NUMERATOR
+}
+
+fn is_focused_generic_match(leaf: &RetrievedLeaf, terms: &[String]) -> bool {
+    let unique_term_count = unique_terms(terms).len();
+    if unique_term_count == 0 {
+        return false;
+    }
+
+    let required_terms = unique_term_count.min(2);
+    let title_summary_hits = leaf.diagnostics.title_hits + leaf.diagnostics.summary_hits;
+
+    leaf.diagnostics.matched_terms >= required_terms && title_summary_hits >= required_terms
+}
+
+fn is_strong_relevance_match(leaf: &RetrievedLeaf, terms: &[String]) -> bool {
+    let diagnostics = &leaf.diagnostics;
+    if diagnostics.matched_terms == 0 || diagnostics.total_hits == 0 {
+        return false;
+    }
+
+    let unique_terms = unique_terms(terms);
+    let unique_term_count = unique_terms.len();
+    let non_generic_term_count = unique_terms
+        .iter()
+        .filter(|term| !is_generic_term(term))
+        .count();
+    let title_summary_hits = diagnostics.title_hits + diagnostics.summary_hits;
+    let density = if diagnostics.token_count == 0 {
+        0.0
+    } else {
+        (diagnostics.total_hits as f64 * 1000.0) / diagnostics.token_count as f64
+    };
+
+    if unique_term_count == 1 {
+        let term = unique_terms[0];
+        return !is_generic_term(term)
+            && (title_summary_hits > 0
+                || diagnostics.total_hits >= 2
+                || density >= MIN_SINGLE_TERM_DENSITY);
+    }
+
+    if non_generic_term_count == 1
+        && diagnostics.matched_non_generic_terms == 1
+        && diagnostics.title_summary_non_generic_hits > 0
+    {
+        return true;
+    }
+
+    if non_generic_term_count > 1
+        && diagnostics.matched_non_generic_terms >= non_generic_term_count.min(2)
+        && (diagnostics.title_summary_non_generic_hits > 0 || density >= MIN_MULTI_TERM_DENSITY)
+    {
+        return true;
+    }
+
+    diagnostics.matched_terms >= unique_term_count.min(2)
+        && (title_summary_hits > 0 || density >= MIN_MULTI_TERM_DENSITY)
 }
 
 // ── context assembly ─────────────────────────────────────────────────────────
@@ -583,8 +948,37 @@ pub fn run(
     api_key: &str,
     model: &str,
 ) -> Result<QueryResult, QueryError> {
+    let prepared = prepare(tree_dir, question, model)?;
     let provider = OpenAiProvider::new(api_key);
-    run_with_provider(tree_dir, question, &provider, model)
+    run_prepared_with_provider(prepared, &provider)
+}
+
+/// Run query preflight up to, but not including, provider-backed synthesis.
+pub fn prepare(tree_dir: &Path, question: &str, model: &str) -> Result<PreparedQuery, QueryError> {
+    let terms = extract_terms(question)?;
+    let budget = compute_query_context_budget(model)?;
+
+    eprintln!("searching...");
+    let retrieved = retrieve_leaves(tree_dir, &terms)?;
+    validate_relevance(&terms, &retrieved)?;
+
+    let (context, consulted) = assemble_context(&retrieved, budget.source_words);
+
+    Ok(PreparedQuery {
+        question: question.to_string(),
+        context,
+        retrieved,
+        leaves_consulted: consulted,
+        model: model.to_string(),
+    })
+}
+
+/// Complete a prepared query with an injectable provider.
+pub fn run_prepared_with_provider(
+    prepared: PreparedQuery,
+    provider: &dyn LlmProvider,
+) -> Result<QueryResult, QueryError> {
+    run_prepared_with_policy(prepared, provider, QUERY_LLM_POLICY)
 }
 
 /// Run the full query pipeline with an injectable provider (for testing).
@@ -604,30 +998,37 @@ fn run_with_provider_and_policy(
     model: &str,
     policy: LlmCallPolicy,
 ) -> Result<QueryResult, QueryError> {
-    let terms = extract_terms(question)?;
-    let budget = compute_query_context_budget(model)?;
+    let prepared = prepare(tree_dir, question, model)?;
+    run_prepared_with_policy(prepared, provider, policy)
+}
 
-    eprintln!("searching...");
-    let retrieved = retrieve_leaves(tree_dir, &terms)?;
-
-    let (context, consulted) = assemble_context(&retrieved, budget.source_words);
-
+fn run_prepared_with_policy(
+    prepared: PreparedQuery,
+    provider: &dyn LlmProvider,
+    policy: LlmCallPolicy,
+) -> Result<QueryResult, QueryError> {
     eprintln!("synthesizing...");
-    let response = synthesize_with_provider(question, &context, provider, model, policy)?;
+    let response = synthesize_with_provider(
+        &prepared.question,
+        &prepared.context,
+        provider,
+        &prepared.model,
+        policy,
+    )?;
 
-    let (answer, citations) = validate_citations(response, &retrieved);
+    let (answer, citations) = validate_citations(response, &prepared.retrieved);
 
     if citations.is_empty() {
         return Err(QueryError::InsufficientSources {
-            leaves_consulted: consulted,
+            leaves_consulted: prepared.leaves_consulted,
         });
     }
 
     Ok(QueryResult {
         answer,
         citations,
-        model: model.to_string(),
-        leaves_consulted: consulted,
+        model: prepared.model,
+        leaves_consulted: prepared.leaves_consulted,
     })
 }
 
