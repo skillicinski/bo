@@ -52,11 +52,11 @@ fn write_leaf(tree_dir: &Path, slug: &str, url: &str) {
     fs::write(index_path, existing).unwrap();
 }
 
-fn write_branch(tree_dir: &Path, slug: &str, compiled_at: &str) {
+fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
     let branches_dir = tree_dir.join("branches");
     fs::create_dir_all(&branches_dir).unwrap();
     let content = format!(
-        "---\ntitle: \"{slug}\"\ncompiled_at: {compiled_at}\nupdated_at: {compiled_at}\nleaves:\n  - some-leaf\n---\n\n# {slug}\n\nBranch body.\n"
+        "---\ntitle: \"{slug}\"\ncreated_at: {created_at}\nupdated_at: {created_at}\nleaves:\n  - some-leaf\n---\n\n# {slug}\n\nBranch body.\n"
     );
     fs::write(branches_dir.join(format!("{}.md", slug)), content).unwrap();
 }

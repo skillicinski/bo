@@ -134,11 +134,8 @@ fn compile_produces_at_least_one_branch_file() {
         "branch missing 'title' in frontmatter"
     );
     assert!(
-        mapping
-            .get("compiled_at")
-            .and_then(|v| v.as_str())
-            .is_some(),
-        "branch missing 'compiled_at' in frontmatter"
+        mapping.get("created_at").and_then(|v| v.as_str()).is_some(),
+        "branch missing 'created_at' in frontmatter"
     );
     assert!(
         mapping.get("updated_at").and_then(|v| v.as_str()).is_some(),
@@ -193,7 +190,7 @@ fn compile_does_not_modify_index_jsonl() {
 
 #[test]
 #[ignore = "requires OPENAI_API_KEY"]
-fn compile_rerun_preserves_compiled_at() {
+fn compile_rerun_preserves_created_at() {
     let dir = setup_fixture_collection();
     let cfg = make_config(dir.path());
 
@@ -210,8 +207,8 @@ fn compile_rerun_preserves_compiled_at() {
 
     let content1 = fs::read_to_string(&first_branch).unwrap();
     let (m1, _) = bo::domain::frontmatter::parse(&content1).unwrap();
-    let compiled_at_1 = m1
-        .get("compiled_at")
+    let created_at_1 = m1
+        .get("created_at")
         .and_then(|v| v.as_str())
         .unwrap()
         .to_string();
@@ -225,14 +222,14 @@ fn compile_rerun_preserves_compiled_at() {
     // Find the same branch (by slug/filename)
     let content2 = fs::read_to_string(&first_branch).unwrap();
     let (m2, _) = bo::domain::frontmatter::parse(&content2).unwrap();
-    let compiled_at_2 = m2
-        .get("compiled_at")
+    let created_at_2 = m2
+        .get("created_at")
         .and_then(|v| v.as_str())
         .unwrap()
         .to_string();
 
     assert_eq!(
-        compiled_at_1, compiled_at_2,
-        "compiled_at changed on second compile run"
+        created_at_1, created_at_2,
+        "created_at changed on second compile run"
     );
 }

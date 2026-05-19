@@ -30,12 +30,12 @@ fn write_leaf(dir: &Path, filename: &str, url: &str) {
     fs::write(dir.join(filename), content).unwrap();
 }
 
-fn write_branch(dir: &Path, slug: &str, compiled_at: &str) {
+fn write_branch(dir: &Path, slug: &str, created_at: &str) {
     let branches_dir = dir.join("branches");
     fs::create_dir_all(&branches_dir).unwrap();
     let content = format!(
-        "---\ntitle: \"{}\"\ncompiled_at: {}\nupdated_at: {}\nleaves:\n  - some-leaf\n---\n\n# {}\n\nBranch body.\n",
-        slug, compiled_at, compiled_at, slug
+        "---\ntitle: \"{}\"\ncreated_at: {}\nupdated_at: {}\nleaves:\n  - some-leaf\n---\n\n# {}\n\nBranch body.\n",
+        slug, created_at, created_at, slug
     );
     fs::write(branches_dir.join(format!("{}.md", slug)), content).unwrap();
 }

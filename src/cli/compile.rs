@@ -14,6 +14,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::domain::manifest::{self, BranchRecord, Manifest, TreeMeta};
 use crate::domain::{branch, frontmatter, index, slug, tree, tree::Tree};
 use crate::engine::auth::{self, AuthResolutionError};
 use crate::engine::config::SeededConfig;
@@ -592,22 +593,82 @@ fn execute_plan(
     let tree = Tree::from_config(&cfg.tree);
     let branches_dir = tree.branches_dir();
 
-    // ── write branches ───────────────────────────────────────────────────────
+    // Load current manifest. Used to (i) preserve `created_at` for branches
+    // that already exist and (ii) carry leaf records and tree metadata
+    // forward into the new manifest.
+    let current = match manifest::read_or_reconstruct(&tree) {
+        Ok(m) => m,
+        Err(manifest::ManifestError::TreeNotInitialized) => Manifest {
+            tree: TreeMeta {
+                name: tree.name.clone().unwrap_or_else(|| "unnamed".to_string()),
+                created_at: tree
+                    .created_at
+                    .clone()
+                    .unwrap_or_else(|| run_timestamp.to_string()),
+                last_compiled_at: None,
+            },
+            leaves: Vec::new(),
+            branches: Vec::new(),
+        },
+        Err(e) => return Err(CompileError::Io(format!("failed to read manifest: {}", e))),
+    };
+
+    // Materialize Vec<BranchRecord> from the validated plan.
+    let new_branches: Vec<BranchRecord> = plan
+        .branches
+        .iter()
+        .map(|vb| {
+            let created_at = current
+                .branch_by_slug(&vb.slug)
+                .map(|b| b.created_at.clone())
+                .or_else(|| branch::read_created_at(&branches_dir.join(format!("{}.md", vb.slug))))
+                .unwrap_or_else(|| run_timestamp.to_string());
+            BranchRecord {
+                slug: vb.slug.clone(),
+                file: format!("branches/{}.md", vb.slug),
+                title: vb.title.clone(),
+                created_at,
+                updated_at: run_timestamp.to_string(),
+                stale: false,
+                leaves: vb
+                    .leaves
+                    .iter()
+                    .map(|f| f.strip_suffix(".md").unwrap_or(f).to_string())
+                    .collect(),
+            }
+        })
+        .collect();
+
+    // Primary write: manifest. The commit point.
+    let new_manifest = Manifest {
+        tree: TreeMeta {
+            last_compiled_at: Some(run_timestamp.to_string()),
+            ..current.tree
+        },
+        leaves: current.leaves,
+        branches: new_branches,
+    };
+    manifest::write(&tree.manifest_path(), &new_manifest)
+        .map_err(|e| CompileError::Io(format!("failed to write manifest: {}", e)))?;
+
+    // Secondary: write branch .md files. created_at is sourced from the
+    // manifest record we just wrote so the two on-disk shapes agree.
     let mut branch_results: Vec<BranchResult> = Vec::new();
 
     for vb in &plan.branches {
         let branch_path = branches_dir.join(format!("{}.md", vb.slug));
-
-        // Preserve compiled_at from existing branch if it exists
-        let compiled_at =
-            branch::read_compiled_at(&branch_path).unwrap_or_else(|| run_timestamp.to_string());
+        let created_at = new_manifest
+            .branch_by_slug(&vb.slug)
+            .expect("branch was just inserted into manifest")
+            .created_at
+            .clone();
 
         branch::write(
             &branch_path,
             &vb.title,
             &vb.body,
             &vb.leaves,
-            &compiled_at,
+            &created_at,
             run_timestamp,
         )
         .map_err(|e| CompileError::Io(format!("failed to write branch '{}': {}", vb.slug, e)))?;

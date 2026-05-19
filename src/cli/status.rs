@@ -147,7 +147,7 @@ fn scan_branches(branches_dir: &Path) -> (usize, Option<String>) {
             continue;
         }
         count += 1;
-        if let Some(compiled_at) = branch::read_compiled_at(&path) {
+        if let Some(compiled_at) = branch::read_created_at(&path) {
             match &latest {
                 None => latest = Some(compiled_at),
                 Some(existing) if compiled_at > *existing => latest = Some(compiled_at),
