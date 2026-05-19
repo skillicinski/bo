@@ -28,7 +28,7 @@ Each task is one focused session. Each follows test-first authoring within itsel
 
 - [x] **T5.2 — `bo show` reads from manifest.** Extend tests in `src/tests/cli_show_tests.rs` covering: show by title returns the same content as before. Modify `src/cli/show.rs` to use `manifest::read` and iterate `Manifest::leaves` (consuming `LeafRecord` directly) instead of `read_index`. Show remains leaf-only — branches are not in scope for this task. Done when: show tests pass; show source no longer references `index::*`.
 
-- [ ] **T5.3 — `bo search` reads from manifest.** Extend tests in `src/tests/cli_search_tests.rs` covering parity of search results before/after migration. Modify `src/cli/search.rs` to iterate `Manifest::leaves` (and branches if currently in scope) instead of `read_index`. Done when: search tests pass; search source no longer references `index::*`.
+- [x] **T5.3 — `bo search` reads from manifest.** Extend tests in `src/tests/cli_search_tests.rs` covering parity of search results before/after migration. Modify `src/cli/search.rs` to iterate `Manifest::leaves` (and branches if currently in scope) instead of `read_index`. Done when: search tests pass; search source no longer references `index::*`.
 
 - [ ] **T5.4 — `bo query` reads from manifest.** Extend tests in `src/tests/cli_query_tests.rs` covering: retrieval and synthesis paths still produce identical results against a fixture tree before and after the migration. Modify `src/cli/query.rs` retrieval to consume `Manifest::leaves` / `Manifest::branches` instead of `read_index` and any branch-directory walks. Leaf `.md` content reads continue via `LeafRecord.file`. Done when: query tests pass; query source no longer references `index::*` or scans `branches/` for metadata.
 

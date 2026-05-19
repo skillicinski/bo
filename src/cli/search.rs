@@ -1,6 +1,8 @@
 // bo search — deterministic lexical search over collected leaves.
 
-use crate::domain::{frontmatter, index, tree};
+use crate::domain::frontmatter;
+use crate::domain::manifest;
+use crate::domain::tree::Tree;
 use chrono::{DateTime, FixedOffset};
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -51,6 +53,7 @@ pub struct SearchHit {
 pub enum SearchError {
     Io(std::io::Error),
     Json(serde_json::Error),
+    Manifest(manifest::ManifestError),
 }
 
 impl fmt::Display for SearchError {
@@ -58,6 +61,7 @@ impl fmt::Display for SearchError {
         match self {
             SearchError::Io(e) => write!(f, "I/O error: {}", e),
             SearchError::Json(e) => write!(f, "JSON error: {}", e),
+            SearchError::Manifest(e) => write!(f, "{}", e),
         }
     }
 }
@@ -71,6 +75,12 @@ impl From<std::io::Error> for SearchError {
 impl From<serde_json::Error> for SearchError {
     fn from(e: serde_json::Error) -> Self {
         SearchError::Json(e)
+    }
+}
+
+impl From<manifest::ManifestError> for SearchError {
+    fn from(e: manifest::ManifestError) -> Self {
+        SearchError::Manifest(e)
     }
 }
 
@@ -214,13 +224,28 @@ pub fn search_leaves(
     query: &SearchQuery,
     options: &SearchOptions,
 ) -> Result<SearchResult, SearchError> {
-    let index_path = tree::index_path(tree_dir);
-    let entries = index::read_index(&index_path)?;
+    let tree = Tree {
+        name: None,
+        created_at: None,
+        output_dir: tree_dir.to_path_buf(),
+    };
+    let m = match manifest::read_or_reconstruct(&tree) {
+        Ok(m) => m,
+        Err(manifest::ManifestError::TreeNotInitialized) => {
+            return Ok(SearchResult {
+                hits: Vec::new(),
+                total_results: 0,
+                page: options.page,
+                total_pages: 0,
+            });
+        }
+        Err(e) => return Err(SearchError::Manifest(e)),
+    };
 
     let mut scored: Vec<ScoredLeaf> = Vec::new();
 
-    for (index_position, entry) in entries.iter().enumerate() {
-        let path = tree_dir.join(&entry.file);
+    for (index_position, leaf) in m.leaves.iter().enumerate() {
+        let path = tree_dir.join(&leaf.file);
         let content = match fs::read_to_string(&path) {
             Ok(c) => c,
             Err(_) => continue, // skip missing/unreadable files
@@ -233,29 +258,26 @@ pub fn search_leaves(
 
         let score = score_relevance(&content_lower, &query.terms);
 
-        // Extract title and body from frontmatter
-        let (title, body, collected_at) = match frontmatter::parse(&content) {
-            Ok((mapping, body)) => {
-                let title = mapping
-                    .get("title")
-                    .and_then(|v| v.as_str())
-                    .filter(|t| !t.trim().is_empty())
-                    .map(|t| t.to_string())
-                    .unwrap_or_else(|| entry.title.clone());
-                let collected_at = mapping
-                    .get("collected_at")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                (title, body, collected_at)
-            }
-            Err(_) => {
-                // If frontmatter is invalid, use the raw content as body
-                (entry.title.clone(), content.clone(), None)
-            }
+        // Use frontmatter::parse only to peel off the body; fall back to the
+        // full content if the .md is malformed. Title and collected_at come
+        // from the canonical manifest record, not the frontmatter.
+        let body = match frontmatter::parse(&content) {
+            Ok((_, body)) => body,
+            Err(_) => content.clone(),
+        };
+        let title = if leaf.title.trim().is_empty() {
+            leaf.file.clone()
+        } else {
+            leaf.title.clone()
+        };
+        let collected_at = if leaf.collected_at.trim().is_empty() {
+            None
+        } else {
+            Some(leaf.collected_at.clone())
         };
 
         scored.push(ScoredLeaf {
-            file: entry.file.clone(),
+            file: leaf.file.clone(),
             title,
             body,
             score,

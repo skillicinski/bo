@@ -288,12 +288,13 @@ fn reconstruct_leaves(tree_dir: &Path) -> Result<Vec<LeafRecord>, ManifestError>
     let mut out = Vec::with_capacity(entries.len());
     for entry in entries {
         let leaf_path = tree_dir.join(&entry.file);
-        let mapping = leaf::read_frontmatter(&leaf_path).map_err(|e| {
-            ManifestError::Io(io::Error::other(format!(
-                "reconstruct leaf {}: {e}",
-                entry.file
-            )))
-        })?;
+        // Skip entries whose .md file is gone or unreadable. Reconstruction
+        // reflects what's actually on disk; missing leaves are dropped
+        // from the manifest rather than aborting the whole rebuild.
+        let mapping = match leaf::read_frontmatter(&leaf_path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
         let slug = entry
             .file
             .strip_suffix(".md")

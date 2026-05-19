@@ -255,6 +255,7 @@ fn search_error_code(error: &search::SearchError) -> &'static str {
     match error {
         search::SearchError::Io(_) => "io_error",
         search::SearchError::Json(_) => "json_error",
+        search::SearchError::Manifest(_) => "manifest_error",
     }
 }
 
