@@ -22,8 +22,10 @@ use std::fs;
 use std::path::Path;
 
 use crate::adapters::youtube::{self, YoutubeError, YoutubeUrlMatch};
-use crate::domain::{index, leaf, slug, tree};
+use crate::domain::manifest::{self, LeafRecord, Manifest, TreeMeta};
+use crate::domain::{leaf, slug};
 use crate::engine::llm::models::DEFAULT_MODEL;
+use crate::engine::pending::{self, OpKind, PendingWrite};
 use crate::engine::quality::RejectReason;
 use crate::engine::{extract, fetch, quality, summary};
 
@@ -54,6 +56,8 @@ pub enum CollectError {
         reason: RejectReason,
     },
     Io(std::io::Error),
+    Manifest(manifest::ManifestError),
+    Pending(pending::PendingError),
 }
 
 impl fmt::Display for CollectError {
@@ -70,6 +74,8 @@ impl fmt::Display for CollectError {
                 write!(f, "{} was not collected: {}", url, reason)
             }
             CollectError::Io(e) => write!(f, "I/O error: {}", e),
+            CollectError::Manifest(e) => write!(f, "{}", e),
+            CollectError::Pending(e) => write!(f, "{}", e),
         }
     }
 }
@@ -104,6 +110,18 @@ impl From<std::io::Error> for CollectError {
     }
 }
 
+impl From<manifest::ManifestError> for CollectError {
+    fn from(e: manifest::ManifestError) -> Self {
+        CollectError::Manifest(e)
+    }
+}
+
+impl From<pending::PendingError> for CollectError {
+    fn from(e: pending::PendingError) -> Self {
+        CollectError::Pending(e)
+    }
+}
+
 pub fn error_code(error: &CollectError) -> &'static str {
     match error {
         CollectError::DuplicateUrl { .. } => "duplicate_url",
@@ -113,6 +131,9 @@ pub fn error_code(error: &CollectError) -> &'static str {
         CollectError::Youtube(_) => "youtube_error",
         CollectError::Summary(_) => "llm_error",
         CollectError::Io(_) => "io_error",
+        CollectError::Manifest(_) => "manifest_error",
+        CollectError::Pending(pending::PendingError::Busy { .. }) => "tree_busy",
+        CollectError::Pending(_) => "pending_error",
     }
 }
 
@@ -222,6 +243,8 @@ pub fn collect_url_with_model(
     output_dir: &Path,
     model: &str,
 ) -> Result<Document, CollectError> {
+    recover_pending_if_needed(output_dir)?;
+
     match youtube::classify_url(url) {
         YoutubeUrlMatch::Supported(supported) => {
             ensure_not_duplicate(supported.normalized_url(), output_dir)?;
@@ -273,8 +296,7 @@ pub fn collect_html_with_model(
     output_dir: &Path,
     model: &str,
 ) -> Result<Document, CollectError> {
-    // Duplicate check — reads index only (fast path).
-    // If index.jsonl is absent, the URL is treated as new.
+    recover_pending_if_needed(output_dir)?;
     ensure_not_duplicate(url, output_dir)?;
 
     // Reject obvious non-document HTML before extraction.
@@ -574,9 +596,27 @@ fn summarize_collect_items(items: &[CollectItemResult]) -> BatchCollectSummary {
 }
 
 pub fn duplicate_file(url: &str, output_dir: &Path) -> Result<Option<String>, CollectError> {
-    let index_path = tree::index_path(output_dir);
-    let entries = index::read_index(&index_path)?;
-    Ok(index::is_duplicate(&entries, url).map(|existing| existing.file.clone()))
+    let manifest_path = output_dir.join(".bo").join("manifest.json");
+    let manifest = match manifest::read(&manifest_path) {
+        Ok(m) => m,
+        Err(manifest::ManifestError::TreeNotInitialized) => return Ok(None),
+        Err(e) => return Err(CollectError::Manifest(e)),
+    };
+    Ok(manifest
+        .leaves
+        .iter()
+        .find(|l| l.url == url)
+        .map(|l| l.file.clone()))
+}
+
+fn recover_pending_if_needed(output_dir: &Path) -> Result<(), CollectError> {
+    if let Some(report) = pending::recover_or_refuse(output_dir)? {
+        eprintln!(
+            "recovered {} changes from interrupted {}",
+            report.changes, report.op
+        );
+    }
+    Ok(())
 }
 
 fn ensure_not_duplicate(url: &str, output_dir: &Path) -> Result<(), CollectError> {
@@ -610,35 +650,80 @@ fn write_new_document_with_summary_result(
     summary_text: Result<String, summary::SummaryError>,
 ) -> Result<Document, CollectError> {
     let summary_text = summary_text?;
-    let index_path = tree::index_path(output_dir);
+    recover_pending_if_needed(output_dir)?;
+
     let title_ref = title.unwrap_or("");
     let base_slug = slug::slugify(title_ref, url);
     let filename = slug::resolve_slug(&base_slug, url, output_dir);
-
-    // `leaf::write` calls `create_dir_all` internally, ensuring `output_dir`
-    // exists before `append_entry` below requires the directory.
     let now_str = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let leaf_path = output_dir.join(format!("{}.md", filename));
+    let leaf_file = format!("{}.md", filename);
+    let summary_field = if summary_text.is_empty() {
+        None
+    } else {
+        Some(summary_text.as_str())
+    };
+    let leaf_content = leaf::format_content(title, url, &now_str, body_markdown, summary_field);
+    let leaf_write = PendingWrite {
+        path: leaf_file.clone(),
+        content_hash: pending::content_hash(leaf_content.as_bytes()),
+    };
 
-    leaf::write(
-        &leaf_path,
-        title,
-        url,
-        &now_str,
-        body_markdown,
-        Some(&summary_text),
-    )?;
+    let manifest_path = output_dir.join(".bo").join("manifest.json");
+    let mut current = match manifest::read(&manifest_path) {
+        Ok(m) => m,
+        Err(manifest::ManifestError::TreeNotInitialized) => Manifest {
+            tree: TreeMeta {
+                name: output_dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "unnamed".to_string()),
+                created_at: now_str.clone(),
+                last_compiled_at: None,
+            },
+            leaves: Vec::new(),
+            branches: Vec::new(),
+        },
+        Err(e) => return Err(CollectError::Manifest(e)),
+    };
 
-    let entry = index::IndexEntry {
-        file: format!("{}.md", filename),
+    if let Some(existing) = current.leaves.iter().find(|leaf| leaf.url == url) {
+        return Err(CollectError::DuplicateUrl {
+            existing_file: existing.file.clone(),
+        });
+    }
+
+    let leaf_record = LeafRecord {
+        slug: filename.clone(),
+        file: leaf_file.clone(),
         title: title.unwrap_or_default().to_string(),
         url: url.to_string(),
+        collected_at: now_str.clone(),
+        summary: if summary_text.is_empty() {
+            None
+        } else {
+            Some(summary_text.clone())
+        },
     };
-    index::append_entry(&index_path, &entry)?;
+    current.leaves.push(leaf_record);
+
+    let operation = pending::new_operation(
+        output_dir,
+        OpKind::Collect {
+            url: url.to_string(),
+        },
+        vec![leaf_write.clone()],
+        Vec::new(),
+    )?;
+    let pending_path = pending::pending_path(output_dir);
+    pending::write(&pending_path, &operation)?;
+    pending::write_staged(output_dir, &leaf_write, leaf_content.as_bytes())?;
+    manifest::write(&manifest_path, &current)?;
+    pending::apply_writes(output_dir, &[leaf_write])?;
+    pending::clear(&pending_path)?;
 
     Ok(Document {
         url: url.to_string(),
-        filename: format!("{}.md", filename),
+        filename: leaf_file,
     })
 }
 

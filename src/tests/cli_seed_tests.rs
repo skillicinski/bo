@@ -1,4 +1,6 @@
 use super::*;
+use crate::domain::manifest;
+use crate::domain::tree::Tree;
 use crate::engine::config;
 use tempfile::TempDir;
 
@@ -150,4 +152,63 @@ fn render_human_already_seeded() {
         render_human(&result),
         "bo has already been seeded at /tmp/tree!"
     );
+}
+
+// ── manifest dual-write (T4.1) ────────────────────────────────────────────────────
+
+#[test]
+fn writes_empty_manifest_to_infra_dir() {
+    let tmp = TempDir::new().unwrap();
+    let output_dir = tmp.path().join("tree");
+    let config_path = tmp.path().join("config.json");
+
+    seed(output_dir.clone(), None, &config_path).unwrap();
+
+    let manifest_path = output_dir.join(".bo/manifest.json");
+    assert!(
+        manifest_path.exists(),
+        "manifest.json should exist after seed"
+    );
+}
+
+#[test]
+fn manifest_metadata_matches_config() {
+    let tmp = TempDir::new().unwrap();
+    let output_dir = tmp.path().join("tree");
+    let config_path = tmp.path().join("config.json");
+
+    seed(
+        output_dir.clone(),
+        Some("my-tree".to_string()),
+        &config_path,
+    )
+    .unwrap();
+
+    let cfg = config::read_config(&config_path).unwrap();
+    let tree_cfg = cfg.tree.unwrap();
+    let tree = Tree::from_config(&tree_cfg);
+    let m = manifest::read(&tree.manifest_path()).unwrap();
+
+    assert_eq!(m.tree.name, "my-tree");
+    assert_eq!(m.tree.created_at, tree_cfg.created_at.unwrap());
+    assert!(m.tree.last_compiled_at.is_none());
+    assert!(m.leaves.is_empty());
+    assert!(m.branches.is_empty());
+}
+
+#[test]
+fn manifest_not_overwritten_on_already_seeded() {
+    let tmp = TempDir::new().unwrap();
+    let output_dir = tmp.path().join("tree");
+    let config_path = tmp.path().join("config.json");
+
+    seed(output_dir.clone(), None, &config_path).unwrap();
+    let manifest_path = output_dir.join(".bo/manifest.json");
+    let first = std::fs::read_to_string(&manifest_path).unwrap();
+
+    // Re-running seed should be a no-op for the manifest.
+    seed(output_dir.clone(), None, &config_path).unwrap();
+    let second = std::fs::read_to_string(&manifest_path).unwrap();
+
+    assert_eq!(first, second);
 }

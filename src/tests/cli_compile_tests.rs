@@ -61,7 +61,7 @@ fn compile_exits_cleanly_on_empty_collection() {
     std::env::remove_var("OPENAI_API_KEY");
     let bo_dir = dir.path().join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    fs::write(bo_dir.join("index.jsonl"), "").unwrap();
+    seed_manifest_for_compile(dir.path(), &[]);
     let result = cmd_compile(&cfg);
     assert!(result.is_ok());
 }
@@ -72,11 +72,7 @@ fn compile_exits_cleanly_on_single_leaf() {
     let dir = TempDir::new().unwrap();
     let bo_dir = dir.path().join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    fs::write(
-        bo_dir.join("index.jsonl"),
-        r#"{"file":"only.md","title":"Only","url":"https://example.com"}"#,
-    )
-    .unwrap();
+    seed_manifest_for_compile(dir.path(), &[("only", "Only", "https://example.com")]);
     std::env::remove_var("OPENAI_API_KEY");
     let cfg = make_test_config(dir.path());
     let result = cmd_compile(&cfg);
@@ -89,14 +85,13 @@ fn compile_errors_without_api_key() {
     let dir = TempDir::new().unwrap();
     let bo_dir = dir.path().join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    let index_path = bo_dir.join("index.jsonl");
-    // Write two valid leaves so we pass the guard
-    fs::write(
-        &index_path,
-        r#"{"file":"a.md","title":"A","url":"https://example.com/a"}
-{"file":"b.md","title":"B","url":"https://example.com/b"}"#,
-    )
-    .unwrap();
+    seed_manifest_for_compile(
+        dir.path(),
+        &[
+            ("a", "A", "https://example.com/a"),
+            ("b", "B", "https://example.com/b"),
+        ],
+    );
     // Write actual leaf files with valid frontmatter
     fs::write(
         dir.path().join("a.md"),
@@ -763,4 +758,155 @@ async fn compile_content_filter_finish_reason_returns_content_filter() {
     .unwrap_err();
 
     assert!(matches!(err, CompileError::ContentFilter));
+}
+
+// ── manifest dual-write (T4.3) ───────────────────────────────────────────
+
+fn seed_manifest_for_compile(dir: &std::path::Path, leaves: &[(&str, &str, &str)]) {
+    use crate::domain::manifest::{LeafRecord, Manifest, TreeMeta};
+    fs::create_dir_all(dir.join(".bo")).unwrap();
+    let leaf_records = leaves
+        .iter()
+        .map(|(slug, title, url)| LeafRecord {
+            slug: slug.to_string(),
+            file: format!("{}.md", slug),
+            title: title.to_string(),
+            url: url.to_string(),
+            collected_at: "2026-01-01T00:00:00Z".to_string(),
+            summary: None,
+        })
+        .collect();
+    let m = Manifest {
+        tree: TreeMeta {
+            name: "compile-tree".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            last_compiled_at: None,
+        },
+        leaves: leaf_records,
+        branches: Vec::new(),
+    };
+    crate::domain::manifest::write(&dir.join(".bo/manifest.json"), &m).unwrap();
+}
+
+fn write_leaf_file(dir: &std::path::Path, slug: &str, title: &str, url: &str) {
+    fs::write(
+        dir.join(format!("{}.md", slug)),
+        format!(
+            "---\ntitle: \"{title}\"\nurl: {url}\ncollected_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\n# {title}\n\nBody.\n"
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn execute_plan_populates_manifest_branches_with_full_metadata() {
+    let dir = TempDir::new().unwrap();
+    let cfg = make_test_config(dir.path());
+    seed_manifest_for_compile(
+        dir.path(),
+        &[
+            ("leaf-a", "A", "https://example.com/a"),
+            ("leaf-b", "B", "https://example.com/b"),
+        ],
+    );
+    write_leaf_file(dir.path(), "leaf-a", "A", "https://example.com/a");
+    write_leaf_file(dir.path(), "leaf-b", "B", "https://example.com/b");
+
+    let valid_filenames: HashSet<String> = ["leaf-a.md", "leaf-b.md"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let mut leaf_assignments = HashMap::new();
+    leaf_assignments.insert("leaf-a.md".to_string(), vec!["test-concept".to_string()]);
+    leaf_assignments.insert("leaf-b.md".to_string(), vec!["test-concept".to_string()]);
+    let plan = CompilePlan {
+        branches: vec![ValidatedBranch {
+            slug: "test-concept".to_string(),
+            title: "Test Concept".to_string(),
+            body: "# Test Concept\n\nBody.\n".to_string(),
+            leaves: vec!["leaf-a.md".to_string(), "leaf-b.md".to_string()],
+        }],
+        leaf_assignments,
+    };
+
+    execute_plan(&plan, &cfg, &valid_filenames, "2026-06-01T12:00:00Z", &[]).unwrap();
+
+    let m = crate::domain::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    assert_eq!(m.branches.len(), 1);
+    let b = &m.branches[0];
+    assert_eq!(b.slug, "test-concept");
+    assert_eq!(b.file, "branches/test-concept.md");
+    assert_eq!(b.title, "Test Concept");
+    assert_eq!(b.created_at, "2026-06-01T12:00:00Z");
+    assert_eq!(b.updated_at, "2026-06-01T12:00:00Z");
+    assert!(!b.stale);
+    assert_eq!(b.leaves, vec!["leaf-a", "leaf-b"]);
+    // Leaf records preserved.
+    assert_eq!(m.leaves.len(), 2);
+    // tree.last_compiled_at advanced.
+    assert_eq!(
+        m.tree.last_compiled_at.as_deref(),
+        Some("2026-06-01T12:00:00Z")
+    );
+}
+
+#[test]
+fn execute_plan_preserves_created_at_across_recompiles() {
+    let dir = TempDir::new().unwrap();
+    let cfg = make_test_config(dir.path());
+    seed_manifest_for_compile(
+        dir.path(),
+        &[
+            ("leaf-a", "A", "https://example.com/a"),
+            ("leaf-b", "B", "https://example.com/b"),
+        ],
+    );
+    write_leaf_file(dir.path(), "leaf-a", "A", "https://example.com/a");
+    write_leaf_file(dir.path(), "leaf-b", "B", "https://example.com/b");
+
+    let valid_filenames: HashSet<String> = ["leaf-a.md", "leaf-b.md"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let mut leaf_assignments = HashMap::new();
+    leaf_assignments.insert("leaf-a.md".to_string(), vec!["test-concept".to_string()]);
+    leaf_assignments.insert("leaf-b.md".to_string(), vec!["test-concept".to_string()]);
+    let plan = CompilePlan {
+        branches: vec![ValidatedBranch {
+            slug: "test-concept".to_string(),
+            title: "Test Concept".to_string(),
+            body: "# Test Concept\n\nBody.\n".to_string(),
+            leaves: vec!["leaf-a.md".to_string(), "leaf-b.md".to_string()],
+        }],
+        leaf_assignments,
+    };
+
+    // First compile.
+    execute_plan(&plan, &cfg, &valid_filenames, "2026-06-01T12:00:00Z", &[]).unwrap();
+    // Second compile (same plan, later timestamp).
+    execute_plan(&plan, &cfg, &valid_filenames, "2026-12-01T10:00:00Z", &[]).unwrap();
+
+    let m = crate::domain::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let b = &m.branches[0];
+    assert_eq!(
+        b.created_at, "2026-06-01T12:00:00Z",
+        "created_at must be preserved"
+    );
+    assert_eq!(
+        b.updated_at, "2026-12-01T10:00:00Z",
+        "updated_at must advance"
+    );
+    assert_eq!(
+        m.tree.last_compiled_at.as_deref(),
+        Some("2026-12-01T10:00:00Z")
+    );
+
+    // Branch frontmatter mirrors manifest.
+    let branch_md = fs::read_to_string(dir.path().join("branches/test-concept.md")).unwrap();
+    assert!(branch_md.contains("created_at: 2026-06-01T12:00:00Z"));
+    assert!(branch_md.contains("updated_at: 2026-12-01T10:00:00Z"));
+    assert!(
+        !branch_md.contains("compiled_at"),
+        "old field name must not appear"
+    );
 }

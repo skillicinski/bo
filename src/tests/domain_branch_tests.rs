@@ -1,14 +1,14 @@
 use super::*;
 use tempfile::TempDir;
 
-fn write_test_branch(dir: &TempDir, slug: &str, compiled_at: &str, updated_at: &str) {
+fn write_test_branch(dir: &TempDir, slug: &str, created_at: &str, updated_at: &str) {
     let path = dir.path().join(format!("{}.md", slug));
     write(
         &path,
         "Test Concept",
         "# Test Concept\n\nSome body.\n",
         &["leaf-a.md".to_string(), "leaf-b.md".to_string()],
-        compiled_at,
+        created_at,
         updated_at,
     )
     .unwrap();
@@ -37,7 +37,7 @@ fn write_creates_file_with_valid_frontmatter() {
         Some("Test Concept")
     );
     assert_eq!(
-        mapping.get("compiled_at").and_then(|v| v.as_str()),
+        mapping.get("created_at").and_then(|v| v.as_str()),
         Some("2025-06-01T12:00:00Z")
     );
     assert_eq!(
@@ -108,14 +108,14 @@ fn write_does_not_duplicate_heading_if_present() {
 }
 
 #[test]
-fn read_compiled_at_returns_none_for_missing_file() {
+fn read_created_at_returns_none_for_missing_file() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("nonexistent.md");
-    assert!(read_compiled_at(&path).is_none());
+    assert!(read_created_at(&path).is_none());
 }
 
 #[test]
-fn read_compiled_at_returns_value_from_existing_file() {
+fn read_created_at_returns_value_from_existing_file() {
     let dir = TempDir::new().unwrap();
     write_test_branch(
         &dir,
@@ -125,13 +125,13 @@ fn read_compiled_at_returns_value_from_existing_file() {
     );
     let path = dir.path().join("concept.md");
     assert_eq!(
-        read_compiled_at(&path).as_deref(),
+        read_created_at(&path).as_deref(),
         Some("2025-06-01T12:00:00Z")
     );
 }
 
 #[test]
-fn second_write_preserves_compiled_at() {
+fn second_write_preserves_created_at() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("concept.md");
 
@@ -146,23 +146,23 @@ fn second_write_preserves_compiled_at() {
     )
     .unwrap();
 
-    let original_compiled_at = read_compiled_at(&path).unwrap();
-    assert_eq!(original_compiled_at, "2025-06-01T12:00:00Z");
+    let original_created_at = read_created_at(&path).unwrap();
+    assert_eq!(original_created_at, "2025-06-01T12:00:00Z");
 
-    // Second write — updated_at advances, compiled_at stays
-    let existing_compiled_at = read_compiled_at(&path).unwrap_or_else(|| "now".to_string());
+    // Second write — updated_at advances, created_at stays
+    let existing_created_at = read_created_at(&path).unwrap_or_else(|| "now".to_string());
     write(
         &path,
         "Concept",
         "updated body\n",
         &[],
-        &existing_compiled_at,
+        &existing_created_at,
         "2025-12-01T10:00:00Z",
     )
     .unwrap();
 
     assert_eq!(
-        read_compiled_at(&path).as_deref(),
+        read_created_at(&path).as_deref(),
         Some("2025-06-01T12:00:00Z")
     );
     let content = fs::read_to_string(&path).unwrap();

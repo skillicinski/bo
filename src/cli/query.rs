@@ -6,8 +6,6 @@
 // `cli::search` (different semantics: OR vs AND, different purpose).
 
 use crate::domain::frontmatter;
-use crate::domain::index;
-use crate::domain::tree;
 use crate::engine::llm::{
     complete_with_policy, context_window_tokens, FinishReason, LlmCallPolicy, LlmError,
     LlmProvider, Message, OpenAiProvider,
@@ -480,34 +478,47 @@ fn compute_retrieval_diagnostics(
 
 /// Retrieve top-k leaves scored by term density (OR semantics).
 fn retrieve_leaves(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedLeaf>, QueryError> {
-    let index_path = tree::index_path(tree_dir);
-    let entries =
-        index::read_index(&index_path).map_err(|e| QueryError::Io(format!("index: {}", e)))?;
+    let tree = crate::domain::tree::Tree {
+        name: None,
+        created_at: None,
+        output_dir: tree_dir.to_path_buf(),
+    };
+    let manifest = match crate::domain::manifest::read(&tree.manifest_path()) {
+        Ok(m) => m,
+        Err(crate::domain::manifest::ManifestError::TreeNotInitialized) => {
+            return Err(QueryError::EmptyTree);
+        }
+        Err(e) => return Err(QueryError::Io(format!("manifest: {}", e))),
+    };
 
-    if entries.is_empty() {
+    if manifest.leaves.is_empty() {
         return Err(QueryError::EmptyTree);
     }
 
     let mut scored: Vec<RetrievedLeaf> = Vec::new();
 
-    for entry in &entries {
-        let path = tree_dir.join(&entry.file);
+    for leaf in &manifest.leaves {
+        let path = tree_dir.join(&leaf.file);
         let content = match fs::read_to_string(&path) {
             Ok(c) => c,
             Err(_) => continue, // skip unreadable leaves
         };
 
-        let (mapping, body) = match frontmatter::parse(&content) {
+        let (_mapping, body) = match frontmatter::parse(&content) {
             Ok(v) => v,
             Err(_) => continue, // skip malformed leaves
         };
 
-        let title = extract_yaml_string(&mapping, "title").unwrap_or_else(|| entry.title.clone());
-        let url = extract_yaml_string(&mapping, "url").unwrap_or_else(|| entry.url.clone());
-        let summary =
-            extract_yaml_string(&mapping, "summary").unwrap_or_else(|| summary_fallback(&body));
+        // Title, url, summary all come from the canonical manifest record.
+        // Fall back to body-derived summary when the manifest didn't capture one.
+        let title = leaf.title.clone();
+        let url = leaf.url.clone();
+        let summary = leaf
+            .summary
+            .clone()
+            .unwrap_or_else(|| summary_fallback(&body));
 
-        let slug = slug_from_file(&entry.file);
+        let slug = leaf.slug.clone();
 
         // Score: OR semantics — count occurrences of each term, normalize by word count
         let searchable = format!("{} {} {}", title, summary, body).to_lowercase();
@@ -532,7 +543,7 @@ fn retrieve_leaves(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedLea
             slug,
             title,
             url,
-            file: entry.file.clone(),
+            file: leaf.file.clone(),
             summary,
             body,
             score,
@@ -1033,24 +1044,6 @@ fn run_prepared_with_policy(
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-/// Extract slug from file path: "leaves/foo-bar.md" → "foo-bar"
-fn slug_from_file(file: &str) -> String {
-    Path::new(file)
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| file.to_string())
-}
-
-/// Extract a string value from a YAML mapping by key.
-fn extract_yaml_string(mapping: &serde_yaml_ng::Mapping, key: &str) -> Option<String> {
-    mapping
-        .get(serde_yaml_ng::Value::String(key.to_string()))
-        .and_then(|v| match v {
-            serde_yaml_ng::Value::String(s) => Some(s.clone()),
-            _ => None,
-        })
-}
 
 /// Generate a summary fallback from the first ~200 words of body.
 fn summary_fallback(body: &str) -> String {

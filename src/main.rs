@@ -178,6 +178,11 @@ impl CliError {
             CliError::Usage { exit_code, .. } => *exit_code,
             CliError::ConfigAuth(error) => error.exit_code(),
             CliError::ConfigCommand(error) => error.exit_code(),
+            CliError::Collect(CollectError::Pending(bo::engine::pending::PendingError::Busy {
+                ..
+            }))
+            | CliError::Compile(CompileError::Busy(_))
+            | CliError::Raze(raze::RazeError::Busy(_)) => 2,
             _ => 1,
         }
     }
@@ -247,6 +252,7 @@ fn list_error_code(error: &list::ListError) -> &'static str {
     match error {
         list::ListError::Io(_) => "io_error",
         list::ListError::Json(_) => "json_error",
+        list::ListError::Manifest(_) => "manifest_error",
     }
 }
 
@@ -254,6 +260,7 @@ fn search_error_code(error: &search::SearchError) -> &'static str {
     match error {
         search::SearchError::Io(_) => "io_error",
         search::SearchError::Json(_) => "json_error",
+        search::SearchError::Manifest(_) => "manifest_error",
     }
 }
 
@@ -269,6 +276,7 @@ fn show_json_error(error: &show::ShowError) -> JsonError {
         ),
         show::ShowError::Io(_) => JsonError::new("io_error", error.to_string()),
         show::ShowError::Json(_) => JsonError::new("json_error", error.to_string()),
+        show::ShowError::Manifest(_) => JsonError::new("manifest_error", error.to_string()),
         show::ShowError::SuspiciousPath { file }
         | show::ShowError::MissingFile { file }
         | show::ShowError::InvalidFrontmatter { file, .. } => JsonError::with_details(
@@ -298,6 +306,7 @@ fn compile_json_error(error: &CompileError) -> JsonError {
         CompileError::ContentFilter => JsonError::new("content_filter", error.to_string()),
         CompileError::Llm(_) => JsonError::new("llm_error", error.to_string()),
         CompileError::Io(_) => JsonError::new("io_error", error.to_string()),
+        CompileError::Busy(_) => JsonError::new("tree_busy", error.to_string()),
         CompileError::Validation(message) => JsonError::with_details(
             "validation_error",
             message.clone(),

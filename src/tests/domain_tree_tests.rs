@@ -1,5 +1,5 @@
 use super::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn full_config() -> TreeConfig {
     TreeConfig {
@@ -52,4 +52,28 @@ fn branches_dir_is_output_dir_slash_branches() {
         tree.branches_dir(),
         PathBuf::from("/tmp/my-research/branches")
     );
+}
+
+#[test]
+fn manifest_path_method_is_infra_dir_slash_manifest_json() {
+    let tree = Tree::from_config(&full_config());
+    assert_eq!(
+        tree.manifest_path(),
+        PathBuf::from("/tmp/my-research/.bo/manifest.json")
+    );
+}
+
+#[test]
+fn manifest_path_free_helper_matches_method() {
+    let dir = Path::new("/tmp/my-research");
+    assert_eq!(
+        super::manifest_path(dir),
+        PathBuf::from("/tmp/my-research/.bo/manifest.json")
+    );
+}
+
+#[test]
+fn manifest_path_method_and_free_helper_agree() {
+    let tree = Tree::from_config(&full_config());
+    assert_eq!(tree.manifest_path(), super::manifest_path(&tree.output_dir));
 }

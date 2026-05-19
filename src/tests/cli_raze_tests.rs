@@ -1,5 +1,5 @@
 use super::*;
-use crate::domain::index::{self, IndexEntry};
+use crate::domain::manifest::{self, LeafRecord, Manifest, TreeMeta};
 use crate::engine::config;
 use std::fs;
 use tempfile::TempDir;
@@ -10,7 +10,19 @@ fn setup_tree(tmp: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
     fs::create_dir_all(&tree_dir).unwrap();
     let bo_dir = tree_dir.join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    fs::write(bo_dir.join("index.jsonl"), "").unwrap();
+    manifest::write(
+        &bo_dir.join("manifest.json"),
+        &Manifest {
+            tree: TreeMeta {
+                name: "tree".to_string(),
+                created_at: "2025-01-01T00:00:00Z".to_string(),
+                last_compiled_at: None,
+            },
+            leaves: Vec::new(),
+            branches: Vec::new(),
+        },
+    )
+    .unwrap();
 
     config::write_config(
         &config::Config {
@@ -33,16 +45,22 @@ fn auth_path_for_config(config_path: &std::path::Path) -> std::path::PathBuf {
 }
 
 fn add_leaf(tree_dir: &std::path::Path, file: &str) {
-    index::append_entry(
-        &tree_dir.join(".bo").join("index.jsonl"),
-        &IndexEntry {
-            file: file.to_string(),
-            title: file.trim_end_matches(".md").to_string(),
-            url: format!("https://example.com/{}", file),
-        },
-    )
-    .unwrap();
+    add_manifest_leaf(tree_dir, file);
     fs::write(tree_dir.join(file), "# content\n").unwrap();
+}
+
+fn add_manifest_leaf(tree_dir: &std::path::Path, file: &str) {
+    let manifest_path = tree_dir.join(".bo/manifest.json");
+    let mut manifest = manifest::read(&manifest_path).unwrap();
+    manifest.leaves.push(LeafRecord {
+        slug: file.trim_end_matches(".md").to_string(),
+        file: file.to_string(),
+        title: file.trim_end_matches(".md").to_string(),
+        url: format!("https://example.com/{}", file),
+        collected_at: "2025-01-01T00:00:00Z".to_string(),
+        summary: None,
+    });
+    manifest::write(&manifest_path, &manifest).unwrap();
 }
 
 #[test]
@@ -68,6 +86,37 @@ fn deletes_index_file() {
 
     assert!(output.result.deleted_index);
     assert!(!tree_dir.join(".bo").exists());
+}
+
+#[test]
+fn deletes_manifest_alongside_other_infra() {
+    let tmp = TempDir::new().unwrap();
+    let (tree_dir, config_path) = setup_tree(&tmp);
+    // Pre-T6.1, raze removes the entire .bo/ directory which incidentally
+    // wipes the manifest. This test pins the behaviour and guards against
+    // anyone reintroducing a manifest path that escapes infra teardown.
+    let manifest_path = tree_dir.join(".bo/manifest.json");
+    crate::domain::manifest::write(
+        &manifest_path,
+        &crate::domain::manifest::Manifest {
+            tree: crate::domain::manifest::TreeMeta {
+                name: "raze-test".to_string(),
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+                last_compiled_at: None,
+            },
+            leaves: Vec::new(),
+            branches: Vec::new(),
+        },
+    )
+    .unwrap();
+    assert!(manifest_path.exists());
+
+    let _ = raze(&tree_dir, &config_path).unwrap();
+
+    assert!(
+        !manifest_path.exists(),
+        "manifest.json must be deleted by raze"
+    );
 }
 
 #[test]
@@ -177,15 +226,7 @@ fn auth_only_cleanup_deletes_auth_without_tree_config() {
 fn skips_missing_files_without_error() {
     let tmp = TempDir::new().unwrap();
     let (tree_dir, config_path) = setup_tree(&tmp);
-    index::append_entry(
-        &tree_dir.join(".bo").join("index.jsonl"),
-        &IndexEntry {
-            file: "ghost.md".to_string(),
-            title: "Ghost".to_string(),
-            url: "https://example.com/ghost".to_string(),
-        },
-    )
-    .unwrap();
+    add_manifest_leaf(&tree_dir, "ghost.md");
 
     let output = raze(&tree_dir, &config_path).unwrap();
 
@@ -197,41 +238,25 @@ fn skips_missing_files_without_error() {
 fn warns_on_suspicious_path_traversal() {
     let tmp = TempDir::new().unwrap();
     let (tree_dir, config_path) = setup_tree(&tmp);
-    index::append_entry(
-        &tree_dir.join(".bo").join("index.jsonl"),
-        &IndexEntry {
-            file: "../escape.md".to_string(),
-            title: "Escape".to_string(),
-            url: "https://example.com/escape".to_string(),
-        },
-    )
-    .unwrap();
+    add_manifest_leaf(&tree_dir, "../escape.md");
 
     let output = raze(&tree_dir, &config_path).unwrap();
 
     assert_eq!(output.warnings.len(), 1);
-    assert_eq!(output.warnings[0].code, "suspicious_ledger_entry");
+    assert_eq!(output.warnings[0].code, "suspicious_manifest_entry");
     assert_eq!(output.result.deleted_files, 0);
 }
 
 #[test]
-fn warns_on_absolute_path_in_index() {
+fn warns_on_absolute_path_in_manifest() {
     let tmp = TempDir::new().unwrap();
     let (tree_dir, config_path) = setup_tree(&tmp);
-    index::append_entry(
-        &tree_dir.join(".bo").join("index.jsonl"),
-        &IndexEntry {
-            file: "/etc/passwd".to_string(),
-            title: "Bad".to_string(),
-            url: "https://example.com/bad".to_string(),
-        },
-    )
-    .unwrap();
+    add_manifest_leaf(&tree_dir, "/etc/passwd");
 
     let output = raze(&tree_dir, &config_path).unwrap();
 
     assert_eq!(output.warnings.len(), 1);
-    assert_eq!(output.warnings[0].code, "suspicious_ledger_entry");
+    assert_eq!(output.warnings[0].code, "suspicious_manifest_entry");
 }
 
 #[test]

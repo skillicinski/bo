@@ -128,17 +128,48 @@ fn make_leaf(
     fs::write(leaves_dir.join(filename), content).unwrap();
 }
 
-fn make_index(dir: &Path, entries: &[(&str, &str, &str)]) {
-    let mut lines = String::new();
-    for (file, title, url) in entries {
-        lines.push_str(&format!(
-            "{{\"file\":\"{}\",\"title\":\"{}\",\"url\":\"{}\"}}\n",
-            file, title, url
-        ));
-    }
+fn make_manifest(dir: &Path, entries: &[(&str, &str, &str)]) {
+    let leaves: Vec<_> = entries
+        .iter()
+        .map(|(file, title, url)| {
+            let summary = fs::read_to_string(dir.join(file))
+                .ok()
+                .and_then(|content| crate::domain::frontmatter::parse(&content).ok())
+                .and_then(|(mapping, _)| {
+                    mapping
+                        .get("summary")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string)
+                });
+            crate::domain::manifest::LeafRecord {
+                slug: Path::new(file)
+                    .file_stem()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                file: file.to_string(),
+                title: title.to_string(),
+                url: url.to_string(),
+                collected_at: String::new(),
+                summary,
+            }
+        })
+        .collect();
     let bo_dir = dir.join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    fs::write(bo_dir.join("index.jsonl"), lines).unwrap();
+    crate::domain::manifest::write(
+        &bo_dir.join("manifest.json"),
+        &crate::domain::manifest::Manifest {
+            tree: crate::domain::manifest::TreeMeta {
+                name: "query".to_string(),
+                created_at: "2025-01-01T00:00:00Z".to_string(),
+                last_compiled_at: None,
+            },
+            leaves,
+            branches: Vec::new(),
+        },
+    )
+    .unwrap();
 }
 
 #[test]
@@ -171,7 +202,7 @@ fn retrieve_or_semantics_scores_partial_matches() {
         "Boil water and add salt. Cook pasta for 10 minutes.",
     );
 
-    make_index(
+    make_manifest(
         tree,
         &[
             (
@@ -207,7 +238,7 @@ fn retrieve_or_semantics_scores_partial_matches() {
 fn retrieve_empty_tree_returns_error() {
     let dir = TempDir::new().unwrap();
     let tree = dir.path();
-    make_index(tree, &[]);
+    make_manifest(tree, &[]);
 
     let err = retrieve_leaves(tree, &["rust".to_string()]).unwrap_err();
     assert!(matches!(err, QueryError::EmptyTree));
@@ -226,7 +257,7 @@ fn retrieve_no_matches_returns_error() {
         Some("How to cook"),
         "Boil water.",
     );
-    make_index(
+    make_manifest(
         tree,
         &[(
             "leaves/cooking.md",
@@ -252,7 +283,7 @@ fn retrieve_missing_summary_uses_body_fallback() {
         None,
         "This leaf has no summary field but has a body about Rust programming.",
     );
-    make_index(
+    make_manifest(
         tree,
         &[(
             "leaves/nosummary.md",
@@ -301,12 +332,7 @@ fn diagnostics_capture_focused_title_and_summary_matches() {
 
 // ── helper tests ─────────────────────────────────────────────────────
 
-#[test]
-fn slug_from_file_strips_dir_and_extension() {
-    assert_eq!(slug_from_file("leaves/foo-bar.md"), "foo-bar");
-    assert_eq!(slug_from_file("leaves/sub/deep.md"), "deep");
-    assert_eq!(slug_from_file("simple.md"), "simple");
-}
+// (slug_from_file removed: slugs now come from manifest LeafRecord.slug)
 
 // ── citation validation tests ────────────────────────────────────────
 
@@ -660,7 +686,7 @@ fn single_leaf_query_tree() -> TempDir {
         Some("Rust safety"),
         "Rust is a language focused on safety.",
     );
-    make_index(
+    make_manifest(
         dir.path(),
         &[(
             "leaves/only-leaf.md",
@@ -763,7 +789,7 @@ fn weak_incidental_match_returns_low_relevance_before_provider_call() {
         Some("Trustworthy teams"),
         "Trust grows slowly through repeated collaboration.",
     );
-    make_index(
+    make_manifest(
         dir.path(),
         &[(
             "leaves/trust.md",
@@ -807,7 +833,7 @@ fn generic_query_returns_low_relevance_before_provider_call() {
         Some("Misc notes"),
         "Patterns across systems are important for teams.",
     );
-    make_index(
+    make_manifest(
         dir.path(),
         &[
             ("leaves/one.md", "First Notes", "https://example.com/one"),

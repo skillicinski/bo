@@ -10,16 +10,16 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-/// Read the `compiled_at` value from an existing branch file.
+/// Read the `created_at` value from an existing branch file.
 ///
 /// Returns `None` in all failure cases: file absent, I/O error, unparseable
-/// frontmatter, or missing `compiled_at` field.  The caller treats all of
+/// frontmatter, or missing `created_at` field.  The caller treats all of
 /// these identically (first-write semantics).
-pub fn read_compiled_at(path: &Path) -> Option<String> {
+pub fn read_created_at(path: &Path) -> Option<String> {
     let content = fs::read_to_string(path).ok()?;
     let (mapping, _) = frontmatter::parse(&content).ok()?;
     mapping
-        .get("compiled_at")
+        .get("created_at")
         .and_then(|v| v.as_str())
         .map(str::to_string)
 }
@@ -35,16 +35,31 @@ pub fn write(
     title: &str,
     body: &str,
     leaves: &[String],
-    compiled_at: &str,
+    created_at: &str,
     updated_at: &str,
 ) -> io::Result<()> {
+    let content = format_content(title, body, leaves, created_at, updated_at);
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, content)
+}
+
+pub(crate) fn format_content(
+    title: &str,
+    body: &str,
+    leaves: &[String],
+    created_at: &str,
+    updated_at: &str,
+) -> String {
     // Build frontmatter mapping
     let mut mapping = Mapping::new();
     frontmatter::set_field(&mut mapping, "title", Value::String(title.to_string()));
     frontmatter::set_field(
         &mut mapping,
-        "compiled_at",
-        Value::String(compiled_at.to_string()),
+        "created_at",
+        Value::String(created_at.to_string()),
     );
     frontmatter::set_field(
         &mut mapping,
@@ -63,12 +78,7 @@ pub fn write(
         format!("{}\n\n{}", expected_heading, body)
     };
 
-    let content = frontmatter::render(&mapping, &full_body);
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, content)
+    frontmatter::render(&mapping, &full_body)
 }
 
 #[cfg(test)]

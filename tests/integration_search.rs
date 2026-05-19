@@ -31,22 +31,38 @@ impl TestTree {
         });
         fs::write(config_dir.join("config.json"), config.to_string()).unwrap();
 
-        // Write leaves and index
-        let mut index_lines = Vec::new();
+        // Write leaves and manifest
+        let mut manifest_leaves = Vec::new();
         for (file, title, body, date) in leaves {
             let content = format!(
                 "---\ntitle: \"{}\"\nurl: https://example.com/{}\ncollected_at: {}\nupdated_at: {}\n---\n\n# {}\n\n{}\n",
                 title, file, date, date, title, body
             );
             fs::write(tree_dir.path().join(file), &content).unwrap();
-            index_lines.push(format!(
-                r#"{{"file":"{}","title":"{}","url":"https://example.com/{}"}}"#,
-                file, title, file
-            ));
+            manifest_leaves.push(bo::domain::manifest::LeafRecord {
+                slug: file.trim_end_matches(".md").to_string(),
+                file: file.to_string(),
+                title: title.to_string(),
+                url: format!("https://example.com/{}", file),
+                collected_at: date.to_string(),
+                summary: None,
+            });
         }
         let bo_dir = tree_dir.path().join(".bo");
         fs::create_dir_all(&bo_dir).unwrap();
-        fs::write(bo_dir.join("index.jsonl"), index_lines.join("\n") + "\n").unwrap();
+        bo::domain::manifest::write(
+            &bo_dir.join("manifest.json"),
+            &bo::domain::manifest::Manifest {
+                tree: bo::domain::manifest::TreeMeta {
+                    name: "test-tree".to_string(),
+                    created_at: "2025-01-01T00:00:00Z".to_string(),
+                    last_compiled_at: None,
+                },
+                leaves: manifest_leaves,
+                branches: Vec::new(),
+            },
+        )
+        .unwrap();
 
         TestTree {
             _home: home,

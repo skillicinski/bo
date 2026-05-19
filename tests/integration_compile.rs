@@ -8,7 +8,7 @@
 use std::fs;
 
 use bo::cli::compile;
-use bo::domain::index;
+use bo::domain::manifest::{self, LeafRecord, Manifest, TreeMeta};
 use bo::engine::config::SeededConfig;
 
 struct FixtureDoc {
@@ -50,7 +50,7 @@ fn setup_fixture_collection() -> tempfile::TempDir {
     let dir = tempfile::TempDir::new().unwrap();
     let bo_dir = dir.path().join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    let index_path = bo_dir.join("index.jsonl");
+    let mut leaves = Vec::new();
 
     for doc in FIXTURE_DOCS {
         bo::domain::leaf::write(
@@ -63,16 +63,29 @@ fn setup_fixture_collection() -> tempfile::TempDir {
         )
         .unwrap();
 
-        index::append_entry(
-            &index_path,
-            &index::IndexEntry {
-                file: doc.file.to_string(),
-                title: doc.title.to_string(),
-                url: doc.url.to_string(),
-            },
-        )
-        .unwrap();
+        leaves.push(LeafRecord {
+            slug: doc.file.trim_end_matches(".md").to_string(),
+            file: doc.file.to_string(),
+            title: doc.title.to_string(),
+            url: doc.url.to_string(),
+            collected_at: "2025-06-01T10:00:00Z".to_string(),
+            summary: None,
+        });
     }
+
+    manifest::write(
+        &bo_dir.join("manifest.json"),
+        &Manifest {
+            tree: TreeMeta {
+                name: "compile-fixture".to_string(),
+                created_at: "2025-06-01T09:00:00Z".to_string(),
+                last_compiled_at: None,
+            },
+            leaves,
+            branches: Vec::new(),
+        },
+    )
+    .unwrap();
 
     dir
 }
@@ -134,11 +147,8 @@ fn compile_produces_at_least_one_branch_file() {
         "branch missing 'title' in frontmatter"
     );
     assert!(
-        mapping
-            .get("compiled_at")
-            .and_then(|v| v.as_str())
-            .is_some(),
-        "branch missing 'compiled_at' in frontmatter"
+        mapping.get("created_at").and_then(|v| v.as_str()).is_some(),
+        "branch missing 'created_at' in frontmatter"
     );
     assert!(
         mapping.get("updated_at").and_then(|v| v.as_str()).is_some(),
@@ -159,41 +169,32 @@ fn compile_gives_every_leaf_a_branches_field() {
 
     compile::cmd_compile(&cfg).unwrap();
 
-    let index_path = dir.path().join(".bo/index.jsonl");
-    let entries = index::read_index(&index_path).unwrap();
-
-    for entry in &entries {
-        let leaf_path = dir.path().join(&entry.file);
+    for doc in FIXTURE_DOCS {
+        let leaf_path = dir.path().join(doc.file);
         let content = fs::read_to_string(&leaf_path).unwrap();
         let (mapping, _) = bo::domain::frontmatter::parse(&content).unwrap();
         assert!(
             mapping.get("branches").is_some(),
             "leaf {} missing 'branches' field after compile",
-            entry.file
+            doc.file
         );
     }
 }
 
 #[test]
 #[ignore = "requires OPENAI_API_KEY"]
-fn compile_does_not_modify_index_jsonl() {
+fn compile_does_not_create_index_jsonl() {
     let dir = setup_fixture_collection();
     let cfg = make_config(dir.path());
 
-    let index_before = fs::read_to_string(dir.path().join(".bo/index.jsonl")).unwrap();
-
     compile::cmd_compile(&cfg).unwrap();
 
-    let index_after = fs::read_to_string(dir.path().join(".bo/index.jsonl")).unwrap();
-    assert_eq!(
-        index_before, index_after,
-        "index.jsonl was modified by bo compile"
-    );
+    assert!(!dir.path().join(".bo/index.jsonl").exists());
 }
 
 #[test]
 #[ignore = "requires OPENAI_API_KEY"]
-fn compile_rerun_preserves_compiled_at() {
+fn compile_rerun_preserves_created_at() {
     let dir = setup_fixture_collection();
     let cfg = make_config(dir.path());
 
@@ -210,8 +211,8 @@ fn compile_rerun_preserves_compiled_at() {
 
     let content1 = fs::read_to_string(&first_branch).unwrap();
     let (m1, _) = bo::domain::frontmatter::parse(&content1).unwrap();
-    let compiled_at_1 = m1
-        .get("compiled_at")
+    let created_at_1 = m1
+        .get("created_at")
         .and_then(|v| v.as_str())
         .unwrap()
         .to_string();
@@ -225,14 +226,14 @@ fn compile_rerun_preserves_compiled_at() {
     // Find the same branch (by slug/filename)
     let content2 = fs::read_to_string(&first_branch).unwrap();
     let (m2, _) = bo::domain::frontmatter::parse(&content2).unwrap();
-    let compiled_at_2 = m2
-        .get("compiled_at")
+    let created_at_2 = m2
+        .get("created_at")
         .and_then(|v| v.as_str())
         .unwrap()
         .to_string();
 
     assert_eq!(
-        compiled_at_1, compiled_at_2,
-        "compiled_at changed on second compile run"
+        created_at_1, created_at_2,
+        "created_at changed on second compile run"
     );
 }

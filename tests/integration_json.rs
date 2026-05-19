@@ -32,15 +32,12 @@ fn seed_tree(home: &TempDir, name: &str) -> std::path::PathBuf {
 }
 
 fn write_compile_leaf(tree: &Path, file: &str, title: &str) {
-    bo::domain::index::append_entry(
-        &tree.join(".bo/index.jsonl"),
-        &bo::domain::index::IndexEntry {
-            file: file.to_string(),
-            title: title.to_string(),
-            url: format!("https://example.com/{}", file.trim_end_matches(".md")),
-        },
-    )
-    .unwrap();
+    add_manifest_leaf(
+        tree,
+        file,
+        title,
+        &format!("https://example.com/{}", file.trim_end_matches(".md")),
+    );
     fs::write(
         tree.join(file),
         format!(
@@ -49,6 +46,20 @@ fn write_compile_leaf(tree: &Path, file: &str, title: &str) {
         ),
     )
     .unwrap();
+}
+
+fn add_manifest_leaf(tree: &Path, file: &str, title: &str, url: &str) {
+    let manifest_path = tree.join(".bo/manifest.json");
+    let mut manifest = bo::domain::manifest::read(&manifest_path).unwrap();
+    manifest.leaves.push(bo::domain::manifest::LeafRecord {
+        slug: file.trim_end_matches(".md").to_string(),
+        file: file.to_string(),
+        title: title.to_string(),
+        url: url.to_string(),
+        collected_at: "2025-01-01T00:00:00Z".to_string(),
+        summary: None,
+    });
+    bo::domain::manifest::write(&manifest_path, &manifest).unwrap();
 }
 
 // ── parse errors ─────────────────────────────────────────────────────────────
@@ -398,23 +409,20 @@ fn raze_json_include_auth_deletes_auth() {
 }
 
 #[test]
-fn raze_json_reports_suspicious_ledger_entries_as_warnings() {
+fn raze_json_reports_suspicious_manifest_entries_as_warnings() {
     let home = TempDir::new().unwrap();
     let tree = seed_tree(&home, "tree");
-    bo::domain::index::append_entry(
-        &tree.join(".bo/index.jsonl"),
-        &bo::domain::index::IndexEntry {
-            file: "../outside.md".to_string(),
-            title: "Suspicious".to_string(),
-            url: "https://example.com/suspicious".to_string(),
-        },
-    )
-    .unwrap();
+    add_manifest_leaf(
+        &tree,
+        "../outside.md",
+        "Suspicious",
+        "https://example.com/suspicious",
+    );
 
     let out = run(home.path(), &["raze", "--json"]);
     assert!(out.status.success());
     let parsed = parse_json(&out);
-    assert_eq!(parsed["warnings"][0]["code"], "suspicious_ledger_entry");
+    assert_eq!(parsed["warnings"][0]["code"], "suspicious_manifest_entry");
     assert_eq!(parsed["warnings"][0]["details"]["file"], "../outside.md");
 }
 
@@ -425,15 +433,7 @@ fn collect_json_duplicate_url_is_structured_error() {
     let home = TempDir::new().unwrap();
     let tree = seed_tree(&home, "tree");
     let url = "https://www.youtube.com/watch?v=a1mhk7mAetk";
-    bo::domain::index::append_entry(
-        &tree.join(".bo/index.jsonl"),
-        &bo::domain::index::IndexEntry {
-            file: "existing.md".to_string(),
-            title: "Existing Video".to_string(),
-            url: url.to_string(),
-        },
-    )
-    .unwrap();
+    add_manifest_leaf(&tree, "existing.md", "Existing Video", url);
 
     let out = run(home.path(), &["collect", "--json", url]);
     assert!(!out.status.success());
@@ -449,15 +449,7 @@ fn collect_json_batch_reports_skipped_duplicates_per_input() {
     let home = TempDir::new().unwrap();
     let tree = seed_tree(&home, "tree");
     let url = "https://example.com/already";
-    bo::domain::index::append_entry(
-        &tree.join(".bo/index.jsonl"),
-        &bo::domain::index::IndexEntry {
-            file: "existing.md".to_string(),
-            title: "Existing".to_string(),
-            url: url.to_string(),
-        },
-    )
-    .unwrap();
+    add_manifest_leaf(&tree, "existing.md", "Existing", url);
 
     let out = run(home.path(), &["collect", "--json", url, url]);
     assert!(out.status.success());

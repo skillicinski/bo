@@ -1,3 +1,4 @@
+use crate::domain::manifest::{self, Manifest, TreeMeta};
 use crate::domain::tree::TreeConfig;
 use crate::engine::config::{self, Config, ConfigError};
 
@@ -87,13 +88,28 @@ pub fn seed(
             tree: Some(TreeConfig {
                 output_dir: output_dir.clone(),
                 name: tree_name.clone(),
-                created_at: Some(created_at),
+                created_at: Some(created_at.clone()),
             }),
             model: existing_model,
         },
         config_path,
     )
     .map_err(|error| SeedError::ConfigWrite(format!("failed to write config: {error}")))?;
+
+    // Write the empty manifest as the canonical tree-state record.
+    // Mirrors config.tree.{name,created_at} for read-time consistency.
+    let manifest_path = output_dir.join(".bo").join("manifest.json");
+    let manifest = Manifest {
+        tree: TreeMeta {
+            name: tree_name.clone().unwrap_or_else(|| "unnamed".to_string()),
+            created_at,
+            last_compiled_at: None,
+        },
+        leaves: Vec::new(),
+        branches: Vec::new(),
+    };
+    manifest::write(&manifest_path, &manifest)
+        .map_err(|error| SeedError::ConfigWrite(format!("failed to write manifest: {error}")))?;
 
     Ok(SeedResult {
         status: "created".to_string(),

@@ -1,12 +1,13 @@
 // bo status — tree health and compile readiness at a glance.
 //
-// Pipeline: read index → read state → scan filesystem → compute health →
-//           derive hints → return StatusResult.
+// Pipeline: read manifest → derive metrics → scan filesystem for size and
+//           orphan/missing checks → return StatusResult.
 //
-// Read-only: never modifies any file.
+// Read-only: never modifies any file. Reads consult the manifest.
 
-use crate::domain::{branch, frontmatter, index, tree};
-use crate::engine::state;
+use crate::domain::frontmatter;
+use crate::domain::manifest;
+use crate::domain::tree::Tree;
 
 use serde::Serialize;
 use std::collections::HashSet;
@@ -61,63 +62,58 @@ pub struct OrphanEntry {
 #[derive(Debug)]
 pub enum StatusError {
     Io(String),
+    Manifest(manifest::ManifestError),
 }
 
 impl std::fmt::Display for StatusError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StatusError::Io(msg) => write!(f, "{}", msg),
+            StatusError::Manifest(e) => write!(f, "{}", e),
         }
+    }
+}
+
+impl From<manifest::ManifestError> for StatusError {
+    fn from(e: manifest::ManifestError) -> Self {
+        StatusError::Manifest(e)
     }
 }
 
 // ── pipeline ──────────────────────────────────────────────────────────────────
 
 pub fn compute_status(tree_dir: &Path, tree_name: &str) -> Result<StatusResult, StatusError> {
-    let index_path = tree::index_path(tree_dir);
-    let state_path = tree::state_path(tree_dir);
+    let tree = Tree {
+        name: None,
+        created_at: None,
+        output_dir: tree_dir.to_path_buf(),
+    };
     let branches_dir = tree_dir.join("branches");
 
-    // Read index
-    let entries = index::read_index(&index_path)
-        .map_err(|e| StatusError::Io(format!("failed to read index: {}", e)))?;
+    let manifest = manifest::read(&tree.manifest_path()).map_err(StatusError::Manifest)?;
 
-    // Read state
-    let tree_state = state::read_state(&state_path);
-
-    // Compute leaf stats
-    let leaf_slugs: Vec<String> = entries
+    // Leaf metrics straight from the manifest.
+    let uncompiled_slugs: Vec<String> = manifest
+        .uncompiled_leaves()
         .iter()
-        .map(|e| state::slug_from_filename(&e.file).to_string())
-        .collect();
-
-    let uncompiled_slugs: Vec<String> = leaf_slugs
-        .iter()
-        .filter(|slug| !tree_state.compiled_leaves.contains_key(*slug))
-        .cloned()
+        .map(|l| l.slug.clone())
         .collect();
 
     let leaves = LeafStatus {
-        total: entries.len(),
+        total: manifest.leaves.len(),
         uncompiled: uncompiled_slugs.len(),
         uncompiled_slugs,
     };
 
-    // Scan branches
-    let (branch_count, last_compiled_at) = scan_branches(&branches_dir);
-
     let branches = BranchStatus {
-        total: branch_count,
-        last_compiled_at,
+        total: manifest.branches.len(),
+        last_compiled_at: manifest.tree.last_compiled_at.clone(),
     };
 
-    // Compute size
+    // Filesystem scan only for size — the one metric the manifest doesn't track.
     let size = compute_size(tree_dir, &branches_dir);
 
-    // Health checks
-    let health = compute_health(tree_dir, &entries);
-
-    // Generate hints
+    let health = compute_health(tree_dir, &manifest);
     let hints = generate_hints(&leaves, &branches, &health);
 
     Ok(StatusResult {
@@ -132,37 +128,9 @@ pub fn compute_status(tree_dir: &Path, tree_name: &str) -> Result<StatusResult, 
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-fn scan_branches(branches_dir: &Path) -> (usize, Option<String>) {
-    let mut count = 0usize;
-    let mut latest: Option<String> = None;
-
-    let entries = match fs::read_dir(branches_dir) {
-        Ok(e) => e,
-        Err(_) => return (0, None), // branches/ doesn't exist yet
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("md") {
-            continue;
-        }
-        count += 1;
-        if let Some(compiled_at) = branch::read_compiled_at(&path) {
-            match &latest {
-                None => latest = Some(compiled_at),
-                Some(existing) if compiled_at > *existing => latest = Some(compiled_at),
-                _ => {}
-            }
-        }
-    }
-
-    (count, latest)
-}
-
 fn compute_size(tree_dir: &Path, branches_dir: &Path) -> SizeStatus {
     let mut total_bytes: u64 = 0;
 
-    // Sum leaf files at tree root
     if let Ok(entries) = fs::read_dir(tree_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -174,7 +142,6 @@ fn compute_size(tree_dir: &Path, branches_dir: &Path) -> SizeStatus {
         }
     }
 
-    // Sum branch files
     if let Ok(entries) = fs::read_dir(branches_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -192,22 +159,30 @@ fn compute_size(tree_dir: &Path, branches_dir: &Path) -> SizeStatus {
     }
 }
 
-fn compute_health(tree_dir: &Path, entries: &[index::IndexEntry]) -> HealthReport {
-    // Orphan detection: index entry references a file that doesn't exist
-    let orphans: Vec<OrphanEntry> = entries
+fn compute_health(tree_dir: &Path, manifest: &manifest::Manifest) -> HealthReport {
+    // Orphan: manifest entry references a file that doesn't exist on disk.
+    let orphans: Vec<OrphanEntry> = manifest
+        .leaves
         .iter()
-        .filter(|e| !tree_dir.join(&e.file).exists())
-        .map(|e| OrphanEntry {
-            file: e.file.clone(),
-            title: e.title.clone(),
-            url: e.url.clone(),
-            remediation: format!("re-collect '{}' or remove the index entry", e.url),
+        .filter(|l| !tree_dir.join(&l.file).exists())
+        .map(|l| OrphanEntry {
+            file: l.file.clone(),
+            title: l.title.clone(),
+            url: l.url.clone(),
+            remediation: format!("re-collect '{}' or remove the manifest entry", l.url),
         })
         .collect();
 
-    // Missing detection: .md files on disk not in index
-    let indexed_files: HashSet<&str> = entries.iter().map(|e| e.file.as_str()).collect();
+    let manifest_files: HashSet<&str> = manifest.leaves.iter().map(|l| l.file.as_str()).collect();
+    let missing_from_index = scan_missing_from_index(tree_dir, &manifest_files);
 
+    HealthReport {
+        orphan_index_entries: orphans,
+        missing_from_index,
+    }
+}
+
+fn scan_missing_from_index(tree_dir: &Path, manifest_files: &HashSet<&str>) -> Vec<String> {
     let mut missing: Vec<String> = Vec::new();
     if let Ok(dir_entries) = fs::read_dir(tree_dir) {
         for entry in dir_entries.flatten() {
@@ -216,20 +191,15 @@ fn compute_health(tree_dir: &Path, entries: &[index::IndexEntry]) -> HealthRepor
                 continue;
             }
             let filename = entry.file_name().to_string_lossy().into_owned();
-            if indexed_files.contains(filename.as_str()) {
+            if manifest_files.contains(filename.as_str()) {
                 continue;
             }
-            // Only flag as missing if it looks like a leaf (has url: in frontmatter)
             if is_leaf_file(&path) {
                 missing.push(filename);
             }
         }
     }
-
-    HealthReport {
-        orphan_index_entries: orphans,
-        missing_from_index: missing,
-    }
+    missing
 }
 
 /// Check if a .md file is a leaf by looking for `url:` in its frontmatter.
@@ -296,7 +266,6 @@ pub fn render_human(result: &StatusResult) -> String {
     out.push_str(&format!("bo \u{00b7} {}\n", result.tree_name));
     out.push('\n');
 
-    // Leaves
     if result.leaves.uncompiled > 0 {
         out.push_str(&format!(
             "  Leaves:      {} ({} uncompiled)\n",
@@ -306,15 +275,12 @@ pub fn render_human(result: &StatusResult) -> String {
         out.push_str(&format!("  Leaves:      {}\n", result.leaves.total));
     }
 
-    // Branches
     out.push_str(&format!("  Branches:    {}\n", result.branches.total));
 
-    // Last compile
     if let Some(ref ts) = result.branches.last_compiled_at {
         out.push_str(&format!("  Last compile: {}\n", ts));
     }
 
-    // Size
     let kb = result.size.bytes / 1024;
     let display_size = if kb > 0 {
         format!("{} KB", kb)
@@ -327,7 +293,6 @@ pub fn render_human(result: &StatusResult) -> String {
         format_number(result.size.estimated_tokens)
     ));
 
-    // Uncompiled list
     if !result.leaves.uncompiled_slugs.is_empty() {
         out.push('\n');
         out.push_str("  Uncompiled:\n");
@@ -345,7 +310,6 @@ pub fn render_human(result: &StatusResult) -> String {
         }
     }
 
-    // Health issues
     if !result.health.orphan_index_entries.is_empty()
         || !result.health.missing_from_index.is_empty()
     {
@@ -365,7 +329,6 @@ pub fn render_human(result: &StatusResult) -> String {
         }
     }
 
-    // Hints
     if !result.hints.is_empty() {
         out.push('\n');
         for hint in &result.hints {

@@ -69,17 +69,51 @@ fn make_leaf(
     fs::write(leaves_dir.join(filename), content).unwrap();
 }
 
-fn make_index(dir: &std::path::Path, entries: &[(&str, &str, &str)]) {
-    let mut lines = String::new();
-    for (file, title, url) in entries {
-        lines.push_str(&format!(
-            "{{\"file\":\"{}\",\"title\":\"{}\",\"url\":\"{}\"}}\n",
-            file, title, url
-        ));
-    }
+fn make_manifest(dir: &std::path::Path, entries: &[(&str, &str, &str)]) {
+    let leaves: Vec<_> = entries
+        .iter()
+        .map(|(file, title, url)| {
+            let slug = std::path::Path::new(file)
+                .file_stem()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            // Read summary from the leaf file if it exists
+            let summary = fs::read_to_string(dir.join(file)).ok().and_then(|content| {
+                bo::domain::frontmatter::parse(&content)
+                    .ok()
+                    .and_then(|(mapping, _)| {
+                        mapping
+                            .get("summary")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string)
+                    })
+            });
+            bo::domain::manifest::LeafRecord {
+                slug,
+                file: file.to_string(),
+                title: title.to_string(),
+                url: url.to_string(),
+                collected_at: "2025-01-01T00:00:00Z".to_string(),
+                summary,
+            }
+        })
+        .collect();
     let bo_dir = dir.join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    fs::write(bo_dir.join("index.jsonl"), lines).unwrap();
+    bo::domain::manifest::write(
+        &bo_dir.join("manifest.json"),
+        &bo::domain::manifest::Manifest {
+            tree: bo::domain::manifest::TreeMeta {
+                name: "query-test".to_string(),
+                created_at: "2025-01-01T00:00:00Z".to_string(),
+                last_compiled_at: None,
+            },
+            leaves,
+            branches: Vec::new(),
+        },
+    )
+    .unwrap();
 }
 
 fn setup_test_tree() -> TempDir {
@@ -136,7 +170,7 @@ fn setup_test_tree() -> TempDir {
         "Traits define shared behavior. A trait tells the Rust compiler about functionality a type must provide. Trait bounds constrain generic types to those implementing specific traits.",
     );
 
-    make_index(
+    make_manifest(
         tree,
         &[
             (
@@ -296,7 +330,7 @@ fn single_leaf_tree_works() {
         Some("This is the only document in the tree about Rust"),
         "Rust is a systems programming language focused on safety and performance.",
     );
-    make_index(
+    make_manifest(
         tree,
         &[(
             "leaves/only-leaf.md",
