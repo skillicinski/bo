@@ -260,6 +260,21 @@ pub fn run_compile_with_options(
         return Ok(noop);
     }
 
+    // Stale repair + noop check run before auth (no LLM needed)
+    let tree = Tree::from_config(&cfg.tree);
+    execute::recover_pending_if_needed(&tree.output_dir)?;
+    let _stale_repair = plan::repair_stale_branches(
+        cfg,
+        &manifest::read(&tree.manifest_path())
+            .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?,
+    )?;
+    let manifest = manifest::read(&tree.manifest_path())
+        .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
+    let new_leaf_slugs = plan::select_new_leaf_slugs(&manifest)?;
+    if !options.all && new_leaf_slugs.is_empty() {
+        return Ok(CompileResult::noop(NO_NEW_LEAVES_REASON));
+    }
+
     let api_key =
         auth::resolve_openai_api_key(&auth::auth_path()).map_err(execute::compile_auth_error)?;
     let provider = OpenAiProvider::new(api_key.api_key.as_str());
