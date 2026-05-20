@@ -71,7 +71,8 @@ pub(super) fn build_incremental_user_message(
          - Do NOT place an existing branch in `new_branches` — that causes a duplicate slug error.\n\
          - Do NOT output branches that only contain previously-compiled leaves with no new leaf added.\n\
          - Omit unchanged non-stale branches entirely — they are preserved automatically.\n\
-         - If no new leaf fits any existing or new cross-cutting concept, return empty arrays.\n\n",
+         - Branches marked stale=\"true\" MUST appear in `updated_branches` with their remaining valid leaves and rewritten body. Do NOT omit stale branches.\n\
+         - If no new leaf fits any existing or new cross-cutting concept, return empty `new_branches` array (but still rebuild stale branches).\n\n",
     );
 
     msg.push_str("<existing_branches>\n");

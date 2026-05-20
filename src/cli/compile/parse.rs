@@ -293,10 +293,33 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
 
     for stale_slug in &required_stale_rebuild_slugs {
         if !seen_updated_branch_slugs.contains(stale_slug.as_str()) {
-            return Err(validation_error(format!(
-                "invalid incremental compile response: stale branch '{}' must be rebuilt or removed deterministically",
-                stale_slug
-            )));
+            // LLM didn't address this stale branch — deterministically repair it
+            // by removing deleted leaves and keeping existing body.
+            if let Some(branch) = manifest.branch_by_slug_str(stale_slug) {
+                let repaired_leaves: Vec<String> = branch
+                    .leaves
+                    .iter()
+                    .filter(|leaf| !deleted_leaf_slugs.contains(leaf.as_str()))
+                    .map(|leaf| format!("{}.md", leaf.as_str()))
+                    .collect();
+                if repaired_leaves.len() >= 2 {
+                    let branch_path = cfg.tree.output_dir.join(&branch.file);
+                    let body = std::fs::read_to_string(&branch_path)
+                        .ok()
+                        .and_then(|content| {
+                            crate::domain::frontmatter::parse(&content)
+                                .ok()
+                                .map(|(_, b)| b.to_string())
+                        })
+                        .unwrap_or_default();
+                    validated_branches.push(ValidatedBranch {
+                        slug: stale_slug.clone(),
+                        title: branch.title.as_str().to_string(),
+                        body,
+                        leaves: repaired_leaves,
+                    });
+                }
+            }
         }
     }
 
