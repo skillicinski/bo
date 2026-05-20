@@ -26,6 +26,7 @@ use crate::cli::json::JsonError;
 use crate::domain::manifest::{self, LeafRecord, Manifest, TreeMeta};
 use crate::domain::slug::Slug;
 use crate::domain::{leaf, slug, Timestamp, Title, Url};
+use crate::engine::auth::{self, AuthResolutionError};
 use crate::engine::llm::models::DEFAULT_MODEL;
 use crate::engine::pending::{self, OpKind, PendingWrite};
 use crate::engine::quality::RejectReason;
@@ -318,7 +319,23 @@ pub fn collect_html_with_model(
     model: &str,
 ) -> Result<Document, CollectError> {
     collect_html_with_summarizer(url, html, output_dir, |body, title| {
-        summary::generate(body, title, model)
+        let api_key = match auth::resolve_openai_api_key(&auth::auth_path()) {
+            Ok(resolved) => resolved.api_key,
+            Err(AuthResolutionError::Missing) => return Ok(summary::generate_fallback(body)),
+            Err(e) => return Err(summary::SummaryError::Runtime(e.to_string())),
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| summary::SummaryError::Runtime(format!("runtime: {}", e)))?;
+        let provider = crate::engine::llm::OpenAiProvider::new(api_key.as_str());
+        rt.block_on(summary::generate_llm(
+            body,
+            title,
+            &provider,
+            model,
+            summary::SUMMARY_LLM_POLICY,
+        ))
     })
 }
 
@@ -666,13 +683,40 @@ fn write_new_document_with_model(
     output_dir: &Path,
     model: &str,
 ) -> Result<Document, CollectError> {
-    write_new_document_with_summary_result(
-        url,
-        title,
-        body_markdown,
-        output_dir,
-        summary::generate(body_markdown, title, model),
-    )
+    let summary_result = {
+        let api_key = match auth::resolve_openai_api_key(&auth::auth_path()) {
+            Ok(resolved) => resolved.api_key,
+            Err(AuthResolutionError::Missing) => {
+                return write_new_document_with_summary_result(
+                    url,
+                    title,
+                    body_markdown,
+                    output_dir,
+                    Ok(summary::generate_fallback(body_markdown)),
+                );
+            }
+            Err(e) => {
+                return Err(CollectError::Summary(summary::SummaryError::Runtime(
+                    e.to_string(),
+                )))
+            }
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                CollectError::Summary(summary::SummaryError::Runtime(format!("runtime: {}", e)))
+            })?;
+        let provider = crate::engine::llm::OpenAiProvider::new(api_key.as_str());
+        rt.block_on(summary::generate_llm(
+            body_markdown,
+            title,
+            &provider,
+            model,
+            summary::SUMMARY_LLM_POLICY,
+        ))
+    };
+    write_new_document_with_summary_result(url, title, body_markdown, output_dir, summary_result)
 }
 
 fn write_new_document_with_summary_result(
