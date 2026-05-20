@@ -334,10 +334,9 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
             let slug = leaf.strip_suffix(".md").unwrap_or(leaf);
             new_leaf_slugs.contains(slug)
         }) {
-            return Err(validation_error(format!(
-                "invalid incremental compile response: new branch '{}' contains no newly processed leaf",
-                title
-            )));
+            // LLM tried to reorganize existing content without integrating a new leaf.
+            // Silently drop rather than fail — this is a common model misbehaviour.
+            continue;
         }
         validated_branches.push(ValidatedBranch {
             slug: branch_slug,

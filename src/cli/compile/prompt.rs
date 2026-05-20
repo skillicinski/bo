@@ -63,7 +63,15 @@ pub(super) fn build_incremental_user_message(
     let stale_branch_slugs: HashSet<&str> = stale_branch_slugs.iter().map(String::as_str).collect();
 
     let mut msg = String::from(
-        "Please incrementally compile my knowledge base. Preserve omitted non-stale branches.\n\n",
+        "Please incrementally compile my knowledge base.\n\n\
+         INCREMENTAL RULES:\n\
+         - You are integrating NEW leaves (listed in <full_leaf_bodies>) into an existing branch structure.\n\
+         - Use `updated_branches` to modify an existing branch — include its slug, updated body, and full leaf list (existing + new).\n\
+         - Use `new_branches` only for entirely new concepts not covered by any existing branch. Each new branch must include at least one new leaf.\n\
+         - Do NOT place an existing branch in `new_branches` — that causes a duplicate slug error.\n\
+         - Do NOT output branches that only contain previously-compiled leaves with no new leaf added.\n\
+         - Omit unchanged non-stale branches entirely — they are preserved automatically.\n\
+         - If no new leaf fits any existing or new cross-cutting concept, return empty arrays.\n\n",
     );
 
     msg.push_str("<existing_branches>\n");
@@ -103,6 +111,13 @@ pub(super) fn build_incremental_user_message(
         msg.push_str("</leaf>\n");
     }
     msg.push_str("</leaf_catalogue>\n\n");
+
+    msg.push_str("<new_leaves_to_integrate>\n");
+    for slug in &new_leaf_slugs {
+        msg.push_str(&format!("  - {}\n", slug));
+    }
+    msg.push_str("</new_leaves_to_integrate>\n\n");
+    msg.push_str("The above are the NEW leaves you must integrate. Every branch you output (updated or new) MUST include at least one of these new leaves. If none fit any concept, return empty arrays.\n\n");
 
     let mut full_body_slugs: HashSet<&str> = new_leaf_slugs.clone();
     for branch_record in &manifest.branches {
