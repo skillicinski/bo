@@ -1,0 +1,420 @@
+// ── compile planning: leaf loading, classification, manifest delta ─────────────
+
+use std::collections::{HashMap, HashSet};
+use std::fs;
+
+use crate::domain::frontmatter;
+use crate::domain::manifest::{BranchRecord, LeafRecord, Manifest, TreeMeta};
+use crate::engine::config::SeededConfig;
+
+use super::parse::{CompilePlan, ValidatedBranch};
+use super::{BranchResult, CompileError, CompileRunMode};
+
+// ── types ─────────────────────────────────────────────────────────────────────
+
+/// A leaf with its full content loaded for prompt assembly.
+pub(super) struct LoadedLeaf {
+    pub(super) slug: String,
+    pub(super) filename: String,
+    pub(super) title: String,
+    pub(super) summary: Option<String>,
+    pub(super) body: String,
+    pub(super) collected_at: String,
+}
+
+/// Classification of leaf files for the planning phase.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct LeafFileClassification {
+    pub(super) deleted_leaf_slugs: Vec<String>,
+    pub(super) skipped_leaf_slugs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RemovedBranchResult {
+    pub(super) slug: String,
+    pub(super) title: String,
+    pub(super) remaining_leaf_count: usize,
+    pub(super) reason: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BranchChangeKind {
+    Create,
+    Update,
+    Rebuild,
+}
+
+#[derive(Debug)]
+pub(super) struct PlannedBranchWrite {
+    pub(super) record: BranchRecord,
+    pub(super) file_leaves: Vec<String>,
+    pub(super) body: String,
+    pub(super) kind: BranchChangeKind,
+}
+
+#[derive(Debug)]
+pub(super) struct ManifestDelta {
+    pub(super) new_manifest: Manifest,
+    pub(super) branch_writes: Vec<PlannedBranchWrite>,
+    pub(super) branch_deletes: Vec<String>,
+    pub(super) deleted_leaf_slugs: Vec<String>,
+    pub(super) branches_created: Vec<BranchResult>,
+    pub(super) branches_updated: Vec<BranchResult>,
+    pub(super) branches_rebuilt: Vec<BranchResult>,
+    pub(super) branches_removed: Vec<RemovedBranchResult>,
+}
+
+// ── functions ─────────────────────────────────────────────────────────────────
+
+pub(super) fn select_new_leaf_slugs(manifest: &Manifest) -> Result<Vec<String>, CompileError> {
+    let Some(last_compiled_at) = manifest.tree.last_compiled_at.as_deref() else {
+        return Ok(manifest
+            .leaves
+            .iter()
+            .map(|leaf| leaf.slug.clone())
+            .collect());
+    };
+
+    manifest
+        .leaves
+        .iter()
+        .filter_map(|leaf| {
+            match super::execute::collected_after_last_compile(&leaf.collected_at, last_compiled_at)
+            {
+                Ok(true) => Some(Ok(leaf.slug.clone())),
+                Ok(false) => None,
+                Err(error) => Some(Err(error)),
+            }
+        })
+        .collect()
+}
+
+pub(super) fn derive_stale_branch_slugs(
+    manifest: &Manifest,
+    deleted_leaf_slugs: &[String],
+) -> Vec<String> {
+    let deleted_leaf_slugs: HashSet<&str> = deleted_leaf_slugs.iter().map(String::as_str).collect();
+    let mut stale_branch_slugs = Vec::new();
+
+    for branch in &manifest.branches {
+        if branch
+            .leaves
+            .iter()
+            .any(|leaf_slug| deleted_leaf_slugs.contains(leaf_slug.as_str()))
+        {
+            stale_branch_slugs.push(branch.slug.clone());
+        }
+    }
+
+    stale_branch_slugs
+}
+
+pub(super) fn classify_leaf_files(
+    cfg: &SeededConfig,
+    manifest: &Manifest,
+    new_leaf_slugs: &[String],
+) -> Result<LeafFileClassification, CompileError> {
+    let branch_referenced_slugs: HashSet<&str> = manifest
+        .branches
+        .iter()
+        .flat_map(|branch| branch.leaves.iter().map(String::as_str))
+        .collect();
+    let new_leaf_slugs: HashSet<&str> = new_leaf_slugs.iter().map(String::as_str).collect();
+
+    let mut deleted_leaf_slugs = Vec::new();
+    let mut skipped_leaf_slugs = Vec::new();
+
+    for leaf in &manifest.leaves {
+        let leaf_path = cfg.tree.output_dir.join(&leaf.file);
+        let is_new = new_leaf_slugs.contains(leaf.slug.as_str());
+        let is_branch_referenced = branch_referenced_slugs.contains(leaf.slug.as_str());
+
+        match fs::read_to_string(&leaf_path) {
+            Ok(content) => {
+                if frontmatter::parse(&content).is_err() {
+                    if is_new {
+                        return Err(CompileError::Io(format!(
+                            "newly selected leaf '{}' is malformed; no files were changed",
+                            leaf.file
+                        )));
+                    }
+                    skipped_leaf_slugs.push(leaf.slug.clone());
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if is_branch_referenced {
+                    deleted_leaf_slugs.push(leaf.slug.clone());
+                } else if is_new {
+                    return Err(CompileError::Io(format!(
+                        "newly selected leaf '{}' is missing; no files were changed",
+                        leaf.file
+                    )));
+                }
+            }
+            Err(error) => {
+                if is_new {
+                    return Err(CompileError::Io(format!(
+                        "newly selected leaf '{}' is unreadable: {}; no files were changed",
+                        leaf.file, error
+                    )));
+                }
+                skipped_leaf_slugs.push(leaf.slug.clone());
+            }
+        }
+    }
+
+    Ok(LeafFileClassification {
+        deleted_leaf_slugs,
+        skipped_leaf_slugs,
+    })
+}
+
+pub(super) fn read_valid_leaves(
+    cfg: &SeededConfig,
+    entries: &[LeafRecord],
+) -> (Vec<LoadedLeaf>, Vec<String>) {
+    let mut loaded = Vec::new();
+    let mut skipped = Vec::new();
+
+    for entry in entries {
+        let leaf_path = cfg.tree.output_dir.join(&entry.file);
+        match fs::read_to_string(&leaf_path) {
+            Ok(content) => match frontmatter::parse(&content) {
+                Ok((mapping, body)) => {
+                    let title = mapping
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .filter(|title| !title.trim().is_empty())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| entry.title.clone());
+                    loaded.push(LoadedLeaf {
+                        slug: entry.slug.clone(),
+                        filename: entry.file.clone(),
+                        title,
+                        summary: entry.summary.clone(),
+                        body,
+                        collected_at: entry.collected_at.clone(),
+                    });
+                }
+                Err(_) => skipped.push(entry.file.clone()),
+            },
+            Err(_) => skipped.push(entry.file.clone()),
+        }
+    }
+
+    (loaded, skipped)
+}
+
+pub(super) fn branch_result(slug: &str, title: &str, leaf_count: usize) -> BranchResult {
+    BranchResult {
+        slug: slug.to_string(),
+        title: title.to_string(),
+        leaf_count,
+    }
+}
+
+pub(super) fn validated_branch_leaf_slugs(branch: &ValidatedBranch) -> Vec<String> {
+    branch
+        .leaves
+        .iter()
+        .map(|leaf| leaf.strip_suffix(".md").unwrap_or(leaf).to_string())
+        .collect()
+}
+
+pub(super) fn build_manifest_delta(
+    current: &Manifest,
+    plan: &CompilePlan,
+    run_mode: CompileRunMode,
+    run_timestamp: &str,
+    deleted_leaf_slugs: &[String],
+    stale_branch_slugs: &[String],
+) -> Result<ManifestDelta, CompileError> {
+    let deleted_leaf_slugs_set: HashSet<&str> =
+        deleted_leaf_slugs.iter().map(String::as_str).collect();
+    let stale_branch_slugs_set: HashSet<&str> =
+        stale_branch_slugs.iter().map(String::as_str).collect();
+
+    let mut branch_writes = Vec::new();
+    let mut branch_deletes = Vec::new();
+    let mut branches_created = Vec::new();
+    let mut branches_updated = Vec::new();
+    let mut branches_rebuilt = Vec::new();
+    let mut branches_removed = Vec::new();
+    let mut new_branches = Vec::new();
+
+    match run_mode {
+        CompileRunMode::Full => {
+            let planned_slugs: HashSet<&str> = plan
+                .branches
+                .iter()
+                .map(|branch| branch.slug.as_str())
+                .collect();
+            for branch in &current.branches {
+                if !planned_slugs.contains(branch.slug.as_str()) {
+                    branch_deletes.push(branch.file.clone());
+                }
+            }
+            for planned in &plan.branches {
+                let created_at = current
+                    .branch_by_slug(&planned.slug)
+                    .map(|branch| branch.created_at.clone())
+                    .unwrap_or_else(|| run_timestamp.to_string());
+                let record = BranchRecord {
+                    slug: planned.slug.clone(),
+                    file: format!("branches/{}.md", planned.slug),
+                    title: planned.title.clone(),
+                    created_at,
+                    updated_at: run_timestamp.to_string(),
+                    stale: false,
+                    leaves: validated_branch_leaf_slugs(planned),
+                };
+                if current.branch_by_slug(&planned.slug).is_some() {
+                    branches_updated.push(branch_result(
+                        &record.slug,
+                        &record.title,
+                        record.leaves.len(),
+                    ));
+                    branch_writes.push(PlannedBranchWrite {
+                        record: record.clone(),
+                        file_leaves: planned.leaves.clone(),
+                        body: planned.body.clone(),
+                        kind: BranchChangeKind::Update,
+                    });
+                } else {
+                    branches_created.push(branch_result(
+                        &record.slug,
+                        &record.title,
+                        record.leaves.len(),
+                    ));
+                    branch_writes.push(PlannedBranchWrite {
+                        record: record.clone(),
+                        file_leaves: planned.leaves.clone(),
+                        body: planned.body.clone(),
+                        kind: BranchChangeKind::Create,
+                    });
+                }
+                new_branches.push(record);
+            }
+        }
+        CompileRunMode::Incremental => {
+            let planned_by_slug: HashMap<&str, &ValidatedBranch> = plan
+                .branches
+                .iter()
+                .map(|branch| (branch.slug.as_str(), branch))
+                .collect();
+            let current_branch_slugs: HashSet<&str> = current
+                .branches
+                .iter()
+                .map(|branch| branch.slug.as_str())
+                .collect();
+            for current_branch in &current.branches {
+                let is_stale = stale_branch_slugs_set.contains(current_branch.slug.as_str());
+                let remaining_leaf_slugs: Vec<String> = current_branch
+                    .leaves
+                    .iter()
+                    .filter(|leaf| !deleted_leaf_slugs_set.contains(leaf.as_str()))
+                    .cloned()
+                    .collect();
+                if is_stale && remaining_leaf_slugs.len() < 2 {
+                    branch_deletes.push(current_branch.file.clone());
+                    branches_removed.push(RemovedBranchResult {
+                        slug: current_branch.slug.clone(),
+                        title: current_branch.title.clone(),
+                        remaining_leaf_count: remaining_leaf_slugs.len(),
+                        reason: "stale_branch_below_minimum_leaves".to_string(),
+                    });
+                    continue;
+                }
+                if let Some(planned) = planned_by_slug.get(current_branch.slug.as_str()) {
+                    let record = BranchRecord {
+                        slug: current_branch.slug.clone(),
+                        file: current_branch.file.clone(),
+                        title: planned.title.clone(),
+                        created_at: current_branch.created_at.clone(),
+                        updated_at: run_timestamp.to_string(),
+                        stale: false,
+                        leaves: validated_branch_leaf_slugs(planned),
+                    };
+                    let result = branch_result(&record.slug, &record.title, record.leaves.len());
+                    if is_stale {
+                        branches_rebuilt.push(result.clone());
+                        branch_writes.push(PlannedBranchWrite {
+                            record: record.clone(),
+                            file_leaves: planned.leaves.clone(),
+                            body: planned.body.clone(),
+                            kind: BranchChangeKind::Rebuild,
+                        });
+                    } else {
+                        branches_updated.push(result.clone());
+                        branch_writes.push(PlannedBranchWrite {
+                            record: record.clone(),
+                            file_leaves: planned.leaves.clone(),
+                            body: planned.body.clone(),
+                            kind: BranchChangeKind::Update,
+                        });
+                    }
+                    new_branches.push(record);
+                } else if is_stale {
+                    return Err(super::parse::validation_error(format!(
+                        "invalid incremental compile response: stale branch '{}' must be rebuilt or removed deterministically",
+                        current_branch.slug
+                    )));
+                } else {
+                    new_branches.push(current_branch.clone());
+                }
+            }
+            for planned in &plan.branches {
+                if current_branch_slugs.contains(planned.slug.as_str()) {
+                    continue;
+                }
+                let record = BranchRecord {
+                    slug: planned.slug.clone(),
+                    file: format!("branches/{}.md", planned.slug),
+                    title: planned.title.clone(),
+                    created_at: run_timestamp.to_string(),
+                    updated_at: run_timestamp.to_string(),
+                    stale: false,
+                    leaves: validated_branch_leaf_slugs(planned),
+                };
+                branches_created.push(branch_result(
+                    &record.slug,
+                    &record.title,
+                    record.leaves.len(),
+                ));
+                branch_writes.push(PlannedBranchWrite {
+                    record: record.clone(),
+                    file_leaves: planned.leaves.clone(),
+                    body: planned.body.clone(),
+                    kind: BranchChangeKind::Create,
+                });
+                new_branches.push(record);
+            }
+        }
+    }
+
+    let new_manifest = Manifest {
+        tree: TreeMeta {
+            name: current.tree.name.clone(),
+            created_at: current.tree.created_at.clone(),
+            last_compiled_at: Some(run_timestamp.to_string()),
+        },
+        leaves: current
+            .leaves
+            .iter()
+            .filter(|leaf| !deleted_leaf_slugs_set.contains(leaf.slug.as_str()))
+            .cloned()
+            .collect(),
+        branches: new_branches,
+    };
+
+    Ok(ManifestDelta {
+        new_manifest,
+        branch_writes,
+        branch_deletes,
+        deleted_leaf_slugs: deleted_leaf_slugs.to_vec(),
+        branches_created,
+        branches_updated,
+        branches_rebuilt,
+        branches_removed,
+    })
+}
