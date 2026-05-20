@@ -15,7 +15,7 @@ path = "src/lib.rs"
 
 [dependencies]
 trafilatura = { version = "0.3", features = ["markdown"] }
-reqwest = { version = "0.12", features = ["blocking"] }
+reqwest = { version = "0.12", features = ["blocking", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -26,9 +26,8 @@ clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-async-openai = { version = "0.34", features = ["chat-completion"] }
+async-openai = { version = "0.38", features = ["chat-completion"] }
 async-trait = "0.1"
-backoff = { version = "0.4.0", features = ["tokio"] }
 tokio = { version = "1", features = ["rt", "macros", "time"] }
 serde_yaml_ng = "0.10"
 rpassword = "7.5.2"
