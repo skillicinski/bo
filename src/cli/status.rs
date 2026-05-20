@@ -96,7 +96,7 @@ pub fn compute_status(tree_dir: &Path, tree_name: &str) -> Result<StatusResult, 
     let uncompiled_slugs: Vec<String> = manifest
         .uncompiled_leaves()
         .iter()
-        .map(|l| l.slug.clone())
+        .map(|l| l.slug.as_str().to_string())
         .collect();
 
     let leaves = LeafStatus {
@@ -107,7 +107,11 @@ pub fn compute_status(tree_dir: &Path, tree_name: &str) -> Result<StatusResult, 
 
     let branches = BranchStatus {
         total: manifest.branches.len(),
-        last_compiled_at: manifest.tree.last_compiled_at.clone(),
+        last_compiled_at: manifest
+            .tree
+            .last_compiled_at
+            .as_ref()
+            .map(|t| t.to_rfc3339_millis()),
     };
 
     // Filesystem scan only for size — the one metric the manifest doesn't track.
@@ -167,8 +171,8 @@ fn compute_health(tree_dir: &Path, manifest: &manifest::Manifest) -> HealthRepor
         .filter(|l| !tree_dir.join(&l.file).exists())
         .map(|l| OrphanEntry {
             file: l.file.clone(),
-            title: l.title.clone(),
-            url: l.url.clone(),
+            title: l.title.as_str().to_string(),
+            url: l.url.as_str().to_string(),
             remediation: format!("re-collect '{}' or remove the manifest entry", l.url),
         })
         .collect();

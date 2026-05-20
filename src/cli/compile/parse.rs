@@ -195,29 +195,29 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
     let required_stale_rebuild_slugs: HashSet<String> = manifest
         .branches
         .iter()
-        .filter(|branch| stale_branch_slugs.contains(&branch.slug))
+        .filter(|branch| stale_branch_slugs.contains(branch.slug.as_str()))
         .filter(|branch| {
             branch
                 .leaves
                 .iter()
-                .filter(|leaf| !deleted_leaf_slugs.contains(*leaf))
+                .filter(|leaf| !deleted_leaf_slugs.contains(leaf.as_str()))
                 .count()
                 >= 2
         })
-        .map(|branch| branch.slug.clone())
+        .map(|branch| branch.slug.as_str().to_string())
         .collect();
     let mut seen_branch_slugs = HashSet::new();
     let mut seen_updated_branch_slugs = HashSet::new();
     let mut validated_branches = Vec::new();
 
     for raw in parsed.updated_branches {
-        let existing = manifest.branch_by_slug(&raw.slug).ok_or_else(|| {
+        let existing = manifest.branch_by_slug_str(&raw.slug).ok_or_else(|| {
             validation_error(format!(
                 "invalid incremental compile response: update references unknown branch '{}'",
                 raw.slug
             ))
         })?;
-        if raw.title.trim() != existing.title {
+        if raw.title.trim() != existing.title.as_str() {
             return Err(validation_error(format!(
                 "invalid incremental compile response: branch '{}' changed title",
                 raw.slug
@@ -232,8 +232,8 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
         let remaining_valid_existing_leaves: HashSet<String> = existing
             .leaves
             .iter()
-            .filter(|leaf| !deleted_leaf_slugs.contains(*leaf))
-            .cloned()
+            .filter(|leaf| !deleted_leaf_slugs.contains(leaf.as_str()))
+            .map(|leaf| leaf.as_str().to_string())
             .collect();
         if is_stale {
             if remaining_valid_existing_leaves.len() < 2 {
@@ -252,10 +252,10 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
             }
         }
         for existing_leaf in &existing.leaves {
-            if deleted_leaf_slugs.contains(existing_leaf) {
+            if deleted_leaf_slugs.contains(existing_leaf.as_str()) {
                 continue;
             }
-            if !leaf_slugs.contains(existing_leaf) {
+            if !leaf_slugs.contains(existing_leaf.as_str()) {
                 return Err(validation_error(format!(
                     "invalid incremental compile response: branch '{}' dropped existing leaf '{}'",
                     raw.slug, existing_leaf
@@ -292,7 +292,7 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
     }
 
     for stale_slug in &required_stale_rebuild_slugs {
-        if !seen_updated_branch_slugs.contains(stale_slug) {
+        if !seen_updated_branch_slugs.contains(stale_slug.as_str()) {
             return Err(validation_error(format!(
                 "invalid incremental compile response: stale branch '{}' must be rebuilt or removed deterministically",
                 stale_slug
@@ -314,7 +314,7 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
             )));
         }
         let branch_slug = slug::slugify(&title, "");
-        if manifest.branch_by_slug(&branch_slug).is_some()
+        if manifest.branch_by_slug_str(&branch_slug).is_some()
             || !seen_branch_slugs.insert(branch_slug.clone())
         {
             return Err(validation_error(format!(

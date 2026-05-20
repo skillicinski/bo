@@ -292,7 +292,7 @@ fn run_compile_with_provider_started_at(
     options: CompileOptions,
     provider: &dyn LlmProvider,
     model: &str,
-    compile_started_at: &str,
+    compile_started_at: &crate::domain::Timestamp,
 ) -> Result<CompileResult, CompileError> {
     let tree = Tree::from_config(&cfg.tree);
     execute::recover_pending_if_needed(&tree.output_dir)?;
@@ -381,7 +381,7 @@ fn run_compile_with_provider_started_at(
     let input_body_bytes = loaded_leaves.iter().map(|l| l.body.len()).sum();
 
     // ── execute validated plan ───────────────────────────────────────────────
-    let run_timestamp = compile_started_at.to_string();
+    let run_timestamp = compile_started_at;
     let compiled_plan = match run_mode {
         CompileRunMode::Full => parse::parse_and_validate_with_input_size(
             &response,
@@ -400,7 +400,7 @@ fn run_compile_with_provider_started_at(
         &compiled_plan,
         cfg,
         &valid_filenames,
-        &run_timestamp,
+        run_timestamp,
         &skipped_leaves,
         run_mode,
         &expected_manifest_hash,

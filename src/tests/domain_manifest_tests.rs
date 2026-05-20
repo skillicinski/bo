@@ -1,5 +1,6 @@
 use super::*;
 use crate::domain::tree::{Tree, TreeConfig};
+use crate::domain::{Slug, Timestamp, Title, Url};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -8,25 +9,25 @@ fn sample_manifest() -> Manifest {
     Manifest {
         tree: TreeMeta {
             name: "rust-notes".to_string(),
-            created_at: "2026-05-19T14:00:00Z".to_string(),
-            last_compiled_at: Some("2026-05-19T14:32:11Z".to_string()),
+            created_at: Timestamp::parse("2026-05-19T14:00:00Z").unwrap(),
+            last_compiled_at: Some(Timestamp::parse("2026-05-19T14:32:11.000Z").unwrap()),
         },
         leaves: vec![LeafRecord {
-            slug: "ownership-and-borrowing".to_string(),
+            slug: Slug::parse("ownership-and-borrowing").unwrap(),
             file: "ownership-and-borrowing.md".to_string(),
-            title: "Ownership and Borrowing".to_string(),
-            url: "https://example.com/ownership".to_string(),
-            collected_at: "2026-05-19T14:05:32Z".to_string(),
+            title: Title::new("Ownership and Borrowing"),
+            url: Url::parse("https://example.com/ownership").unwrap(),
+            collected_at: Timestamp::parse("2026-05-19T14:05:32Z").unwrap(),
             summary: Some("Rust's ownership rules.".to_string()),
         }],
         branches: vec![BranchRecord {
-            slug: "memory-safety".to_string(),
+            slug: Slug::parse("memory-safety").unwrap(),
             file: "branches/memory-safety.md".to_string(),
-            title: "Memory Safety".to_string(),
-            created_at: "2026-05-19T14:32:11Z".to_string(),
-            updated_at: "2026-05-19T14:32:11Z".to_string(),
+            title: Title::new("Memory Safety"),
+            created_at: Timestamp::parse("2026-05-19T14:32:11.000Z").unwrap(),
+            updated_at: Timestamp::parse("2026-05-19T14:32:11.000Z").unwrap(),
             stale: false,
-            leaves: vec!["ownership-and-borrowing".to_string()],
+            leaves: vec![Slug::parse("ownership-and-borrowing").unwrap()],
         }],
     }
 }
@@ -35,7 +36,7 @@ fn empty_manifest() -> Manifest {
     Manifest {
         tree: TreeMeta {
             name: "empty-tree".to_string(),
-            created_at: "2026-05-19T14:00:00Z".to_string(),
+            created_at: Timestamp::parse("2026-05-19T14:00:00Z").unwrap(),
             last_compiled_at: None,
         },
         leaves: Vec::new(),
@@ -51,53 +52,53 @@ fn resolution_fixture() -> Manifest {
     Manifest {
         tree: TreeMeta {
             name: "fixture".to_string(),
-            created_at: "2026-05-19T13:00:00Z".to_string(),
-            last_compiled_at: Some("2026-05-19T15:00:00Z".to_string()),
+            created_at: Timestamp::parse("2026-05-19T13:00:00Z").unwrap(),
+            last_compiled_at: Some(Timestamp::parse("2026-05-19T15:00:00Z").unwrap()),
         },
         leaves: vec![
             LeafRecord {
-                slug: "alpha".to_string(),
+                slug: Slug::parse("alpha").unwrap(),
                 file: "alpha.md".to_string(),
-                title: "Alpha".to_string(),
-                url: "https://example.com/a".to_string(),
-                collected_at: "2026-05-19T14:00:00Z".to_string(),
+                title: Title::new("Alpha"),
+                url: Url::parse("https://example.com/a").unwrap(),
+                collected_at: Timestamp::parse("2026-05-19T14:00:00Z").unwrap(),
                 summary: None,
             },
             LeafRecord {
-                slug: "beta".to_string(),
+                slug: Slug::parse("beta").unwrap(),
                 file: "beta.md".to_string(),
-                title: "Beta".to_string(),
-                url: "https://example.com/b".to_string(),
-                collected_at: "2026-05-19T14:30:00Z".to_string(),
+                title: Title::new("Beta"),
+                url: Url::parse("https://example.com/b").unwrap(),
+                collected_at: Timestamp::parse("2026-05-19T14:30:00Z").unwrap(),
                 summary: None,
             },
             LeafRecord {
-                slug: "gamma".to_string(),
+                slug: Slug::parse("gamma").unwrap(),
                 file: "gamma.md".to_string(),
-                title: "Gamma".to_string(),
-                url: "https://example.com/g".to_string(),
-                collected_at: "2026-05-19T16:00:00Z".to_string(),
+                title: Title::new("Gamma"),
+                url: Url::parse("https://example.com/g").unwrap(),
+                collected_at: Timestamp::parse("2026-05-19T16:00:00Z").unwrap(),
                 summary: None,
             },
         ],
         branches: vec![
             BranchRecord {
-                slug: "topic-x".to_string(),
+                slug: Slug::parse("topic-x").unwrap(),
                 file: "branches/topic-x.md".to_string(),
-                title: "Topic X".to_string(),
-                created_at: "2026-05-19T15:00:00Z".to_string(),
-                updated_at: "2026-05-19T15:00:00Z".to_string(),
+                title: Title::new("Topic X"),
+                created_at: Timestamp::parse("2026-05-19T15:00:00Z").unwrap(),
+                updated_at: Timestamp::parse("2026-05-19T15:00:00Z").unwrap(),
                 stale: false,
-                leaves: vec!["alpha".to_string(), "beta".to_string()],
+                leaves: vec![Slug::parse("alpha").unwrap(), Slug::parse("beta").unwrap()],
             },
             BranchRecord {
-                slug: "topic-y".to_string(),
+                slug: Slug::parse("topic-y").unwrap(),
                 file: "branches/topic-y.md".to_string(),
-                title: "Topic Y".to_string(),
-                created_at: "2026-05-19T15:00:00Z".to_string(),
-                updated_at: "2026-05-19T15:00:00Z".to_string(),
+                title: Title::new("Topic Y"),
+                created_at: Timestamp::parse("2026-05-19T15:00:00Z").unwrap(),
+                updated_at: Timestamp::parse("2026-05-19T15:00:00Z").unwrap(),
                 stale: false,
-                leaves: vec!["beta".to_string()],
+                leaves: vec![Slug::parse("beta").unwrap()],
             },
         ],
     }
@@ -108,27 +109,27 @@ fn resolution_fixture() -> Manifest {
 #[test]
 fn leaf_by_slug_returns_record_for_known_slug() {
     let m = resolution_fixture();
-    let leaf = m.leaf_by_slug("beta").unwrap();
-    assert_eq!(leaf.title, "Beta");
+    let leaf = m.leaf_by_slug_str("beta").unwrap();
+    assert_eq!(leaf.title.as_str(), "Beta");
 }
 
 #[test]
 fn leaf_by_slug_returns_none_for_unknown_slug() {
     let m = resolution_fixture();
-    assert!(m.leaf_by_slug("nope").is_none());
+    assert!(m.leaf_by_slug_str("nope").is_none());
 }
 
 #[test]
 fn branch_by_slug_returns_record_for_known_slug() {
     let m = resolution_fixture();
-    let b = m.branch_by_slug("topic-x").unwrap();
-    assert_eq!(b.title, "Topic X");
+    let b = m.branch_by_slug_str("topic-x").unwrap();
+    assert_eq!(b.title.as_str(), "Topic X");
 }
 
 #[test]
 fn branch_by_slug_returns_none_for_unknown_slug() {
     let m = resolution_fixture();
-    assert!(m.branch_by_slug("missing").is_none());
+    assert!(m.branch_by_slug_str("missing").is_none());
 }
 
 #[test]
@@ -136,7 +137,7 @@ fn uncompiled_leaves_returns_only_those_collected_after_last_compile() {
     let m = resolution_fixture();
     let uncompiled = m.uncompiled_leaves();
     assert_eq!(uncompiled.len(), 1);
-    assert_eq!(uncompiled[0].slug, "gamma");
+    assert_eq!(uncompiled[0].slug.as_str(), "gamma");
 }
 
 #[test]
@@ -150,7 +151,7 @@ fn uncompiled_leaves_returns_all_when_never_compiled() {
 #[test]
 fn uncompiled_leaves_empty_when_all_predate_last_compile() {
     let mut m = resolution_fixture();
-    m.leaves.retain(|l| l.slug != "gamma");
+    m.leaves.retain(|l| l.slug.as_str() != "gamma");
     let uncompiled = m.uncompiled_leaves();
     assert!(uncompiled.is_empty());
 }
@@ -167,13 +168,13 @@ fn stale_branches_returns_marked_records() {
     m.branches[0].stale = true;
     let stale = m.stale_branches();
     assert_eq!(stale.len(), 1);
-    assert_eq!(stale[0].slug, "topic-x");
+    assert_eq!(stale[0].slug.as_str(), "topic-x");
 }
 
 #[test]
 fn leaves_for_branch_resolves_slugs_to_records() {
     let m = resolution_fixture();
-    let leaves = m.leaves_for_branch("topic-x");
+    let leaves = m.leaves_for_branch_str("topic-x");
     let slugs: Vec<&str> = leaves.iter().map(|l| l.slug.as_str()).collect();
     assert_eq!(slugs, vec!["alpha", "beta"]);
 }
@@ -181,13 +182,13 @@ fn leaves_for_branch_resolves_slugs_to_records() {
 #[test]
 fn leaves_for_branch_returns_empty_for_unknown_branch() {
     let m = resolution_fixture();
-    assert!(m.leaves_for_branch("missing").is_empty());
+    assert!(m.leaves_for_branch_str("missing").is_empty());
 }
 
 #[test]
 fn branches_for_leaf_returns_multiple_when_shared() {
     let m = resolution_fixture();
-    let branches = m.branches_for_leaf("beta");
+    let branches = m.branches_for_leaf_str("beta");
     let slugs: Vec<&str> = branches.iter().map(|b| b.slug.as_str()).collect();
     assert_eq!(slugs, vec!["topic-x", "topic-y"]);
 }
@@ -195,7 +196,7 @@ fn branches_for_leaf_returns_multiple_when_shared() {
 #[test]
 fn branches_for_leaf_returns_singleton_when_only_one_branch_owns_it() {
     let m = resolution_fixture();
-    let branches = m.branches_for_leaf("alpha");
+    let branches = m.branches_for_leaf_str("alpha");
     let slugs: Vec<&str> = branches.iter().map(|b| b.slug.as_str()).collect();
     assert_eq!(slugs, vec!["topic-x"]);
 }
@@ -203,7 +204,7 @@ fn branches_for_leaf_returns_singleton_when_only_one_branch_owns_it() {
 #[test]
 fn branches_for_leaf_returns_empty_for_unknown_leaf() {
     let m = resolution_fixture();
-    assert!(m.branches_for_leaf("nope").is_empty());
+    assert!(m.branches_for_leaf_str("nope").is_empty());
 }
 
 // ── reconstruction (T2.1) ───────────────────────────────────────────────────────
@@ -427,8 +428,14 @@ fn round_trip_full_manifest_preserves_all_fields() {
     let loaded = read(&path).unwrap();
 
     assert_eq!(loaded, original);
-    assert_eq!(loaded.branches[0].created_at, "2026-05-19T14:32:11Z");
-    assert_eq!(loaded.branches[0].updated_at, "2026-05-19T14:32:11Z");
+    assert_eq!(
+        loaded.branches[0].created_at.to_string(),
+        "2026-05-19T14:32:11.000Z"
+    );
+    assert_eq!(
+        loaded.branches[0].updated_at.to_string(),
+        "2026-05-19T14:32:11.000Z"
+    );
     assert!(!loaded.branches[0].stale);
     assert_eq!(
         loaded.leaves[0].summary.as_deref(),

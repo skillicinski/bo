@@ -516,14 +516,14 @@ fn retrieve_leaves(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedLea
 
         // Title, url, summary all come from the canonical manifest record.
         // Fall back to body-derived summary when the manifest didn't capture one.
-        let title = leaf.title.clone();
-        let url = leaf.url.clone();
+        let title = leaf.title.as_str().to_string();
+        let url = leaf.url.as_str().to_string();
         let summary = leaf
             .summary
             .clone()
             .unwrap_or_else(|| summary_fallback(&body));
 
-        let slug = leaf.slug.clone();
+        let slug = leaf.slug.as_str().to_string();
 
         // Score: OR semantics — count occurrences of each term, normalize by word count
         let searchable = format!("{} {} {}", title, summary, body).to_lowercase();

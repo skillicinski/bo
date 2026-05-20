@@ -1,5 +1,6 @@
 // Integration tests for `bo search`.
 
+use bo::domain::{Slug, Timestamp, Title, Url};
 use std::fs;
 use std::process::Command;
 use tempfile::TempDir;
@@ -40,11 +41,11 @@ impl TestTree {
             );
             fs::write(tree_dir.path().join(file), &content).unwrap();
             manifest_leaves.push(bo::domain::manifest::LeafRecord {
-                slug: file.trim_end_matches(".md").to_string(),
+                slug: Slug::parse(file.trim_end_matches(".md")).unwrap(),
                 file: file.to_string(),
-                title: title.to_string(),
-                url: format!("https://example.com/{}", file),
-                collected_at: date.to_string(),
+                title: Title::new(title),
+                url: Url::parse(&format!("https://example.com/{}", file)).unwrap(),
+                collected_at: bo::domain::Timestamp::parse(date).unwrap(),
                 summary: None,
             });
         }
@@ -55,7 +56,7 @@ impl TestTree {
             &bo::domain::manifest::Manifest {
                 tree: bo::domain::manifest::TreeMeta {
                     name: "test-tree".to_string(),
-                    created_at: "2025-01-01T00:00:00Z".to_string(),
+                    created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                     last_compiled_at: None,
                 },
                 leaves: manifest_leaves,

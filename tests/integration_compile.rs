@@ -5,6 +5,7 @@
 //
 //   OPENAI_API_KEY=sk-... cargo test --test integration_compile -- --ignored
 
+use bo::domain::{Timestamp, Title};
 use std::fs;
 
 use bo::cli::compile;
@@ -53,22 +54,25 @@ fn setup_fixture_collection() -> tempfile::TempDir {
     let mut leaves = Vec::new();
 
     for doc in FIXTURE_DOCS {
+        let title = Title::new(doc.title);
+        let url = bo::domain::Url::parse(doc.url).unwrap();
+        let ts = Timestamp::parse("2025-06-01T10:00:00Z").unwrap();
         bo::domain::leaf::write(
             &dir.path().join(doc.file),
-            Some(doc.title),
-            doc.url,
-            "2025-06-01T10:00:00Z",
+            Some(&title),
+            &url,
+            &ts,
             doc.body,
             None,
         )
         .unwrap();
 
         leaves.push(LeafRecord {
-            slug: doc.file.trim_end_matches(".md").to_string(),
+            slug: bo::domain::Slug::parse(doc.file.trim_end_matches(".md")).unwrap(),
             file: doc.file.to_string(),
-            title: doc.title.to_string(),
-            url: doc.url.to_string(),
-            collected_at: "2025-06-01T10:00:00Z".to_string(),
+            title: Title::new(doc.title),
+            url: bo::domain::Url::parse(doc.url).unwrap(),
+            collected_at: Timestamp::parse("2025-06-01T10:00:00Z").unwrap(),
             summary: None,
         });
     }
@@ -78,7 +82,7 @@ fn setup_fixture_collection() -> tempfile::TempDir {
         &Manifest {
             tree: TreeMeta {
                 name: "compile-fixture".to_string(),
-                created_at: "2025-06-01T09:00:00Z".to_string(),
+                created_at: Timestamp::parse("2025-06-01T09:00:00Z").unwrap(),
                 last_compiled_at: None,
             },
             leaves,

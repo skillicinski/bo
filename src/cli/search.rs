@@ -280,15 +280,15 @@ pub fn search_leaves(
             Ok((_, body)) => body,
             Err(_) => content.clone(),
         };
-        let title = if leaf.title.trim().is_empty() {
+        let title = if leaf.title.as_str().trim().is_empty() {
             leaf.file.clone()
         } else {
-            leaf.title.clone()
+            leaf.title.as_str().to_string()
         };
-        let collected_at = if leaf.collected_at.trim().is_empty() {
+        let collected_at = if leaf.collected_at.to_rfc3339_millis().trim().is_empty() {
             None
         } else {
-            Some(leaf.collected_at.clone())
+            Some(leaf.collected_at.to_rfc3339_millis())
         };
 
         scored.push(ScoredLeaf {

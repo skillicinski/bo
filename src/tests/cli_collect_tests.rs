@@ -1,5 +1,6 @@
 use super::*;
 use crate::domain::manifest;
+use crate::domain::{Slug, Timestamp, Title, Url};
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
@@ -103,15 +104,15 @@ fn batch_collect_skips_existing_manifest_duplicates_without_fetching() {
         &manifest::Manifest {
             tree: manifest::TreeMeta {
                 name: "test".to_string(),
-                created_at: "2026-01-01T00:00:00Z".to_string(),
+                created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                 last_compiled_at: None,
             },
             leaves: vec![manifest::LeafRecord {
-                slug: "already".to_string(),
+                slug: Slug::parse("already").unwrap(),
                 file: "already.md".to_string(),
-                title: "Already".to_string(),
-                url: url.to_string(),
-                collected_at: "2026-01-01T00:00:00Z".to_string(),
+                title: Title::new("Already"),
+                url: Url::parse(url).unwrap(),
+                collected_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                 summary: None,
             }],
             branches: Vec::new(),
@@ -167,7 +168,7 @@ fn ordinary_html_collection_writes_leaf_and_manifest() {
     assert!(dir.path().join(&document.filename).exists());
     let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.leaves.len(), 1);
-    assert_eq!(m.leaves[0].url, "https://example.com/article");
+    assert_eq!(m.leaves[0].url.as_str(), "https://example.com/article");
     assert!(!dir.path().join(".bo/index.jsonl").exists());
 }
 
@@ -200,15 +201,15 @@ fn collect_url_rejects_duplicate_youtube_url_before_network_fetch() {
         &manifest::Manifest {
             tree: manifest::TreeMeta {
                 name: "test".to_string(),
-                created_at: "2026-01-01T00:00:00Z".to_string(),
+                created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                 last_compiled_at: None,
             },
             leaves: vec![manifest::LeafRecord {
-                slug: "existing".to_string(),
+                slug: Slug::parse("existing").unwrap(),
                 file: "existing.md".to_string(),
-                title: "Existing Video".to_string(),
-                url: url.to_string(),
-                collected_at: "2026-01-01T00:00:00Z".to_string(),
+                title: Title::new("Existing Video"),
+                url: Url::parse(url).unwrap(),
+                collected_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                 summary: None,
             }],
             branches: Vec::new(),
@@ -366,7 +367,7 @@ fn full_pipeline_happy_path() {
 
     let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.leaves.len(), 1);
-    assert_eq!(m.leaves[0].url, "https://example.com/article");
+    assert_eq!(m.leaves[0].url.as_str(), "https://example.com/article");
 }
 
 #[test]
@@ -497,7 +498,7 @@ fn mdbook_page_with_bad_ui_title_and_substantive_body_is_accepted() {
 
     let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.leaves.len(), 1);
-    assert_eq!(m.leaves[0].title, "Understanding Ownership");
+    assert_eq!(m.leaves[0].title.as_str(), "Understanding Ownership");
 }
 
 #[test]
@@ -543,7 +544,7 @@ fn seed_for_collect(dir: &TempDir, name: &str) {
     let m = manifest::Manifest {
         tree: TreeMeta {
             name: name.to_string(),
-            created_at: "2026-05-19T12:00:00Z".to_string(),
+            created_at: Timestamp::parse("2026-05-19T12:00:00Z").unwrap(),
             last_compiled_at: None,
         },
         leaves: Vec::new(),
@@ -570,12 +571,12 @@ fn collect_appends_leaf_record_to_manifest_with_full_metadata() {
     let m = manifest::read(&manifest_path).unwrap();
     assert_eq!(m.leaves.len(), 1);
     let rec = &m.leaves[0];
-    assert_eq!(rec.slug, doc.filename.strip_suffix(".md").unwrap());
+    assert_eq!(rec.slug.as_str(), doc.filename.strip_suffix(".md").unwrap());
     assert_eq!(rec.file, doc.filename);
-    assert_eq!(rec.title, "Test Article");
-    assert_eq!(rec.url, "https://example.com/article");
+    assert_eq!(rec.title.as_str(), "Test Article");
+    assert_eq!(rec.url.as_str(), "https://example.com/article");
     assert!(
-        rec.collected_at.contains('T'),
+        rec.collected_at.to_string().contains('T'),
         "collected_at iso8601: {}",
         rec.collected_at
     );
@@ -609,8 +610,8 @@ fn collect_writes_only_manifest_records() {
     for (n, rec) in m.leaves.iter().enumerate() {
         let n = n + 1;
         assert_eq!(rec.file, format!("page-{n}.md"));
-        assert_eq!(rec.url, format!("https://example.com/page{n}"));
-        assert_eq!(rec.title, format!("Page {n}"));
+        assert_eq!(rec.url.as_str(), &format!("https://example.com/page{n}"));
+        assert_eq!(rec.title.as_str(), format!("Page {n}"));
     }
 }
 
@@ -642,11 +643,11 @@ fn dedup_uses_manifest_not_index_jsonl() {
     let manifest_path = dir.path().join(".bo/manifest.json");
     let mut m = manifest::read(&manifest_path).unwrap();
     m.leaves.push(crate::domain::manifest::LeafRecord {
-        slug: "already-collected".to_string(),
+        slug: Slug::parse("already-collected").unwrap(),
         file: "already-collected.md".to_string(),
-        title: "Already".to_string(),
-        url: "https://example.com/article".to_string(),
-        collected_at: "2026-01-01T00:00:00Z".to_string(),
+        title: Title::new("Already"),
+        url: Url::parse("https://example.com/article").unwrap(),
+        collected_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         summary: None,
     });
     manifest::write(&manifest_path, &m).unwrap();
@@ -676,6 +677,6 @@ fn fresh_collect_after_3b_does_not_write_index_secondary() {
 
     let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.leaves.len(), 1);
-    assert_eq!(m.leaves[0].url, "https://example.com/page");
+    assert_eq!(m.leaves[0].url.as_str(), "https://example.com/page");
     assert!(!dir.path().join(".bo/index.jsonl").exists());
 }

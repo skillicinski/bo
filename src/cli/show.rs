@@ -219,8 +219,8 @@ fn load_candidate(
     canonical_tree_dir: Option<&Path>,
     leaf: &LeafRecord,
 ) -> CandidateLoad {
-    let fallback_title = leaf.title.trim().to_string();
-    let fallback_url = non_empty_trimmed(&leaf.url);
+    let fallback_title = leaf.title.as_str().trim().to_string();
+    let fallback_url = non_empty_trimmed(leaf.url.as_str());
     let unresolved_summary = ShowCandidateSummary {
         file: leaf.file.clone(),
         title: fallback_title.clone(),
@@ -281,7 +281,7 @@ fn load_candidate(
     };
 
     let title = frontmatter_string(&document.frontmatter, "title")
-        .or_else(|| non_empty_trimmed(&leaf.title))
+        .or_else(|| non_empty_trimmed(leaf.title.as_str()))
         .unwrap_or_default();
     let url = frontmatter_string(&document.frontmatter, "url").or(fallback_url);
 

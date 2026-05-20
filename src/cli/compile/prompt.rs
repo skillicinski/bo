@@ -69,12 +69,13 @@ pub(super) fn build_incremental_user_message(
     msg.push_str("<existing_branches>\n");
     for branch_record in &manifest.branches {
         let stale = stale_branch_slugs.contains(branch_record.slug.as_str());
+        let leaves_str: Vec<&str> = branch_record.leaves.iter().map(|s| s.as_str()).collect();
         msg.push_str(&format!(
             "<branch slug=\"{}\" title=\"{}\" stale=\"{}\" leaves=\"{}\">\n",
             branch_record.slug,
             branch_record.title,
             stale,
-            branch_record.leaves.join(",")
+            leaves_str.join(",")
         ));
         let branch_path = cfg.tree.output_dir.join(&branch_record.file);
         if let Ok(content) = fs::read_to_string(branch_path) {

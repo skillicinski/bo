@@ -1,4 +1,5 @@
 use super::*;
+use crate::domain::{Slug, Timestamp, Title, Url};
 use tempfile::TempDir;
 
 // ── core matching tests ──────────────────────────────────────────────────
@@ -577,7 +578,7 @@ fn write_manifest(tree_dir: &Path, leaves: Vec<crate::domain::manifest::LeafReco
         &crate::domain::manifest::Manifest {
             tree: crate::domain::manifest::TreeMeta {
                 name: "search".to_string(),
-                created_at: "2025-01-01T00:00:00Z".to_string(),
+                created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                 last_compiled_at: None,
             },
             leaves,
@@ -589,11 +590,11 @@ fn write_manifest(tree_dir: &Path, leaves: Vec<crate::domain::manifest::LeafReco
 
 fn manifest_leaf(file: &str, title: &str, date: &str) -> crate::domain::manifest::LeafRecord {
     crate::domain::manifest::LeafRecord {
-        slug: file.trim_end_matches(".md").to_string(),
+        slug: Slug::parse(file.trim_end_matches(".md")).unwrap(),
         file: file.to_string(),
-        title: title.to_string(),
-        url: format!("https://example.com/{file}"),
-        collected_at: date.to_string(),
+        title: Title::new(title),
+        url: Url::parse(&format!("https://example.com/{file}")).unwrap(),
+        collected_at: Timestamp::parse(date).unwrap(),
         summary: None,
     }
 }

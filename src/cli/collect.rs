@@ -14,7 +14,6 @@
 //
 // Dependency direction: collect → adapters, fetch, quality, extract, leaf, slug, index.
 
-use chrono::Utc;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt;
@@ -25,7 +24,8 @@ use std::path::Path;
 use crate::adapters::youtube::{self, YoutubeError, YoutubeUrlMatch};
 use crate::cli::json::JsonError;
 use crate::domain::manifest::{self, LeafRecord, Manifest, TreeMeta};
-use crate::domain::{leaf, slug};
+use crate::domain::slug::Slug;
+use crate::domain::{leaf, slug, Timestamp, Title, Url};
 use crate::engine::llm::models::DEFAULT_MODEL;
 use crate::engine::pending::{self, OpKind, PendingWrite};
 use crate::engine::quality::RejectReason;
@@ -638,7 +638,7 @@ pub fn duplicate_file(url: &str, output_dir: &Path) -> Result<Option<String>, Co
     Ok(manifest
         .leaves
         .iter()
-        .find(|l| l.url == url)
+        .find(|l| l.url.as_str() == url)
         .map(|l| l.file.clone()))
 }
 
@@ -686,16 +686,25 @@ fn write_new_document_with_summary_result(
     recover_pending_if_needed(output_dir)?;
 
     let title_ref = title.unwrap_or("");
-    let base_slug = slug::slugify(title_ref, url);
+    let base_slug = Slug::generate(title_ref, url);
     let filename = slug::resolve_slug(&base_slug, url, output_dir);
-    let now_str = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let now = Timestamp::now();
+    let domain_url = Url::parse(url)
+        .unwrap_or_else(|_| Url::parse(&format!("http://{}", url)).expect("url fallback"));
+    let domain_title = title.map(Title::new);
     let leaf_file = format!("{}.md", filename);
     let summary_field = if summary_text.is_empty() {
         None
     } else {
         Some(summary_text.as_str())
     };
-    let leaf_content = leaf::format_content(title, url, &now_str, body_markdown, summary_field);
+    let leaf_content = leaf::format_content(
+        domain_title.as_ref(),
+        &domain_url,
+        &now,
+        body_markdown,
+        summary_field,
+    );
     let leaf_write = PendingWrite {
         path: leaf_file.clone(),
         content_hash: pending::content_hash(leaf_content.as_bytes()),
@@ -710,7 +719,7 @@ fn write_new_document_with_summary_result(
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "unnamed".to_string()),
-                created_at: now_str.clone(),
+                created_at: now.clone(),
                 last_compiled_at: None,
             },
             leaves: Vec::new(),
@@ -719,7 +728,7 @@ fn write_new_document_with_summary_result(
         Err(e) => return Err(CollectError::Manifest(e)),
     };
 
-    if let Some(existing) = current.leaves.iter().find(|leaf| leaf.url == url) {
+    if let Some(existing) = current.leaves.iter().find(|leaf| leaf.url.as_str() == url) {
         return Err(CollectError::DuplicateUrl {
             existing_file: existing.file.clone(),
         });
@@ -728,9 +737,9 @@ fn write_new_document_with_summary_result(
     let leaf_record = LeafRecord {
         slug: filename.clone(),
         file: leaf_file.clone(),
-        title: title.unwrap_or_default().to_string(),
-        url: url.to_string(),
-        collected_at: now_str.clone(),
+        title: Title::new(title.unwrap_or_default()),
+        url: domain_url,
+        collected_at: now,
         summary: if summary_text.is_empty() {
             None
         } else {

@@ -5,6 +5,8 @@ use std::fs;
 
 use crate::domain::frontmatter;
 use crate::domain::manifest::{BranchRecord, LeafRecord, Manifest, TreeMeta};
+use crate::domain::slug::Slug;
+use crate::domain::{Timestamp, Title};
 use crate::engine::config::SeededConfig;
 
 use super::parse::{CompilePlan, ValidatedBranch};
@@ -67,26 +69,22 @@ pub(super) struct ManifestDelta {
 // ── functions ─────────────────────────────────────────────────────────────────
 
 pub(super) fn select_new_leaf_slugs(manifest: &Manifest) -> Result<Vec<String>, CompileError> {
-    let Some(last_compiled_at) = manifest.tree.last_compiled_at.as_deref() else {
+    let Some(last_compiled_at) = &manifest.tree.last_compiled_at else {
         return Ok(manifest
             .leaves
             .iter()
-            .map(|leaf| leaf.slug.clone())
+            .map(|leaf| leaf.slug.as_str().to_string())
             .collect());
     };
 
-    manifest
+    Ok(manifest
         .leaves
         .iter()
-        .filter_map(|leaf| {
-            match super::execute::collected_after_last_compile(&leaf.collected_at, last_compiled_at)
-            {
-                Ok(true) => Some(Ok(leaf.slug.clone())),
-                Ok(false) => None,
-                Err(error) => Some(Err(error)),
-            }
+        .filter(|leaf| {
+            super::execute::collected_after_last_compile(&leaf.collected_at, last_compiled_at)
         })
-        .collect()
+        .map(|leaf| leaf.slug.as_str().to_string())
+        .collect())
 }
 
 pub(super) fn derive_stale_branch_slugs(
@@ -102,7 +100,7 @@ pub(super) fn derive_stale_branch_slugs(
             .iter()
             .any(|leaf_slug| deleted_leaf_slugs.contains(leaf_slug.as_str()))
         {
-            stale_branch_slugs.push(branch.slug.clone());
+            stale_branch_slugs.push(branch.slug.as_str().to_string());
         }
     }
 
@@ -117,7 +115,7 @@ pub(super) fn classify_leaf_files(
     let branch_referenced_slugs: HashSet<&str> = manifest
         .branches
         .iter()
-        .flat_map(|branch| branch.leaves.iter().map(String::as_str))
+        .flat_map(|branch| branch.leaves.iter().map(|s| s.as_str()))
         .collect();
     let new_leaf_slugs: HashSet<&str> = new_leaf_slugs.iter().map(String::as_str).collect();
 
@@ -138,12 +136,12 @@ pub(super) fn classify_leaf_files(
                             leaf.file
                         )));
                     }
-                    skipped_leaf_slugs.push(leaf.slug.clone());
+                    skipped_leaf_slugs.push(leaf.slug.as_str().to_string());
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 if is_branch_referenced {
-                    deleted_leaf_slugs.push(leaf.slug.clone());
+                    deleted_leaf_slugs.push(leaf.slug.as_str().to_string());
                 } else if is_new {
                     return Err(CompileError::Io(format!(
                         "newly selected leaf '{}' is missing; no files were changed",
@@ -158,7 +156,7 @@ pub(super) fn classify_leaf_files(
                         leaf.file, error
                     )));
                 }
-                skipped_leaf_slugs.push(leaf.slug.clone());
+                skipped_leaf_slugs.push(leaf.slug.as_str().to_string());
             }
         }
     }
@@ -186,14 +184,14 @@ pub(super) fn read_valid_leaves(
                         .and_then(|v| v.as_str())
                         .filter(|title| !title.trim().is_empty())
                         .map(str::to_string)
-                        .unwrap_or_else(|| entry.title.clone());
+                        .unwrap_or_else(|| entry.title.as_str().to_string());
                     loaded.push(LoadedLeaf {
-                        slug: entry.slug.clone(),
+                        slug: entry.slug.as_str().to_string(),
                         filename: entry.file.clone(),
                         title,
                         summary: entry.summary.clone(),
                         body,
-                        collected_at: entry.collected_at.clone(),
+                        collected_at: entry.collected_at.to_rfc3339_millis(),
                     });
                 }
                 Err(_) => skipped.push(entry.file.clone()),
@@ -213,11 +211,14 @@ pub(super) fn branch_result(slug: &str, title: &str, leaf_count: usize) -> Branc
     }
 }
 
-pub(super) fn validated_branch_leaf_slugs(branch: &ValidatedBranch) -> Vec<String> {
+pub(super) fn validated_branch_leaf_slugs(branch: &ValidatedBranch) -> Vec<Slug> {
     branch
         .leaves
         .iter()
-        .map(|leaf| leaf.strip_suffix(".md").unwrap_or(leaf).to_string())
+        .map(|leaf| {
+            let stem = leaf.strip_suffix(".md").unwrap_or(leaf);
+            Slug::parse(stem).unwrap_or_else(|_| Slug::generate(stem, ""))
+        })
         .collect()
 }
 
@@ -225,7 +226,7 @@ pub(super) fn build_manifest_delta(
     current: &Manifest,
     plan: &CompilePlan,
     run_mode: CompileRunMode,
-    run_timestamp: &str,
+    run_timestamp: &Timestamp,
     deleted_leaf_slugs: &[String],
     stale_branch_slugs: &[String],
 ) -> Result<ManifestDelta, CompileError> {
@@ -256,22 +257,24 @@ pub(super) fn build_manifest_delta(
             }
             for planned in &plan.branches {
                 let created_at = current
-                    .branch_by_slug(&planned.slug)
+                    .branch_by_slug_str(&planned.slug)
                     .map(|branch| branch.created_at.clone())
-                    .unwrap_or_else(|| run_timestamp.to_string());
+                    .unwrap_or_else(|| run_timestamp.clone());
+                let slug = Slug::parse(&planned.slug)
+                    .unwrap_or_else(|_| Slug::generate(&planned.slug, ""));
                 let record = BranchRecord {
-                    slug: planned.slug.clone(),
+                    slug: slug.clone(),
                     file: format!("branches/{}.md", planned.slug),
-                    title: planned.title.clone(),
+                    title: Title::new(&planned.title),
                     created_at,
-                    updated_at: run_timestamp.to_string(),
+                    updated_at: run_timestamp.clone(),
                     stale: false,
                     leaves: validated_branch_leaf_slugs(planned),
                 };
-                if current.branch_by_slug(&planned.slug).is_some() {
+                if current.branch_by_slug_str(&planned.slug).is_some() {
                     branches_updated.push(branch_result(
-                        &record.slug,
-                        &record.title,
+                        record.slug.as_str(),
+                        record.title.as_str(),
                         record.leaves.len(),
                     ));
                     branch_writes.push(PlannedBranchWrite {
@@ -282,8 +285,8 @@ pub(super) fn build_manifest_delta(
                     });
                 } else {
                     branches_created.push(branch_result(
-                        &record.slug,
-                        &record.title,
+                        record.slug.as_str(),
+                        record.title.as_str(),
                         record.leaves.len(),
                     ));
                     branch_writes.push(PlannedBranchWrite {
@@ -309,17 +312,16 @@ pub(super) fn build_manifest_delta(
                 .collect();
             for current_branch in &current.branches {
                 let is_stale = stale_branch_slugs_set.contains(current_branch.slug.as_str());
-                let remaining_leaf_slugs: Vec<String> = current_branch
+                let remaining_leaf_slugs: Vec<&Slug> = current_branch
                     .leaves
                     .iter()
                     .filter(|leaf| !deleted_leaf_slugs_set.contains(leaf.as_str()))
-                    .cloned()
                     .collect();
                 if is_stale && remaining_leaf_slugs.len() < 2 {
                     branch_deletes.push(current_branch.file.clone());
                     branches_removed.push(RemovedBranchResult {
-                        slug: current_branch.slug.clone(),
-                        title: current_branch.title.clone(),
+                        slug: current_branch.slug.as_str().to_string(),
+                        title: current_branch.title.as_str().to_string(),
                         remaining_leaf_count: remaining_leaf_slugs.len(),
                         reason: "stale_branch_below_minimum_leaves".to_string(),
                     });
@@ -329,13 +331,17 @@ pub(super) fn build_manifest_delta(
                     let record = BranchRecord {
                         slug: current_branch.slug.clone(),
                         file: current_branch.file.clone(),
-                        title: planned.title.clone(),
+                        title: Title::new(&planned.title),
                         created_at: current_branch.created_at.clone(),
-                        updated_at: run_timestamp.to_string(),
+                        updated_at: run_timestamp.clone(),
                         stale: false,
                         leaves: validated_branch_leaf_slugs(planned),
                     };
-                    let result = branch_result(&record.slug, &record.title, record.leaves.len());
+                    let result = branch_result(
+                        record.slug.as_str(),
+                        record.title.as_str(),
+                        record.leaves.len(),
+                    );
                     if is_stale {
                         branches_rebuilt.push(result.clone());
                         branch_writes.push(PlannedBranchWrite {
@@ -367,18 +373,20 @@ pub(super) fn build_manifest_delta(
                 if current_branch_slugs.contains(planned.slug.as_str()) {
                     continue;
                 }
+                let slug = Slug::parse(&planned.slug)
+                    .unwrap_or_else(|_| Slug::generate(&planned.slug, ""));
                 let record = BranchRecord {
-                    slug: planned.slug.clone(),
+                    slug: slug.clone(),
                     file: format!("branches/{}.md", planned.slug),
-                    title: planned.title.clone(),
-                    created_at: run_timestamp.to_string(),
-                    updated_at: run_timestamp.to_string(),
+                    title: Title::new(&planned.title),
+                    created_at: run_timestamp.clone(),
+                    updated_at: run_timestamp.clone(),
                     stale: false,
                     leaves: validated_branch_leaf_slugs(planned),
                 };
                 branches_created.push(branch_result(
-                    &record.slug,
-                    &record.title,
+                    record.slug.as_str(),
+                    record.title.as_str(),
                     record.leaves.len(),
                 ));
                 branch_writes.push(PlannedBranchWrite {
@@ -396,7 +404,7 @@ pub(super) fn build_manifest_delta(
         tree: TreeMeta {
             name: current.tree.name.clone(),
             created_at: current.tree.created_at.clone(),
-            last_compiled_at: Some(run_timestamp.to_string()),
+            last_compiled_at: Some(run_timestamp.clone()),
         },
         leaves: current
             .leaves

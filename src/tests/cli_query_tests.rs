@@ -1,4 +1,5 @@
 use super::*;
+use crate::domain::{Slug, Timestamp, Title, Url};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::fs;
@@ -142,15 +143,11 @@ fn make_manifest(dir: &Path, entries: &[(&str, &str, &str)]) {
                         .map(str::to_string)
                 });
             crate::domain::manifest::LeafRecord {
-                slug: Path::new(file)
-                    .file_stem()
-                    .unwrap()
-                    .to_string_lossy()
-                    .into_owned(),
+                slug: Slug::generate(&Path::new(file).file_stem().unwrap().to_string_lossy(), ""),
                 file: file.to_string(),
-                title: title.to_string(),
-                url: url.to_string(),
-                collected_at: String::new(),
+                title: Title::new(title),
+                url: Url::parse(url).unwrap(),
+                collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                 summary,
             }
         })
@@ -162,7 +159,7 @@ fn make_manifest(dir: &Path, entries: &[(&str, &str, &str)]) {
         &crate::domain::manifest::Manifest {
             tree: crate::domain::manifest::TreeMeta {
                 name: "query".to_string(),
-                created_at: "2025-01-01T00:00:00Z".to_string(),
+                created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                 last_compiled_at: None,
             },
             leaves,
@@ -227,11 +224,11 @@ fn retrieve_or_semantics_scores_partial_matches() {
     let results = retrieve_leaves(tree, &terms).unwrap();
 
     // ownership leaf should rank highest (both terms match densely)
-    assert_eq!(results[0].slug, "ownership");
+    assert_eq!(results[0].slug.as_str(), "ownership");
     // lifetimes should match (contains "rust")
-    assert!(results.iter().any(|r| r.slug == "lifetimes"));
+    assert!(results.iter().any(|r| r.slug.as_str() == "lifetimes"));
     // cooking should NOT match
-    assert!(!results.iter().any(|r| r.slug == "cooking"));
+    assert!(!results.iter().any(|r| r.slug.as_str() == "cooking"));
 }
 
 #[test]
@@ -295,7 +292,7 @@ fn retrieve_missing_summary_uses_body_fallback() {
     let terms = vec!["rust".to_string()];
     let results = retrieve_leaves(tree, &terms).unwrap();
 
-    assert_eq!(results[0].slug, "nosummary");
+    assert_eq!(results[0].slug.as_str(), "nosummary");
     // Summary should be the body fallback (body is short, so full body used)
     assert!(results[0].summary.contains("Rust programming"));
 }
@@ -361,7 +358,7 @@ fn validate_preserves_valid_wikilinks_exactly() {
 
     assert_eq!(answer, "Answer cites [[valid-leaf]] exactly.");
     assert_eq!(citations.len(), 1);
-    assert_eq!(citations[0].slug, "valid-leaf");
+    assert_eq!(citations[0].slug.as_str(), "valid-leaf");
 }
 
 #[test]
@@ -391,7 +388,7 @@ fn validate_strips_invalid_citations() {
 
     // Invalid slug removed from citations list
     assert_eq!(citations.len(), 1);
-    assert_eq!(citations[0].slug, "valid-leaf");
+    assert_eq!(citations[0].slug.as_str(), "valid-leaf");
 }
 
 #[test]
@@ -430,7 +427,7 @@ fn validate_leaves_malformed_nested_empty_and_unclosed_wikilinks_unchanged() {
         "Keep [[ and [[foo and [[]] and [[foo] and [[foo[[bar]] but keep [[leaf-a]]."
     );
     assert_eq!(citations.len(), 1);
-    assert_eq!(citations[0].slug, "leaf-a");
+    assert_eq!(citations[0].slug.as_str(), "leaf-a");
 }
 
 #[test]
@@ -444,7 +441,7 @@ fn validate_includes_valid_prose_wikilink_missing_from_cited_slugs() {
     let (_answer, citations) = validate_citations(response, &retrieved);
 
     assert_eq!(citations.len(), 1);
-    assert_eq!(citations[0].slug, "leaf-a");
+    assert_eq!(citations[0].slug.as_str(), "leaf-a");
 }
 
 #[test]
@@ -720,7 +717,7 @@ fn query_retries_transient_failure_and_succeeds() {
     .unwrap();
 
     assert_eq!(provider.calls(), 2);
-    assert_eq!(result.citations[0].slug, "only-leaf");
+    assert_eq!(result.citations[0].slug.as_str(), "only-leaf");
 }
 
 #[test]
@@ -879,7 +876,7 @@ fn answerable_one_source_query_invokes_provider_and_succeeds() {
 
     assert_eq!(provider.calls(), 1);
     assert_eq!(result.citations.len(), 1);
-    assert_eq!(result.citations[0].slug, "only-leaf");
+    assert_eq!(result.citations[0].slug.as_str(), "only-leaf");
 }
 
 // ── context assembly tests ───────────────────────────────────────────
@@ -1000,5 +997,5 @@ fn one_valid_citation_returns_ok() {
     .unwrap();
 
     assert_eq!(result.citations.len(), 1);
-    assert_eq!(result.citations[0].slug, "only-leaf");
+    assert_eq!(result.citations[0].slug.as_str(), "only-leaf");
 }

@@ -8,6 +8,7 @@
 // fixtures are staged on disk directly so we can invoke `bo status`, `bo list`,
 // `bo show`, etc. without going through `collect`/`compile`.
 
+use bo::domain::{Slug, Timestamp, Title};
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
@@ -66,28 +67,28 @@ fn stage_tree(home: &Path) -> std::path::PathBuf {
     let m = bo::domain::manifest::Manifest {
         tree: bo::domain::manifest::TreeMeta {
             name: "tree".to_string(),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
-            last_compiled_at: Some("2026-01-02T10:00:00Z".to_string()),
+            created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            last_compiled_at: Some(Timestamp::parse("2026-01-02T10:00:00Z").unwrap()),
         },
         leaves: leaves
             .iter()
             .map(|(slug, title, url)| bo::domain::manifest::LeafRecord {
-                slug: (*slug).to_string(),
+                slug: Slug::parse(slug).unwrap(),
                 file: format!("{slug}.md"),
-                title: (*title).to_string(),
-                url: (*url).to_string(),
-                collected_at: "2026-01-01T00:00:00Z".to_string(),
+                title: Title::new(*title),
+                url: bo::domain::Url::parse(url).unwrap(),
+                collected_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                 summary: None,
             })
             .collect(),
         branches: vec![bo::domain::manifest::BranchRecord {
-            slug: "topic-x".to_string(),
+            slug: Slug::parse("topic-x").unwrap(),
             file: "branches/topic-x.md".to_string(),
-            title: "topic-x".to_string(),
-            created_at: "2026-01-02T10:00:00Z".to_string(),
-            updated_at: "2026-01-02T10:00:00Z".to_string(),
+            title: Title::new("topic-x"),
+            created_at: Timestamp::parse("2026-01-02T10:00:00Z").unwrap(),
+            updated_at: Timestamp::parse("2026-01-02T10:00:00Z").unwrap(),
             stale: false,
-            leaves: vec!["alpha".to_string(), "beta".to_string()],
+            leaves: vec![Slug::parse("alpha").unwrap(), Slug::parse("beta").unwrap()],
         }],
     };
     bo::domain::manifest::write(&tree_dir.join(".bo/manifest.json"), &m).unwrap();

@@ -2,10 +2,9 @@
 
 use std::collections::HashSet;
 
-use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::domain::{branch, manifest, tree::Tree};
+use crate::domain::{branch, manifest, tree::Tree, Timestamp};
 use crate::engine::auth::AuthResolutionError;
 use crate::engine::config::SeededConfig;
 use crate::engine::llm::{
@@ -14,7 +13,7 @@ use crate::engine::llm::{
 };
 use crate::engine::pending::{self, CompileMode, OpKind, PendingWrite};
 
-use super::parse::{validation_error, CompilePlan};
+use super::parse::CompilePlan;
 use super::plan::{
     build_manifest_delta, classify_leaf_files, derive_stale_branch_slugs, select_new_leaf_slugs,
 };
@@ -47,21 +46,15 @@ impl StagedWrite {
 
 // ── time helpers ──────────────────────────────────────────────────────────────
 
-pub(super) fn compile_timestamp_now() -> String {
-    Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-}
-
-pub(super) fn parse_rfc3339_utc(value: &str) -> Result<DateTime<Utc>, CompileError> {
-    DateTime::parse_from_rfc3339(value)
-        .map(|timestamp| timestamp.with_timezone(&Utc))
-        .map_err(|error| validation_error(format!("invalid RFC3339 timestamp '{value}': {error}")))
+pub(super) fn compile_timestamp_now() -> Timestamp {
+    Timestamp::now()
 }
 
 pub(super) fn collected_after_last_compile(
-    collected_at: &str,
-    last_compiled_at: &str,
-) -> Result<bool, CompileError> {
-    Ok(parse_rfc3339_utc(collected_at)? > parse_rfc3339_utc(last_compiled_at)?)
+    collected_at: &Timestamp,
+    last_compiled_at: &Timestamp,
+) -> bool {
+    collected_at > last_compiled_at
 }
 
 // ── token estimation ──────────────────────────────────────────────────────────
@@ -217,7 +210,7 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
     plan: &CompilePlan,
     cfg: &SeededConfig,
     valid_filenames: &HashSet<String>,
-    run_timestamp: &str,
+    run_timestamp: &Timestamp,
     skipped_leaves: &[String],
     run_mode: CompileRunMode,
     expected_manifest_hash: &str,
@@ -234,8 +227,9 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
                 name: tree.name.clone().unwrap_or_else(|| "unnamed".to_string()),
                 created_at: tree
                     .created_at
-                    .clone()
-                    .unwrap_or_else(|| run_timestamp.to_string()),
+                    .as_deref()
+                    .and_then(|s| Timestamp::parse(s).ok())
+                    .unwrap_or_else(|| run_timestamp.clone()),
                 last_compiled_at: None,
             },
             leaves: Vec::new(),
@@ -268,11 +262,11 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
     for planned_write in &delta.branch_writes {
         let _change_kind = planned_write.kind;
         let content = branch::format_content(
-            &planned_write.record.title,
+            planned_write.record.title.as_str(),
             &planned_write.body,
             &planned_write.file_leaves,
-            &planned_write.record.created_at,
-            run_timestamp,
+            &planned_write.record.created_at.to_rfc3339_millis(),
+            &run_timestamp.to_rfc3339_millis(),
         );
         staged.push(StagedWrite::new(planned_write.record.file.clone(), content));
     }

@@ -5,6 +5,7 @@
 
 use async_trait::async_trait;
 use bo::cli::query;
+use bo::domain::{Timestamp, Title, Url};
 use bo::engine::llm::{LlmError, LlmProvider, LlmResponse, Message};
 use serde_json::Value;
 use std::fs;
@@ -73,11 +74,13 @@ fn make_manifest(dir: &std::path::Path, entries: &[(&str, &str, &str)]) {
     let leaves: Vec<_> = entries
         .iter()
         .map(|(file, title, url)| {
-            let slug = std::path::Path::new(file)
+            let slug_str = std::path::Path::new(file)
                 .file_stem()
                 .unwrap()
                 .to_string_lossy()
                 .into_owned();
+            let slug = bo::domain::Slug::parse(&slug_str)
+                .unwrap_or_else(|_| bo::domain::Slug::generate(&slug_str, ""));
             // Read summary from the leaf file if it exists
             let summary = fs::read_to_string(dir.join(file)).ok().and_then(|content| {
                 bo::domain::frontmatter::parse(&content)
@@ -92,9 +95,9 @@ fn make_manifest(dir: &std::path::Path, entries: &[(&str, &str, &str)]) {
             bo::domain::manifest::LeafRecord {
                 slug,
                 file: file.to_string(),
-                title: title.to_string(),
-                url: url.to_string(),
-                collected_at: "2025-01-01T00:00:00Z".to_string(),
+                title: Title::new(title),
+                url: Url::parse(url).unwrap(),
+                collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                 summary,
             }
         })
@@ -106,7 +109,7 @@ fn make_manifest(dir: &std::path::Path, entries: &[(&str, &str, &str)]) {
         &bo::domain::manifest::Manifest {
             tree: bo::domain::manifest::TreeMeta {
                 name: "query-test".to_string(),
-                created_at: "2025-01-01T00:00:00Z".to_string(),
+                created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                 last_compiled_at: None,
             },
             leaves,
@@ -242,8 +245,11 @@ fn full_pipeline_with_mock_provider() {
 
     // Citations list only contains valid entries
     assert_eq!(result.citations.len(), 1);
-    assert_eq!(result.citations[0].slug, "rust-ownership");
-    assert_eq!(result.citations[0].title, "Understanding Ownership");
+    assert_eq!(result.citations[0].slug.as_str(), "rust-ownership");
+    assert_eq!(
+        result.citations[0].title.as_str(),
+        "Understanding Ownership"
+    );
 
     // Model recorded
     assert_eq!(result.model, "gpt-4o");
@@ -344,7 +350,7 @@ fn single_leaf_tree_works() {
     let result = query::run_with_provider(tree, "what is Rust?", &provider, "gpt-4o").unwrap();
 
     assert_eq!(result.citations.len(), 1);
-    assert_eq!(result.citations[0].slug, "only-leaf");
+    assert_eq!(result.citations[0].slug.as_str(), "only-leaf");
     assert_eq!(result.leaves_consulted, 1);
 }
 
@@ -362,7 +368,7 @@ fn leaf_without_summary_still_retrieved() {
         query::run_with_provider(dir.path(), "explain Rust traits", &provider, "gpt-4o").unwrap();
 
     assert_eq!(result.citations.len(), 1);
-    assert_eq!(result.citations[0].slug, "rust-traits");
+    assert_eq!(result.citations[0].slug.as_str(), "rust-traits");
 }
 
 #[test]
@@ -406,7 +412,9 @@ fn live_api_query() {
     // All citations should be valid leaf slugs
     for c in &result.citations {
         assert!(
-            c.slug.starts_with("rust-") || c.slug == "python-gc" || c.slug == "go-concurrency",
+            c.slug.starts_with("rust-")
+                || c.slug.as_str() == "python-gc"
+                || c.slug.as_str() == "go-concurrency",
             "unexpected citation: {}",
             c.slug
         );

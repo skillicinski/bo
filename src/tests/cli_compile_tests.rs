@@ -1,4 +1,5 @@
 use super::*;
+use crate::domain::{Slug, Timestamp, Title, Url};
 use async_trait::async_trait;
 use serde_json::Value;
 use serial_test::serial;
@@ -31,18 +32,18 @@ fn seed_manifest(dir: &std::path::Path, leaves: &[(&str, &str, &str)]) {
     let leaf_records = leaves
         .iter()
         .map(|(slug, title, url)| LeafRecord {
-            slug: slug.to_string(),
+            slug: Slug::parse(slug).unwrap(),
             file: format!("{}.md", slug),
-            title: title.to_string(),
-            url: url.to_string(),
-            collected_at: "2026-01-01T00:00:00Z".to_string(),
+            title: Title::new(title),
+            url: Url::parse(url).unwrap(),
+            collected_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             summary: None,
         })
         .collect();
     let m = Manifest {
         tree: TreeMeta {
             name: "compile-tree".to_string(),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
+            created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             last_compiled_at: None,
         },
         leaves: leaf_records,
@@ -73,15 +74,18 @@ fn seed_compiled_tree(dir: &std::path::Path) {
     write_leaf(dir, "leaf-b", "B", "https://example.com/b");
     let manifest_path = dir.join(".bo/manifest.json");
     let mut m = manifest::read(&manifest_path).unwrap();
-    m.tree.last_compiled_at = Some("2026-06-01T12:00:00Z".to_string());
+    m.tree.last_compiled_at = Some(Timestamp::parse("2026-06-01T12:00:00Z").unwrap());
     m.branches = vec![BranchRecord {
-        slug: "existing".to_string(),
+        slug: Slug::parse("existing").unwrap(),
         file: "branches/existing.md".to_string(),
-        title: "Existing".to_string(),
-        created_at: "2026-06-01T12:00:00Z".to_string(),
-        updated_at: "2026-06-01T12:00:00Z".to_string(),
+        title: Title::new("Existing"),
+        created_at: Timestamp::parse("2026-06-01T12:00:00Z").unwrap(),
+        updated_at: Timestamp::parse("2026-06-01T12:00:00Z").unwrap(),
         stale: false,
-        leaves: vec!["leaf-a".to_string(), "leaf-b".to_string()],
+        leaves: vec![
+            Slug::parse("leaf-a").unwrap(),
+            Slug::parse("leaf-b").unwrap(),
+        ],
     }];
     manifest::write(&manifest_path, &m).unwrap();
     fs::create_dir_all(dir.join("branches")).unwrap();
@@ -282,8 +286,15 @@ fn first_compile_creates_branches_and_reports_incremental_mode() {
     // Manifest updated
     let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.branches.len(), 1);
-    assert_eq!(m.branches[0].slug, "test-concept");
-    assert_eq!(m.branches[0].leaves, vec!["leaf-a", "leaf-b"]);
+    assert_eq!(m.branches[0].slug.as_str(), "test-concept");
+    assert_eq!(
+        m.branches[0]
+            .leaves
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>(),
+        vec!["leaf-a", "leaf-b"]
+    );
     assert!(m.tree.last_compiled_at.is_some());
 
     // Branch file written
@@ -366,11 +377,11 @@ fn full_mode_deletes_omitted_branch_files() {
     let manifest_path = dir.path().join(".bo/manifest.json");
     let mut m = manifest::read(&manifest_path).unwrap();
     m.leaves.push(LeafRecord {
-        slug: "leaf-c".to_string(),
+        slug: Slug::parse("leaf-c").unwrap(),
         file: "leaf-c.md".to_string(),
-        title: "C".to_string(),
-        url: "https://example.com/c".to_string(),
-        collected_at: "2026-07-01T00:00:00Z".to_string(),
+        title: Title::new("C"),
+        url: Url::parse("https://example.com/c").unwrap(),
+        collected_at: Timestamp::parse("2026-07-01T00:00:00Z").unwrap(),
         summary: None,
     });
     manifest::write(&manifest_path, &m).unwrap();
@@ -403,8 +414,8 @@ fn full_mode_deletes_omitted_branch_files() {
     assert!(dir.path().join("branches/replacement.md").exists());
 
     let m = manifest::read(&manifest_path).unwrap();
-    assert!(m.branch_by_slug("existing").is_none());
-    assert!(m.branch_by_slug("replacement").is_some());
+    assert!(m.branch_by_slug_str("existing").is_none());
+    assert!(m.branch_by_slug_str("replacement").is_some());
 }
 
 // ── incremental compile preserves omitted branches ────────────────────────────
@@ -417,11 +428,11 @@ fn incremental_compile_preserves_existing_branches() {
     let manifest_path = dir.path().join(".bo/manifest.json");
     let mut m = manifest::read(&manifest_path).unwrap();
     m.leaves.push(LeafRecord {
-        slug: "leaf-c".to_string(),
+        slug: Slug::parse("leaf-c").unwrap(),
         file: "leaf-c.md".to_string(),
-        title: "C".to_string(),
-        url: "https://example.com/c".to_string(),
-        collected_at: "2026-07-01T00:00:00Z".to_string(),
+        title: Title::new("C"),
+        url: Url::parse("https://example.com/c").unwrap(),
+        collected_at: Timestamp::parse("2026-07-01T00:00:00Z").unwrap(),
         summary: None,
     });
     manifest::write(&manifest_path, &m).unwrap();
@@ -451,9 +462,9 @@ fn incremental_compile_preserves_existing_branches() {
 
     let m = manifest::read(&manifest_path).unwrap();
     // Existing branch preserved
-    assert!(m.branch_by_slug("existing").is_some());
+    assert!(m.branch_by_slug_str("existing").is_some());
     // New branch created
-    assert!(m.branch_by_slug("new-concept").is_some());
+    assert!(m.branch_by_slug_str("new-concept").is_some());
     // Old branch file still exists
     assert!(dir.path().join("branches/existing.md").exists());
     // New branch file written
@@ -478,18 +489,18 @@ fn deleted_leaf_rebuilds_stale_branch() {
     write_leaf(dir.path(), "leaf-c", "C", "https://example.com/c");
     let manifest_path = dir.path().join(".bo/manifest.json");
     let mut m = manifest::read(&manifest_path).unwrap();
-    m.tree.last_compiled_at = Some("2026-06-01T12:00:00Z".to_string());
+    m.tree.last_compiled_at = Some(Timestamp::parse("2026-06-01T12:00:00Z").unwrap());
     m.branches = vec![BranchRecord {
-        slug: "concept".to_string(),
+        slug: Slug::parse("concept").unwrap(),
         file: "branches/concept.md".to_string(),
-        title: "Concept".to_string(),
-        created_at: "2026-06-01T12:00:00Z".to_string(),
-        updated_at: "2026-06-01T12:00:00Z".to_string(),
+        title: Title::new("Concept"),
+        created_at: Timestamp::parse("2026-06-01T12:00:00Z").unwrap(),
+        updated_at: Timestamp::parse("2026-06-01T12:00:00Z").unwrap(),
         stale: false,
         leaves: vec![
-            "leaf-a".to_string(),
-            "leaf-b".to_string(),
-            "leaf-c".to_string(),
+            Slug::parse("leaf-a").unwrap(),
+            Slug::parse("leaf-b").unwrap(),
+            Slug::parse("leaf-c").unwrap(),
         ],
     }];
     manifest::write(&manifest_path, &m).unwrap();
@@ -522,9 +533,12 @@ fn deleted_leaf_rebuilds_stale_branch() {
     assert_eq!(provider.calls(), 1);
 
     let m = manifest::read(&manifest_path).unwrap();
-    assert!(m.leaf_by_slug("leaf-c").is_none());
-    let branch = m.branch_by_slug("concept").unwrap();
-    assert_eq!(branch.leaves, vec!["leaf-a", "leaf-b"]);
+    assert!(m.leaf_by_slug_str("leaf-c").is_none());
+    let branch = m.branch_by_slug_str("concept").unwrap();
+    assert_eq!(
+        branch.leaves.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        vec!["leaf-a", "leaf-b"]
+    );
     assert!(!branch.stale);
     let content = fs::read_to_string(dir.path().join("branches/concept.md")).unwrap();
     assert!(content.contains("Rebuilt from two leaves"));
@@ -547,15 +561,18 @@ fn stale_branch_below_threshold_removed() {
     // leaf-b deliberately missing
     let manifest_path = dir.path().join(".bo/manifest.json");
     let mut m = manifest::read(&manifest_path).unwrap();
-    m.tree.last_compiled_at = Some("2026-06-01T12:00:00Z".to_string());
+    m.tree.last_compiled_at = Some(Timestamp::parse("2026-06-01T12:00:00Z").unwrap());
     m.branches = vec![BranchRecord {
-        slug: "doomed".to_string(),
+        slug: Slug::parse("doomed").unwrap(),
         file: "branches/doomed.md".to_string(),
-        title: "Doomed".to_string(),
-        created_at: "2026-06-01T12:00:00Z".to_string(),
-        updated_at: "2026-06-01T12:00:00Z".to_string(),
+        title: Title::new("Doomed"),
+        created_at: Timestamp::parse("2026-06-01T12:00:00Z").unwrap(),
+        updated_at: Timestamp::parse("2026-06-01T12:00:00Z").unwrap(),
         stale: false,
-        leaves: vec!["leaf-a".to_string(), "leaf-b".to_string()],
+        leaves: vec![
+            Slug::parse("leaf-a").unwrap(),
+            Slug::parse("leaf-b").unwrap(),
+        ],
     }];
     manifest::write(&manifest_path, &m).unwrap();
     fs::create_dir_all(dir.path().join("branches")).unwrap();
@@ -574,7 +591,7 @@ fn stale_branch_below_threshold_removed() {
 
     assert_eq!(result.status, "compiled");
     let m = manifest::read(&manifest_path).unwrap();
-    assert!(m.branch_by_slug("doomed").is_none());
+    assert!(m.branch_by_slug_str("doomed").is_none());
     assert!(!dir.path().join("branches/doomed.md").exists());
-    assert!(m.leaf_by_slug("leaf-b").is_none());
+    assert!(m.leaf_by_slug_str("leaf-b").is_none());
 }

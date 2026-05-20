@@ -1,4 +1,5 @@
 use super::*;
+use crate::domain::{Slug, Timestamp, Title, Url};
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::time::SystemTime;
@@ -83,9 +84,9 @@ fn title_uses_frontmatter_then_index_fallback() {
     let frontmatter = show_leaf(dir.path(), "frontmatter title", &ShowOptions::default()).unwrap();
     let index = show_leaf(dir.path(), "index fallback title", &ShowOptions::default()).unwrap();
 
-    assert_eq!(frontmatter.title, "Frontmatter Title");
+    assert_eq!(frontmatter.title.as_str(), "Frontmatter Title");
     assert_eq!(frontmatter.file, "frontmatter.md");
-    assert_eq!(index.title, "Index Fallback Title");
+    assert_eq!(index.title.as_str(), "Index Fallback Title");
     assert_eq!(index.file, "index.md");
 }
 
@@ -285,19 +286,24 @@ fn write_index(tree: &Path, entries: &[(&str, &str)]) {
     fs::create_dir_all(tree).unwrap();
     let leaves: Vec<crate::domain::manifest::LeafRecord> = entries
         .iter()
-        .map(|(file, title)| crate::domain::manifest::LeafRecord {
-            slug: file.trim_end_matches(".md").to_string(),
-            file: (*file).to_string(),
-            title: (*title).to_string(),
-            url: format!("https://example.com/{}", file.trim_end_matches(".md")),
-            collected_at: "2025-01-01T00:00:00Z".to_string(),
-            summary: None,
+        .enumerate()
+        .map(|(i, (file, title))| {
+            // Use a valid slug even for adversarial file paths
+            let slug = Slug::parse(&format!("test-leaf-{}", i)).unwrap();
+            crate::domain::manifest::LeafRecord {
+                slug,
+                file: (*file).to_string(),
+                title: Title::new(*title),
+                url: Url::parse("https://example.com/test").unwrap(),
+                collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+                summary: None,
+            }
         })
         .collect();
     let m = crate::domain::manifest::Manifest {
         tree: crate::domain::manifest::TreeMeta {
             name: "test".to_string(),
-            created_at: "2025-01-01T00:00:00Z".to_string(),
+            created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             last_compiled_at: None,
         },
         leaves,

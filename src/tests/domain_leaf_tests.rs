@@ -1,5 +1,16 @@
 use super::*;
+use crate::domain::{Timestamp, Title, Url};
 use tempfile::TempDir;
+
+// ── helpers ───────────────────────────────────────────────────────────────
+
+fn ts(s: &str) -> Timestamp {
+    Timestamp::parse(s).unwrap()
+}
+
+fn url(s: &str) -> Url {
+    Url::parse(s).unwrap()
+}
 
 // ── write ─────────────────────────────────────────────────────────────────
 
@@ -7,12 +18,13 @@ use tempfile::TempDir;
 fn write_creates_file_with_all_fields() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("my-article.md");
+    let title = Title::new("My Article");
 
     write(
         &path,
-        Some("My Article"),
-        "https://example.com",
-        "2025-01-15T09:32:00Z",
+        Some(&title),
+        &url("https://example.com"),
+        &ts("2025-01-15T09:32:00Z"),
         "Some content here.",
         None,
     )
@@ -23,8 +35,8 @@ fn write_creates_file_with_all_fields() {
     assert!(content.starts_with("---\n"));
     assert!(content.contains("title: \"My Article\""));
     assert!(content.contains("url: https://example.com"));
-    assert!(content.contains("collected_at: 2025-01-15T09:32:00Z"));
-    assert!(content.contains("updated_at: 2025-01-15T09:32:00Z"));
+    assert!(content.contains("collected_at: 2025-01-15T09:32:00.000Z"));
+    assert!(content.contains("updated_at: 2025-01-15T09:32:00.000Z"));
     assert!(content.contains("# My Article"));
     assert!(content.contains("Some content here."));
 }
@@ -37,8 +49,8 @@ fn write_with_no_title_omits_heading() {
     write(
         &path,
         None,
-        "https://example.com",
-        "2025-01-15T09:32:00Z",
+        &url("https://example.com"),
+        &ts("2025-01-15T09:32:00Z"),
         "Body only.",
         None,
     )
@@ -53,12 +65,13 @@ fn write_with_no_title_omits_heading() {
 fn write_escapes_yaml_special_chars_in_title() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("special.md");
+    let title = Title::new("Rust: A \"Fast\" Language");
 
     write(
         &path,
-        Some("Rust: A \"Fast\" Language"),
-        "https://example.com",
-        "2025-01-15T09:32:00Z",
+        Some(&title),
+        &url("https://example.com"),
+        &ts("2025-01-15T09:32:00Z"),
         "Content.",
         None,
     )
@@ -76,8 +89,8 @@ fn write_creates_parent_directories() {
     write(
         &path,
         None,
-        "https://example.com",
-        "2025-01-01T00:00:00Z",
+        &url("https://example.com"),
+        &ts("2025-01-01T00:00:00Z"),
         "content",
         None,
     )
@@ -94,8 +107,8 @@ fn write_appends_trailing_newline_if_body_lacks_one() {
     write(
         &path,
         None,
-        "https://example.com",
-        "2025-01-01T00:00:00Z",
+        &url("https://example.com"),
+        &ts("2025-01-01T00:00:00Z"),
         "no newline",
         None,
     )
@@ -113,8 +126,8 @@ fn write_does_not_double_newline_if_body_already_ends_with_one() {
     write(
         &path,
         None,
-        "https://example.com",
-        "2025-01-01T00:00:00Z",
+        &url("https://example.com"),
+        &ts("2025-01-01T00:00:00Z"),
         "has newline\n",
         None,
     )
@@ -130,12 +143,13 @@ fn write_does_not_double_newline_if_body_already_ends_with_one() {
 fn read_frontmatter_returns_mapping_for_valid_leaf() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("article.md");
+    let title = Title::new("Test Article");
 
     write(
         &path,
-        Some("Test Article"),
-        "https://example.com",
-        "2025-06-01T10:00:00Z",
+        Some(&title),
+        &url("https://example.com"),
+        &ts("2025-06-01T10:00:00Z"),
         "Body.\n",
         None,
     )
@@ -187,12 +201,13 @@ fn read_frontmatter_returns_missing_error_for_no_delimiters() {
 fn write_with_single_line_summary() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("summary.md");
+    let title = Title::new("Article");
 
     write(
         &path,
-        Some("Article"),
-        "https://example.com",
-        "2025-01-01T00:00:00Z",
+        Some(&title),
+        &url("https://example.com"),
+        &ts("2025-01-01T00:00:00Z"),
         "Body content.",
         Some("This is a single-line summary of the article."),
     )
@@ -212,13 +227,14 @@ fn write_with_single_line_summary() {
 fn write_with_multi_line_summary() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("multi.md");
+    let title = Title::new("Article");
 
     let summary = "First line of the summary.\nSecond line continues.\nThird line ends.";
     write(
         &path,
-        Some("Article"),
-        "https://example.com",
-        "2025-01-01T00:00:00Z",
+        Some(&title),
+        &url("https://example.com"),
+        &ts("2025-01-01T00:00:00Z"),
         "Body.",
         Some(summary),
     )
@@ -238,13 +254,14 @@ fn write_with_multi_line_summary() {
 fn write_with_summary_containing_special_chars() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("special.md");
+    let title = Title::new("Article");
 
     let summary = "Rust's \"ownership\" model: memory safety without GC.";
     write(
         &path,
-        Some("Article"),
-        "https://example.com",
-        "2025-01-01T00:00:00Z",
+        Some(&title),
+        &url("https://example.com"),
+        &ts("2025-01-01T00:00:00Z"),
         "Body.",
         Some(summary),
     )
@@ -260,12 +277,13 @@ fn write_with_summary_containing_special_chars() {
 fn write_with_none_summary_omits_field() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("nosummary.md");
+    let title = Title::new("Article");
 
     write(
         &path,
-        Some("Article"),
-        "https://example.com",
-        "2025-01-01T00:00:00Z",
+        Some(&title),
+        &url("https://example.com"),
+        &ts("2025-01-01T00:00:00Z"),
         "Body.",
         None,
     )

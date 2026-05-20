@@ -1,5 +1,6 @@
 use super::*;
 use crate::domain::manifest::{self, LeafRecord, Manifest, TreeMeta};
+use crate::domain::{Slug, Timestamp, Title, Url};
 use crate::engine::config;
 use std::fs;
 use tempfile::TempDir;
@@ -15,7 +16,7 @@ fn setup_tree(tmp: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
         &Manifest {
             tree: TreeMeta {
                 name: "tree".to_string(),
-                created_at: "2025-01-01T00:00:00Z".to_string(),
+                created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                 last_compiled_at: None,
             },
             leaves: Vec::new(),
@@ -51,14 +52,18 @@ fn add_leaf(tree_dir: &std::path::Path, file: &str) {
 }
 
 fn add_manifest_leaf(tree_dir: &std::path::Path, file: &str) {
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let manifest_path = tree_dir.join(".bo/manifest.json");
     let mut manifest = manifest::read(&manifest_path).unwrap();
+    // Use a valid slug even for adversarial file paths
+    let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let slug = Slug::parse(&format!("leaf-{}", idx)).unwrap();
     manifest.leaves.push(LeafRecord {
-        slug: file.trim_end_matches(".md").to_string(),
+        slug,
         file: file.to_string(),
-        title: file.trim_end_matches(".md").to_string(),
-        url: format!("https://example.com/{}", file),
-        collected_at: "2025-01-01T00:00:00Z".to_string(),
+        title: Title::new(file.trim_end_matches(".md")),
+        url: Url::parse("https://example.com/test").unwrap(),
+        collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
         summary: None,
     });
     manifest::write(&manifest_path, &manifest).unwrap();
@@ -102,7 +107,7 @@ fn deletes_manifest_alongside_other_infra() {
         &crate::domain::manifest::Manifest {
             tree: crate::domain::manifest::TreeMeta {
                 name: "raze-test".to_string(),
-                created_at: "2026-01-01T00:00:00Z".to_string(),
+                created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                 last_compiled_at: None,
             },
             leaves: Vec::new(),
