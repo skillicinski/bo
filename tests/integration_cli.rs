@@ -474,7 +474,7 @@ fn config_only_file_still_counts_as_not_seeded_for_tree_commands() {
         vec!["collect", "https://example.com"],
         vec!["compile"],
         vec!["list"],
-        vec!["search", "rust"],
+        vec!["status"],
         vec!["show", "Rust"],
         vec!["query", "what", "is", "rust"],
         vec!["raze"],
@@ -582,10 +582,7 @@ fn list_on_seeded_empty_tree_reports_no_leaves_collected_yet() {
     );
 
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        stdout.contains("no leaves collected yet"),
-        "stdout: {stdout}"
-    );
+    assert!(stdout.contains("no content in tree"), "stdout: {stdout}");
 }
 
 #[test]
@@ -597,7 +594,7 @@ fn list_on_synthetic_tree_uses_index_order_and_shows_dates_and_branch_arrays() {
     assert!(seeded.status.success());
     write_basic_list_tree(&tree);
 
-    let out = list(home.path(), &[]);
+    let out = list(home.path(), &["--leaves"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -620,8 +617,8 @@ fn list_on_synthetic_tree_uses_index_order_and_shows_dates_and_branch_arrays() {
     assert!(stdout.contains("2025-01-05"), "stdout: {stdout}");
     assert!(stdout.contains("2025-01-10"), "stdout: {stdout}");
     assert!(stdout.contains("2025-02-01"), "stdout: {stdout}");
-    assert!(stdout.contains("[branch-a, branch-b]"), "stdout: {stdout}");
-    assert!(stdout.contains("[]"), "stdout: {stdout}");
+    assert!(stdout.contains("2 branches"), "stdout: {stdout}");
+    assert!(stdout.contains("0 branches"), "stdout: {stdout}");
 }
 
 #[test]
@@ -633,7 +630,7 @@ fn list_limit_one_prints_at_most_one_leaf_title() {
     assert!(seeded.status.success());
     write_basic_list_tree(&tree);
 
-    let out = list(home.path(), &["--limit", "1"]);
+    let out = list(home.path(), &["--leaves", "--limit", "1"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -658,7 +655,7 @@ fn list_branch_filter_is_exact_and_missing_branch_is_not_an_error() {
     assert!(seeded.status.success());
     write_basic_list_tree(&tree);
 
-    let out = list(home.path(), &["--branch", "branch-a"]);
+    let out = list(home.path(), &["--leaves", "--branch", "branch-a"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -670,7 +667,7 @@ fn list_branch_filter_is_exact_and_missing_branch_is_not_an_error() {
     assert!(!stdout.contains("Beta Entry"), "stdout: {stdout}");
     assert!(!stdout.contains("Gamma Entry"), "stdout: {stdout}");
 
-    let missing = list(home.path(), &["--branch", "missing_branch"]);
+    let missing = list(home.path(), &["--leaves", "--branch", "missing_branch"]);
     assert!(
         missing.status.success(),
         "stderr: {}",
@@ -679,7 +676,7 @@ fn list_branch_filter_is_exact_and_missing_branch_is_not_an_error() {
 
     let missing_stdout = String::from_utf8_lossy(&missing.stdout);
     assert!(
-        missing_stdout.contains("no leaves matched branch 'missing_branch'"),
+        missing_stdout.contains("no leaves matched branch"),
         "stdout: {missing_stdout}"
     );
 }
@@ -693,7 +690,7 @@ fn list_json_output_is_parseable_and_includes_required_fields_and_degradation_st
     assert!(seeded.status.success());
     write_json_list_tree(&tree);
 
-    let out = list(home.path(), &["--json"]);
+    let out = list(home.path(), &["--leaves", "--json"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -703,12 +700,13 @@ fn list_json_output_is_parseable_and_includes_required_fields_and_degradation_st
     let payload: Value = serde_json::from_slice(&out.stdout).expect("stdout was not valid JSON");
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["command"], "list");
-    let leaves = payload["data"]["leaves"]
+    let leaves = payload["data"]["view"]["items"]
         .as_array()
-        .expect("expected enveloped JSON with data.leaves array");
+        .expect("expected enveloped JSON with data.view.items array");
 
     assert_eq!(leaves.len(), 2, "payload: {payload}");
     for row in leaves {
+        assert!(row.get("slug").is_some(), "row missing slug: {row}");
         assert!(row.get("file").is_some(), "row missing file: {row}");
         assert!(
             row.get("display_title").is_some(),
@@ -719,6 +717,10 @@ fn list_json_output_is_parseable_and_includes_required_fields_and_degradation_st
             "row missing collected_at: {row}"
         );
         assert!(row.get("branches").is_some(), "row missing branches: {row}");
+        assert!(
+            row.get("branch_count").is_some(),
+            "row missing branch_count: {row}"
+        );
         assert!(row.get("degraded").is_some(), "row missing degraded: {row}");
         assert!(
             row.get("degradation_reasons").is_some(),
@@ -757,7 +759,9 @@ fn list_combined_flags_filter_sort_limit_and_emit_json() {
 
     let out = list(
         home.path(),
-        &["--branch", "branch-a", "--recent", "--limit", "5", "--json"],
+        &[
+            "--leaves", "--branch", "branch-a", "--recent", "--limit", "5", "--json",
+        ],
     );
     assert!(
         out.status.success(),
@@ -768,9 +772,9 @@ fn list_combined_flags_filter_sort_limit_and_emit_json() {
     let payload: Value = serde_json::from_slice(&out.stdout).expect("stdout was not valid JSON");
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["command"], "list");
-    let leaves = payload["data"]["leaves"]
+    let leaves = payload["data"]["view"]["items"]
         .as_array()
-        .expect("expected enveloped JSON with data.leaves array");
+        .expect("expected enveloped JSON with data.view.items array");
 
     assert_eq!(leaves.len(), 5, "payload: {payload}");
 
@@ -836,6 +840,7 @@ fn show_prints_frontmatter_and_bounded_preview() {
     let body = format!("# Some Title\n\n{}\nTAIL_MARKER\n", "A".repeat(10_000));
     write_show_leaf(&tree, "some-title.md", "Some Title", "Some Title", &body);
 
+    // Card view: frontmatter only, no body.
     let out = show(home.path(), &["Some Title"]);
     assert!(
         out.status.success(),
@@ -848,9 +853,11 @@ fn show_prints_frontmatter_and_bounded_preview() {
         stdout.contains("---\ntitle: \"Some Title\""),
         "stdout: {stdout}"
     );
-    assert!(stdout.contains("# Some Title"), "stdout: {stdout}");
-    assert!(stdout.contains("preview truncated"), "stdout: {stdout}");
     assert!(!stdout.contains("TAIL_MARKER"), "stdout: {stdout}");
+    assert!(
+        !stdout.contains("preview truncated"),
+        "card view has no body"
+    );
 }
 
 #[test]
@@ -935,14 +942,11 @@ fn show_json_output_is_parseable_and_contains_required_fields() {
             .is_some_and(|raw| raw.contains("title: \"Json Title\"")),
         "leaf: {leaf}"
     );
-    assert_eq!(leaf["truncated"], true);
     assert_eq!(leaf["full"], false);
+    assert!(leaf.get("body").is_none(), "card view JSON omits body");
     assert!(
-        !leaf["body"]
-            .as_str()
-            .expect("body must be a string")
-            .contains("TAIL_MARKER"),
-        "leaf: {leaf}"
+        leaf.get("truncated").is_none(),
+        "card view JSON omits truncated"
     );
 }
 
@@ -968,8 +972,11 @@ fn show_json_full_output_contains_full_body() {
     assert_eq!(payload["command"], "show");
     let leaf = payload["data"].get("leaf").expect("missing leaf object");
 
-    assert_eq!(leaf["truncated"], false);
     assert_eq!(leaf["full"], true);
+    assert!(
+        leaf.get("truncated").is_none(),
+        "full body is never truncated"
+    );
     assert!(
         leaf["body"]
             .as_str()

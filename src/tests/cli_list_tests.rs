@@ -17,9 +17,12 @@ struct FileSnapshot {
 #[test]
 fn empty_index_returns_empty_result() {
     let dir = TempDir::new().unwrap();
-    let result = list_leaves(dir.path(), &ListOptions::default()).unwrap();
-    assert!(result.leaves.is_empty());
-    assert_eq!(result.total_index_entries, 0);
+    let result = list_tree(dir.path(), &ListOptions::default()).unwrap();
+    assert!(
+        matches!(result.view, ListView::BranchCentric { ref branches, ref unbranched } if branches.is_empty() && unbranched.is_empty())
+    );
+    assert_eq!(result.total_branches, 0);
+    assert_eq!(result.total_leaves, 0);
 }
 
 #[test]
@@ -36,14 +39,15 @@ fn default_order_follows_collection_order() {
     );
     write_leaf_files(dir.path(), &["second", "first", "third"]);
 
-    let result = list_leaves(dir.path(), &ListOptions::default()).unwrap();
+    let result = list_tree(dir.path(), &leaves_options()).unwrap();
 
+    let leaves = leaves_from_result(&result);
     assert_eq!(
-        files(&result.leaves),
+        files(&leaves),
         vec!["second.md", "first.md", "third.md"],
         "leaves preserve manifest insertion order"
     );
-    assert_eq!(index_positions(&result.leaves), vec![0, 1, 2]);
+    assert_eq!(index_positions(&leaves), vec![0, 1, 2]);
 }
 
 #[test]
@@ -70,8 +74,9 @@ fn suspicious_path_is_degraded_and_never_read() {
     )
     .unwrap();
 
-    let result = list_leaves(&tree_dir, &ListOptions::default()).unwrap();
-    let row = &result.leaves[0];
+    let result = list_tree(&tree_dir, &leaves_options()).unwrap();
+    let leaves = leaves_from_result(&result);
+    let row = &leaves[0];
 
     assert_eq!(row.display_title, "Outside Title");
     assert!(row.degraded);
@@ -88,8 +93,9 @@ fn missing_file_yields_degraded_row() {
     );
     // Note: no leaf .md file written.
 
-    let result = list_leaves(dir.path(), &ListOptions::default()).unwrap();
-    let row = &result.leaves[0];
+    let result = list_tree(dir.path(), &leaves_options()).unwrap();
+    let leaves = leaves_from_result(&result);
+    let row = &leaves[0];
 
     assert_eq!(row.file, "missing.md");
     assert_eq!(row.display_title, "Index Title");
@@ -110,10 +116,11 @@ fn display_title_falls_back_to_filename_when_manifest_title_empty() {
     );
     write_leaf_files(dir.path(), &["with-title", "filename-only"]);
 
-    let result = list_leaves(dir.path(), &ListOptions::default()).unwrap();
+    let result = list_tree(dir.path(), &leaves_options()).unwrap();
+    let leaves = leaves_from_result(&result);
 
-    assert_eq!(result.leaves[0].display_title, "Has Title");
-    assert_eq!(result.leaves[1].display_title, "filename-only");
+    assert_eq!(leaves[0].display_title, "Has Title");
+    assert_eq!(leaves[1].display_title, "filename-only");
 }
 
 #[test]
@@ -126,13 +133,14 @@ fn collected_at_is_taken_directly_from_manifest() {
     );
     write_leaf_files(dir.path(), &["only"]);
 
-    let result = list_leaves(dir.path(), &ListOptions::default()).unwrap();
+    let result = list_tree(dir.path(), &leaves_options()).unwrap();
+    let leaves = leaves_from_result(&result);
 
     assert_eq!(
-        result.leaves[0].collected_at.as_deref(),
+        leaves[0].collected_at.as_deref(),
         Some("2025-06-01T10:00:00.000Z")
     );
-    assert!(!result.leaves[0].degraded);
+    assert!(!leaves[0].degraded);
 }
 
 #[test]
@@ -149,14 +157,18 @@ fn branches_for_leaf_come_from_manifest_inverse() {
     );
     write_leaf_files(dir.path(), &["alpha", "beta", "orphan"]);
 
-    let result = list_leaves(dir.path(), &ListOptions::default()).unwrap();
+    let result = list_tree(dir.path(), &leaves_options()).unwrap();
+    let leaves = leaves_from_result(&result);
 
-    assert_eq!(result.leaves[0].branches, vec!["topic-x".to_string()]);
+    assert_eq!(leaves[0].branches, vec!["topic-x".to_string()]);
+    assert_eq!(leaves[0].branch_count, 1);
     assert_eq!(
-        result.leaves[1].branches,
+        leaves[1].branches,
         vec!["topic-x".to_string(), "topic-y".to_string()]
     );
-    assert!(result.leaves[2].branches.is_empty());
+    assert_eq!(leaves[1].branch_count, 2);
+    assert!(leaves[2].branches.is_empty());
+    assert_eq!(leaves[2].branch_count, 0);
 }
 
 #[test]
@@ -177,16 +189,19 @@ fn branch_filter_is_exact() {
     );
     write_leaf_files(dir.path(), &["exact", "partial", "second-exact"]);
 
-    let result = list_leaves(
+    let result = list_tree(
         dir.path(),
         &ListOptions {
+            view: ListViewMode::Leaves,
+            terms: Vec::new(),
             branch: Some("rust".to_string()),
             ..ListOptions::default()
         },
     )
     .unwrap();
 
-    assert_eq!(files(&result.leaves), vec!["exact.md", "second-exact.md"]);
+    let leaves = leaves_from_result(&result);
+    assert_eq!(files(&leaves), vec!["exact.md", "second-exact.md"]);
 }
 
 #[test]
@@ -199,17 +214,20 @@ fn branch_filter_can_return_no_matches() {
     );
     write_leaf_files(dir.path(), &["only"]);
 
-    let result = list_leaves(
+    let result = list_tree(
         dir.path(),
         &ListOptions {
+            view: ListViewMode::Leaves,
+            terms: Vec::new(),
             branch: Some("missing".to_string()),
             ..ListOptions::default()
         },
     )
     .unwrap();
 
-    assert!(result.leaves.is_empty());
-    assert_eq!(result.total_index_entries, 1);
+    let leaves = leaves_from_result(&result);
+    assert!(leaves.is_empty());
+    assert_eq!(result.total_leaves, 1);
     assert_eq!(result.branch_filter.as_deref(), Some("missing"));
 }
 
@@ -228,18 +246,21 @@ fn recent_sorting_puts_newest_first_and_preserves_index_ties() {
     );
     write_leaf_files(dir.path(), &["old-a", "middle", "newest", "old-b"]);
 
-    let result = list_leaves(
+    let result = list_tree(
         dir.path(),
         &ListOptions {
+            view: ListViewMode::Leaves,
+            terms: Vec::new(),
             recent: true,
             ..ListOptions::default()
         },
     )
     .unwrap();
 
+    let leaves = leaves_from_result(&result);
     // Newest first, then ties broken by index position (old-a before old-b)
     assert_eq!(
-        files(&result.leaves),
+        files(&leaves),
         vec!["newest.md", "middle.md", "old-a.md", "old-b.md",]
     );
 }
@@ -262,9 +283,11 @@ fn limit_is_applied_after_filtering_and_sorting() {
     );
     write_leaf_files(dir.path(), &["mid", "ignored", "newest", "oldest"]);
 
-    let result = list_leaves(
+    let result = list_tree(
         dir.path(),
         &ListOptions {
+            view: ListViewMode::Leaves,
+            terms: Vec::new(),
             branch: Some("keep".to_string()),
             recent: true,
             limit: Some(2),
@@ -272,11 +295,12 @@ fn limit_is_applied_after_filtering_and_sorting() {
     )
     .unwrap();
 
-    assert_eq!(files(&result.leaves), vec!["newest.md", "mid.md"]);
+    let leaves = leaves_from_result(&result);
+    assert_eq!(files(&leaves), vec!["newest.md", "mid.md"]);
 }
 
 #[test]
-fn list_leaves_is_read_only() {
+fn list_tree_is_read_only() {
     let dir = TempDir::new().unwrap();
     write_manifest(
         dir.path(),
@@ -298,10 +322,10 @@ fn list_leaves_is_read_only() {
     fs::write(dir.path().join("nested/two.md"), "body\n").unwrap();
 
     let before = snapshot_tree(dir.path());
-    let _ = list_leaves(
+    let _ = list_tree(
         dir.path(),
         &ListOptions {
-            recent: true,
+            view: ListViewMode::Leaves,
             ..ListOptions::default()
         },
     )
@@ -311,47 +335,169 @@ fn list_leaves_is_read_only() {
     assert_eq!(before, after);
 }
 
+// ── render tests ────────────────────────────────────────────────────────────
+
 #[test]
-fn render_human_formats_normal_rows() {
+fn render_human_branch_centric_formats_nested_leaves() {
     let result = ListResult {
-        leaves: vec![
-            row(
-                "alpha.md",
-                "Alpha",
-                Some("2025-06-01T10:00:00.000Z"),
-                &["branch-a", "branch-b"],
+        view: ListView::BranchCentric {
+            branches: vec![BranchWithLeaves {
+                slug: "topic-x".to_string(),
+                title: "Topic X".to_string(),
+                updated_at: Some("2025-01-01T00:00:00.000Z".to_string()),
+                stale: false,
+                leaves: vec![leaf_row(
+                    "alpha",
+                    "alpha.md",
+                    "Alpha",
+                    Some("2025-06-01T10:00:00.000Z"),
+                    &["topic-x"],
+                    false,
+                    &[],
+                    0,
+                )],
+            }],
+            unbranched: vec![leaf_row(
+                "orphan",
+                "orphan.md",
+                "Orphan",
+                None,
+                &[],
                 false,
                 &[],
-                0,
-            ),
-            row("beta.md", "Beta", None, &[], false, &[], 1),
-        ],
-        total_index_entries: 2,
+                1,
+            )],
+        },
+        total_branches: 1,
+        total_leaves: 2,
         branch_filter: None,
     };
 
-    assert_eq!(
-        render_human(&result),
-        "Alpha | 2025-06-01T10:00:00.000Z | [branch-a, branch-b]\nBeta | - | []\n"
+    let rendered = render_human(&result);
+    assert!(rendered.contains("## Topic X"), "{rendered}");
+    assert!(rendered.contains("Alpha"), "{rendered}");
+    assert!(rendered.contains("## unbranched"), "{rendered}");
+    assert!(rendered.contains("Orphan"), "{rendered}");
+}
+
+#[test]
+fn render_human_branches_view() {
+    let result = ListResult {
+        view: ListView::Branches {
+            items: vec![
+                BranchRow {
+                    slug: "topic-x".to_string(),
+                    title: "Topic X".to_string(),
+                    leaf_count: 3,
+                    updated_at: Some("2025-01-01T00:00:00.000Z".to_string()),
+                    stale: false,
+                },
+                BranchRow {
+                    slug: "topic-y".to_string(),
+                    title: "Topic Y".to_string(),
+                    leaf_count: 1,
+                    updated_at: Some("2025-01-02T00:00:00.000Z".to_string()),
+                    stale: true,
+                },
+            ],
+        },
+        total_branches: 2,
+        total_leaves: 4,
+        branch_filter: None,
+    };
+
+    let rendered = render_human(&result);
+    assert!(
+        rendered.contains("topic-x | Topic X | 3 leaves"),
+        "{rendered}"
     );
+    assert!(
+        rendered.contains("topic-y | Topic Y | 1 leaves"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("⚠ stale"), "{rendered}");
+}
+
+#[test]
+fn render_human_leaves_view_formats_rows() {
+    let result = ListResult {
+        view: ListView::Leaves {
+            items: vec![
+                leaf_row(
+                    "alpha",
+                    "alpha.md",
+                    "Alpha",
+                    Some("2025-06-01T10:00:00.000Z"),
+                    &["branch-a", "branch-b"],
+                    false,
+                    &[],
+                    0,
+                ),
+                leaf_row("beta", "beta.md", "Beta", None, &[], false, &[], 1),
+            ],
+        },
+        total_branches: 2,
+        total_leaves: 2,
+        branch_filter: None,
+    };
+
+    let rendered = render_human(&result);
+    assert!(
+        rendered.contains("Alpha | alpha | 2025-06-01T10:00:00.000Z | 2 branches"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("Beta | beta | - | 0 branches"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn render_human_leaves_marks_degraded_rows() {
+    let result = ListResult {
+        view: ListView::Leaves {
+            items: vec![leaf_row(
+                "broken",
+                "broken.md",
+                "Broken",
+                None,
+                &[],
+                true,
+                &["missing file"],
+                0,
+            )],
+        },
+        total_branches: 0,
+        total_leaves: 1,
+        branch_filter: None,
+    };
+
+    let rendered = render_human(&result);
+    assert!(rendered.contains("DEGRADED"));
+    assert!(rendered.contains("missing file"));
 }
 
 #[test]
 fn render_human_empty_tree_message_is_clear() {
     let result = ListResult {
-        leaves: Vec::new(),
-        total_index_entries: 0,
+        view: ListView::BranchCentric {
+            branches: Vec::new(),
+            unbranched: Vec::new(),
+        },
+        total_branches: 0,
+        total_leaves: 0,
         branch_filter: None,
     };
 
-    assert_eq!(render_human(&result), "no leaves collected yet\n");
+    assert_eq!(render_human(&result), "no content in tree\n");
 }
 
 #[test]
-fn render_human_branch_no_match_message_is_clear() {
+fn render_human_leaves_branch_no_match_message_is_clear() {
     let result = ListResult {
-        leaves: Vec::new(),
-        total_index_entries: 3,
+        view: ListView::Leaves { items: Vec::new() },
+        total_branches: 1,
+        total_leaves: 3,
         branch_filter: Some("rust".to_string()),
     };
 
@@ -359,56 +505,269 @@ fn render_human_branch_no_match_message_is_clear() {
 }
 
 #[test]
-fn render_human_marks_degraded_rows() {
+fn render_human_no_branches_message() {
     let result = ListResult {
-        leaves: vec![row(
-            "broken.md",
-            "Broken",
-            None,
-            &[],
-            true,
-            &["missing file"],
-            0,
-        )],
-        total_index_entries: 1,
+        view: ListView::Branches { items: Vec::new() },
+        total_branches: 0,
+        total_leaves: 5,
         branch_filter: None,
     };
 
-    let rendered = render_human(&result);
-    assert!(rendered.contains("DEGRADED"));
-    assert!(rendered.contains("missing file"));
-    assert_eq!(rendered, "Broken | - | [] | ⚠ DEGRADED: missing file\n");
+    assert_eq!(render_human(&result), "no branches compiled yet\n");
 }
 
 #[test]
-fn render_json_is_pretty_parseable_and_omits_index_position() {
+fn render_human_branch_centric_no_branches_no_matches_message() {
     let result = ListResult {
-        leaves: vec![row(
-            "alpha.md",
-            "Alpha",
-            Some("2025-06-01T10:00:00.000Z"),
-            &["branch-a"],
-            true,
-            &["missing file"],
-            7,
-        )],
-        total_index_entries: 1,
+        view: ListView::BranchCentric {
+            branches: Vec::new(),
+            unbranched: Vec::new(),
+        },
+        total_branches: 2,
+        total_leaves: 5,
+        branch_filter: Some("rust".to_string()),
+    };
+
+    assert_eq!(render_human(&result), "no branches matched 'rust'\n");
+}
+
+#[test]
+fn render_json_leaves_parseable_and_omits_index_position() {
+    let result = ListResult {
+        view: ListView::Leaves {
+            items: vec![leaf_row(
+                "alpha",
+                "alpha.md",
+                "Alpha",
+                Some("2025-06-01T10:00:00.000Z"),
+                &["branch-a"],
+                true,
+                &["missing file"],
+                7,
+            )],
+        },
+        total_branches: 1,
+        total_leaves: 1,
         branch_filter: Some("branch-a".to_string()),
     };
 
     let rendered = render_json(&result).unwrap();
     let parsed: JsonValue = serde_json::from_str(&rendered).unwrap();
-    let row = &parsed["leaves"][0];
 
     assert!(rendered.contains('\n'));
+    assert_eq!(parsed["view"]["mode"], "Leaves");
+    let row = &parsed["view"]["items"][0];
+    assert_eq!(row["slug"], "alpha");
     assert_eq!(row["file"], "alpha.md");
     assert_eq!(row["display_title"], "Alpha");
     assert_eq!(row["collected_at"], "2025-06-01T10:00:00.000Z");
     assert_eq!(row["branches"][0], "branch-a");
+    assert_eq!(row["branch_count"], 1);
     assert_eq!(row["degraded"], true);
     assert_eq!(row["degradation_reasons"][0], "missing file");
     assert!(row.get("index_position").is_none());
-    assert!(parsed.get("leaves").is_some());
+}
+
+#[test]
+fn render_json_branch_centric_has_mode_tag() {
+    let result = ListResult {
+        view: ListView::BranchCentric {
+            branches: vec![BranchWithLeaves {
+                slug: "topic-x".to_string(),
+                title: "Topic X".to_string(),
+                updated_at: Some("2025-01-01T00:00:00.000Z".to_string()),
+                stale: false,
+                leaves: vec![leaf_row(
+                    "alpha",
+                    "alpha.md",
+                    "Alpha",
+                    Some("2025-06-01T10:00:00.000Z"),
+                    &["topic-x"],
+                    false,
+                    &[],
+                    0,
+                )],
+            }],
+            unbranched: Vec::new(),
+        },
+        total_branches: 1,
+        total_leaves: 1,
+        branch_filter: None,
+    };
+
+    let rendered = render_json(&result).unwrap();
+    let parsed: JsonValue = serde_json::from_str(&rendered).unwrap();
+    assert_eq!(parsed["view"]["mode"], "BranchCentric");
+    assert_eq!(parsed["view"]["branches"][0]["slug"], "topic-x");
+    assert_eq!(parsed["view"]["branches"][0]["title"], "Topic X");
+    assert_eq!(parsed["view"]["branches"][0]["leaves"][0]["slug"], "alpha");
+}
+
+#[test]
+fn terms_filters_leaves_by_title_and_slug() {
+    let dir = TempDir::new().unwrap();
+    write_manifest(
+        dir.path(),
+        &[
+            leaf("rust-basics", "Rust Basics", "2025-01-01T00:00:00Z"),
+            leaf("go-intro", "Go Introduction", "2025-01-02T00:00:00Z"),
+            leaf("rust-advanced", "Advanced Rust", "2025-01-03T00:00:00Z"),
+        ],
+        &[],
+    );
+    write_leaf_files(dir.path(), &["rust-basics", "go-intro", "rust-advanced"]);
+
+    let result = list_tree(
+        dir.path(),
+        &ListOptions {
+            view: ListViewMode::Leaves,
+            terms: vec!["rust".to_string()],
+            ..ListOptions::default()
+        },
+    )
+    .unwrap();
+
+    let leaves = leaves_from_result(&result);
+    assert_eq!(leaves.len(), 2);
+    assert_eq!(leaves[0].display_title, "Rust Basics");
+    assert_eq!(leaves[1].display_title, "Advanced Rust");
+}
+
+#[test]
+fn terms_filters_branches_by_title_and_slug() {
+    let dir = TempDir::new().unwrap();
+    write_manifest(
+        dir.path(),
+        &[
+            leaf("a", "A", "2025-01-01T00:00:00Z"),
+            leaf("b", "B", "2025-01-01T00:00:00Z"),
+            leaf("c", "C", "2025-01-01T00:00:00Z"),
+        ],
+        &[
+            ("rust-basics", &["a"]),
+            ("go-intro", &["b"]),
+            ("rust-advanced", &["c"]),
+        ],
+    );
+    write_leaf_files(dir.path(), &["a", "b", "c"]);
+
+    let result = list_tree(
+        dir.path(),
+        &ListOptions {
+            view: ListViewMode::Branches,
+            terms: vec!["rust".to_string()],
+            ..ListOptions::default()
+        },
+    )
+    .unwrap();
+
+    if let ListView::Branches { items: rows } = &result.view {
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].slug, "rust-basics");
+        assert_eq!(rows[1].slug, "rust-advanced");
+    } else {
+        panic!("expected Branches view");
+    }
+}
+
+#[test]
+fn terms_filters_branch_centric_by_branch_and_leaf_match() {
+    let dir = TempDir::new().unwrap();
+    write_manifest(
+        dir.path(),
+        &[
+            leaf("rust-leaf", "Rust Leaf", "2025-01-01T00:00:00Z"),
+            leaf("go-leaf", "Go Leaf", "2025-01-01T00:00:00Z"),
+        ],
+        &[("rust-branch", &["rust-leaf"]), ("go-branch", &["go-leaf"])],
+    );
+    write_leaf_files(dir.path(), &["rust-leaf", "go-leaf"]);
+
+    let result = list_tree(
+        dir.path(),
+        &ListOptions {
+            view: ListViewMode::BranchCentric,
+            terms: vec!["rust".to_string()],
+            ..ListOptions::default()
+        },
+    )
+    .unwrap();
+
+    if let ListView::BranchCentric {
+        branches,
+        unbranched,
+    } = &result.view
+    {
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].slug, "rust-branch");
+        assert_eq!(branches[0].leaves.len(), 1);
+        assert_eq!(branches[0].leaves[0].slug, "rust-leaf");
+        assert!(unbranched.is_empty());
+    } else {
+        panic!("expected BranchCentric view");
+    }
+}
+
+#[test]
+fn degraded_leaves_collects_from_branch_centric() {
+    let result = ListResult {
+        view: ListView::BranchCentric {
+            branches: vec![BranchWithLeaves {
+                slug: "topic-x".to_string(),
+                title: "Topic X".to_string(),
+                updated_at: Some("2025-01-01T00:00:00.000Z".to_string()),
+                stale: false,
+                leaves: vec![leaf_row(
+                    "alpha",
+                    "alpha.md",
+                    "Alpha",
+                    None,
+                    &[],
+                    true,
+                    &["missing file"],
+                    0,
+                )],
+            }],
+            unbranched: vec![leaf_row(
+                "orphan",
+                "orphan.md",
+                "Orphan",
+                None,
+                &[],
+                true,
+                &["suspicious path"],
+                1,
+            )],
+        },
+        total_branches: 1,
+        total_leaves: 2,
+        branch_filter: None,
+    };
+
+    let degraded = result.degraded_leaves();
+    assert_eq!(degraded.len(), 2);
+    assert_eq!(degraded[0].slug, "alpha");
+    assert_eq!(degraded[1].slug, "orphan");
+}
+
+#[test]
+fn degraded_leaves_empty_for_branches_view() {
+    let result = ListResult {
+        view: ListView::Branches {
+            items: vec![BranchRow {
+                slug: "topic-x".to_string(),
+                title: "Topic X".to_string(),
+                leaf_count: 1,
+                updated_at: Some("2025-01-01T00:00:00.000Z".to_string()),
+                stale: false,
+            }],
+        },
+        total_branches: 1,
+        total_leaves: 1,
+        branch_filter: None,
+    };
+
+    assert!(result.degraded_leaves().is_empty());
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -468,7 +827,24 @@ fn index_positions(rows: &[ListLeafRow]) -> Vec<usize> {
     rows.iter().map(|row| row.index_position).collect()
 }
 
-fn row(
+fn leaves_options() -> ListOptions {
+    ListOptions {
+        view: ListViewMode::Leaves,
+        terms: Vec::new(),
+        ..ListOptions::default()
+    }
+}
+
+fn leaves_from_result(result: &ListResult) -> Vec<ListLeafRow> {
+    match &result.view {
+        ListView::Leaves { items: rows } => rows.clone(),
+        _ => panic!("expected Leaves view"),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn leaf_row(
+    slug: &str,
     file: &str,
     display_title: &str,
     collected_at: Option<&str>,
@@ -477,11 +853,15 @@ fn row(
     degradation_reasons: &[&str],
     index_position: usize,
 ) -> ListLeafRow {
+    let branch_slugs: Vec<String> = branches.iter().map(|b| b.to_string()).collect();
+    let branch_count = branch_slugs.len();
     ListLeafRow {
+        slug: slug.to_string(),
         file: file.to_string(),
         display_title: display_title.to_string(),
         collected_at: collected_at.map(str::to_string),
-        branches: branches.iter().map(|branch| branch.to_string()).collect(),
+        branches: branch_slugs,
+        branch_count,
         degraded,
         degradation_reasons: degradation_reasons
             .iter()
