@@ -2,10 +2,9 @@ use bo::cli::collect::{self, BatchCollectResult, CollectError, CollectOutput};
 use bo::cli::compile::{self, CompileError, CompileOptions, CompileResult};
 use bo::cli::config as cli_config;
 use bo::cli::json::{self as json_output, JsonError, JsonWarning};
-use bo::cli::list::{self, ListOptions};
+use bo::cli::list::{self};
 use bo::cli::query;
 use bo::cli::raze;
-use bo::cli::search::{self, SearchOptions, SearchQuery};
 use bo::cli::seed;
 use bo::cli::show::{self, ShowOptions};
 use bo::cli::status;
@@ -23,7 +22,7 @@ use std::process;
 
 const NOT_SEEDED_MSG: &str = "bo hasn't been seeded yet — run: bo seed <output-dir>";
 const KNOWN_COMMANDS: &[&str] = &[
-    "seed", "config", "collect", "compile", "list", "search", "show", "query", "status", "raze",
+    "seed", "config", "collect", "compile", "list", "show", "query", "status", "raze",
 ];
 
 #[derive(Parser, Debug)]
@@ -67,35 +66,35 @@ enum Commands {
         #[arg(long)]
         all: bool,
     },
-    /// List collected leaves in the current tree
+    /// Inspect branches and leaves in the current tree
+    #[command(
+        after_help = "Examples:\n  bo list                  # branch-centric tree view\n  bo list --branches       # flat branch list with leaf counts\n  bo list --leaves         # flat leaf list with branch counts\n  bo list --terms rust     # filter by title/slug match"
+    )]
     List {
-        /// Maximum number of leaves to show
+        /// Show only branches (flat list with leaf counts)
+        #[arg(long, conflicts_with = "leaves")]
+        branches: bool,
+        /// Show only leaves (flat list with branch counts)
+        #[arg(long, conflicts_with = "branches")]
+        leaves: bool,
+        /// Filter by text match against title and slug (all terms must match)
+        #[arg(long, num_args = 1.., value_name = "TERMS")]
+        terms: Vec<String>,
+        /// Maximum number of items to show
         #[arg(long)]
         limit: Option<usize>,
-        /// Sort by collected date, newest first
+        /// Sort leaves by collected date, newest first (only in --leaves mode)
         #[arg(long)]
         recent: bool,
         /// Filter by exact branch name/slug
         #[arg(long)]
         branch: Option<String>,
     },
-    /// Search collected leaves by content
-    Search {
-        /// Search terms (all must match). Quote phrases: "borrow checker"
-        #[arg(required = true)]
-        terms: Vec<String>,
-        /// Page number (default 1, 5 results per page)
-        #[arg(long, default_value = "1")]
-        page: usize,
-        /// Sort by collected date instead of relevance
-        #[arg(long)]
-        recent: bool,
-    },
-    /// Show one collected leaf by exact title
+    /// Display a leaf's frontmatter card (use --full for complete body)
     Show {
         /// Leaf title to show
         title: String,
-        /// Show the full leaf body instead of a preview
+        /// Include the complete leaf body
         #[arg(long)]
         full: bool,
     },
@@ -139,18 +138,6 @@ enum ConfigCommands {
 // ── JSON payloads ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
-struct SearchJsonData<'a> {
-    query: SearchJsonQuery,
-    #[serde(flatten)]
-    result: &'a search::SearchResult,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct SearchJsonQuery {
-    terms: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 struct ShowJsonData<'a> {
     leaf: &'a show::ShowResult,
 }
@@ -159,7 +146,6 @@ struct ShowJsonData<'a> {
 
 #[derive(Debug)]
 enum CliError {
-    Usage { message: String, exit_code: i32 },
     NotSeeded,
     ConfigRead(String),
     ConfigAuth(cli_config::ConfigAuthError),
@@ -167,7 +153,6 @@ enum CliError {
     Raze(raze::RazeError),
     Collect(CollectError),
     List(list::ListError),
-    Search(search::SearchError),
     Show(show::ShowError),
     Compile(CompileError),
     Status(status::StatusError),
@@ -177,7 +162,6 @@ enum CliError {
 impl CliError {
     fn exit_code(&self) -> i32 {
         match self {
-            CliError::Usage { exit_code, .. } => *exit_code,
             CliError::ConfigAuth(error) => error.exit_code(),
             CliError::ConfigCommand(error) => error.exit_code(),
             CliError::Collect(CollectError::Pending(bo::engine::pending::PendingError::Busy {
@@ -191,11 +175,6 @@ impl CliError {
 
     fn to_json_error(&self) -> JsonError {
         match self {
-            CliError::Usage { message, .. } => JsonError::with_details(
-                "usage_error",
-                message.clone(),
-                json!({ "exit_code": self.exit_code() }),
-            ),
             CliError::NotSeeded => JsonError::new("not_seeded", NOT_SEEDED_MSG),
             CliError::ConfigRead(message) => JsonError::new("io_error", message.clone()),
             CliError::ConfigAuth(error) => {
@@ -205,7 +184,6 @@ impl CliError {
             CliError::Raze(error) => JsonError::new("io_error", error.to_string()),
             CliError::Collect(error) => error.json_error(),
             CliError::List(error) => error.json_error(),
-            CliError::Search(error) => error.json_error(),
             CliError::Show(error) => error.json_error(),
             CliError::Compile(error) => error.json_error(),
             CliError::Status(error) => JsonError::new("io_error", error.to_string()),
@@ -217,7 +195,6 @@ impl CliError {
 impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CliError::Usage { message, .. } => write!(f, "{}", message),
             CliError::NotSeeded => write!(f, "{}", NOT_SEEDED_MSG),
             CliError::ConfigRead(message) => write!(f, "{}", message),
             CliError::ConfigAuth(error) => write!(f, "{}", error),
@@ -225,7 +202,6 @@ impl fmt::Display for CliError {
             CliError::Raze(error) => write!(f, "{}", error),
             CliError::Collect(error) => write!(f, "{}", error),
             CliError::List(error) => write!(f, "{}", error),
-            CliError::Search(error) => write!(f, "{}", error),
             CliError::Show(error) => write!(f, "{}", error),
             CliError::Compile(error) => write!(f, "{}", error),
             CliError::Status(error) => write!(f, "{}", error),
@@ -321,10 +297,13 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
             Err(error) => emit_cli_error("compile", json, error, stdout, stderr),
         },
         Commands::List {
+            branches,
+            leaves,
+            terms,
             limit,
             recent,
             branch,
-        } => match execute_list(limit, recent, branch) {
+        } => match execute_list(branches, leaves, terms, limit, recent, branch) {
             Ok(result) if json => {
                 let warnings = list_warnings(&result);
                 emit_json_success("list", &result, warnings, stdout)
@@ -333,34 +312,6 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 write_human_or_error(write!(stdout, "{}", list::render_human(&result)), stderr)
             }
             Err(error) => emit_cli_error("list", json, error, stdout, stderr),
-        },
-        Commands::Search {
-            terms,
-            page,
-            recent,
-        } => match execute_search(terms, page, recent) {
-            Ok((query, result)) if json => {
-                let data = SearchJsonData {
-                    query: SearchJsonQuery { terms: query.terms },
-                    result: &result,
-                };
-                emit_json_success("search", data, Vec::new(), stdout)
-            }
-            Ok((_query, result)) => {
-                let has_results = !result.hits.is_empty();
-                let code = write_human_or_error(
-                    write!(stdout, "{}", search::render_human(&result)),
-                    stderr,
-                );
-                if code != 0 {
-                    code
-                } else if has_results {
-                    0
-                } else {
-                    1
-                }
-            }
-            Err(error) => emit_cli_error("search", json, error, stdout, stderr),
         },
         Commands::Show { title, full } => match execute_show(title, full) {
             Ok(result) if json => {
@@ -683,43 +634,32 @@ fn execute_collect(inputs: Vec<String>) -> Result<CollectOutput, CliError> {
 }
 
 fn execute_list(
+    branches: bool,
+    leaves: bool,
+    terms: Vec<String>,
     limit: Option<usize>,
     recent: bool,
     branch: Option<String>,
 ) -> Result<list::ListResult, CliError> {
+    let view = if leaves {
+        list::ListViewMode::Leaves
+    } else if branches {
+        list::ListViewMode::Branches
+    } else {
+        list::ListViewMode::BranchCentric
+    };
     let cfg = require_seeded_config()?;
-    list::list_leaves(
+    list::list_tree(
         &cfg.tree.output_dir,
-        &ListOptions {
+        &list::ListOptions {
+            view,
+            terms: terms.iter().map(|t| t.to_lowercase()).collect(),
             limit,
             recent,
             branch,
         },
     )
     .map_err(CliError::List)
-}
-
-fn execute_search(
-    terms: Vec<String>,
-    page: usize,
-    recent: bool,
-) -> Result<(SearchQuery, search::SearchResult), CliError> {
-    if page == 0 {
-        return Err(CliError::Usage {
-            message: "--page must be at least 1".to_string(),
-            exit_code: 2,
-        });
-    }
-
-    let cfg = require_seeded_config()?;
-    let query = SearchQuery {
-        terms: terms.iter().map(|term| term.to_lowercase()).collect(),
-    };
-    let options = SearchOptions { page, recent };
-    let result =
-        search::search_leaves(&cfg.tree.output_dir, &query, &options).map_err(CliError::Search)?;
-
-    Ok((query, result))
 }
 
 fn execute_show(title: String, full: bool) -> Result<show::ShowResult, CliError> {
@@ -755,9 +695,8 @@ where
 
 fn list_warnings(result: &list::ListResult) -> Vec<JsonWarning> {
     result
-        .leaves
+        .degraded_leaves()
         .iter()
-        .filter(|row| row.degraded)
         .map(|row| {
             JsonWarning::with_details(
                 "degraded_leaf",

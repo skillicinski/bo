@@ -11,8 +11,6 @@ use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::{Component, Path, PathBuf};
 
-const PREVIEW_CHAR_LIMIT: usize = 2_000;
-
 // ── public types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
@@ -36,8 +34,10 @@ pub struct ShowResult {
     pub url: Option<String>,
     pub frontmatter: Mapping,
     pub frontmatter_raw: String,
-    pub body: String,
-    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncated: Option<bool>,
     pub full: bool,
 }
 
@@ -404,17 +404,12 @@ fn normalize_title(title: &str) -> String {
     title.to_lowercase()
 }
 
-fn body_for_options(body: &str, full: bool) -> (String, bool) {
+fn body_for_options(body: &str, full: bool) -> (Option<String>, Option<bool>) {
     if full {
-        return (body.to_string(), false);
+        return (Some(body.to_string()), None);
     }
-
-    let char_count = body.chars().count();
-    if char_count <= PREVIEW_CHAR_LIMIT {
-        return (body.to_string(), false);
-    }
-
-    (body.chars().take(PREVIEW_CHAR_LIMIT).collect(), true)
+    // Card view: frontmatter only, no body.
+    (None, None)
 }
 
 // ── render ───────────────────────────────────────────────────────────────────
@@ -425,14 +420,17 @@ pub fn render_human(result: &ShowResult) -> String {
     if !output.ends_with('\n') {
         output.push('\n');
     }
-    output.push('\n');
-    output.push_str(&result.body);
-    if !result.body.ends_with('\n') {
-        output.push('\n');
-    }
 
-    if result.truncated {
-        output.push_str("\n[preview truncated; rerun with --full to show the complete leaf]\n");
+    if let Some(body) = &result.body {
+        output.push('\n');
+        output.push_str(body);
+        if !body.ends_with('\n') {
+            output.push('\n');
+        }
+
+        if result.truncated == Some(true) {
+            output.push_str("\n[preview truncated; rerun with --full to show the complete leaf]\n");
+        }
     }
 
     output

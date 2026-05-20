@@ -115,7 +115,7 @@ fn manifest_only_reads_work_without_secondary_store() {
     let show = parse_data(&run(tmp.path(), &["show", "Alpha", "--json"]));
 
     assert_eq!(status["leaves"]["total"], 3);
-    assert_eq!(list["total_index_entries"], 3);
+    assert_eq!(list["total_leaves"], 3);
     assert_eq!(show["leaf"]["file"], "alpha.md");
 }
 

@@ -151,7 +151,6 @@ fn every_output_command_accepts_json_flag() {
         (vec!["collect", "--json", "https://example.com"], "collect"),
         (vec!["compile", "--json"], "compile"),
         (vec!["list", "--json"], "list"),
-        (vec!["search", "--json", "term"], "search"),
         (vec!["show", "--json", "Title"], "show"),
         (vec!["raze", "--json"], "raze"),
     ];
@@ -226,35 +225,6 @@ fn config_json_usage_error_preserves_exit_code_and_command() {
         .unwrap()
         .iter()
         .any(|value| value == "gpt-4.1-mini"));
-}
-
-// ── search ───────────────────────────────────────────────────────────────────
-
-#[test]
-fn search_json_no_results_exits_successfully() {
-    let home = TempDir::new().unwrap();
-    seed_tree(&home, "tree");
-
-    let out = run(home.path(), &["search", "--json", "missing"]);
-    assert!(out.status.success());
-    let parsed = parse_json(&out);
-    assert_eq!(parsed["ok"], true);
-    assert_eq!(parsed["command"], "search");
-    assert_eq!(parsed["data"]["hits"].as_array().unwrap().len(), 0);
-    assert_eq!(parsed["data"]["query"]["terms"][0], "missing");
-}
-
-#[test]
-fn search_json_page_zero_is_structured_usage_error() {
-    let home = TempDir::new().unwrap();
-    seed_tree(&home, "tree");
-
-    let out = run(home.path(), &["search", "--json", "term", "--page", "0"]);
-    assert_eq!(out.status.code(), Some(2));
-    let parsed = parse_json(&out);
-    assert_eq!(parsed["ok"], false);
-    assert_eq!(parsed["command"], "search");
-    assert_eq!(parsed["error"]["code"], "usage_error");
 }
 
 // ── compile ──────────────────────────────────────────────────────────────────

@@ -41,7 +41,7 @@ fn suspicious_path_is_rejected_and_never_read() {
 }
 
 #[test]
-fn show_leaf_preserves_raw_frontmatter_and_body() {
+fn show_leaf_card_view_returns_frontmatter_only() {
     let dir = TempDir::new().unwrap();
     write_index(dir.path(), &[("raw.md", "Raw: Title")]);
     write_raw_file(
@@ -56,11 +56,29 @@ fn show_leaf_preserves_raw_frontmatter_and_body() {
         result.frontmatter_raw,
         "---\ntitle: \"Raw: Title\"\nurl: https://example.com\n---\n"
     );
-    assert_eq!(result.body, "# Heading\n\nBody.\n");
+    assert!(result.body.is_none(), "card view should have no body");
+    assert!(result.truncated.is_none());
+    assert!(!result.full);
     assert_eq!(
         result.frontmatter.get("title").and_then(Value::as_str),
         Some("Raw: Title")
     );
+}
+
+#[test]
+fn show_leaf_full_returns_body() {
+    let dir = TempDir::new().unwrap();
+    write_index(dir.path(), &[("raw.md", "Raw: Title")]);
+    write_raw_file(
+        dir.path(),
+        "raw.md",
+        "---\ntitle: \"Raw: Title\"\nurl: https://example.com\n---\n\n# Heading\n\nBody.\n",
+    );
+
+    let result = show_leaf(dir.path(), "raw: title", &ShowOptions { full: true }).unwrap();
+
+    assert_eq!(result.body.as_deref(), Some("# Heading\n\nBody.\n"));
+    assert!(result.full);
 }
 
 #[test]
@@ -176,31 +194,33 @@ fn selected_leaf_failures_are_clear() {
 }
 
 #[test]
-fn show_leaf_short_body_is_not_truncated() {
+fn show_leaf_card_view_has_no_body() {
     let dir = TempDir::new().unwrap();
-    write_index(dir.path(), &[("short.md", "Short")]);
-    write_leaf(dir.path(), "short.md", "title: Short\n", "short body");
+    write_index(dir.path(), &[("leaf.md", "Leaf")]);
+    write_leaf(dir.path(), "leaf.md", "title: Leaf\n", "body content");
 
-    let result = show_leaf(dir.path(), "Short", &ShowOptions::default()).unwrap();
+    let result = show_leaf(dir.path(), "Leaf", &ShowOptions::default()).unwrap();
 
-    assert_eq!(result.body, "short body");
-    assert!(!result.truncated);
+    assert!(result.body.is_none());
+    assert!(result.truncated.is_none());
+    assert!(!result.full);
 }
 
 #[test]
 fn show_leaf_full_option_returns_full_body() {
     let dir = TempDir::new().unwrap();
-    let long_body = format!("{}TAIL", "a".repeat(PREVIEW_CHAR_LIMIT + 10));
+    let long_body = "Body content with no truncation.".to_string();
     write_index(dir.path(), &[("leaf.md", "Long")]);
     write_leaf(dir.path(), "leaf.md", "title: Long\n", &long_body);
 
-    let preview = show_leaf(dir.path(), "Long", &ShowOptions { full: false }).unwrap();
+    let card = show_leaf(dir.path(), "Long", &ShowOptions { full: false }).unwrap();
     let full = show_leaf(dir.path(), "Long", &ShowOptions { full: true }).unwrap();
 
-    assert!(preview.truncated);
-    assert!(!preview.body.contains("TAIL"));
-    assert!(!full.truncated);
-    assert_eq!(full.body, long_body);
+    assert!(card.body.is_none(), "card view should have no body");
+    assert!(card.truncated.is_none());
+    assert_eq!(full.body.as_deref(), Some(long_body.as_str()));
+    assert!(full.truncated.is_none());
+    assert!(full.full);
 }
 
 #[test]
@@ -217,8 +237,8 @@ fn show_leaf_is_read_only() {
 }
 
 #[test]
-fn render_human_preview_includes_frontmatter_body_and_truncation_marker() {
-    let result = fixture_result("preview body", true, false);
+fn render_human_card_view_frontmatter_only() {
+    let result = fixture_result(None, None, false);
 
     let output = render_human(&result);
 
@@ -226,13 +246,13 @@ fn render_human_preview_includes_frontmatter_body_and_truncation_marker() {
         output.contains("---\ntitle: Rendered\n---\n"),
         "output: {output}"
     );
-    assert!(output.contains("preview body"), "output: {output}");
-    assert!(output.contains("preview truncated"), "output: {output}");
+    assert!(!output.contains("body"), "card view should exclude body");
+    assert!(!output.contains("preview truncated"), "output: {output}");
 }
 
 #[test]
-fn render_human_full_has_no_truncation_marker() {
-    let result = fixture_result("complete body", false, true);
+fn render_human_full_includes_body() {
+    let result = fixture_result(Some("complete body"), None, true);
 
     let output = render_human(&result);
 
@@ -241,24 +261,39 @@ fn render_human_full_has_no_truncation_marker() {
 }
 
 #[test]
-fn render_json_is_object_rooted_and_contains_agent_fields() {
-    let result = fixture_result("json body", false, false);
+fn render_json_card_view_omits_body() {
+    let result = fixture_result(None, None, false);
 
     let payload: JsonValue = serde_json::from_str(&render_json(&result).unwrap()).unwrap();
     let leaf = payload.get("leaf").expect("missing leaf object");
 
     assert_eq!(leaf["title"], "Rendered");
     assert_eq!(leaf["file"], "rendered.md");
-    assert_eq!(leaf["path"], "/tmp/rendered.md");
-    assert_eq!(leaf["url"], "https://example.com/rendered");
-    assert_eq!(leaf["frontmatter"]["title"], "Rendered");
-    assert_eq!(leaf["frontmatter_raw"], "---\ntitle: Rendered\n---\n");
-    assert_eq!(leaf["body"], "json body");
-    assert_eq!(leaf["truncated"], false);
     assert_eq!(leaf["full"], false);
+    assert!(
+        leaf.get("body").is_none(),
+        "card view JSON should omit body"
+    );
+    assert!(
+        leaf.get("truncated").is_none(),
+        "card view JSON should omit truncated"
+    );
 }
 
-fn fixture_result(body: &str, truncated: bool, full: bool) -> ShowResult {
+#[test]
+fn render_json_full_includes_body() {
+    let result = fixture_result(Some("json body"), None, true);
+
+    let payload: JsonValue = serde_json::from_str(&render_json(&result).unwrap()).unwrap();
+    let leaf = payload.get("leaf").expect("missing leaf object");
+
+    assert_eq!(leaf["title"], "Rendered");
+    assert_eq!(leaf["body"], "json body");
+    assert!(leaf.get("truncated").is_none());
+    assert_eq!(leaf["full"], true);
+}
+
+fn fixture_result(body: Option<&str>, truncated: Option<bool>, full: bool) -> ShowResult {
     let mut frontmatter = Mapping::new();
     frontmatter.insert(
         Value::String("title".to_string()),
@@ -276,7 +311,7 @@ fn fixture_result(body: &str, truncated: bool, full: bool) -> ShowResult {
         url: Some("https://example.com/rendered".to_string()),
         frontmatter,
         frontmatter_raw: "---\ntitle: Rendered\n---\n".to_string(),
-        body: body.to_string(),
+        body: body.map(|s| s.to_string()),
         truncated,
         full,
     }
@@ -288,7 +323,6 @@ fn write_index(tree: &Path, entries: &[(&str, &str)]) {
         .iter()
         .enumerate()
         .map(|(i, (file, title))| {
-            // Use a valid slug even for adversarial file paths
             let slug = Slug::parse(&format!("test-leaf-{}", i)).unwrap();
             crate::domain::manifest::LeafRecord {
                 slug,

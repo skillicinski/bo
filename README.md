@@ -48,9 +48,11 @@ bo query "How do these concepts relate to each other?"
 | `bo collect <url>` | Fetch and store a web page as a markdown leaf |
 | `bo compile` | Build topic branches from collected leaves via LLM |
 | `bo query <question>` | Answer a question with citations from your tree |
-| `bo list` | List collected leaves |
-| `bo search <terms>` | Search leaves by content |
-| `bo show <title>` | Display a single leaf or branch |
+| `bo list` | Inspect branches and leaves. Default: branch-centric tree view |
+| `bo list --branches` | Flat branch list with leaf counts |
+| `bo list --leaves` | Flat leaf list with branch counts |
+| `bo list --terms <terms>` | Filter by title/slug match |
+| `bo show <title>` | Display a leaf's frontmatter card. `--full` for complete body |
 | `bo config auth --provider openai` | Store your API key |
 | `bo config get model` | Show the active model |
 | `bo config set model <id>` | Change the LLM model |
