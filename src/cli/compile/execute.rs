@@ -13,9 +13,7 @@ use crate::engine::llm::{
 use crate::engine::pending::{self, CompileMode, OpKind, PendingWrite};
 
 use super::parse::CompilePlan;
-use super::plan::{
-    build_manifest_delta, classify_leaf_files, derive_stale_branch_slugs, select_new_leaf_slugs,
-};
+use super::plan::build_manifest_delta;
 use super::prompt::COMPILE_SYSTEM_PROMPT;
 use super::{
     BranchResult, CompileContextMode, CompileError, CompileRunMode, CompileSummary,
@@ -238,18 +236,8 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
         ));
     }
 
-    let new_leaf_slugs = select_new_leaf_slugs(&current)?;
-    let classification = classify_leaf_files(cfg, &current, &new_leaf_slugs)?;
-    let stale_branch_slugs =
-        derive_stale_branch_slugs(&current, &classification.deleted_leaf_slugs);
-    let delta = build_manifest_delta(
-        &current,
-        plan,
-        run_mode,
-        run_timestamp,
-        &classification.deleted_leaf_slugs,
-        &stale_branch_slugs,
-    )?;
+    // Stale branches already repaired in pre-LLM pass; no deleted leaves remain.
+    let delta = build_manifest_delta(&current, plan, run_mode, run_timestamp, &[], &[])?;
 
     let mut staged: Vec<StagedWrite> = Vec::new();
     for planned_write in &delta.branch_writes {

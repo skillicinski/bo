@@ -68,6 +68,106 @@ pub(super) struct ManifestDelta {
 
 // ── functions ─────────────────────────────────────────────────────────────────
 
+/// Result of deterministic stale branch repair (pre-LLM pass).
+#[derive(Debug)]
+#[allow(dead_code)]
+pub(super) struct StaleRepairResult {
+    /// Branches that were deleted (dropped below 2-leaf minimum).
+    pub(super) branches_removed: Vec<RemovedBranchResult>,
+    /// Branch files to delete from disk.
+    pub(super) branch_deletes: Vec<String>,
+    /// Leaf slugs that were deleted (file missing).
+    pub(super) deleted_leaf_slugs: Vec<String>,
+    /// Whether any mutation was made to the manifest.
+    pub(super) manifest_changed: bool,
+}
+
+/// Deterministic pre-pass: detect deleted leaves, remove them from branches,
+/// drop branches below 2-leaf minimum, purge orphan leaf records.
+/// Writes the repaired manifest if changes were made.
+pub(super) fn repair_stale_branches(
+    cfg: &SeededConfig,
+    manifest: &Manifest,
+) -> Result<StaleRepairResult, CompileError> {
+    let new_leaf_slugs = select_new_leaf_slugs(manifest)?;
+    let classification = classify_leaf_files(cfg, manifest, &new_leaf_slugs)?;
+
+    if classification.deleted_leaf_slugs.is_empty() {
+        return Ok(StaleRepairResult {
+            branches_removed: Vec::new(),
+            branch_deletes: Vec::new(),
+            deleted_leaf_slugs: Vec::new(),
+            manifest_changed: false,
+        });
+    }
+
+    let deleted_set: HashSet<&str> = classification
+        .deleted_leaf_slugs
+        .iter()
+        .map(String::as_str)
+        .collect();
+
+    let mut branches_removed = Vec::new();
+    let mut branch_deletes = Vec::new();
+    let mut repaired_branches = Vec::new();
+
+    for branch in &manifest.branches {
+        let remaining: Vec<Slug> = branch
+            .leaves
+            .iter()
+            .filter(|s| !deleted_set.contains(s.as_str()))
+            .cloned()
+            .collect();
+
+        if remaining.len() < 2 {
+            branch_deletes.push(branch.file.clone());
+            branches_removed.push(RemovedBranchResult {
+                slug: branch.slug.as_str().to_string(),
+                title: branch.title.as_str().to_string(),
+                remaining_leaf_count: remaining.len(),
+                reason: "stale_branch_below_minimum_leaves".to_string(),
+            });
+        } else {
+            let mut repaired = branch.clone();
+            repaired.leaves = remaining;
+            repaired.stale = false;
+            repaired_branches.push(repaired);
+        }
+    }
+
+    let repaired_leaves: Vec<LeafRecord> = manifest
+        .leaves
+        .iter()
+        .filter(|l| !deleted_set.contains(l.slug.as_str()))
+        .cloned()
+        .collect();
+
+    let repaired_manifest = Manifest {
+        tree: manifest.tree.clone(),
+        leaves: repaired_leaves,
+        branches: repaired_branches,
+    };
+
+    // Write repaired manifest
+    let tree = crate::domain::tree::Tree::from_config(&cfg.tree);
+    crate::domain::manifest::write(&tree.manifest_path(), &repaired_manifest)
+        .map_err(|e| CompileError::Io(format!("failed to write repaired manifest: {}", e)))?;
+
+    // Delete branch files
+    for file in &branch_deletes {
+        let path = cfg.tree.output_dir.join(file);
+        if path.exists() {
+            std::fs::remove_file(&path).ok();
+        }
+    }
+
+    Ok(StaleRepairResult {
+        branches_removed,
+        branch_deletes,
+        deleted_leaf_slugs: classification.deleted_leaf_slugs,
+        manifest_changed: true,
+    })
+}
 pub(super) fn select_new_leaf_slugs(manifest: &Manifest) -> Result<Vec<String>, CompileError> {
     let Some(last_compiled_at) = &manifest.tree.last_compiled_at else {
         return Ok(manifest
@@ -85,26 +185,6 @@ pub(super) fn select_new_leaf_slugs(manifest: &Manifest) -> Result<Vec<String>, 
         })
         .map(|leaf| leaf.slug.as_str().to_string())
         .collect())
-}
-
-pub(super) fn derive_stale_branch_slugs(
-    manifest: &Manifest,
-    deleted_leaf_slugs: &[String],
-) -> Vec<String> {
-    let deleted_leaf_slugs: HashSet<&str> = deleted_leaf_slugs.iter().map(String::as_str).collect();
-    let mut stale_branch_slugs = Vec::new();
-
-    for branch in &manifest.branches {
-        if branch
-            .leaves
-            .iter()
-            .any(|leaf_slug| deleted_leaf_slugs.contains(leaf_slug.as_str()))
-        {
-            stale_branch_slugs.push(branch.slug.as_str().to_string());
-        }
-    }
-
-    stale_branch_slugs
 }
 
 pub(super) fn classify_leaf_files(

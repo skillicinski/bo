@@ -7,7 +7,7 @@ use serde::Deserialize;
 use crate::domain::{slug, tree::Tree};
 use crate::engine::config::SeededConfig;
 
-use super::plan::{classify_leaf_files, derive_stale_branch_slugs, select_new_leaf_slugs};
+use super::plan::select_new_leaf_slugs;
 use super::{CompileError, MAX_COMPILED_BODY_BYTES_MIN, MAX_COMPILED_BODY_BYTES_PER_INPUT_BYTE};
 
 // ── types ─────────────────────────────────────────────────────────────────────
@@ -183,29 +183,8 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
     let manifest = crate::domain::manifest::read(&tree.manifest_path())
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
     let new_leaf_slugs_vec = select_new_leaf_slugs(&manifest)?;
-    let classification = classify_leaf_files(cfg, &manifest, &new_leaf_slugs_vec)?;
-    let stale_branch_slugs: HashSet<String> =
-        derive_stale_branch_slugs(&manifest, &classification.deleted_leaf_slugs)
-            .into_iter()
-            .collect();
-    let deleted_leaf_slugs: HashSet<String> =
-        classification.deleted_leaf_slugs.into_iter().collect();
     let new_leaf_slugs: HashSet<String> = new_leaf_slugs_vec.into_iter().collect();
     let valid_leaf_refs = valid_leaf_reference_map(valid_filenames);
-    let required_stale_rebuild_slugs: HashSet<String> = manifest
-        .branches
-        .iter()
-        .filter(|branch| stale_branch_slugs.contains(branch.slug.as_str()))
-        .filter(|branch| {
-            branch
-                .leaves
-                .iter()
-                .filter(|leaf| !deleted_leaf_slugs.contains(leaf.as_str()))
-                .count()
-                >= 2
-        })
-        .map(|branch| branch.slug.as_str().to_string())
-        .collect();
     let mut seen_branch_slugs = HashSet::new();
     let mut seen_updated_branch_slugs = HashSet::new();
     let mut validated_branches = Vec::new();
@@ -228,33 +207,8 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
             .iter()
             .map(|leaf| leaf.strip_suffix(".md").unwrap_or(leaf).to_string())
             .collect();
-        let is_stale = stale_branch_slugs.contains(&raw.slug);
-        let remaining_valid_existing_leaves: HashSet<String> = existing
-            .leaves
-            .iter()
-            .filter(|leaf| !deleted_leaf_slugs.contains(leaf.as_str()))
-            .map(|leaf| leaf.as_str().to_string())
-            .collect();
-        if is_stale {
-            if remaining_valid_existing_leaves.len() < 2 {
-                return Err(validation_error(format!(
-                    "invalid incremental compile response: stale branch '{}' has fewer than 2 remaining valid leaves and must be removed deterministically",
-                    raw.slug
-                )));
-            }
-            for leaf_slug in &leaf_slugs {
-                if !remaining_valid_existing_leaves.contains(leaf_slug) {
-                    return Err(validation_error(format!(
-                        "invalid incremental compile response: stale branch '{}' may only use remaining valid leaves",
-                        raw.slug
-                    )));
-                }
-            }
-        }
+        // Ensure existing leaves are preserved (no drops)
         for existing_leaf in &existing.leaves {
-            if deleted_leaf_slugs.contains(existing_leaf.as_str()) {
-                continue;
-            }
             if !leaf_slugs.contains(existing_leaf.as_str()) {
                 return Err(validation_error(format!(
                     "invalid incremental compile response: branch '{}' dropped existing leaf '{}'",
@@ -262,7 +216,8 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
                 )));
             }
         }
-        if !is_stale && !leaf_slugs.iter().any(|slug| new_leaf_slugs.contains(slug)) {
+        // Updated branch must add at least one new leaf
+        if !leaf_slugs.iter().any(|slug| new_leaf_slugs.contains(slug)) {
             return Err(validation_error(format!(
                 "invalid incremental compile response: branch '{}' update adds no newly processed leaf",
                 raw.slug
@@ -289,38 +244,6 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
             body: raw.body,
             leaves,
         });
-    }
-
-    for stale_slug in &required_stale_rebuild_slugs {
-        if !seen_updated_branch_slugs.contains(stale_slug.as_str()) {
-            // LLM didn't address this stale branch — deterministically repair it
-            // by removing deleted leaves and keeping existing body.
-            if let Some(branch) = manifest.branch_by_slug_str(stale_slug) {
-                let repaired_leaves: Vec<String> = branch
-                    .leaves
-                    .iter()
-                    .filter(|leaf| !deleted_leaf_slugs.contains(leaf.as_str()))
-                    .map(|leaf| format!("{}.md", leaf.as_str()))
-                    .collect();
-                if repaired_leaves.len() >= 2 {
-                    let branch_path = cfg.tree.output_dir.join(&branch.file);
-                    let body = std::fs::read_to_string(&branch_path)
-                        .ok()
-                        .and_then(|content| {
-                            crate::domain::frontmatter::parse(&content)
-                                .ok()
-                                .map(|(_, b)| b.to_string())
-                        })
-                        .unwrap_or_default();
-                    validated_branches.push(ValidatedBranch {
-                        slug: stale_slug.clone(),
-                        title: branch.title.as_str().to_string(),
-                        body,
-                        leaves: repaired_leaves,
-                    });
-                }
-            }
-        }
     }
 
     for raw in parsed.new_branches {

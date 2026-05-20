@@ -53,14 +53,12 @@ pub(super) fn build_incremental_user_message(
     manifest: &Manifest,
     leaves: &[LoadedLeaf],
     new_leaf_slugs: &[String],
-    stale_branch_slugs: &[String],
 ) -> String {
     let leaves_by_slug: HashMap<&str, &LoadedLeaf> = leaves
         .iter()
         .map(|leaf| (leaf.slug.as_str(), leaf))
         .collect();
     let new_leaf_slugs: HashSet<&str> = new_leaf_slugs.iter().map(String::as_str).collect();
-    let stale_branch_slugs: HashSet<&str> = stale_branch_slugs.iter().map(String::as_str).collect();
 
     let mut msg = String::from(
         "Please incrementally compile my knowledge base.\n\n\
@@ -70,20 +68,17 @@ pub(super) fn build_incremental_user_message(
          - Use `new_branches` only for entirely new concepts not covered by any existing branch. Each new branch must include at least one new leaf.\n\
          - Do NOT place an existing branch in `new_branches` — that causes a duplicate slug error.\n\
          - Do NOT output branches that only contain previously-compiled leaves with no new leaf added.\n\
-         - Omit unchanged non-stale branches entirely — they are preserved automatically.\n\
-         - Branches marked stale=\"true\" MUST appear in `updated_branches` with their remaining valid leaves and rewritten body. Do NOT omit stale branches.\n\
-         - If no new leaf fits any existing or new cross-cutting concept, return empty `new_branches` array (but still rebuild stale branches).\n\n",
+         - Omit unchanged branches entirely — they are preserved automatically.\n\
+         - If no new leaf fits any existing or new cross-cutting concept, return empty arrays.\n\n",
     );
 
     msg.push_str("<existing_branches>\n");
     for branch_record in &manifest.branches {
-        let stale = stale_branch_slugs.contains(branch_record.slug.as_str());
         let leaves_str: Vec<&str> = branch_record.leaves.iter().map(|s| s.as_str()).collect();
         msg.push_str(&format!(
-            "<branch slug=\"{}\" title=\"{}\" stale=\"{}\" leaves=\"{}\">\n",
+            "<branch slug=\"{}\" title=\"{}\" leaves=\"{}\">\n",
             branch_record.slug,
             branch_record.title,
-            stale,
             leaves_str.join(",")
         ));
         let branch_path = cfg.tree.output_dir.join(&branch_record.file);
@@ -120,14 +115,7 @@ pub(super) fn build_incremental_user_message(
     msg.push_str("</new_leaves_to_integrate>\n\n");
     msg.push_str("The above are the NEW leaves you must integrate. Every branch you output (updated or new) MUST include at least one of these new leaves. If none fit any concept, return empty arrays.\n\n");
 
-    let mut full_body_slugs: HashSet<&str> = new_leaf_slugs.clone();
-    for branch_record in &manifest.branches {
-        if stale_branch_slugs.contains(branch_record.slug.as_str()) {
-            for leaf_slug in &branch_record.leaves {
-                full_body_slugs.insert(leaf_slug.as_str());
-            }
-        }
-    }
+    let full_body_slugs: HashSet<&str> = new_leaf_slugs.clone();
 
     msg.push_str("<full_leaf_bodies>\n");
     for slug in full_body_slugs {

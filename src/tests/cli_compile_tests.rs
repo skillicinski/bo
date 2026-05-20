@@ -529,8 +529,9 @@ fn deleted_leaf_rebuilds_stale_branch() {
     )
     .unwrap();
 
-    assert_eq!(result.status, "compiled");
-    assert_eq!(provider.calls(), 1);
+    // Stale repair happens deterministically in pre-pass; no LLM call needed
+    assert_eq!(result.status, "noop");
+    assert_eq!(provider.calls(), 0);
 
     let m = manifest::read(&manifest_path).unwrap();
     assert!(m.leaf_by_slug_str("leaf-c").is_none());
@@ -540,8 +541,6 @@ fn deleted_leaf_rebuilds_stale_branch() {
         vec!["leaf-a", "leaf-b"]
     );
     assert!(!branch.stale);
-    let content = fs::read_to_string(dir.path().join("branches/concept.md")).unwrap();
-    assert!(content.contains("Rebuilt from two leaves"));
     assert!(fs::read_to_string(dir.path().join("leaf-a.md"))
         .unwrap()
         .contains("Body for leaf-a"));
@@ -589,7 +588,8 @@ fn stale_branch_below_threshold_removed() {
     )
     .unwrap();
 
-    assert_eq!(result.status, "compiled");
+    // Stale repair happens deterministically; branch below 2-leaf threshold removed
+    assert_eq!(result.status, "noop");
     let m = manifest::read(&manifest_path).unwrap();
     assert!(m.branch_by_slug_str("doomed").is_none());
     assert!(!dir.path().join("branches/doomed.md").exists());

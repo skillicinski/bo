@@ -244,15 +244,10 @@ fn preflight_noop(
         1 => return Ok(Some(CompileResult::noop("single_leaf"))),
         _ => {}
     }
-    let new_leaf_slugs = plan::select_new_leaf_slugs(&manifest)?;
-    let leaf_file_classification = plan::classify_leaf_files(cfg, &manifest, &new_leaf_slugs)?;
-    let stale_branch_slugs =
-        plan::derive_stale_branch_slugs(&manifest, &leaf_file_classification.deleted_leaf_slugs);
 
-    if !options.all && new_leaf_slugs.is_empty() && stale_branch_slugs.is_empty() {
-        return Ok(Some(CompileResult::noop(NO_NEW_LEAVES_REASON)));
-    }
-
+    // Stale repair + new-leaf detection happen in the main function.
+    // Preflight only catches trivial noops (empty/single-leaf).
+    let _ = options;
     Ok(None)
 }
 
@@ -297,17 +292,21 @@ fn run_compile_with_provider_started_at(
     let tree = Tree::from_config(&cfg.tree);
     execute::recover_pending_if_needed(&tree.output_dir)?;
 
-    // ── read manifest (guard: empty/single-leaf) ────────────────────────────
+    // ── deterministic stale repair (pre-LLM) ────────────────────────────────
+    let _stale_repair = plan::repair_stale_branches(
+        cfg,
+        &manifest::read(&tree.manifest_path())
+            .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?,
+    )?;
+
+    // ── read manifest (post-repair) and check for work ──────────────────────
     let manifest = manifest::read(&tree.manifest_path())
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
     let expected_manifest_hash = pending::manifest_hash(&tree.output_dir)?;
 
     let new_leaf_slugs = plan::select_new_leaf_slugs(&manifest)?;
-    let leaf_file_classification = plan::classify_leaf_files(cfg, &manifest, &new_leaf_slugs)?;
-    let stale_branch_slugs =
-        plan::derive_stale_branch_slugs(&manifest, &leaf_file_classification.deleted_leaf_slugs);
 
-    if !options.all && new_leaf_slugs.is_empty() && stale_branch_slugs.is_empty() {
+    if !options.all && new_leaf_slugs.is_empty() {
         return Ok(CompileResult::noop(NO_NEW_LEAVES_REASON));
     }
 
@@ -327,7 +326,7 @@ fn run_compile_with_provider_started_at(
         )));
     }
 
-    if loaded_leaves.len() < 2 && stale_branch_slugs.is_empty() {
+    if loaded_leaves.len() < 2 {
         return Ok(CompileResult::noop("single_leaf"));
     }
 
@@ -343,13 +342,8 @@ fn run_compile_with_provider_started_at(
     } else {
         CompileRunMode::Incremental
     };
-    let incremental_user_message = prompt::build_incremental_user_message(
-        cfg,
-        &manifest,
-        &loaded_leaves,
-        &new_leaf_slugs,
-        &stale_branch_slugs,
-    );
+    let incremental_user_message =
+        prompt::build_incremental_user_message(cfg, &manifest, &loaded_leaves, &new_leaf_slugs);
     let incremental_prompt_tokens = execute::estimate_compile_prompt_tokens(
         prompt::COMPILE_SYSTEM_PROMPT
             .len()
