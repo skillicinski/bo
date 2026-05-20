@@ -1,8 +1,10 @@
 use super::*;
+use async_trait::async_trait;
 use bo::domain::tree::TreeConfig;
 use std::cell::Cell;
 use std::fs;
 use std::path::Path;
+use std::sync::Mutex;
 use tempfile::TempDir;
 
 #[test]
@@ -18,6 +20,93 @@ fn raw_json_mode_detection_stops_at_arg_terminator() {
         OsString::from("--"),
         OsString::from("--json"),
     ]));
+}
+
+#[test]
+fn compile_flags_parse() {
+    let cli = Cli::try_parse_from(["bo", "compile", "--all"]).unwrap();
+
+    match cli.command {
+        Commands::Compile { all } => {
+            assert!(all);
+        }
+        other => panic!("expected compile command, got {other:?}"),
+    }
+}
+
+#[test]
+fn compile_flags_default_false() {
+    let cli = Cli::try_parse_from(["bo", "compile"]).unwrap();
+
+    match cli.command {
+        Commands::Compile { all } => {
+            assert!(!all);
+        }
+        other => panic!("expected compile command, got {other:?}"),
+    }
+}
+
+#[test]
+fn compile_noop_human_output_is_exact_message() {
+    let result = CompileResult {
+        status: "noop".to_string(),
+        reason: Some("no new leaves since last compile".to_string()),
+        mode: None,
+        context_mode: None,
+        model: None,
+        branches: Vec::new(),
+        leaves_processed: 0,
+        leaves_skipped: Vec::new(),
+    };
+    let mut stdout = Vec::new();
+
+    render_compile_human(&result, &mut stdout).unwrap();
+
+    assert_eq!(
+        String::from_utf8(stdout).unwrap(),
+        "nothing new to compile\n"
+    );
+}
+
+#[test]
+fn compile_noop_json_data_contains_reason() {
+    let result = CompileResult {
+        status: "noop".to_string(),
+        reason: Some("no new leaves since last compile".to_string()),
+        mode: None,
+        context_mode: None,
+        model: None,
+        branches: Vec::new(),
+        leaves_processed: 0,
+        leaves_skipped: Vec::new(),
+    };
+    let encoded = json_output::success_string("compile", &result, Vec::new()).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+
+    assert_eq!(parsed["data"]["status"], "noop");
+    assert_eq!(parsed["data"]["reason"], "no new leaves since last compile");
+}
+
+#[test]
+fn compile_context_overflow_json_recommends_compile_model() {
+    let error = compile_json_error(&CompileError::ContextOverflow {
+        model: "gpt-4o-mini".to_string(),
+        estimated_tokens: Some(250_000),
+        context_tokens: Some(128_000),
+    });
+
+    assert_eq!(error.code, "context_overflow");
+    assert_eq!(error.details["model"], "gpt-4o-mini");
+    assert_eq!(error.details["estimated_tokens"], 250_000);
+    assert_eq!(error.details["context_tokens"], 128_000);
+    assert!(error
+        .message
+        .contains("bo config set compile_model gpt-4.1-mini"));
+    assert!(error.details["next_steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|step| step == "bo config set compile_model gpt-4.1"));
 }
 
 #[test]
@@ -157,6 +246,86 @@ fn query_relevant_sources_require_provider() {
     assert_eq!(calls.get(), 1);
 }
 
+#[test]
+fn query_uses_model_not_compile_model() {
+    let dir = TempDir::new().unwrap();
+    write_leaf(
+        dir.path(),
+        "only-leaf.md",
+        "Only Leaf",
+        "Rust is a language focused on safety.",
+    );
+    write_index(
+        dir.path(),
+        &[(
+            "leaves/only-leaf.md",
+            "Only Leaf",
+            "https://example.com/only",
+        )],
+    );
+
+    let provider = QueryModelRecordingProvider::new();
+    let cfg = SeededConfig {
+        tree: TreeConfig {
+            output_dir: dir.path().to_path_buf(),
+            name: Some("test-tree".to_string()),
+            created_at: Some("2026-05-17T00:00:00Z".to_string()),
+        },
+        model: Some("gpt-4o-mini".to_string()),
+        compile_model: Some("gpt-4.1".to_string()),
+    };
+
+    let result = execute_query_with_provider_resolver(&cfg, "what is rust safety", || {
+        Ok(Box::new(provider.clone_box()) as Box<dyn LlmProvider>)
+    });
+
+    assert!(result.is_ok(), "query failed: {result:?}");
+    assert_eq!(provider.model().as_deref(), Some("gpt-4o-mini"));
+}
+
+struct QueryModelRecordingProvider {
+    model: std::sync::Arc<Mutex<Option<String>>>,
+}
+
+impl QueryModelRecordingProvider {
+    fn new() -> Self {
+        Self {
+            model: std::sync::Arc::new(Mutex::new(None)),
+        }
+    }
+
+    fn clone_box(&self) -> Self {
+        Self {
+            model: std::sync::Arc::clone(&self.model),
+        }
+    }
+
+    fn model(&self) -> Option<String> {
+        self.model.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl LlmProvider for QueryModelRecordingProvider {
+    async fn complete(
+        &self,
+        _messages: &[bo::engine::llm::Message],
+        model: &str,
+        _max_tokens: u32,
+        _response_schema: Option<&serde_json::Value>,
+    ) -> Result<bo::engine::llm::LlmResponse, bo::engine::llm::LlmError> {
+        *self.model.lock().unwrap() = Some(model.to_string());
+        Ok(bo::engine::llm::LlmResponse {
+            content: serde_json::json!({
+                "answer": "Rust focuses on safety [[only-leaf]].",
+                "cited_slugs": ["only-leaf"]
+            })
+            .to_string(),
+            finish_reason: bo::engine::llm::FinishReason::Stop,
+        })
+    }
+}
+
 fn assert_no_provider_resolver_not_called(
     cfg: &SeededConfig,
     question: &str,
@@ -183,6 +352,7 @@ fn seeded_config(tree: &Path) -> SeededConfig {
             created_at: Some("2026-05-17T00:00:00Z".to_string()),
         },
         model: Some("gpt-4o".to_string()),
+        compile_model: None,
     }
 }
 

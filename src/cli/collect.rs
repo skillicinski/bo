@@ -296,10 +296,23 @@ pub fn collect_html_with_model(
     output_dir: &Path,
     model: &str,
 ) -> Result<Document, CollectError> {
+    collect_html_with_summarizer(url, html, output_dir, |body, title| {
+        summary::generate(body, title, model)
+    })
+}
+
+pub fn collect_html_with_summarizer<F>(
+    url: &str,
+    html: &str,
+    output_dir: &Path,
+    summarize: F,
+) -> Result<Document, CollectError>
+where
+    F: FnOnce(&str, Option<&str>) -> Result<String, summary::SummaryError>,
+{
     recover_pending_if_needed(output_dir)?;
     ensure_not_duplicate(url, output_dir)?;
 
-    // Reject obvious non-document HTML before extraction.
     if let Some(reason) = quality::classify_html(html) {
         return Err(CollectError::Rejected {
             url: url.to_string(),
@@ -307,10 +320,8 @@ pub fn collect_html_with_model(
         });
     }
 
-    // Extract
     let content = extract::extract_content(html)?;
 
-    // Reject extracted boilerplate/shell content before writing artifacts.
     if let Some(reason) =
         quality::classify_extracted(content.title.as_deref(), &content.body_markdown)
     {
@@ -320,12 +331,13 @@ pub fn collect_html_with_model(
         });
     }
 
-    write_new_document_with_model(
+    let summary_result = summarize(&content.body_markdown, content.title.as_deref());
+    write_new_document_with_summary_result(
         url,
         content.title.as_deref(),
         &content.body_markdown,
         output_dir,
-        model,
+        summary_result,
     )
 }
 
@@ -655,7 +667,7 @@ fn write_new_document_with_summary_result(
     let title_ref = title.unwrap_or("");
     let base_slug = slug::slugify(title_ref, url);
     let filename = slug::resolve_slug(&base_slug, url, output_dir);
-    let now_str = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let now_str = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let leaf_file = format!("{}.md", filename);
     let summary_field = if summary_text.is_empty() {
         None

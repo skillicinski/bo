@@ -45,7 +45,7 @@ pub fn seed(
             .join(&output_dir)
     };
 
-    let existing_model = match config::read_config(config_path) {
+    let (existing_model, existing_compile_model) = match config::read_config(config_path) {
         Ok(existing) => {
             if let Some(tree) = existing.tree {
                 return Ok(SeedResult {
@@ -54,9 +54,9 @@ pub fn seed(
                     tree_name: tree.name,
                 });
             }
-            existing.model
+            (existing.model, existing.compile_model)
         }
-        Err(ConfigError::NotFound) => None,
+        Err(ConfigError::NotFound) => (None, None),
         Err(error) => {
             return Err(SeedError::ConfigRead(format!(
                 "failed to read config: {}",
@@ -91,6 +91,7 @@ pub fn seed(
                 created_at: Some(created_at.clone()),
             }),
             model: existing_model,
+            compile_model: existing_compile_model,
         },
         config_path,
     )

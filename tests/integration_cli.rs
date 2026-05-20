@@ -514,7 +514,7 @@ fn config_get_unknown_key_exits_two_and_lists_valid_key() {
 }
 
 #[test]
-fn config_set_unknown_key_exits_two_and_lists_valid_key() {
+fn config_set_compile_model_succeeds() {
     let home = TempDir::new().unwrap();
 
     let out = bo(home.path())
@@ -522,10 +522,10 @@ fn config_set_unknown_key_exits_two_and_lists_valid_key() {
         .output()
         .unwrap();
 
-    assert_eq!(out.status.code(), Some(2));
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("compile_model"), "stderr: {stderr}");
-    assert!(stderr.contains("model"), "stderr: {stderr}");
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("compile_model"), "stdout: {stdout}");
+    assert!(stdout.contains("gpt-4.1-mini"), "stdout: {stdout}");
 }
 
 #[test]

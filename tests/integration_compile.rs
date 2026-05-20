@@ -98,6 +98,7 @@ fn make_config(output_dir: &std::path::Path) -> SeededConfig {
             created_at: None,
         },
         model: Some("gpt-4o-mini".to_string()), // cheaper model for tests
+        compile_model: None,
     }
 }
 

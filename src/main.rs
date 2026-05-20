@@ -1,7 +1,7 @@
 use bo::cli::collect::{
     self, BatchCollectResult, CollectError, CollectItemStatus, CollectOutput, CollectResult,
 };
-use bo::cli::compile::{self, BranchResult, CompileError, CompileResult};
+use bo::cli::compile::{self, CompileError, CompileOptions, CompileResult};
 use bo::cli::config as cli_config;
 use bo::cli::json::{self as json_output, JsonError, JsonWarning};
 use bo::cli::list::{self, ListOptions};
@@ -64,7 +64,11 @@ enum Commands {
         action: ConfigCommands,
     },
     /// Compile collected documents into a linked knowledge graph
-    Compile,
+    Compile {
+        /// Recompile the full corpus and allow complete branch graph rewrite
+        #[arg(long)]
+        all: bool,
+    },
     /// List collected leaves in the current tree
     List {
         /// Maximum number of leaves to show
@@ -301,7 +305,23 @@ fn show_error_code(error: &show::ShowError) -> &'static str {
 
 fn compile_json_error(error: &CompileError) -> JsonError {
     match error {
-        CompileError::ContextOverflow => JsonError::new("context_overflow", error.to_string()),
+        CompileError::ContextOverflow {
+            model,
+            estimated_tokens,
+            context_tokens,
+        } => JsonError::with_details(
+            "context_overflow",
+            error.to_string(),
+            json!({
+                "model": model,
+                "estimated_tokens": estimated_tokens,
+                "context_tokens": context_tokens,
+                "next_steps": [
+                    "bo config set compile_model gpt-4.1-mini",
+                    "bo config set compile_model gpt-4.1",
+                ],
+            }),
+        ),
         CompileError::Truncated => JsonError::new("truncated", error.to_string()),
         CompileError::ContentFilter => JsonError::new("content_filter", error.to_string()),
         CompileError::Llm(_) => JsonError::new("llm_error", error.to_string()),
@@ -420,9 +440,10 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
             }
             Err(error) => emit_cli_error("collect", json, error, stdout, stderr),
         },
-        Commands::Compile => match require_seeded_config()
-            .and_then(|cfg| compile::run_compile(&cfg).map_err(CliError::Compile))
-        {
+        Commands::Compile { all } => match require_seeded_config().and_then(|cfg| {
+            compile::run_compile_with_options(&cfg, CompileOptions { all })
+                .map_err(CliError::Compile)
+        }) {
             Ok(result) if json => {
                 let warnings = compile_warnings(&result);
                 emit_json_success("compile", &result, warnings, stdout)
@@ -931,40 +952,45 @@ fn render_compile_human<W: Write>(result: &CompileResult, stdout: &mut W) -> io:
         match result.reason.as_deref() {
             Some("empty_tree") => writeln!(stdout, "bo is empty!"),
             Some("single_leaf") => writeln!(stdout, "bo only has 1 leaf!"),
+            Some("no new leaves since last compile") => writeln!(stdout, "nothing new to compile"),
             _ => writeln!(stdout, "compiled: no work to do"),
         }?;
         return Ok(());
     }
 
-    render_compile_summary_human(
-        &result.branches,
-        result.leaves_updated,
-        &result.leaves_skipped,
-        stdout,
-    )
+    render_compile_summary_human(result, stdout)
 }
 
 fn render_compile_summary_human<W: Write>(
-    branches: &[BranchResult],
-    leaves_updated: usize,
-    leaves_skipped: &[String],
+    result: &CompileResult,
     stdout: &mut W,
 ) -> io::Result<()> {
-    if branches.is_empty() {
-        writeln!(stdout, "compiled: no branches found")?;
+    if let (Some(mode), Some(model)) = (&result.mode, &result.model) {
+        let ctx = result
+            .context_mode
+            .as_ref()
+            .map(|c| format!(", {c:?}"))
+            .unwrap_or_default();
+        writeln!(stdout, "compiled ({mode:?}{ctx}) using {model}")?;
+    } else {
+        writeln!(stdout, "compiled")?;
+    }
+
+    if result.branches.is_empty() {
+        writeln!(stdout, "  no branches found")?;
     } else {
         writeln!(
             stdout,
-            "compiled: {} {} across {} leaves",
-            branches.len(),
-            if branches.len() == 1 {
+            "  {} {} from {} processed leaves",
+            result.branches.len(),
+            if result.branches.len() == 1 {
                 "branch"
             } else {
                 "branches"
             },
-            leaves_updated
+            result.leaves_processed
         )?;
-        for branch in branches {
+        for branch in &result.branches {
             writeln!(
                 stdout,
                 "  ✓ {} ({} {})",
@@ -979,19 +1005,19 @@ fn render_compile_summary_human<W: Write>(
         }
     }
 
-    if !leaves_skipped.is_empty() {
+    if !result.leaves_skipped.is_empty() {
         writeln!(stdout)?;
         writeln!(
             stdout,
             "  ⚠ skipped {} {} (unparseable frontmatter):",
-            leaves_skipped.len(),
-            if leaves_skipped.len() == 1 {
+            result.leaves_skipped.len(),
+            if result.leaves_skipped.len() == 1 {
                 "leaf"
             } else {
                 "leaves"
             }
         )?;
-        for file in leaves_skipped {
+        for file in &result.leaves_skipped {
             writeln!(stdout, "    - {}", file)?;
         }
     }

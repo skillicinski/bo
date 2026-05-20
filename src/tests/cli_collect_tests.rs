@@ -1,7 +1,12 @@
 use super::*;
 use crate::domain::manifest;
 use std::fs;
+use std::path::Path;
 use tempfile::TempDir;
+
+fn collect_html_test(url: &str, html: &str, output_dir: &Path) -> Result<Document, CollectError> {
+    collect_html_with_summarizer(url, html, output_dir, |_, _| Ok("test summary".to_string()))
+}
 
 #[test]
 fn collect_input_expands_txt_url_list() {
@@ -156,7 +161,8 @@ fn unsupported_youtube_embed_rejected_without_writes() {
 fn ordinary_html_collection_writes_leaf_and_manifest() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
-    let document = collect_html("https://example.com/article", ARTICLE_HTML, dir.path()).unwrap();
+    let document =
+        collect_html_test("https://example.com/article", ARTICLE_HTML, dir.path()).unwrap();
 
     assert!(dir.path().join(&document.filename).exists());
     let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
@@ -220,13 +226,13 @@ fn collect_html_keeps_exact_match_duplicate_semantics_for_youtube_urls() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
 
-    collect_html(
+    collect_html_test(
         "https://www.youtube.com/watch?v=a1mhk7mAetk",
         ARTICLE_HTML,
         dir.path(),
     )
     .unwrap();
-    collect_html("https://youtu.be/a1mhk7mAetk", ARTICLE_HTML, dir.path()).unwrap();
+    collect_html_test("https://youtu.be/a1mhk7mAetk", ARTICLE_HTML, dir.path()).unwrap();
 
     let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.leaves.len(), 2);
@@ -343,7 +349,7 @@ fn assert_rejected_with(result: Result<Document, CollectError>, url: &str, reaso
 fn full_pipeline_happy_path() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
-    let page = collect_html("https://example.com/article", SAMPLE_HTML, dir.path()).unwrap();
+    let page = collect_html_test("https://example.com/article", SAMPLE_HTML, dir.path()).unwrap();
 
     assert!(dir.path().join(&page.filename).exists());
 
@@ -367,9 +373,9 @@ fn full_pipeline_happy_path() {
 fn duplicate_rejected() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
-    collect_html("https://example.com/article", SAMPLE_HTML, dir.path()).unwrap();
+    collect_html_test("https://example.com/article", SAMPLE_HTML, dir.path()).unwrap();
 
-    let result = collect_html("https://example.com/article", SAMPLE_HTML, dir.path());
+    let result = collect_html_test("https://example.com/article", SAMPLE_HTML, dir.path());
     assert!(result.is_err());
     assert!(result
         .unwrap_err()
@@ -385,8 +391,10 @@ fn slug_collision_disambiguated() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
 
-    let page1 = collect_html("https://example.com/intro1", COLLISION_HTML_1, dir.path()).unwrap();
-    let page2 = collect_html("https://example.com/intro2", COLLISION_HTML_2, dir.path()).unwrap();
+    let page1 =
+        collect_html_test("https://example.com/intro1", COLLISION_HTML_1, dir.path()).unwrap();
+    let page2 =
+        collect_html_test("https://example.com/intro2", COLLISION_HTML_2, dir.path()).unwrap();
 
     assert!(dir.path().join(&page1.filename).exists());
     assert!(dir.path().join(&page2.filename).exists());
@@ -410,7 +418,7 @@ fn empty_extraction_no_artifacts() {
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let empty_html = "<html><body></body></html>";
 
-    let result = collect_html("https://example.com/empty", empty_html, dir.path());
+    let result = collect_html_test("https://example.com/empty", empty_html, dir.path());
     assert!(result.is_err());
 
     assert_no_collection_artifacts(&dir);
@@ -422,7 +430,7 @@ fn redirect_stub_rejected_without_artifacts() {
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let url = "https://blog.rust-lang.org/2015/05/11/traits.html";
 
-    let result = collect_html(url, REDIRECT_STUB_HTML, dir.path());
+    let result = collect_html_test(url, REDIRECT_STUB_HTML, dir.path());
 
     assert_rejected_with(result, url, "redirect stub");
     assert_no_collection_artifacts(&dir);
@@ -434,7 +442,7 @@ fn x_js_shell_rejected_without_artifacts() {
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let url = "https://x.com/lifeof_jer/status/2048103471019434248";
 
-    let result = collect_html(url, X_JS_SHELL_HTML, dir.path());
+    let result = collect_html_test(url, X_JS_SHELL_HTML, dir.path());
 
     assert_rejected_with(result, url, "JS-rendered content");
     assert_no_collection_artifacts(&dir);
@@ -446,7 +454,7 @@ fn openreview_footer_only_rejected_without_artifacts() {
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let url = "https://openreview.net/forum?id=OAudWSf7aH";
 
-    let result = collect_html(url, OPENREVIEW_FOOTER_HTML, dir.path());
+    let result = collect_html_test(url, OPENREVIEW_FOOTER_HTML, dir.path());
 
     assert_rejected_with(result, url, "boilerplate-only content");
     assert_no_collection_artifacts(&dir);
@@ -458,7 +466,7 @@ fn cloudflare_block_rejected_without_artifacts() {
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let url = "https://medium.com/@loci.ai/deploying-vllm-on-ecs-with-ec2-82d58b482125";
 
-    let result = collect_html(url, CLOUDFLARE_BLOCK_HTML, dir.path());
+    let result = collect_html_test(url, CLOUDFLARE_BLOCK_HTML, dir.path());
 
     assert_rejected_with(result, url, "blocked by site");
     assert_no_collection_artifacts(&dir);
@@ -469,7 +477,7 @@ fn mdbook_page_with_bad_ui_title_and_substantive_body_is_accepted() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
 
-    let result = collect_html(
+    let result = collect_html_test(
         "https://doc.rust-lang.org/book/ch04-00-understanding-ownership.html",
         MDBOOK_WITH_BAD_UI_TITLE_HTML,
         dir.path(),
@@ -498,10 +506,10 @@ fn failed_url_can_be_resubmitted() {
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let empty_html = "<html><body></body></html>";
 
-    let result = collect_html("https://example.com/flaky", empty_html, dir.path());
+    let result = collect_html_test("https://example.com/flaky", empty_html, dir.path());
     assert!(result.is_err());
 
-    let result = collect_html("https://example.com/flaky", SAMPLE_HTML, dir.path());
+    let result = collect_html_test("https://example.com/flaky", SAMPLE_HTML, dir.path());
     assert!(result.is_ok());
 }
 
@@ -510,8 +518,8 @@ fn near_duplicate_urls_both_stored() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
 
-    collect_html("https://example.com/article", SAMPLE_HTML, dir.path()).unwrap();
-    collect_html(
+    collect_html_test("https://example.com/article", SAMPLE_HTML, dir.path()).unwrap();
+    collect_html_test(
         "https://example.com/article?ref=twitter",
         SAMPLE_HTML,
         dir.path(),

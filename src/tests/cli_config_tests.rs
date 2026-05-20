@@ -111,6 +111,19 @@ fn seeded_config() -> Config {
             created_at: Some("2026-05-12T00:00:00Z".to_string()),
         }),
         model: None,
+        compile_model: None,
+    }
+}
+
+fn seeded_config_with_models() -> Config {
+    Config {
+        tree: Some(TreeConfig {
+            output_dir: PathBuf::from("/tmp/tree"),
+            name: Some("tree".to_string()),
+            created_at: Some("2026-05-12T00:00:00Z".to_string()),
+        }),
+        model: Some("gpt-4o-mini".to_string()),
+        compile_model: Some("gpt-4.1-mini".to_string()),
     }
 }
 
@@ -135,9 +148,60 @@ fn set_creates_config() {
     let result = set("model", "gpt-4.1-mini", &path).unwrap();
 
     assert_eq!(result.action, "set");
+    assert_eq!(result.key, "model");
     assert_eq!(result.value, "gpt-4.1-mini");
     let loaded = engine_config::read_config(&path).unwrap();
     assert_eq!(loaded.model.as_deref(), Some("gpt-4.1-mini"));
+    assert!(loaded.compile_model.is_none());
+    assert!(loaded.tree.is_none());
+}
+
+#[test]
+fn get_compile_model_returns_fallback_model_when_unset() {
+    let dir = TempDir::new().unwrap();
+    let path = temp_config_path(&dir);
+    engine_config::write_config(
+        &Config {
+            tree: None,
+            model: Some("gpt-4o-mini".to_string()),
+            compile_model: None,
+        },
+        &path,
+    )
+    .unwrap();
+
+    let result = get("compile_model", &path).unwrap();
+
+    assert_eq!(result.action, "get");
+    assert_eq!(result.key, "compile_model");
+    assert_eq!(result.value, "gpt-4o-mini");
+}
+
+#[test]
+fn get_compile_model_returns_default_when_models_unset() {
+    let dir = TempDir::new().unwrap();
+    let path = temp_config_path(&dir);
+
+    let result = get("compile_model", &path).unwrap();
+
+    assert_eq!(result.key, "compile_model");
+    assert_eq!(result.value, "gpt-4o");
+    assert!(!path.exists());
+}
+
+#[test]
+fn set_compile_model_persists_only_compile_model() {
+    let dir = TempDir::new().unwrap();
+    let path = temp_config_path(&dir);
+
+    let result = set("compile_model", "gpt-4.1-mini", &path).unwrap();
+
+    assert_eq!(result.action, "set");
+    assert_eq!(result.key, "compile_model");
+    assert_eq!(result.value, "gpt-4.1-mini");
+    let loaded = engine_config::read_config(&path).unwrap();
+    assert!(loaded.model.is_none());
+    assert_eq!(loaded.compile_model.as_deref(), Some("gpt-4.1-mini"));
     assert!(loaded.tree.is_none());
 }
 
@@ -168,6 +232,22 @@ fn set_preserves_tree_metadata() {
 }
 
 #[test]
+fn set_model_preserves_compile_model_and_tree_metadata() {
+    let dir = TempDir::new().unwrap();
+    let path = temp_config_path(&dir);
+    engine_config::write_config(&seeded_config_with_models(), &path).unwrap();
+
+    set("model", "gpt-4.1", &path).unwrap();
+
+    let loaded = engine_config::read_config(&path).unwrap();
+    assert_eq!(loaded.model.as_deref(), Some("gpt-4.1"));
+    assert_eq!(loaded.compile_model.as_deref(), Some("gpt-4.1-mini"));
+    let tree = loaded.tree.unwrap();
+    assert_eq!(tree.output_dir, PathBuf::from("/tmp/tree"));
+    assert_eq!(tree.name.as_deref(), Some("tree"));
+}
+
+#[test]
 fn unknown_get_key_is_usage_error() {
     let dir = TempDir::new().unwrap();
     let path = temp_config_path(&dir);
@@ -176,7 +256,7 @@ fn unknown_get_key_is_usage_error() {
 
     assert_eq!(err.exit_code(), 2);
     assert!(matches!(err, ConfigCommandError::UnknownKey { .. }));
-    assert_eq!(err.valid_keys().unwrap(), &["model"]);
+    assert_eq!(err.valid_keys().unwrap(), &["model", "compile_model"]);
 }
 
 #[test]
@@ -196,6 +276,18 @@ fn unsupported_model_is_usage_error() {
     let path = temp_config_path(&dir);
 
     let err = set("model", "unknown-model", &path).unwrap_err();
+
+    assert_eq!(err.exit_code(), 2);
+    assert!(matches!(err, ConfigCommandError::UnsupportedModel { .. }));
+    assert!(err.supported_models().unwrap().contains(&"gpt-4.1-mini"));
+}
+
+#[test]
+fn unsupported_compile_model_is_usage_error() {
+    let dir = TempDir::new().unwrap();
+    let path = temp_config_path(&dir);
+
+    let err = set("compile_model", "unknown-model", &path).unwrap_err();
 
     assert_eq!(err.exit_code(), 2);
     assert!(matches!(err, ConfigCommandError::UnsupportedModel { .. }));
