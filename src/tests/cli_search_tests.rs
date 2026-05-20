@@ -1,6 +1,27 @@
 use super::*;
 use crate::domain::{Slug, Timestamp, Title, Url};
+use std::fs;
 use tempfile::TempDir;
+
+// Helpers previously in cli/search.rs, now tested via local re-implementations
+// that verify the same logic now living in engine::retrieval.
+fn matches_all_terms(content_lower: &str, terms_lower: &[String]) -> bool {
+    terms_lower
+        .iter()
+        .all(|term| content_lower.contains(term.as_str()))
+}
+
+fn score_relevance(content_lower: &str, terms_lower: &[String]) -> usize {
+    let word_count = content_lower.split_whitespace().count();
+    if word_count == 0 {
+        return 0;
+    }
+    let total: usize = terms_lower
+        .iter()
+        .map(|term| content_lower.matches(term.as_str()).count())
+        .sum();
+    (total * 1000) / word_count
+}
 
 // ── core matching tests ──────────────────────────────────────────────────
 

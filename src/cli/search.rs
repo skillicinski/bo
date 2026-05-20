@@ -1,14 +1,13 @@
 // bo search — deterministic lexical search over collected leaves.
 
 use crate::cli::json::JsonError;
-use crate::domain::frontmatter;
 use crate::domain::manifest;
 use crate::domain::tree::Tree;
+use crate::engine::retrieval::{self, ScoringPolicy};
 use chrono::{DateTime, FixedOffset};
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::fmt;
-use std::fs;
 use std::path::Path;
 
 // ── constants ────────────────────────────────────────────────────────────────
@@ -108,31 +107,6 @@ struct ScoredLeaf {
     score: usize,
     collected_at: Option<String>,
     index_position: usize,
-}
-
-// ── core matching ────────────────────────────────────────────────────────────
-
-/// Returns true if every term appears as a substring of content.
-/// Both content and terms must be pre-lowercased.
-fn matches_all_terms(content_lower: &str, terms_lower: &[String]) -> bool {
-    terms_lower
-        .iter()
-        .all(|term| content_lower.contains(term.as_str()))
-}
-
-/// Per-mille density normalized by word count: (sum of occurrences * 1000) / word_count.
-/// Both content and terms must be pre-lowercased.
-/// Returns 0 if content has no words.
-fn score_relevance(content_lower: &str, terms_lower: &[String]) -> usize {
-    let word_count = content_lower.split_whitespace().count();
-    if word_count == 0 {
-        return 0;
-    }
-    let total: usize = terms_lower
-        .iter()
-        .map(|term| content_lower.matches(term.as_str()).count())
-        .sum();
-    (total * 1000) / word_count
 }
 
 // ── snippet extraction ───────────────────────────────────────────────────────
@@ -257,49 +231,18 @@ pub fn search_leaves(
         Err(e) => return Err(SearchError::Manifest(e)),
     };
 
-    let mut scored: Vec<ScoredLeaf> = Vec::new();
-
-    for (index_position, leaf) in m.leaves.iter().enumerate() {
-        let path = tree_dir.join(&leaf.file);
-        let content = match fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue, // skip missing/unreadable files
-        };
-
-        let content_lower = content.to_lowercase();
-        if !matches_all_terms(&content_lower, &query.terms) {
-            continue;
-        }
-
-        let score = score_relevance(&content_lower, &query.terms);
-
-        // Use frontmatter::parse only to peel off the body; fall back to the
-        // full content if the .md is malformed. Title and collected_at come
-        // from the canonical manifest record, not the frontmatter.
-        let body = match frontmatter::parse(&content) {
-            Ok((_, body)) => body,
-            Err(_) => content.clone(),
-        };
-        let title = if leaf.title.as_str().trim().is_empty() {
-            leaf.file.clone()
-        } else {
-            leaf.title.as_str().to_string()
-        };
-        let collected_at = if leaf.collected_at.to_rfc3339_millis().trim().is_empty() {
-            None
-        } else {
-            Some(leaf.collected_at.to_rfc3339_millis())
-        };
-
-        scored.push(ScoredLeaf {
-            file: leaf.file.clone(),
-            title,
-            body,
-            score,
-            collected_at,
-            index_position,
-        });
-    }
+    let mut scored: Vec<ScoredLeaf> =
+        retrieval::score_corpus(tree_dir, &m, &query.terms, ScoringPolicy::AllTermsRequired)
+            .into_iter()
+            .map(|s| ScoredLeaf {
+                file: s.file,
+                title: s.title,
+                body: s.body,
+                score: s.score as usize,
+                collected_at: s.collected_at,
+                index_position: s.index_position,
+            })
+            .collect();
 
     let total_results = scored.len();
 

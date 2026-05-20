@@ -2,20 +2,20 @@
 //
 // Pipeline: extract terms → retrieve leaves → assemble context → synthesize → format
 //
-// This module is self-contained and does not share retrieval logic with
-// `cli::search` (different semantics: OR vs AND, different purpose).
+// Retrieval is shared with `cli::search` via `engine::retrieval::score_corpus`.
+// This module adds query-specific post-processing: diagnostics, relevance
+// validation, context assembly, and LLM synthesis.
 
 use crate::cli::json::JsonError;
-use crate::domain::frontmatter;
 use crate::engine::llm::{
     complete_with_policy, context_window_tokens, FinishReason, LlmCallPolicy, LlmError,
     LlmProvider, Message, OpenAiProvider,
 };
+use crate::engine::retrieval::{self, ScoringPolicy};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashSet;
 use std::fmt;
-use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
@@ -28,7 +28,6 @@ const QUERY_PROMPT_OVERHEAD_TOKENS: usize = 4096;
 const MIN_QUERY_SOURCE_WORDS: usize = 1000;
 const TOKENS_TO_WORDS_NUMERATOR: usize = 3;
 const TOKENS_TO_WORDS_DENOMINATOR: usize = 4;
-const SUMMARY_FALLBACK_WORDS: usize = 200;
 const MIN_SINGLE_TERM_DENSITY: f64 = 20.0;
 const MIN_MULTI_TERM_DENSITY: f64 = 8.0;
 const MOSTLY_GENERIC_RATIO_NUMERATOR: usize = 2;
@@ -500,65 +499,28 @@ fn retrieve_leaves(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedLea
         return Err(QueryError::EmptyTree);
     }
 
-    let mut scored: Vec<RetrievedLeaf> = Vec::new();
+    let corpus = retrieval::score_corpus(tree_dir, &manifest, terms, ScoringPolicy::AnyTermCounts);
 
-    for leaf in &manifest.leaves {
-        let path = tree_dir.join(&leaf.file);
-        let content = match fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue, // skip unreadable leaves
-        };
-
-        let (_mapping, body) = match frontmatter::parse(&content) {
-            Ok(v) => v,
-            Err(_) => continue, // skip malformed leaves
-        };
-
-        // Title, url, summary all come from the canonical manifest record.
-        // Fall back to body-derived summary when the manifest didn't capture one.
-        let title = leaf.title.as_str().to_string();
-        let url = leaf.url.as_str().to_string();
-        let summary = leaf
-            .summary
-            .clone()
-            .unwrap_or_else(|| summary_fallback(&body));
-
-        let slug = leaf.slug.as_str().to_string();
-
-        // Score: OR semantics — count occurrences of each term, normalize by word count
-        let searchable = format!("{} {} {}", title, summary, body).to_lowercase();
-        let word_count = searchable.split_whitespace().count();
-        if word_count == 0 {
-            continue;
-        }
-
-        let total_hits: usize = terms
-            .iter()
-            .map(|term| searchable.matches(term.as_str()).count())
-            .sum();
-
-        if total_hits == 0 {
-            continue;
-        }
-
-        let score = (total_hits as f64 * 1000.0) / word_count as f64;
-        let diagnostics = compute_retrieval_diagnostics(&title, &summary, &body, terms);
-
-        scored.push(RetrievedLeaf {
-            slug,
-            title,
-            url,
-            file: leaf.file.clone(),
-            summary,
-            body,
-            score,
-            diagnostics,
-        });
-    }
-
-    if scored.is_empty() {
+    if corpus.is_empty() {
         return Err(QueryError::NoResults);
     }
+
+    let mut scored: Vec<RetrievedLeaf> = corpus
+        .into_iter()
+        .map(|s| {
+            let diagnostics = compute_retrieval_diagnostics(&s.title, &s.summary, &s.body, terms);
+            RetrievedLeaf {
+                slug: s.slug,
+                title: s.title,
+                url: s.url,
+                file: s.file,
+                summary: s.summary,
+                body: s.body,
+                score: s.score,
+                diagnostics,
+            }
+        })
+        .collect();
 
     // Sort by score descending
     scored.sort_by(|a, b| {
@@ -1069,16 +1031,6 @@ pub fn render_error_human<E: std::io::Write>(
     }
 
     exit_code
-}
-
-/// Generate a summary fallback from the first ~200 words of body.
-fn summary_fallback(body: &str) -> String {
-    let words: Vec<&str> = body.split_whitespace().collect();
-    if words.len() <= SUMMARY_FALLBACK_WORDS {
-        words.join(" ")
-    } else {
-        words[..SUMMARY_FALLBACK_WORDS].join(" ")
-    }
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────
