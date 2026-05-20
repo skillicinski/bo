@@ -3,9 +3,11 @@
 // No agent or tool-calling concepts. This module provides a trait for sending
 // messages to an LLM and receiving structured responses.
 
+pub mod model;
 pub mod models;
 pub mod providers;
 
+pub use model::{Model, UnsupportedModel};
 pub use models::context_window_tokens;
 pub use providers::OpenAiProvider;
 

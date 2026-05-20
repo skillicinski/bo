@@ -307,11 +307,9 @@ fn read_or_reconstruct_returns_existing_manifest_when_present() {
     let original = sample_manifest();
     write(&tree.manifest_path(), &original).unwrap();
 
-    let mut warner = Vec::new();
-    let loaded = read_or_reconstruct_into(&tree, &mut warner).unwrap();
+    let loaded = read_or_reconstruct(&tree).unwrap();
 
     assert_eq!(loaded, original);
-    assert!(warner.is_empty(), "no warning when manifest exists");
 }
 
 #[test]
@@ -320,12 +318,10 @@ fn read_or_reconstruct_does_not_rebuild_from_secondary_when_manifest_absent() {
     write_secondary_tree(dir.path());
     let tree = fixture_tree(&dir);
 
-    let mut warner = Vec::new();
-    let err = read_or_reconstruct_into(&tree, &mut warner).unwrap_err();
+    let err = read_or_reconstruct(&tree).unwrap_err();
 
     assert!(matches!(err, ManifestError::TreeNotInitialized));
     assert!(!tree.manifest_path().exists());
-    assert!(warner.is_empty());
 }
 
 #[test]
@@ -335,12 +331,11 @@ fn read_or_reconstruct_does_not_persist_when_manifest_absent() {
     let tree = fixture_tree(&dir);
 
     assert!(!tree.manifest_path().exists());
-    let mut warner = Vec::new();
-    let err = read_or_reconstruct_into(&tree, &mut warner).unwrap_err();
+
+    let err = read_or_reconstruct(&tree).unwrap_err();
 
     assert!(matches!(err, ManifestError::TreeNotInitialized));
     assert!(!tree.manifest_path().exists());
-    assert!(warner.is_empty());
 }
 
 #[test]
@@ -349,8 +344,7 @@ fn read_or_reconstruct_returns_tree_not_initialized_when_secondary_also_empty() 
     let tree = fixture_tree(&dir);
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
 
-    let mut warner = Vec::new();
-    let err = read_or_reconstruct_into(&tree, &mut warner).unwrap_err();
+    let err = read_or_reconstruct(&tree).unwrap_err();
     assert!(
         matches!(err, ManifestError::TreeNotInitialized),
         "got: {err}"
@@ -365,13 +359,8 @@ fn read_or_reconstruct_propagates_parse_error_without_reconstructing() {
     fs::create_dir_all(tree.manifest_path().parent().unwrap()).unwrap();
     fs::write(tree.manifest_path(), "{not valid").unwrap();
 
-    let mut warner = Vec::new();
-    let err = read_or_reconstruct_into(&tree, &mut warner).unwrap_err();
+    let err = read_or_reconstruct(&tree).unwrap_err();
     assert!(matches!(err, ManifestError::Parse(_)), "got: {err}");
-    assert!(
-        warner.is_empty(),
-        "reconstruction warning must NOT fire on parse error"
-    );
     // The corrupt file should still be on disk — we did not silently overwrite.
     let raw = fs::read_to_string(tree.manifest_path()).unwrap();
     assert_eq!(raw, "{not valid");
@@ -387,10 +376,8 @@ fn missing_manifest_does_not_use_tree_name_fallbacks() {
         created_at: Some("2026-05-19T13:00:00Z".to_string()),
     });
 
-    let mut warner = Vec::new();
-    let err = read_or_reconstruct_into(&tree, &mut warner).unwrap_err();
+    let err = read_or_reconstruct(&tree).unwrap_err();
     assert!(matches!(err, ManifestError::TreeNotInitialized));
-    assert!(warner.is_empty());
 }
 
 #[test]
@@ -398,8 +385,8 @@ fn missing_manifest_does_not_round_trip_secondary_store() {
     let dir = TempDir::new().unwrap();
     write_secondary_tree(dir.path());
     let tree = fixture_tree(&dir);
-    let mut warner = Vec::new();
-    let err = read_or_reconstruct_into(&tree, &mut warner).unwrap_err();
+
+    let err = read_or_reconstruct(&tree).unwrap_err();
     assert!(matches!(err, ManifestError::TreeNotInitialized));
     assert!(read(&tree.manifest_path()).is_err());
 }

@@ -8,8 +8,7 @@ use crate::domain::{branch, manifest, tree::Tree, Timestamp};
 use crate::engine::auth::AuthResolutionError;
 use crate::engine::config::SeededConfig;
 use crate::engine::llm::{
-    complete_with_policy, context_window_tokens, FinishReason, LlmCallPolicy, LlmError,
-    LlmProvider, Message,
+    complete_with_policy, FinishReason, LlmCallPolicy, LlmError, LlmProvider, Message, Model,
 };
 use crate::engine::pending::{self, CompileMode, OpKind, PendingWrite};
 
@@ -70,16 +69,10 @@ pub(super) fn estimate_compile_prompt_tokens(prompt_bytes: usize) -> usize {
 }
 
 pub(super) fn ensure_compile_context_fits(
-    model: &str,
+    model: &Model,
     estimated_tokens: usize,
 ) -> Result<(), CompileError> {
-    let Some(context_tokens) = context_window_tokens(model) else {
-        return Err(CompileError::ContextOverflow {
-            model: model.to_string(),
-            estimated_tokens: Some(estimated_tokens),
-            context_tokens: None,
-        });
-    };
+    let context_tokens = model.context_tokens();
 
     if estimated_tokens > context_tokens {
         return Err(CompileError::ContextOverflow {
@@ -93,7 +86,7 @@ pub(super) fn ensure_compile_context_fits(
 }
 
 pub(super) fn choose_context_mode(
-    model: &str,
+    model: &Model,
     run_mode: CompileRunMode,
     full_prompt_tokens: usize,
     incremental_prompt_tokens: usize,
@@ -117,7 +110,7 @@ pub(super) fn choose_context_mode(
 
 pub(super) fn call_llm_blocking(
     provider: &dyn LlmProvider,
-    model: &str,
+    model: &Model,
     user_message: &str,
     schema: &Value,
 ) -> Result<String, CompileError> {
@@ -128,7 +121,7 @@ pub(super) fn call_llm_blocking(
 
     rt.block_on(call_llm_with_provider(
         provider,
-        model,
+        model.as_str(),
         user_message,
         schema,
         COMPILE_LLM_POLICY,

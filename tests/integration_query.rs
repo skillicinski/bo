@@ -6,10 +6,14 @@
 use async_trait::async_trait;
 use bo::cli::query;
 use bo::domain::{Timestamp, Title, Url};
-use bo::engine::llm::{LlmError, LlmProvider, LlmResponse, Message};
+use bo::engine::llm::{LlmError, LlmProvider, LlmResponse, Message, Model};
 use serde_json::Value;
 use std::fs;
 use tempfile::TempDir;
+
+fn test_model() -> Model {
+    Model::parse("gpt-4o").unwrap()
+}
 
 // ── mock provider ────────────────────────────────────────────────────────────
 
@@ -231,7 +235,7 @@ fn full_pipeline_with_mock_provider() {
         dir.path(),
         "how does Rust handle memory safety?",
         &provider,
-        "gpt-4o",
+        &test_model(),
     )
     .unwrap();
 
@@ -269,7 +273,7 @@ fn json_output_is_schema_conformant() {
         dir.path(),
         "what is ownership in Rust?",
         &provider,
-        "gpt-4o",
+        &test_model(),
     )
     .unwrap();
 
@@ -303,7 +307,7 @@ fn no_relevant_sources_returns_error() {
         dir.path(),
         "quantum computing entanglement",
         &provider,
-        "gpt-4o",
+        &test_model(),
     )
     .unwrap_err();
 
@@ -317,7 +321,8 @@ fn all_stop_words_returns_no_terms_error() {
 
     let provider = MockProvider::new("unused", &[]);
 
-    let err = query::run_with_provider(dir.path(), "what is it?", &provider, "gpt-4o").unwrap_err();
+    let err =
+        query::run_with_provider(dir.path(), "what is it?", &provider, &test_model()).unwrap_err();
 
     assert!(matches!(err, query::QueryError::NoTerms));
     assert_eq!(err.exit_code(), 2);
@@ -347,7 +352,7 @@ fn single_leaf_tree_works() {
 
     let provider = MockProvider::new("Rust focuses on safety [[only-leaf]].", &["only-leaf"]);
 
-    let result = query::run_with_provider(tree, "what is Rust?", &provider, "gpt-4o").unwrap();
+    let result = query::run_with_provider(tree, "what is Rust?", &provider, &test_model()).unwrap();
 
     assert_eq!(result.citations.len(), 1);
     assert_eq!(result.citations[0].slug.as_str(), "only-leaf");
@@ -365,7 +370,8 @@ fn leaf_without_summary_still_retrieved() {
     );
 
     let result =
-        query::run_with_provider(dir.path(), "explain Rust traits", &provider, "gpt-4o").unwrap();
+        query::run_with_provider(dir.path(), "explain Rust traits", &provider, &test_model())
+            .unwrap();
 
     assert_eq!(result.citations.len(), 1);
     assert_eq!(result.citations[0].slug.as_str(), "rust-traits");
@@ -379,8 +385,13 @@ fn zero_citations_returns_insufficient_sources() {
     let provider = MockProvider::new("The PMNS matrix describes neutrino mixing parameters.", &[]);
 
     // "rust ownership" will match leaves, but provider returns zero citations
-    let err = query::run_with_provider(dir.path(), "what is Rust ownership?", &provider, "gpt-4o")
-        .unwrap_err();
+    let err = query::run_with_provider(
+        dir.path(),
+        "what is Rust ownership?",
+        &provider,
+        &test_model(),
+    )
+    .unwrap_err();
 
     assert!(matches!(err, query::QueryError::InsufficientSources { .. }));
     assert_eq!(err.exit_code(), 1);
@@ -401,7 +412,7 @@ fn live_api_query() {
         dir.path(),
         "how does Rust ensure memory safety without a garbage collector?",
         &api_key,
-        "gpt-4o",
+        &test_model(),
     )
     .unwrap();
 

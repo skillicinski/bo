@@ -222,14 +222,6 @@ pub fn read_or_reconstruct(tree: &Tree) -> Result<Manifest, ManifestError> {
     read(&tree.manifest_path())
 }
 
-#[cfg(test)]
-pub(crate) fn read_or_reconstruct_into<W: Write>(
-    tree: &Tree,
-    _warner: &mut W,
-) -> Result<Manifest, ManifestError> {
-    read(&tree.manifest_path())
-}
-
 // ── internals ─────────────────────────────────────────────────────────────────
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {

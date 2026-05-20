@@ -673,11 +673,11 @@ fn execute_collect(inputs: Vec<String>) -> Result<CollectOutput, CliError> {
     let cfg = require_seeded_config()?;
     let output_dir = cfg.tree.output_dir.clone();
     let collect_dir = output_dir.clone();
-    let model = cfg.effective_model().to_string();
+    let model = cfg.effective_model();
 
     collect::collect_inputs_with_collector(inputs, &output_dir, |url| {
         eprintln!("fetching {}...", url);
-        collect::collect_url_with_model(url, &collect_dir, &model)
+        collect::collect_url_with_model(url, &collect_dir, model.as_str())
     })
     .map_err(CliError::Collect)
 }
@@ -747,7 +747,7 @@ fn execute_query_with_provider_resolver<F>(
 where
     F: FnOnce() -> Result<Box<dyn LlmProvider>, query::QueryError>,
 {
-    let model = cfg.effective_model().to_string();
+    let model = cfg.effective_model();
     let prepared = query::prepare(&cfg.tree.output_dir, question, &model)?;
     let provider = resolve_provider()?;
     query::run_prepared_with_provider(prepared, provider.as_ref())

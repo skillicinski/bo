@@ -8,8 +8,8 @@
 
 use crate::cli::json::JsonError;
 use crate::engine::llm::{
-    complete_with_policy, context_window_tokens, FinishReason, LlmCallPolicy, LlmError,
-    LlmProvider, Message, OpenAiProvider,
+    complete_with_policy, FinishReason, LlmCallPolicy, LlmError, LlmProvider, Message, Model,
+    OpenAiProvider,
 };
 use crate::engine::retrieval::{self, ScoringPolicy};
 use serde::{Deserialize, Serialize};
@@ -92,8 +92,6 @@ pub enum QueryError {
     EmptyTree,
     /// Index read or file I/O error
     Io(String),
-    /// Configured query model has no known context window
-    UnknownModelContext { model: String },
     /// Known model has too little context after reserved prompt/completion budget
     ContextBudgetExhausted {
         model: String,
@@ -128,11 +126,6 @@ impl fmt::Display for QueryError {
             QueryError::NoResults => write!(f, "no relevant sources found in tree"),
             QueryError::EmptyTree => write!(f, "no sources collected yet"),
             QueryError::Io(msg) => write!(f, "{}", msg),
-            QueryError::UnknownModelContext { model } => write!(
-                f,
-                "unknown context window for model '{}' — choose a known model or add its context window",
-                model
-            ),
             QueryError::ContextBudgetExhausted {
                 model,
                 context_tokens,
@@ -187,7 +180,6 @@ impl QueryError {
             QueryError::NoResults => "no_results",
             QueryError::EmptyTree => "empty_tree",
             QueryError::Io(_) => "io_error",
-            QueryError::UnknownModelContext { .. } => "unknown_model_context",
             QueryError::ContextBudgetExhausted { .. } => "context_budget_exhausted",
             QueryError::Truncated | QueryError::ContentFilter => "llm_error",
             QueryError::Llm(_) => "llm_error",
@@ -638,14 +630,9 @@ fn is_strong_relevance_match(leaf: &RetrievedLeaf, terms: &[String]) -> bool {
 
 // ── context assembly ─────────────────────────────────────────────────────────
 
-fn compute_query_context_budget(model: &str) -> Result<QueryContextBudget, QueryError> {
-    let Some(context_tokens) = context_window_tokens(model) else {
-        return Err(QueryError::UnknownModelContext {
-            model: model.to_string(),
-        });
-    };
-
-    compute_query_context_budget_from_tokens(model, context_tokens)
+fn compute_query_context_budget(model: &Model) -> Result<QueryContextBudget, QueryError> {
+    let context_tokens = model.context_tokens();
+    compute_query_context_budget_from_tokens(model.as_str(), context_tokens)
 }
 
 fn compute_query_context_budget_from_tokens(
@@ -924,7 +911,7 @@ pub fn run(
     tree_dir: &Path,
     question: &str,
     api_key: &str,
-    model: &str,
+    model: &Model,
 ) -> Result<QueryResult, QueryError> {
     let prepared = prepare(tree_dir, question, model)?;
     let provider = OpenAiProvider::new(api_key);
@@ -932,7 +919,11 @@ pub fn run(
 }
 
 /// Run query preflight up to, but not including, provider-backed synthesis.
-pub fn prepare(tree_dir: &Path, question: &str, model: &str) -> Result<PreparedQuery, QueryError> {
+pub fn prepare(
+    tree_dir: &Path,
+    question: &str,
+    model: &Model,
+) -> Result<PreparedQuery, QueryError> {
     let terms = extract_terms(question)?;
     let budget = compute_query_context_budget(model)?;
 
@@ -964,7 +955,7 @@ pub fn run_with_provider(
     tree_dir: &Path,
     question: &str,
     provider: &dyn LlmProvider,
-    model: &str,
+    model: &Model,
 ) -> Result<QueryResult, QueryError> {
     run_with_provider_and_policy(tree_dir, question, provider, model, QUERY_LLM_POLICY)
 }
@@ -973,7 +964,7 @@ fn run_with_provider_and_policy(
     tree_dir: &Path,
     question: &str,
     provider: &dyn LlmProvider,
-    model: &str,
+    model: &Model,
     policy: LlmCallPolicy,
 ) -> Result<QueryResult, QueryError> {
     let prepared = prepare(tree_dir, question, model)?;

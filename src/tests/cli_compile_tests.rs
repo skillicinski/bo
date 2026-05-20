@@ -274,7 +274,7 @@ fn first_compile_creates_branches_and_reports_incremental_mode() {
         &cfg,
         CompileOptions::default(),
         &provider,
-        cfg.effective_compile_model(),
+        &cfg.effective_compile_model(),
     )
     .unwrap();
 
@@ -319,7 +319,7 @@ fn no_op_when_no_new_leaves_and_no_stale_branches() {
         &cfg,
         CompileOptions::default(),
         &provider,
-        cfg.effective_compile_model(),
+        &cfg.effective_compile_model(),
     )
     .unwrap();
 
@@ -360,7 +360,7 @@ fn compile_uses_effective_compile_model() {
         &cfg,
         CompileOptions::default(),
         &provider,
-        cfg.effective_compile_model(),
+        &cfg.effective_compile_model(),
     )
     .unwrap();
 
@@ -401,7 +401,7 @@ fn full_mode_deletes_omitted_branch_files() {
         &cfg,
         CompileOptions { all: true },
         &provider,
-        cfg.effective_compile_model(),
+        &cfg.effective_compile_model(),
     )
     .unwrap();
 
@@ -453,7 +453,7 @@ fn incremental_compile_preserves_existing_branches() {
         &cfg,
         CompileOptions::default(),
         &provider,
-        cfg.effective_compile_model(),
+        &cfg.effective_compile_model(),
     )
     .unwrap();
 
@@ -525,7 +525,7 @@ fn deleted_leaf_rebuilds_stale_branch() {
         &cfg,
         CompileOptions::default(),
         &provider,
-        cfg.effective_compile_model(),
+        &cfg.effective_compile_model(),
     )
     .unwrap();
 
@@ -585,7 +585,7 @@ fn stale_branch_below_threshold_removed() {
         &cfg,
         CompileOptions::default(),
         &provider,
-        cfg.effective_compile_model(),
+        &cfg.effective_compile_model(),
     )
     .unwrap();
 

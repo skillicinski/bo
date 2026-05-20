@@ -17,7 +17,7 @@ use crate::domain::manifest;
 use crate::domain::tree::Tree;
 use crate::engine::auth;
 use crate::engine::config::SeededConfig;
-use crate::engine::llm::{LlmCallPolicy, LlmProvider, OpenAiProvider};
+use crate::engine::llm::{LlmCallPolicy, LlmProvider, Model, OpenAiProvider};
 use crate::engine::pending;
 
 mod execute;
@@ -178,7 +178,7 @@ impl CompileResult {
         summary: CompileSummary,
         mode: CompileRunMode,
         context_mode: CompileContextMode,
-        model: &str,
+        model: &Model,
     ) -> Self {
         Self {
             status: "compiled".to_string(),
@@ -272,7 +272,7 @@ pub fn run_compile_with_options(
         cfg,
         options,
         &provider,
-        cfg.effective_compile_model(),
+        &cfg.effective_compile_model(),
         &compile_started_at,
     )
 }
@@ -281,7 +281,7 @@ pub fn run_compile_with_provider(
     cfg: &SeededConfig,
     options: CompileOptions,
     provider: &dyn LlmProvider,
-    model: &str,
+    model: &Model,
 ) -> Result<CompileResult, CompileError> {
     let compile_started_at = execute::compile_timestamp_now();
     run_compile_with_provider_started_at(cfg, options, provider, model, &compile_started_at)
@@ -291,7 +291,7 @@ fn run_compile_with_provider_started_at(
     cfg: &SeededConfig,
     options: CompileOptions,
     provider: &dyn LlmProvider,
-    model: &str,
+    model: &Model,
     compile_started_at: &crate::domain::Timestamp,
 ) -> Result<CompileResult, CompileError> {
     let tree = Tree::from_config(&cfg.tree);

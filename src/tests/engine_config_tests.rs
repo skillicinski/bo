@@ -138,8 +138,8 @@ fn model_absent_uses_default() {
     let loaded = read_config(&path).unwrap();
     assert!(loaded.model.is_none());
     assert!(loaded.compile_model.is_none());
-    assert_eq!(loaded.effective_model(), DEFAULT_MODEL);
-    assert_eq!(loaded.effective_compile_model(), DEFAULT_MODEL);
+    assert_eq!(loaded.effective_model(), "gpt-4o");
+    assert_eq!(loaded.effective_compile_model(), "gpt-4o");
 }
 
 #[test]
@@ -161,7 +161,7 @@ fn compile_model_absent_and_model_absent_falls_back_to_default() {
         compile_model: None,
     };
 
-    assert_eq!(cfg.effective_compile_model(), DEFAULT_MODEL);
+    assert_eq!(cfg.effective_compile_model(), "gpt-4o");
 }
 
 #[test]
@@ -234,8 +234,8 @@ fn seeded_config_uses_default_model_when_absent() {
 
     let seeded = cfg.into_seeded().unwrap();
 
-    assert_eq!(seeded.effective_model(), DEFAULT_MODEL);
-    assert_eq!(seeded.effective_compile_model(), DEFAULT_MODEL);
+    assert_eq!(seeded.effective_model(), "gpt-4o");
+    assert_eq!(seeded.effective_compile_model(), "gpt-4o");
 }
 
 #[test]

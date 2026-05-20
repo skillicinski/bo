@@ -21,7 +21,7 @@
 // `{ "model": "gpt-4.1-mini" }`.
 
 use crate::domain::tree::TreeConfig;
-use crate::engine::llm::models::DEFAULT_MODEL;
+use crate::engine::llm::model::Model;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::io;
@@ -45,15 +45,19 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn effective_model(&self) -> &str {
-        self.model.as_deref().unwrap_or(DEFAULT_MODEL)
+    pub fn effective_model(&self) -> Model {
+        self.model
+            .as_deref()
+            .and_then(|s| Model::parse(s).ok())
+            .unwrap_or_else(Model::default_model)
     }
 
-    pub fn effective_compile_model(&self) -> &str {
+    pub fn effective_compile_model(&self) -> Model {
         self.compile_model
             .as_deref()
             .or(self.model.as_deref())
-            .unwrap_or(DEFAULT_MODEL)
+            .and_then(|s| Model::parse(s).ok())
+            .unwrap_or_else(Model::default_model)
     }
 
     pub fn into_seeded(self) -> Option<SeededConfig> {
@@ -73,15 +77,19 @@ pub struct SeededConfig {
 }
 
 impl SeededConfig {
-    pub fn effective_model(&self) -> &str {
-        self.model.as_deref().unwrap_or(DEFAULT_MODEL)
+    pub fn effective_model(&self) -> Model {
+        self.model
+            .as_deref()
+            .and_then(|s| Model::parse(s).ok())
+            .unwrap_or_else(Model::default_model)
     }
 
-    pub fn effective_compile_model(&self) -> &str {
+    pub fn effective_compile_model(&self) -> Model {
         self.compile_model
             .as_deref()
             .or(self.model.as_deref())
-            .unwrap_or(DEFAULT_MODEL)
+            .and_then(|s| Model::parse(s).ok())
+            .unwrap_or_else(Model::default_model)
     }
 }
 

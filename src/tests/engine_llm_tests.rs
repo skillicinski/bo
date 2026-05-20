@@ -106,7 +106,7 @@ impl LlmProvider for HangingProvider {
     }
 }
 
-fn test_policy(max_attempts: usize) -> LlmCallPolicy {
+fn short_retry_policy(max_attempts: usize) -> LlmCallPolicy {
     LlmCallPolicy {
         timeout: Duration::from_millis(20),
         max_attempts,
@@ -143,7 +143,7 @@ fn model_catalog_rejects_unsupported_models() {
 async fn complete_with_policy_succeeds_after_one_transient_failure() {
     let provider = TransientThenSuccessProvider::new(1);
 
-    let response = complete_with_policy(&provider, &[], "gpt-4o", 10, None, test_policy(3))
+    let response = complete_with_policy(&provider, &[], "gpt-4o", 10, None, short_retry_policy(3))
         .await
         .unwrap();
 
@@ -155,7 +155,7 @@ async fn complete_with_policy_succeeds_after_one_transient_failure() {
 async fn complete_with_policy_exhausts_after_three_transient_attempts() {
     let provider = TransientThenSuccessProvider::new(usize::MAX);
 
-    let err = complete_with_policy(&provider, &[], "gpt-4o", 10, None, test_policy(3))
+    let err = complete_with_policy(&provider, &[], "gpt-4o", 10, None, short_retry_policy(3))
         .await
         .unwrap_err();
 
@@ -167,7 +167,7 @@ async fn complete_with_policy_exhausts_after_three_transient_attempts() {
 async fn complete_with_policy_times_out_hanging_provider() {
     let provider = HangingProvider::new();
 
-    let err = complete_with_policy(&provider, &[], "gpt-4o", 10, None, test_policy(1))
+    let err = complete_with_policy(&provider, &[], "gpt-4o", 10, None, short_retry_policy(1))
         .await
         .unwrap_err();
 
@@ -187,7 +187,7 @@ async fn complete_with_policy_times_out_hanging_provider() {
 async fn complete_with_policy_does_not_retry_permanent_error() {
     let provider = PermanentFailureProvider::new();
 
-    let err = complete_with_policy(&provider, &[], "gpt-4o", 10, None, test_policy(3))
+    let err = complete_with_policy(&provider, &[], "gpt-4o", 10, None, short_retry_policy(3))
         .await
         .unwrap_err();
 
