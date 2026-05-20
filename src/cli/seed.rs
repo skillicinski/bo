@@ -1,8 +1,8 @@
 use crate::domain::manifest::{self, Manifest, TreeMeta};
 use crate::domain::tree::TreeConfig;
+use crate::domain::Timestamp;
 use crate::engine::config::{self, Config, ConfigError};
 
-use chrono::Utc;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -45,7 +45,7 @@ pub fn seed(
             .join(&output_dir)
     };
 
-    let existing_model = match config::read_config(config_path) {
+    let (existing_model, existing_compile_model) = match config::read_config(config_path) {
         Ok(existing) => {
             if let Some(tree) = existing.tree {
                 return Ok(SeedResult {
@@ -54,9 +54,9 @@ pub fn seed(
                     tree_name: tree.name,
                 });
             }
-            existing.model
+            (existing.model, existing.compile_model)
         }
-        Err(ConfigError::NotFound) => None,
+        Err(ConfigError::NotFound) => (None, None),
         Err(error) => {
             return Err(SeedError::ConfigRead(format!(
                 "failed to read config: {}",
@@ -81,16 +81,18 @@ pub fn seed(
             .map(|name| name.to_string_lossy().into_owned())
     });
 
-    let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let created_at = Timestamp::now();
+    let created_at_str = created_at.to_rfc3339_millis();
 
     config::write_config(
         &Config {
             tree: Some(TreeConfig {
                 output_dir: output_dir.clone(),
                 name: tree_name.clone(),
-                created_at: Some(created_at.clone()),
+                created_at: Some(created_at_str),
             }),
             model: existing_model,
+            compile_model: existing_compile_model,
         },
         config_path,
     )

@@ -1,5 +1,6 @@
 // bo list — deterministic tree inspection for collected leaves.
 
+use crate::cli::json::JsonError;
 use crate::domain::manifest::{self, LeafRecord, Manifest};
 use crate::domain::tree::Tree;
 use chrono::{DateTime, FixedOffset};
@@ -73,6 +74,20 @@ impl From<manifest::ManifestError> for ListError {
     }
 }
 
+impl ListError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            ListError::Io(_) => "io_error",
+            ListError::Json(_) => "json_error",
+            ListError::Manifest(_) => "manifest_error",
+        }
+    }
+
+    pub fn json_error(&self) -> JsonError {
+        JsonError::new(self.code(), self.to_string())
+    }
+}
+
 // ── list ─────────────────────────────────────────────────────────────────────
 
 pub fn list_leaves(tree_dir: &Path, options: &ListOptions) -> Result<ListResult, ListError> {
@@ -128,20 +143,20 @@ fn build_row(
     manifest: &Manifest,
     index_position: usize,
 ) -> ListLeafRow {
-    let display_title = if leaf.title.trim().is_empty() {
+    let display_title = if leaf.title.as_str().trim().is_empty() {
         filename_fallback(&leaf.file)
     } else {
-        leaf.title.clone()
+        leaf.title.as_str().to_string()
     };
-    let collected_at = if leaf.collected_at.trim().is_empty() {
+    let collected_at = if leaf.collected_at.to_rfc3339_millis().trim().is_empty() {
         None
     } else {
-        Some(leaf.collected_at.clone())
+        Some(leaf.collected_at.to_rfc3339_millis())
     };
     let branches: Vec<String> = manifest
         .branches_for_leaf(&leaf.slug)
         .iter()
-        .map(|b| b.slug.clone())
+        .map(|b| b.slug.as_str().to_string())
         .collect();
 
     let mut row = ListLeafRow {

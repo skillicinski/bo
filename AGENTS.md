@@ -8,6 +8,8 @@ Rust CLI tool. Collects web pages into a local markdown knowledge tree, compiles
 
 Deterministic pipeline tool, not an autonomous agent. LLM commands (compile, query, summary) follow: code gathers context → one structured-output LLM call → code writes results. See `docs/adrs/001.md`.
 
+Architectural decisions are recorded in `docs/adrs/`. Consult them when making implementation decisions — especially ADR-001 (pipeline boundaries), ADR-002 (structured output schemas), ADR-004 (manifest design), and ADR-005 (deterministic processing at LLM boundaries).
+
 ## Project layout
 
 ```

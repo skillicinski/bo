@@ -3,6 +3,7 @@
 // Tests the full CLI binary with $HOME override. Simulates tree states
 // by directly constructing files (no network/LLM required).
 
+use bo::domain::{Slug, Timestamp, Title};
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
@@ -48,11 +49,11 @@ fn write_leaf(tree_dir: &Path, slug: &str, url: &str) {
     let manifest_path = tree_dir.join(".bo/manifest.json");
     let mut m = bo::domain::manifest::read(&manifest_path).unwrap();
     m.leaves.push(bo::domain::manifest::LeafRecord {
-        slug: slug.to_string(),
+        slug: Slug::parse(slug).unwrap(),
         file: filename,
-        title: slug.to_string(),
-        url: url.to_string(),
-        collected_at: collected_at.to_string(),
+        title: Title::new(slug),
+        url: bo::domain::Url::parse(url).unwrap(),
+        collected_at: Timestamp::parse(collected_at).unwrap(),
         summary: None,
     });
     bo::domain::manifest::write(&manifest_path, &m).unwrap();
@@ -70,15 +71,15 @@ fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
     let manifest_path = tree_dir.join(".bo/manifest.json");
     let mut m = bo::domain::manifest::read(&manifest_path).unwrap();
     m.branches.push(bo::domain::manifest::BranchRecord {
-        slug: slug.to_string(),
+        slug: Slug::parse(slug).unwrap(),
         file: format!("branches/{}.md", slug),
-        title: slug.to_string(),
-        created_at: created_at.to_string(),
-        updated_at: created_at.to_string(),
+        title: Title::new(slug),
+        created_at: Timestamp::parse(created_at).unwrap(),
+        updated_at: Timestamp::parse(created_at).unwrap(),
         stale: false,
-        leaves: vec!["some-leaf".to_string()],
+        leaves: vec![Slug::parse("some-leaf").unwrap()],
     });
-    m.tree.last_compiled_at = Some(created_at.to_string());
+    m.tree.last_compiled_at = Some(Timestamp::parse(created_at).unwrap());
     bo::domain::manifest::write(&manifest_path, &m).unwrap();
 }
 
@@ -142,7 +143,7 @@ fn status_after_compile_shows_zero_uncompiled() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(!stdout.contains("uncompiled"));
     assert!(stdout.contains("Branches:    1"));
-    assert!(stdout.contains("2026-05-15T10:00:00Z"));
+    assert!(stdout.contains("2026-05-15T10:00:00"));
 }
 
 #[test]

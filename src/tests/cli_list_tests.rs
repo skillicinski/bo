@@ -1,4 +1,5 @@
 use super::*;
+use crate::domain::{Slug, Timestamp, Title, Url};
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::time::SystemTime;
@@ -54,11 +55,11 @@ fn suspicious_path_is_degraded_and_never_read() {
     write_manifest(
         &tree_dir,
         &[LeafRecord {
-            slug: "outside".to_string(),
+            slug: Slug::parse("outside").unwrap(),
             file: "../outside.md".to_string(),
-            title: "Outside Title".to_string(),
-            url: "https://example.com/outside".to_string(),
-            collected_at: "2025-01-01T00:00:00Z".to_string(),
+            title: Title::new("Outside Title"),
+            url: Url::parse("https://example.com/outside").unwrap(),
+            collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             summary: None,
         }],
         &[],
@@ -129,7 +130,7 @@ fn collected_at_is_taken_directly_from_manifest() {
 
     assert_eq!(
         result.leaves[0].collected_at.as_deref(),
-        Some("2025-06-01T10:00:00Z")
+        Some("2025-06-01T10:00:00.000Z")
     );
     assert!(!result.leaves[0].degraded);
 }
@@ -213,23 +214,19 @@ fn branch_filter_can_return_no_matches() {
 }
 
 #[test]
-fn recent_sorting_puts_valid_dates_first_and_preserves_index_ties() {
+fn recent_sorting_puts_newest_first_and_preserves_index_ties() {
     let dir = TempDir::new().unwrap();
     write_manifest(
         dir.path(),
         &[
             leaf("old-a", "Old A", "2025-01-01T00:00:00Z"),
-            leaf("missing-ts", "Missing", ""),
+            leaf("middle", "Middle", "2025-01-15T00:00:00Z"),
             leaf("newest", "Newest", "2025-02-01T00:00:00Z"),
-            leaf("invalid", "Invalid", "not-a-date"),
             leaf("old-b", "Old B", "2025-01-01T00:00:00Z"),
         ],
         &[],
     );
-    write_leaf_files(
-        dir.path(),
-        &["old-a", "missing-ts", "newest", "invalid", "old-b"],
-    );
+    write_leaf_files(dir.path(), &["old-a", "middle", "newest", "old-b"]);
 
     let result = list_leaves(
         dir.path(),
@@ -240,15 +237,10 @@ fn recent_sorting_puts_valid_dates_first_and_preserves_index_ties() {
     )
     .unwrap();
 
+    // Newest first, then ties broken by index position (old-a before old-b)
     assert_eq!(
         files(&result.leaves),
-        vec![
-            "newest.md",
-            "old-a.md",
-            "old-b.md",
-            "missing-ts.md",
-            "invalid.md",
-        ]
+        vec!["newest.md", "middle.md", "old-a.md", "old-b.md",]
     );
 }
 
@@ -291,15 +283,15 @@ fn list_leaves_is_read_only() {
         &[
             leaf("one", "One", "2025-01-01T00:00:00Z"),
             LeafRecord {
-                slug: "two".to_string(),
+                slug: Slug::parse("two").unwrap(),
                 file: "nested/two.md".to_string(),
-                title: "Two".to_string(),
-                url: "https://example.com/two".to_string(),
-                collected_at: "2025-01-02T00:00:00Z".to_string(),
+                title: Title::new("Two"),
+                url: Url::parse("https://example.com/two").unwrap(),
+                collected_at: Timestamp::parse("2025-01-02T00:00:00Z").unwrap(),
                 summary: None,
             },
         ],
-        &[("branch_a", &["one"])],
+        &[("branch-a", &["one"])],
     );
     write_leaf_files(dir.path(), &["one"]);
     fs::create_dir_all(dir.path().join("nested")).unwrap();
@@ -326,8 +318,8 @@ fn render_human_formats_normal_rows() {
             row(
                 "alpha.md",
                 "Alpha",
-                Some("2025-06-01T10:00:00Z"),
-                &["branch_a", "branch_b"],
+                Some("2025-06-01T10:00:00.000Z"),
+                &["branch-a", "branch-b"],
                 false,
                 &[],
                 0,
@@ -340,7 +332,7 @@ fn render_human_formats_normal_rows() {
 
     assert_eq!(
         render_human(&result),
-        "Alpha | 2025-06-01T10:00:00Z | [branch_a, branch_b]\nBeta | - | []\n"
+        "Alpha | 2025-06-01T10:00:00.000Z | [branch-a, branch-b]\nBeta | - | []\n"
     );
 }
 
@@ -394,14 +386,14 @@ fn render_json_is_pretty_parseable_and_omits_index_position() {
         leaves: vec![row(
             "alpha.md",
             "Alpha",
-            Some("2025-06-01T10:00:00Z"),
-            &["branch_a"],
+            Some("2025-06-01T10:00:00.000Z"),
+            &["branch-a"],
             true,
             &["missing file"],
             7,
         )],
         total_index_entries: 1,
-        branch_filter: Some("branch_a".to_string()),
+        branch_filter: Some("branch-a".to_string()),
     };
 
     let rendered = render_json(&result).unwrap();
@@ -411,8 +403,8 @@ fn render_json_is_pretty_parseable_and_omits_index_position() {
     assert!(rendered.contains('\n'));
     assert_eq!(row["file"], "alpha.md");
     assert_eq!(row["display_title"], "Alpha");
-    assert_eq!(row["collected_at"], "2025-06-01T10:00:00Z");
-    assert_eq!(row["branches"][0], "branch_a");
+    assert_eq!(row["collected_at"], "2025-06-01T10:00:00.000Z");
+    assert_eq!(row["branches"][0], "branch-a");
     assert_eq!(row["degraded"], true);
     assert_eq!(row["degradation_reasons"][0], "missing file");
     assert!(row.get("index_position").is_none());
@@ -423,11 +415,11 @@ fn render_json_is_pretty_parseable_and_omits_index_position() {
 
 fn leaf(slug: &str, title: &str, collected_at: &str) -> LeafRecord {
     LeafRecord {
-        slug: slug.to_string(),
+        slug: Slug::parse(slug).unwrap(),
         file: format!("{}.md", slug),
-        title: title.to_string(),
-        url: format!("https://example.com/{slug}"),
-        collected_at: collected_at.to_string(),
+        title: Title::new(title),
+        url: Url::parse(&format!("https://example.com/{slug}")).unwrap(),
+        collected_at: Timestamp::parse(collected_at).unwrap(),
         summary: None,
     }
 }
@@ -437,19 +429,19 @@ fn write_manifest(tree_dir: &Path, leaves: &[LeafRecord], branches: &[(&str, &[&
     let branch_records: Vec<BranchRecord> = branches
         .iter()
         .map(|(slug, leaf_slugs)| BranchRecord {
-            slug: slug.to_string(),
+            slug: Slug::parse(slug).unwrap(),
             file: format!("branches/{}.md", slug),
-            title: slug.to_string(),
-            created_at: "2025-01-01T00:00:00Z".to_string(),
-            updated_at: "2025-01-01T00:00:00Z".to_string(),
+            title: Title::new(slug),
+            created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+            updated_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             stale: false,
-            leaves: leaf_slugs.iter().map(|s| s.to_string()).collect(),
+            leaves: leaf_slugs.iter().map(|s| Slug::parse(s).unwrap()).collect(),
         })
         .collect();
     let m = Manifest {
         tree: TreeMeta {
             name: "test".to_string(),
-            created_at: "2025-01-01T00:00:00Z".to_string(),
+            created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             last_compiled_at: None,
         },
         leaves: leaves.to_vec(),

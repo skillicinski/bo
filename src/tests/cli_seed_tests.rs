@@ -83,6 +83,7 @@ fn seeds_config_without_tree_and_preserves_model() {
         &config::Config {
             tree: None,
             model: Some("gpt-4.1-mini".to_string()),
+            compile_model: None,
         },
         &config_path,
     )
@@ -190,7 +191,7 @@ fn manifest_metadata_matches_config() {
     let m = manifest::read(&tree.manifest_path()).unwrap();
 
     assert_eq!(m.tree.name, "my-tree");
-    assert_eq!(m.tree.created_at, tree_cfg.created_at.unwrap());
+    assert_eq!(m.tree.created_at.to_string(), tree_cfg.created_at.unwrap());
     assert!(m.tree.last_compiled_at.is_none());
     assert!(m.leaves.is_empty());
     assert!(m.branches.is_empty());

@@ -2,19 +2,20 @@
 //
 // Pipeline: extract terms → retrieve leaves → assemble context → synthesize → format
 //
-// This module is self-contained and does not share retrieval logic with
-// `cli::search` (different semantics: OR vs AND, different purpose).
+// Retrieval is shared with `cli::search` via `engine::retrieval::score_corpus`.
+// This module adds query-specific post-processing: diagnostics, relevance
+// validation, context assembly, and LLM synthesis.
 
-use crate::domain::frontmatter;
+use crate::cli::json::JsonError;
 use crate::engine::llm::{
-    complete_with_policy, context_window_tokens, FinishReason, LlmCallPolicy, LlmError,
-    LlmProvider, Message, OpenAiProvider,
+    complete_with_policy, FinishReason, LlmCallPolicy, LlmError, LlmProvider, Message, Model,
+    OpenAiProvider,
 };
+use crate::engine::retrieval::{self, ScoringPolicy};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashSet;
 use std::fmt;
-use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
@@ -27,7 +28,6 @@ const QUERY_PROMPT_OVERHEAD_TOKENS: usize = 4096;
 const MIN_QUERY_SOURCE_WORDS: usize = 1000;
 const TOKENS_TO_WORDS_NUMERATOR: usize = 3;
 const TOKENS_TO_WORDS_DENOMINATOR: usize = 4;
-const SUMMARY_FALLBACK_WORDS: usize = 200;
 const MIN_SINGLE_TERM_DENSITY: f64 = 20.0;
 const MIN_MULTI_TERM_DENSITY: f64 = 8.0;
 const MOSTLY_GENERIC_RATIO_NUMERATOR: usize = 2;
@@ -92,8 +92,6 @@ pub enum QueryError {
     EmptyTree,
     /// Index read or file I/O error
     Io(String),
-    /// Configured query model has no known context window
-    UnknownModelContext { model: String },
     /// Known model has too little context after reserved prompt/completion budget
     ContextBudgetExhausted {
         model: String,
@@ -128,11 +126,6 @@ impl fmt::Display for QueryError {
             QueryError::NoResults => write!(f, "no relevant sources found in tree"),
             QueryError::EmptyTree => write!(f, "no sources collected yet"),
             QueryError::Io(msg) => write!(f, "{}", msg),
-            QueryError::UnknownModelContext { model } => write!(
-                f,
-                "unknown context window for model '{}' — choose a known model or add its context window",
-                model
-            ),
             QueryError::ContextBudgetExhausted {
                 model,
                 context_tokens,
@@ -187,7 +180,6 @@ impl QueryError {
             QueryError::NoResults => "no_results",
             QueryError::EmptyTree => "empty_tree",
             QueryError::Io(_) => "io_error",
-            QueryError::UnknownModelContext { .. } => "unknown_model_context",
             QueryError::ContextBudgetExhausted { .. } => "context_budget_exhausted",
             QueryError::Truncated | QueryError::ContentFilter => "llm_error",
             QueryError::Llm(_) => "llm_error",
@@ -237,6 +229,10 @@ impl QueryError {
             }),
             _ => json!({}),
         }
+    }
+
+    pub fn json_error(&self) -> JsonError {
+        JsonError::with_details(self.code(), self.to_string(), self.details())
     }
 }
 
@@ -495,65 +491,28 @@ fn retrieve_leaves(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedLea
         return Err(QueryError::EmptyTree);
     }
 
-    let mut scored: Vec<RetrievedLeaf> = Vec::new();
+    let corpus = retrieval::score_corpus(tree_dir, &manifest, terms, ScoringPolicy::AnyTermCounts);
 
-    for leaf in &manifest.leaves {
-        let path = tree_dir.join(&leaf.file);
-        let content = match fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue, // skip unreadable leaves
-        };
-
-        let (_mapping, body) = match frontmatter::parse(&content) {
-            Ok(v) => v,
-            Err(_) => continue, // skip malformed leaves
-        };
-
-        // Title, url, summary all come from the canonical manifest record.
-        // Fall back to body-derived summary when the manifest didn't capture one.
-        let title = leaf.title.clone();
-        let url = leaf.url.clone();
-        let summary = leaf
-            .summary
-            .clone()
-            .unwrap_or_else(|| summary_fallback(&body));
-
-        let slug = leaf.slug.clone();
-
-        // Score: OR semantics — count occurrences of each term, normalize by word count
-        let searchable = format!("{} {} {}", title, summary, body).to_lowercase();
-        let word_count = searchable.split_whitespace().count();
-        if word_count == 0 {
-            continue;
-        }
-
-        let total_hits: usize = terms
-            .iter()
-            .map(|term| searchable.matches(term.as_str()).count())
-            .sum();
-
-        if total_hits == 0 {
-            continue;
-        }
-
-        let score = (total_hits as f64 * 1000.0) / word_count as f64;
-        let diagnostics = compute_retrieval_diagnostics(&title, &summary, &body, terms);
-
-        scored.push(RetrievedLeaf {
-            slug,
-            title,
-            url,
-            file: leaf.file.clone(),
-            summary,
-            body,
-            score,
-            diagnostics,
-        });
-    }
-
-    if scored.is_empty() {
+    if corpus.is_empty() {
         return Err(QueryError::NoResults);
     }
+
+    let mut scored: Vec<RetrievedLeaf> = corpus
+        .into_iter()
+        .map(|s| {
+            let diagnostics = compute_retrieval_diagnostics(&s.title, &s.summary, &s.body, terms);
+            RetrievedLeaf {
+                slug: s.slug,
+                title: s.title,
+                url: s.url,
+                file: s.file,
+                summary: s.summary,
+                body: s.body,
+                score: s.score,
+                diagnostics,
+            }
+        })
+        .collect();
 
     // Sort by score descending
     scored.sort_by(|a, b| {
@@ -671,14 +630,9 @@ fn is_strong_relevance_match(leaf: &RetrievedLeaf, terms: &[String]) -> bool {
 
 // ── context assembly ─────────────────────────────────────────────────────────
 
-fn compute_query_context_budget(model: &str) -> Result<QueryContextBudget, QueryError> {
-    let Some(context_tokens) = context_window_tokens(model) else {
-        return Err(QueryError::UnknownModelContext {
-            model: model.to_string(),
-        });
-    };
-
-    compute_query_context_budget_from_tokens(model, context_tokens)
+fn compute_query_context_budget(model: &Model) -> Result<QueryContextBudget, QueryError> {
+    let context_tokens = model.context_tokens();
+    compute_query_context_budget_from_tokens(model.as_str(), context_tokens)
 }
 
 fn compute_query_context_budget_from_tokens(
@@ -957,7 +911,7 @@ pub fn run(
     tree_dir: &Path,
     question: &str,
     api_key: &str,
-    model: &str,
+    model: &Model,
 ) -> Result<QueryResult, QueryError> {
     let prepared = prepare(tree_dir, question, model)?;
     let provider = OpenAiProvider::new(api_key);
@@ -965,7 +919,11 @@ pub fn run(
 }
 
 /// Run query preflight up to, but not including, provider-backed synthesis.
-pub fn prepare(tree_dir: &Path, question: &str, model: &str) -> Result<PreparedQuery, QueryError> {
+pub fn prepare(
+    tree_dir: &Path,
+    question: &str,
+    model: &Model,
+) -> Result<PreparedQuery, QueryError> {
     let terms = extract_terms(question)?;
     let budget = compute_query_context_budget(model)?;
 
@@ -997,7 +955,7 @@ pub fn run_with_provider(
     tree_dir: &Path,
     question: &str,
     provider: &dyn LlmProvider,
-    model: &str,
+    model: &Model,
 ) -> Result<QueryResult, QueryError> {
     run_with_provider_and_policy(tree_dir, question, provider, model, QUERY_LLM_POLICY)
 }
@@ -1006,7 +964,7 @@ fn run_with_provider_and_policy(
     tree_dir: &Path,
     question: &str,
     provider: &dyn LlmProvider,
-    model: &str,
+    model: &Model,
     policy: LlmCallPolicy,
 ) -> Result<QueryResult, QueryError> {
     let prepared = prepare(tree_dir, question, model)?;
@@ -1045,14 +1003,25 @@ fn run_prepared_with_policy(
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-/// Generate a summary fallback from the first ~200 words of body.
-fn summary_fallback(body: &str) -> String {
-    let words: Vec<&str> = body.split_whitespace().collect();
-    if words.len() <= SUMMARY_FALLBACK_WORDS {
-        words.join(" ")
-    } else {
-        words[..SUMMARY_FALLBACK_WORDS].join(" ")
+/// Render a query error to stderr in human-friendly form.
+///
+/// Returns the supplied `exit_code` on success, or `1` if writing failed.
+pub fn render_error_human<E: std::io::Write>(
+    error: &QueryError,
+    stderr: &mut E,
+    exit_code: i32,
+) -> i32 {
+    if writeln!(stderr, "error: {}", error).is_err() {
+        return 1;
     }
+
+    if let Some(next_step) = error.next_step() {
+        if writeln!(stderr, "next step: {}", next_step).is_err() {
+            return 1;
+        }
+    }
+
+    exit_code
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────

@@ -1,16 +1,19 @@
 use super::*;
+use crate::domain::{Slug, Timestamp, Title, Url};
 use async_trait::async_trait;
 use serde_json::Value;
 use serial_test::serial;
 use std::fs;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
 use tempfile::TempDir;
 
+use crate::domain::manifest::{self, BranchRecord, LeafRecord, Manifest, TreeMeta};
 use crate::engine::auth::MISSING_OPENAI_AUTH_MESSAGE;
 use crate::engine::config::SeededConfig;
-use crate::engine::llm::{LlmProvider, LlmResponse};
+use crate::engine::llm::{LlmError, LlmProvider, LlmResponse, Message};
+
+// ── helpers ───────────────────────────────────────────────────────────────────
 
 fn make_test_config(output_dir: &std::path::Path) -> SeededConfig {
     SeededConfig {
@@ -20,7 +23,77 @@ fn make_test_config(output_dir: &std::path::Path) -> SeededConfig {
             created_at: None,
         },
         model: Some("gpt-4o-mini".to_string()),
+        compile_model: None,
     }
+}
+
+fn seed_manifest(dir: &std::path::Path, leaves: &[(&str, &str, &str)]) {
+    fs::create_dir_all(dir.join(".bo")).unwrap();
+    let leaf_records = leaves
+        .iter()
+        .map(|(slug, title, url)| LeafRecord {
+            slug: Slug::parse(slug).unwrap(),
+            file: format!("{}.md", slug),
+            title: Title::new(title),
+            url: Url::parse(url).unwrap(),
+            collected_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            summary: None,
+        })
+        .collect();
+    let m = Manifest {
+        tree: TreeMeta {
+            name: "compile-tree".to_string(),
+            created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+            last_compiled_at: None,
+        },
+        leaves: leaf_records,
+        branches: Vec::new(),
+    };
+    manifest::write(&dir.join(".bo/manifest.json"), &m).unwrap();
+}
+
+fn write_leaf(dir: &std::path::Path, slug: &str, title: &str, url: &str) {
+    fs::write(
+        dir.join(format!("{}.md", slug)),
+        format!(
+            "---\ntitle: \"{title}\"\nurl: {url}\ncollected_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\n# {title}\n\nBody for {slug}.\n"
+        ),
+    )
+    .unwrap();
+}
+
+fn seed_compiled_tree(dir: &std::path::Path) {
+    seed_manifest(
+        dir,
+        &[
+            ("leaf-a", "A", "https://example.com/a"),
+            ("leaf-b", "B", "https://example.com/b"),
+        ],
+    );
+    write_leaf(dir, "leaf-a", "A", "https://example.com/a");
+    write_leaf(dir, "leaf-b", "B", "https://example.com/b");
+    let manifest_path = dir.join(".bo/manifest.json");
+    let mut m = manifest::read(&manifest_path).unwrap();
+    m.tree.last_compiled_at = Some(Timestamp::parse("2026-06-01T12:00:00Z").unwrap());
+    m.branches = vec![BranchRecord {
+        slug: Slug::parse("existing").unwrap(),
+        file: "branches/existing.md".to_string(),
+        title: Title::new("Existing"),
+        created_at: Timestamp::parse("2026-06-01T12:00:00Z").unwrap(),
+        updated_at: Timestamp::parse("2026-06-01T12:00:00Z").unwrap(),
+        stale: false,
+        leaves: vec![
+            Slug::parse("leaf-a").unwrap(),
+            Slug::parse("leaf-b").unwrap(),
+        ],
+    }];
+    manifest::write(&manifest_path, &m).unwrap();
+    fs::create_dir_all(dir.join("branches")).unwrap();
+    fs::write(
+        dir.join("branches/existing.md"),
+        "---\ntitle: Existing\ncreated_at: 2026-06-01T12:00:00Z\nupdated_at: 2026-06-01T12:00:00Z\nleaves:\n  - leaf-a.md\n  - leaf-b.md\n---\n\n# Existing\n\nBranch body.\n",
+    )
+    .unwrap();
 }
 
 struct EnvGuard {
@@ -51,471 +124,18 @@ impl Drop for EnvGuard {
     }
 }
 
-// ── guard tests (ported) ──────────────────────────────────────────────────
+// ── fake providers ────────────────────────────────────────────────────────────
 
-#[test]
-#[serial]
-fn compile_exits_cleanly_on_empty_collection() {
-    let dir = TempDir::new().unwrap();
-    let cfg = make_test_config(dir.path());
-    std::env::remove_var("OPENAI_API_KEY");
-    let bo_dir = dir.path().join(".bo");
-    fs::create_dir_all(&bo_dir).unwrap();
-    seed_manifest_for_compile(dir.path(), &[]);
-    let result = cmd_compile(&cfg);
-    assert!(result.is_ok());
-}
-
-#[test]
-#[serial]
-fn compile_exits_cleanly_on_single_leaf() {
-    let dir = TempDir::new().unwrap();
-    let bo_dir = dir.path().join(".bo");
-    fs::create_dir_all(&bo_dir).unwrap();
-    seed_manifest_for_compile(dir.path(), &[("only", "Only", "https://example.com")]);
-    std::env::remove_var("OPENAI_API_KEY");
-    let cfg = make_test_config(dir.path());
-    let result = cmd_compile(&cfg);
-    assert!(result.is_ok());
-}
-
-#[test]
-#[serial]
-fn compile_errors_without_api_key() {
-    let dir = TempDir::new().unwrap();
-    let bo_dir = dir.path().join(".bo");
-    fs::create_dir_all(&bo_dir).unwrap();
-    seed_manifest_for_compile(
-        dir.path(),
-        &[
-            ("a", "A", "https://example.com/a"),
-            ("b", "B", "https://example.com/b"),
-        ],
-    );
-    // Write actual leaf files with valid frontmatter
-    fs::write(
-        dir.path().join("a.md"),
-        "---\ntitle: A\nurl: https://example.com/a\ncollected_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-01T00:00:00Z\n---\n\n# A\n\nBody A.\n",
-    ).unwrap();
-    fs::write(
-        dir.path().join("b.md"),
-        "---\ntitle: B\nurl: https://example.com/b\ncollected_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-01T00:00:00Z\n---\n\n# B\n\nBody B.\n",
-    ).unwrap();
-    let home = TempDir::new().unwrap();
-    let _home_guard = EnvGuard::set("HOME", home.path().to_str().unwrap());
-    let _api_key_guard = EnvGuard::unset("OPENAI_API_KEY");
-    let cfg = make_test_config(dir.path());
-    let result = cmd_compile(&cfg);
-    assert!(result.is_err());
-    let msg = result.unwrap_err();
-    assert_eq!(msg, MISSING_OPENAI_AUTH_MESSAGE);
-}
-
-// ── parse_and_validate tests ──────────────────────────────────────────────
-
-fn sample_valid_filenames() -> HashSet<String> {
-    ["leaf-a.md", "leaf-b.md", "leaf-c.md"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
-}
-
-#[test]
-fn parse_valid_response() {
-    let json = serde_json::json!({
-        "branches": [
-            {
-                "title": "Test Concept",
-                "body": "# Test Concept\n\nDescription.",
-                "leaves": ["leaf-a.md", "leaf-b.md"]
-            }
-        ]
-    })
-    .to_string();
-    let json = &json;
-
-    let plan = parse_and_validate(json, &sample_valid_filenames()).unwrap();
-    assert_eq!(plan.branches.len(), 1);
-    assert_eq!(plan.branches[0].slug, "test-concept");
-    assert_eq!(plan.branches[0].leaves.len(), 2);
-    assert_eq!(
-        plan.leaf_assignments.get("leaf-a.md").unwrap(),
-        &vec!["test-concept".to_string()]
-    );
-}
-
-#[test]
-fn parse_empty_branches_is_valid() {
-    let json = r#"{"branches": []}"#;
-    let plan = parse_and_validate(json, &sample_valid_filenames()).unwrap();
-    assert!(plan.branches.is_empty());
-    assert!(plan.leaf_assignments.is_empty());
-}
-
-#[test]
-fn validation_error_display_includes_actionable_hint() {
-    let message = CompileError::Validation("invalid compile response".to_string()).to_string();
-    assert!(message.contains("invalid compile response"));
-    assert!(message.contains(VALIDATION_NEXT_STEP));
-}
-
-#[test]
-fn parse_rejects_missing_required_fields() {
-    let json = r##"{"branches":[{"title":"Concept","body":"# Concept\n\nBody."}]}"##;
-
-    let err = parse_and_validate(json, &sample_valid_filenames()).unwrap_err();
-    assert!(err.to_string().contains("invalid compile response shape"));
-}
-
-#[test]
-fn parse_rejects_wrong_field_types() {
-    let json =
-        r##"{"branches":[{"title":"Concept","body":"# Concept\n\nBody.","leaves":"leaf-a.md"}]}"##;
-
-    let err = parse_and_validate(json, &sample_valid_filenames()).unwrap_err();
-    assert!(err.to_string().contains("invalid compile response shape"));
-}
-
-#[test]
-fn parse_rejects_extra_fields() {
-    let json = serde_json::json!({
-        "branches": [
-            {
-                "title": "Concept",
-                "body": "# Concept\n\nBody.",
-                "leaves": ["leaf-a.md", "leaf-b.md"],
-                "confidence": 0.9
-            }
-        ]
-    })
-    .to_string();
-    let json = &json;
-
-    let err = parse_and_validate(json, &sample_valid_filenames()).unwrap_err();
-    assert!(err.to_string().contains("invalid compile response shape"));
-}
-
-#[test]
-fn parse_rejects_absurdly_large_branch_bodies() {
-    let json = serde_json::json!({
-        "branches": [
-            {
-                "title": "Concept",
-                "body": "x".repeat(MAX_COMPILED_BODY_BYTES_MIN + 1),
-                "leaves": ["leaf-a.md", "leaf-b.md"]
-            }
-        ]
-    })
-    .to_string();
-    let json = &json;
-
-    let err = parse_and_validate_with_input_size(json, &sample_valid_filenames(), 1).unwrap_err();
-    assert!(err.to_string().contains("exceeding"));
-}
-
-#[test]
-fn parse_rejects_unknown_leaves() {
-    let json = serde_json::json!({
-        "branches": [
-            {
-                "title": "Concept",
-                "body": "# Concept\n\nBody.",
-                "leaves": ["leaf-a.md", "leaf-b.md", "invented.md"]
-            }
-        ]
-    })
-    .to_string();
-    let json = &json;
-
-    let err = parse_and_validate(json, &sample_valid_filenames()).unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("references unknown leaf 'invented.md'"));
-}
-
-#[test]
-fn parse_deduplicates_leaves_within_branch() {
-    let json = serde_json::json!({
-        "branches": [
-            {
-                "title": "Concept",
-                "body": "# Concept\n\nBody.",
-                "leaves": ["leaf-a.md", "leaf-a.md", "leaf-b.md"]
-            }
-        ]
-    })
-    .to_string();
-    let json = &json;
-
-    let plan = parse_and_validate(json, &sample_valid_filenames()).unwrap();
-    assert_eq!(plan.branches[0].leaves, vec!["leaf-a.md", "leaf-b.md"]);
-}
-
-#[test]
-fn parse_rejects_duplicate_slugs() {
-    // "Rust Ownership" and "Rust: Ownership" both slugify to "rust-ownership"
-    let json = serde_json::json!({
-        "branches": [
-            {
-                "title": "Rust Ownership",
-                "body": "# Rust Ownership\n\nBody.",
-                "leaves": ["leaf-a.md", "leaf-b.md"]
-            },
-            {
-                "title": "Rust: Ownership",
-                "body": "# Rust: Ownership\n\nBody.",
-                "leaves": ["leaf-b.md", "leaf-c.md"]
-            }
-        ]
-    })
-    .to_string();
-    let json = &json;
-
-    let result = parse_and_validate(json, &sample_valid_filenames());
-    assert!(result.is_err());
-    let err = result.unwrap_err().to_string();
-    assert!(err.contains("duplicate branch slug"));
-}
-
-#[test]
-fn parse_rejects_branch_with_all_unknown_leaves() {
-    let json = serde_json::json!({
-        "branches": [
-            {
-                "title": "Concept",
-                "body": "# Concept\n\nBody.",
-                "leaves": ["nonexistent.md"]
-            }
-        ]
-    })
-    .to_string();
-    let json = &json;
-
-    let err = parse_and_validate(json, &sample_valid_filenames()).unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("references unknown leaf 'nonexistent.md'"));
-}
-
-#[test]
-fn parse_rejects_branch_with_single_leaf() {
-    let json = serde_json::json!({
-        "branches": [
-            {
-                "title": "Solo Concept",
-                "body": "# Solo Concept\n\nBody.",
-                "leaves": ["leaf-a.md"]
-            }
-        ]
-    })
-    .to_string();
-    let json = &json;
-
-    let err = parse_and_validate(json, &sample_valid_filenames()).unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("branches must reference at least 2 leaves"));
-}
-
-#[test]
-fn parse_rejects_branch_with_empty_title() {
-    let json = serde_json::json!({
-        "branches": [
-            {
-                "title": "",
-                "body": "# Something\n\nBody.",
-                "leaves": ["leaf-a.md"]
-            }
-        ]
-    })
-    .to_string();
-    let json = &json;
-
-    let err = parse_and_validate(json, &sample_valid_filenames()).unwrap_err();
-    assert!(err.to_string().contains("empty title"));
-}
-
-#[test]
-fn parse_rejects_branch_with_empty_body() {
-    let json = serde_json::json!({
-        "branches": [
-            {
-                "title": "Concept",
-                "body": "",
-                "leaves": ["leaf-a.md", "leaf-b.md"]
-            }
-        ]
-    })
-    .to_string();
-    let json = &json;
-
-    let err = parse_and_validate(json, &sample_valid_filenames()).unwrap_err();
-    assert!(err.to_string().contains("empty body"));
-}
-
-#[test]
-fn validation_failure_does_not_mutate_tree() {
-    let dir = TempDir::new().unwrap();
-    let cfg = make_test_config(dir.path());
-
-    let leaf_a_path = dir.path().join("leaf-a.md");
-    let leaf_b_path = dir.path().join("leaf-b.md");
-    let leaf_a_before = "---\ntitle: A\nurl: https://example.com/a\ncollected_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-01T00:00:00Z\n---\n\n# A\n\nBody A.\n";
-    let leaf_b_before = "---\ntitle: B\nurl: https://example.com/b\ncollected_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-01T00:00:00Z\n---\n\n# B\n\nBody B.\n";
-    fs::write(&leaf_a_path, leaf_a_before).unwrap();
-    fs::write(&leaf_b_path, leaf_b_before).unwrap();
-
-    let valid_filenames: HashSet<String> = ["leaf-a.md", "leaf-b.md"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-    let bad_response = serde_json::json!({
-        "branches": [
-            {
-                "title": "Concept",
-                "body": "# Concept\n\nBody.",
-                "leaves": ["leaf-a.md", "invented.md"]
-            }
-        ]
-    })
-    .to_string();
-
-    let result = validate_and_execute_plan(
-        &bad_response,
-        &cfg,
-        &valid_filenames,
-        leaf_a_before.len() + leaf_b_before.len(),
-        "2025-06-01T12:00:00Z",
-        &[],
-    );
-
-    assert!(matches!(result, Err(CompileError::Validation(_))));
-    assert!(!dir.path().join("branches").exists());
-    assert_eq!(fs::read_to_string(&leaf_a_path).unwrap(), leaf_a_before);
-    assert_eq!(fs::read_to_string(&leaf_b_path).unwrap(), leaf_b_before);
-}
-
-// ── execute_plan tests ────────────────────────────────────────────────────
-
-#[test]
-fn execute_plan_writes_branches_and_updates_frontmatter() {
-    let dir = TempDir::new().unwrap();
-    let cfg = make_test_config(dir.path());
-
-    // Write leaf files
-    fs::write(
-        dir.path().join("leaf-a.md"),
-        "---\ntitle: A\nurl: https://example.com/a\ncollected_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-01T00:00:00Z\n---\n\n# A\n\nBody.\n",
-    ).unwrap();
-    fs::write(
-        dir.path().join("leaf-b.md"),
-        "---\ntitle: B\nurl: https://example.com/b\ncollected_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-01T00:00:00Z\n---\n\n# B\n\nBody.\n",
-    ).unwrap();
-
-    let valid_filenames: HashSet<String> = ["leaf-a.md", "leaf-b.md"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-
-    let mut leaf_assignments = HashMap::new();
-    leaf_assignments.insert("leaf-a.md".to_string(), vec!["test-concept".to_string()]);
-    leaf_assignments.insert("leaf-b.md".to_string(), vec!["test-concept".to_string()]);
-
-    let plan = CompilePlan {
-        branches: vec![ValidatedBranch {
-            slug: "test-concept".to_string(),
-            title: "Test Concept".to_string(),
-            body: "# Test Concept\n\nDescription.\n".to_string(),
-            leaves: vec!["leaf-a.md".to_string(), "leaf-b.md".to_string()],
-        }],
-        leaf_assignments,
-    };
-
-    let summary = execute_plan(&plan, &cfg, &valid_filenames, "2025-06-01T12:00:00Z", &[]).unwrap();
-
-    // Branch file written
-    let branch_path = dir.path().join("branches").join("test-concept.md");
-    assert!(branch_path.exists());
-    let branch_content = fs::read_to_string(&branch_path).unwrap();
-    assert!(branch_content.contains("title: Test Concept"));
-    assert!(branch_content.contains("leaf-a.md"));
-    assert!(branch_content.contains("leaf-b.md"));
-
-    // Leaf frontmatter updated
-    let leaf_a = fs::read_to_string(dir.path().join("leaf-a.md")).unwrap();
-    assert!(leaf_a.contains("branches:"));
-    assert!(leaf_a.contains("- test-concept"));
-    assert!(leaf_a.contains("updated_at: 2025-06-01T12:00:00Z"));
-
-    // Summary correct
-    assert_eq!(summary.branches.len(), 1);
-    assert_eq!(summary.leaves_updated, 2);
-}
-
-#[test]
-fn execute_plan_empty_branches_resets_leaf_frontmatter() {
-    let dir = TempDir::new().unwrap();
-    let cfg = make_test_config(dir.path());
-
-    // Write a leaf that already has branches assigned
-    fs::write(
-        dir.path().join("leaf-a.md"),
-        "---\ntitle: A\nurl: https://example.com/a\ncollected_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-01T00:00:00Z\nbranches:\n  - old-branch\n---\n\n# A\n\nBody.\n",
-    ).unwrap();
-
-    let valid_filenames: HashSet<String> = ["leaf-a.md"].iter().map(|s| s.to_string()).collect();
-
-    let plan = CompilePlan {
-        branches: Vec::new(),
-        leaf_assignments: HashMap::new(),
-    };
-
-    execute_plan(&plan, &cfg, &valid_filenames, "2025-06-01T12:00:00Z", &[]).unwrap();
-
-    let content = fs::read_to_string(dir.path().join("leaf-a.md")).unwrap();
-    assert!(content.contains("branches: []"));
-}
-
-// ── build_user_message test ───────────────────────────────────────────────
-
-#[test]
-fn build_user_message_uses_xml_fencing() {
-    let leaves = vec![LoadedLeaf {
-        filename: "test.md".to_string(),
-        title: "Test Doc".to_string(),
-        body: "Some body content.".to_string(),
-    }];
-
-    let msg = build_user_message(&leaves);
-    assert!(msg.contains("<document filename=\"test.md\" title=\"Test Doc\">"));
-    assert!(msg.contains("Some body content."));
-    assert!(msg.contains("</document>"));
-}
-
-// ── compile_response_schema test ──────────────────────────────────────────
-
-#[test]
-fn schema_is_valid_json_schema() {
-    let schema = compile_response_schema();
-    assert_eq!(schema["type"], "object");
-    assert!(schema["properties"]["branches"].is_object());
-    assert_eq!(schema["properties"]["branches"]["type"], "array");
-}
-
-// ── LLM policy tests ─────────────────────────────────────────────────────
-
-struct CompileFakeProvider {
+struct StaticProvider {
+    response: String,
     calls: AtomicUsize,
-    fail_attempts: usize,
-    finish_reason: FinishReason,
 }
 
-impl CompileFakeProvider {
-    fn new(fail_attempts: usize, finish_reason: FinishReason) -> Self {
+impl StaticProvider {
+    fn new(response: serde_json::Value) -> Self {
         Self {
+            response: response.to_string(),
             calls: AtomicUsize::new(0),
-            fail_attempts,
-            finish_reason,
         }
     }
 
@@ -525,7 +145,7 @@ impl CompileFakeProvider {
 }
 
 #[async_trait]
-impl LlmProvider for CompileFakeProvider {
+impl LlmProvider for StaticProvider {
     async fn complete(
         &self,
         _messages: &[Message],
@@ -533,22 +153,19 @@ impl LlmProvider for CompileFakeProvider {
         _max_tokens: u32,
         _response_schema: Option<&Value>,
     ) -> Result<LlmResponse, LlmError> {
-        let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
-        if call <= self.fail_attempts {
-            return Err(LlmError::Network("temporary failure".to_string()));
-        }
+        self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(LlmResponse {
-            content: r#"{"branches":[]}"#.to_string(),
-            finish_reason: self.finish_reason.clone(),
+            content: self.response.clone(),
+            finish_reason: crate::engine::llm::FinishReason::Stop,
         })
     }
 }
 
-struct CompileModelRecordingProvider {
+struct ModelRecordingProvider {
     model: Mutex<Option<String>>,
 }
 
-impl CompileModelRecordingProvider {
+impl ModelRecordingProvider {
     fn new() -> Self {
         Self {
             model: Mutex::new(None),
@@ -561,7 +178,7 @@ impl CompileModelRecordingProvider {
 }
 
 #[async_trait]
-impl LlmProvider for CompileModelRecordingProvider {
+impl LlmProvider for ModelRecordingProvider {
     async fn complete(
         &self,
         _messages: &[Message],
@@ -571,342 +188,410 @@ impl LlmProvider for CompileModelRecordingProvider {
     ) -> Result<LlmResponse, LlmError> {
         *self.model.lock().unwrap() = Some(model.to_string());
         Ok(LlmResponse {
-            content: r#"{"branches":[]}"#.to_string(),
-            finish_reason: FinishReason::Stop,
+            content: r#"{"updated_branches":[],"new_branches":[]}"#.to_string(),
+            finish_reason: crate::engine::llm::FinishReason::Stop,
         })
     }
 }
 
-struct CompilePermanentFailureProvider {
-    calls: AtomicUsize,
+fn empty_incremental_response() -> serde_json::Value {
+    serde_json::json!({"updated_branches": [], "new_branches": []})
 }
 
-impl CompilePermanentFailureProvider {
-    fn new() -> Self {
-        Self {
-            calls: AtomicUsize::new(0),
-        }
-    }
+// ── scenario tests ────────────────────────────────────────────────────────────
 
-    fn calls(&self) -> usize {
-        self.calls.load(Ordering::SeqCst)
-    }
+#[test]
+#[serial]
+fn compile_exits_cleanly_on_empty_collection() {
+    let dir = TempDir::new().unwrap();
+    let cfg = make_test_config(dir.path());
+    std::env::remove_var("OPENAI_API_KEY");
+    seed_manifest(dir.path(), &[]);
+    let result = cmd_compile(&cfg);
+    assert!(result.is_ok());
 }
 
-#[async_trait]
-impl LlmProvider for CompilePermanentFailureProvider {
-    async fn complete(
-        &self,
-        _messages: &[Message],
-        _model: &str,
-        _max_tokens: u32,
-        _response_schema: Option<&Value>,
-    ) -> Result<LlmResponse, LlmError> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        Err(LlmError::Parse("invalid".to_string()))
-    }
+#[test]
+#[serial]
+fn compile_exits_cleanly_on_single_leaf() {
+    let dir = TempDir::new().unwrap();
+    seed_manifest(dir.path(), &[("only", "Only", "https://example.com")]);
+    write_leaf(dir.path(), "only", "Only", "https://example.com");
+    std::env::remove_var("OPENAI_API_KEY");
+    let cfg = make_test_config(dir.path());
+    let result = cmd_compile(&cfg);
+    assert!(result.is_ok());
 }
 
-struct CompileHangingProvider {
-    calls: AtomicUsize,
+#[test]
+#[serial]
+fn compile_errors_without_api_key() {
+    let dir = TempDir::new().unwrap();
+    seed_manifest(
+        dir.path(),
+        &[
+            ("a", "A", "https://example.com/a"),
+            ("b", "B", "https://example.com/b"),
+        ],
+    );
+    write_leaf(dir.path(), "a", "A", "https://example.com/a");
+    write_leaf(dir.path(), "b", "B", "https://example.com/b");
+    let home = TempDir::new().unwrap();
+    let _home_guard = EnvGuard::set("HOME", home.path().to_str().unwrap());
+    let _api_key_guard = EnvGuard::unset("OPENAI_API_KEY");
+    let cfg = make_test_config(dir.path());
+    let result = cmd_compile(&cfg);
+    assert!(result.is_err());
+    let msg = result.unwrap_err();
+    assert_eq!(msg, MISSING_OPENAI_AUTH_MESSAGE);
 }
 
-impl CompileHangingProvider {
-    fn new() -> Self {
-        Self {
-            calls: AtomicUsize::new(0),
-        }
-    }
+// ── first compile creates branches ────────────────────────────────────────────
 
-    fn calls(&self) -> usize {
-        self.calls.load(Ordering::SeqCst)
-    }
-}
+#[test]
+fn first_compile_creates_branches_and_reports_incremental_mode() {
+    let dir = TempDir::new().unwrap();
+    seed_manifest(
+        dir.path(),
+        &[
+            ("leaf-a", "A", "https://example.com/a"),
+            ("leaf-b", "B", "https://example.com/b"),
+        ],
+    );
+    write_leaf(dir.path(), "leaf-a", "A", "https://example.com/a");
+    write_leaf(dir.path(), "leaf-b", "B", "https://example.com/b");
+    let cfg = make_test_config(dir.path());
+    let provider = StaticProvider::new(serde_json::json!({
+        "updated_branches": [],
+        "new_branches": [{
+            "title": "Test Concept",
+            "body": "# Test Concept\n\nBody.",
+            "leaves": ["leaf-a", "leaf-b"]
+        }]
+    }));
 
-#[async_trait]
-impl LlmProvider for CompileHangingProvider {
-    async fn complete(
-        &self,
-        _messages: &[Message],
-        _model: &str,
-        _max_tokens: u32,
-        _response_schema: Option<&Value>,
-    ) -> Result<LlmResponse, LlmError> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        Ok(LlmResponse {
-            content: r#"{"branches":[]}"#.to_string(),
-            finish_reason: FinishReason::Stop,
-        })
-    }
-}
-
-fn short_compile_policy(max_attempts: usize) -> LlmCallPolicy {
-    LlmCallPolicy {
-        timeout: Duration::from_millis(20),
-        max_attempts,
-        initial_backoff: Duration::ZERO,
-    }
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn compile_retries_transient_failure_and_succeeds() {
-    let provider = CompileFakeProvider::new(1, FinishReason::Stop);
-    let schema = compile_response_schema();
-
-    let response = call_llm_with_provider(
+    let result = run_compile_with_provider(
+        &cfg,
+        CompileOptions::default(),
         &provider,
-        "gpt-4o",
-        "compile this",
-        &schema,
-        short_compile_policy(3),
+        &cfg.effective_compile_model(),
     )
-    .await
     .unwrap();
 
-    assert_eq!(provider.calls(), 2);
-    assert_eq!(response, r#"{"branches":[]}"#);
+    assert_eq!(result.status, "compiled");
+    assert_eq!(result.mode, Some(CompileRunMode::Incremental));
+    assert_eq!(result.context_mode, Some(CompileContextMode::FullCorpus));
+    assert_eq!(provider.calls(), 1);
+
+    // Manifest updated
+    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    assert_eq!(m.branches.len(), 1);
+    assert_eq!(m.branches[0].slug.as_str(), "test-concept");
+    assert_eq!(
+        m.branches[0]
+            .leaves
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>(),
+        vec!["leaf-a", "leaf-b"]
+    );
+    assert!(m.tree.last_compiled_at.is_some());
+
+    // Branch file written
+    assert!(dir.path().join("branches/test-concept.md").exists());
+
+    // Leaf files unchanged
+    let leaf_a = fs::read_to_string(dir.path().join("leaf-a.md")).unwrap();
+    assert!(leaf_a.contains("Body for leaf-a."));
+    assert!(!leaf_a.contains("branches:"));
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn compile_provider_receives_requested_model() {
-    let provider = CompileModelRecordingProvider::new();
-    let schema = compile_response_schema();
+// ── no-op ─────────────────────────────────────────────────────────────────────
 
-    call_llm_with_provider(
+#[test]
+fn no_op_when_no_new_leaves_and_no_stale_branches() {
+    let dir = TempDir::new().unwrap();
+    seed_compiled_tree(dir.path());
+    let cfg = make_test_config(dir.path());
+    let provider = StaticProvider::new(empty_incremental_response());
+
+    let result = run_compile_with_provider(
+        &cfg,
+        CompileOptions::default(),
         &provider,
-        "gpt-4.1-mini",
-        "compile this",
-        &schema,
-        short_compile_policy(1),
+        &cfg.effective_compile_model(),
     )
-    .await
+    .unwrap();
+
+    assert_eq!(result.status, "noop");
+    assert_eq!(
+        result.reason.as_deref(),
+        Some("no new leaves since last compile")
+    );
+    assert_eq!(provider.calls(), 0);
+}
+
+// ── compile_model routing ─────────────────────────────────────────────────────
+
+#[test]
+fn compile_uses_effective_compile_model() {
+    let dir = TempDir::new().unwrap();
+    seed_manifest(
+        dir.path(),
+        &[
+            ("leaf-a", "A", "https://example.com/a"),
+            ("leaf-b", "B", "https://example.com/b"),
+        ],
+    );
+    write_leaf(dir.path(), "leaf-a", "A", "https://example.com/a");
+    write_leaf(dir.path(), "leaf-b", "B", "https://example.com/b");
+    let cfg = SeededConfig {
+        tree: crate::domain::tree::TreeConfig {
+            output_dir: dir.path().to_path_buf(),
+            name: None,
+            created_at: None,
+        },
+        model: Some("gpt-4o-mini".to_string()),
+        compile_model: Some("gpt-4.1-mini".to_string()),
+    };
+    let provider = ModelRecordingProvider::new();
+
+    run_compile_with_provider(
+        &cfg,
+        CompileOptions::default(),
+        &provider,
+        &cfg.effective_compile_model(),
+    )
     .unwrap();
 
     assert_eq!(provider.model().as_deref(), Some("gpt-4.1-mini"));
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn compile_timeout_fails() {
-    let provider = CompileHangingProvider::new();
-    let schema = compile_response_schema();
+// ── full mode (--all) deletes omitted branches ────────────────────────────────
 
-    let err = call_llm_with_provider(
+#[test]
+fn full_mode_deletes_omitted_branch_files() {
+    let dir = TempDir::new().unwrap();
+    seed_compiled_tree(dir.path());
+    // Add a new leaf so compile has work to do
+    let manifest_path = dir.path().join(".bo/manifest.json");
+    let mut m = manifest::read(&manifest_path).unwrap();
+    m.leaves.push(LeafRecord {
+        slug: Slug::parse("leaf-c").unwrap(),
+        file: "leaf-c.md".to_string(),
+        title: Title::new("C"),
+        url: Url::parse("https://example.com/c").unwrap(),
+        collected_at: Timestamp::parse("2026-07-01T00:00:00Z").unwrap(),
+        summary: None,
+    });
+    manifest::write(&manifest_path, &m).unwrap();
+    write_leaf(dir.path(), "leaf-c", "C", "https://example.com/c");
+
+    let cfg = make_test_config(dir.path());
+    // Full response replaces graph with a different branch — "existing" is omitted
+    let provider = StaticProvider::new(serde_json::json!({
+        "branches": [{
+            "title": "Replacement",
+            "body": "# Replacement\n\nNew graph.",
+            "leaves": ["leaf-a.md", "leaf-b.md", "leaf-c.md"]
+        }]
+    }));
+
+    let result = run_compile_with_provider(
+        &cfg,
+        CompileOptions { all: true },
         &provider,
-        "gpt-4o",
-        "compile this",
-        &schema,
-        short_compile_policy(1),
-    )
-    .await
-    .unwrap_err();
-
-    assert_eq!(provider.calls(), 1);
-    assert!(matches!(err, CompileError::Llm(_)));
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn compile_does_not_retry_permanent_failure() {
-    let provider = CompilePermanentFailureProvider::new();
-    let schema = compile_response_schema();
-
-    let err = call_llm_with_provider(
-        &provider,
-        "gpt-4o",
-        "compile this",
-        &schema,
-        short_compile_policy(3),
-    )
-    .await
-    .unwrap_err();
-
-    assert_eq!(provider.calls(), 1);
-    assert!(matches!(err, CompileError::Llm(_)));
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn compile_length_finish_reason_returns_truncated() {
-    let provider = CompileFakeProvider::new(0, FinishReason::Length);
-    let schema = compile_response_schema();
-
-    let err = call_llm_with_provider(
-        &provider,
-        "gpt-4o",
-        "compile this",
-        &schema,
-        short_compile_policy(1),
-    )
-    .await
-    .unwrap_err();
-
-    assert!(matches!(err, CompileError::Truncated));
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn compile_content_filter_finish_reason_returns_content_filter() {
-    let provider = CompileFakeProvider::new(0, FinishReason::ContentFilter);
-    let schema = compile_response_schema();
-
-    let err = call_llm_with_provider(
-        &provider,
-        "gpt-4o",
-        "compile this",
-        &schema,
-        short_compile_policy(1),
-    )
-    .await
-    .unwrap_err();
-
-    assert!(matches!(err, CompileError::ContentFilter));
-}
-
-// ── manifest dual-write (T4.3) ───────────────────────────────────────────
-
-fn seed_manifest_for_compile(dir: &std::path::Path, leaves: &[(&str, &str, &str)]) {
-    use crate::domain::manifest::{LeafRecord, Manifest, TreeMeta};
-    fs::create_dir_all(dir.join(".bo")).unwrap();
-    let leaf_records = leaves
-        .iter()
-        .map(|(slug, title, url)| LeafRecord {
-            slug: slug.to_string(),
-            file: format!("{}.md", slug),
-            title: title.to_string(),
-            url: url.to_string(),
-            collected_at: "2026-01-01T00:00:00Z".to_string(),
-            summary: None,
-        })
-        .collect();
-    let m = Manifest {
-        tree: TreeMeta {
-            name: "compile-tree".to_string(),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
-            last_compiled_at: None,
-        },
-        leaves: leaf_records,
-        branches: Vec::new(),
-    };
-    crate::domain::manifest::write(&dir.join(".bo/manifest.json"), &m).unwrap();
-}
-
-fn write_leaf_file(dir: &std::path::Path, slug: &str, title: &str, url: &str) {
-    fs::write(
-        dir.join(format!("{}.md", slug)),
-        format!(
-            "---\ntitle: \"{title}\"\nurl: {url}\ncollected_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\n# {title}\n\nBody.\n"
-        ),
+        &cfg.effective_compile_model(),
     )
     .unwrap();
+
+    assert_eq!(result.status, "compiled");
+    assert_eq!(result.mode, Some(CompileRunMode::Full));
+
+    // Old branch file deleted
+    assert!(!dir.path().join("branches/existing.md").exists());
+    // New branch file created
+    assert!(dir.path().join("branches/replacement.md").exists());
+
+    let m = manifest::read(&manifest_path).unwrap();
+    assert!(m.branch_by_slug_str("existing").is_none());
+    assert!(m.branch_by_slug_str("replacement").is_some());
+}
+
+// ── incremental compile preserves omitted branches ────────────────────────────
+
+#[test]
+fn incremental_compile_preserves_existing_branches() {
+    let dir = TempDir::new().unwrap();
+    seed_compiled_tree(dir.path());
+    // Add a new leaf
+    let manifest_path = dir.path().join(".bo/manifest.json");
+    let mut m = manifest::read(&manifest_path).unwrap();
+    m.leaves.push(LeafRecord {
+        slug: Slug::parse("leaf-c").unwrap(),
+        file: "leaf-c.md".to_string(),
+        title: Title::new("C"),
+        url: Url::parse("https://example.com/c").unwrap(),
+        collected_at: Timestamp::parse("2026-07-01T00:00:00Z").unwrap(),
+        summary: None,
+    });
+    manifest::write(&manifest_path, &m).unwrap();
+    write_leaf(dir.path(), "leaf-c", "C", "https://example.com/c");
+
+    let cfg = make_test_config(dir.path());
+    // Response creates a new branch but does NOT mention "existing"
+    let provider = StaticProvider::new(serde_json::json!({
+        "updated_branches": [],
+        "new_branches": [{
+            "title": "New Concept",
+            "body": "# New Concept\n\nBody.",
+            "leaves": ["leaf-a", "leaf-c"]
+        }]
+    }));
+
+    let result = run_compile_with_provider(
+        &cfg,
+        CompileOptions::default(),
+        &provider,
+        &cfg.effective_compile_model(),
+    )
+    .unwrap();
+
+    assert_eq!(result.status, "compiled");
+    assert_eq!(result.mode, Some(CompileRunMode::Incremental));
+
+    let m = manifest::read(&manifest_path).unwrap();
+    // Existing branch preserved
+    assert!(m.branch_by_slug_str("existing").is_some());
+    // New branch created
+    assert!(m.branch_by_slug_str("new-concept").is_some());
+    // Old branch file still exists
+    assert!(dir.path().join("branches/existing.md").exists());
+    // New branch file written
+    assert!(dir.path().join("branches/new-concept.md").exists());
+}
+
+// ── stale branch scenarios ────────────────────────────────────────────────
+
+#[test]
+fn deleted_leaf_rebuilds_stale_branch() {
+    let dir = TempDir::new().unwrap();
+    seed_manifest(
+        dir.path(),
+        &[
+            ("leaf-a", "A", "https://example.com/a"),
+            ("leaf-b", "B", "https://example.com/b"),
+            ("leaf-c", "C", "https://example.com/c"),
+        ],
+    );
+    write_leaf(dir.path(), "leaf-a", "A", "https://example.com/a");
+    write_leaf(dir.path(), "leaf-b", "B", "https://example.com/b");
+    write_leaf(dir.path(), "leaf-c", "C", "https://example.com/c");
+    let manifest_path = dir.path().join(".bo/manifest.json");
+    let mut m = manifest::read(&manifest_path).unwrap();
+    m.tree.last_compiled_at = Some(Timestamp::parse("2026-06-01T12:00:00Z").unwrap());
+    m.branches = vec![BranchRecord {
+        slug: Slug::parse("concept").unwrap(),
+        file: "branches/concept.md".to_string(),
+        title: Title::new("Concept"),
+        created_at: Timestamp::parse("2026-06-01T12:00:00Z").unwrap(),
+        updated_at: Timestamp::parse("2026-06-01T12:00:00Z").unwrap(),
+        stale: false,
+        leaves: vec![
+            Slug::parse("leaf-a").unwrap(),
+            Slug::parse("leaf-b").unwrap(),
+            Slug::parse("leaf-c").unwrap(),
+        ],
+    }];
+    manifest::write(&manifest_path, &m).unwrap();
+    fs::create_dir_all(dir.path().join("branches")).unwrap();
+    fs::write(dir.path().join("branches/concept.md"), "old").unwrap();
+
+    // Delete leaf-c to make the branch stale
+    fs::remove_file(dir.path().join("leaf-c.md")).unwrap();
+
+    let cfg = make_test_config(dir.path());
+    let provider = StaticProvider::new(serde_json::json!({
+        "updated_branches": [{
+            "slug": "concept",
+            "title": "Concept",
+            "body": "# Concept\n\nRebuilt from two leaves.",
+            "leaves": ["leaf-a", "leaf-b"]
+        }],
+        "new_branches": []
+    }));
+
+    let result = run_compile_with_provider(
+        &cfg,
+        CompileOptions::default(),
+        &provider,
+        &cfg.effective_compile_model(),
+    )
+    .unwrap();
+
+    // Stale repair happens deterministically in pre-pass; no LLM call needed
+    assert_eq!(result.status, "noop");
+    assert_eq!(provider.calls(), 0);
+
+    let m = manifest::read(&manifest_path).unwrap();
+    assert!(m.leaf_by_slug_str("leaf-c").is_none());
+    let branch = m.branch_by_slug_str("concept").unwrap();
+    assert_eq!(
+        branch.leaves.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        vec!["leaf-a", "leaf-b"]
+    );
+    assert!(!branch.stale);
+    assert!(fs::read_to_string(dir.path().join("leaf-a.md"))
+        .unwrap()
+        .contains("Body for leaf-a"));
 }
 
 #[test]
-fn execute_plan_populates_manifest_branches_with_full_metadata() {
+fn stale_branch_below_threshold_removed() {
     let dir = TempDir::new().unwrap();
-    let cfg = make_test_config(dir.path());
-    seed_manifest_for_compile(
+    seed_manifest(
         dir.path(),
         &[
             ("leaf-a", "A", "https://example.com/a"),
             ("leaf-b", "B", "https://example.com/b"),
         ],
     );
-    write_leaf_file(dir.path(), "leaf-a", "A", "https://example.com/a");
-    write_leaf_file(dir.path(), "leaf-b", "B", "https://example.com/b");
-
-    let valid_filenames: HashSet<String> = ["leaf-a.md", "leaf-b.md"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-    let mut leaf_assignments = HashMap::new();
-    leaf_assignments.insert("leaf-a.md".to_string(), vec!["test-concept".to_string()]);
-    leaf_assignments.insert("leaf-b.md".to_string(), vec!["test-concept".to_string()]);
-    let plan = CompilePlan {
-        branches: vec![ValidatedBranch {
-            slug: "test-concept".to_string(),
-            title: "Test Concept".to_string(),
-            body: "# Test Concept\n\nBody.\n".to_string(),
-            leaves: vec!["leaf-a.md".to_string(), "leaf-b.md".to_string()],
-        }],
-        leaf_assignments,
-    };
-
-    execute_plan(&plan, &cfg, &valid_filenames, "2026-06-01T12:00:00Z", &[]).unwrap();
-
-    let m = crate::domain::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
-    assert_eq!(m.branches.len(), 1);
-    let b = &m.branches[0];
-    assert_eq!(b.slug, "test-concept");
-    assert_eq!(b.file, "branches/test-concept.md");
-    assert_eq!(b.title, "Test Concept");
-    assert_eq!(b.created_at, "2026-06-01T12:00:00Z");
-    assert_eq!(b.updated_at, "2026-06-01T12:00:00Z");
-    assert!(!b.stale);
-    assert_eq!(b.leaves, vec!["leaf-a", "leaf-b"]);
-    // Leaf records preserved.
-    assert_eq!(m.leaves.len(), 2);
-    // tree.last_compiled_at advanced.
-    assert_eq!(
-        m.tree.last_compiled_at.as_deref(),
-        Some("2026-06-01T12:00:00Z")
-    );
-}
-
-#[test]
-fn execute_plan_preserves_created_at_across_recompiles() {
-    let dir = TempDir::new().unwrap();
-    let cfg = make_test_config(dir.path());
-    seed_manifest_for_compile(
-        dir.path(),
-        &[
-            ("leaf-a", "A", "https://example.com/a"),
-            ("leaf-b", "B", "https://example.com/b"),
+    write_leaf(dir.path(), "leaf-a", "A", "https://example.com/a");
+    // leaf-b deliberately missing
+    let manifest_path = dir.path().join(".bo/manifest.json");
+    let mut m = manifest::read(&manifest_path).unwrap();
+    m.tree.last_compiled_at = Some(Timestamp::parse("2026-06-01T12:00:00Z").unwrap());
+    m.branches = vec![BranchRecord {
+        slug: Slug::parse("doomed").unwrap(),
+        file: "branches/doomed.md".to_string(),
+        title: Title::new("Doomed"),
+        created_at: Timestamp::parse("2026-06-01T12:00:00Z").unwrap(),
+        updated_at: Timestamp::parse("2026-06-01T12:00:00Z").unwrap(),
+        stale: false,
+        leaves: vec![
+            Slug::parse("leaf-a").unwrap(),
+            Slug::parse("leaf-b").unwrap(),
         ],
-    );
-    write_leaf_file(dir.path(), "leaf-a", "A", "https://example.com/a");
-    write_leaf_file(dir.path(), "leaf-b", "B", "https://example.com/b");
+    }];
+    manifest::write(&manifest_path, &m).unwrap();
+    fs::create_dir_all(dir.path().join("branches")).unwrap();
+    fs::write(dir.path().join("branches/doomed.md"), "old").unwrap();
 
-    let valid_filenames: HashSet<String> = ["leaf-a.md", "leaf-b.md"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-    let mut leaf_assignments = HashMap::new();
-    leaf_assignments.insert("leaf-a.md".to_string(), vec!["test-concept".to_string()]);
-    leaf_assignments.insert("leaf-b.md".to_string(), vec!["test-concept".to_string()]);
-    let plan = CompilePlan {
-        branches: vec![ValidatedBranch {
-            slug: "test-concept".to_string(),
-            title: "Test Concept".to_string(),
-            body: "# Test Concept\n\nBody.\n".to_string(),
-            leaves: vec!["leaf-a.md".to_string(), "leaf-b.md".to_string()],
-        }],
-        leaf_assignments,
-    };
+    let cfg = make_test_config(dir.path());
+    let provider = StaticProvider::new(empty_incremental_response());
 
-    // First compile.
-    execute_plan(&plan, &cfg, &valid_filenames, "2026-06-01T12:00:00Z", &[]).unwrap();
-    // Second compile (same plan, later timestamp).
-    execute_plan(&plan, &cfg, &valid_filenames, "2026-12-01T10:00:00Z", &[]).unwrap();
+    let result = run_compile_with_provider(
+        &cfg,
+        CompileOptions::default(),
+        &provider,
+        &cfg.effective_compile_model(),
+    )
+    .unwrap();
 
-    let m = crate::domain::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
-    let b = &m.branches[0];
-    assert_eq!(
-        b.created_at, "2026-06-01T12:00:00Z",
-        "created_at must be preserved"
-    );
-    assert_eq!(
-        b.updated_at, "2026-12-01T10:00:00Z",
-        "updated_at must advance"
-    );
-    assert_eq!(
-        m.tree.last_compiled_at.as_deref(),
-        Some("2026-12-01T10:00:00Z")
-    );
-
-    // Branch frontmatter mirrors manifest.
-    let branch_md = fs::read_to_string(dir.path().join("branches/test-concept.md")).unwrap();
-    assert!(branch_md.contains("created_at: 2026-06-01T12:00:00Z"));
-    assert!(branch_md.contains("updated_at: 2026-12-01T10:00:00Z"));
-    assert!(
-        !branch_md.contains("compiled_at"),
-        "old field name must not appear"
-    );
+    // Stale repair happens deterministically; branch below 2-leaf threshold removed
+    assert_eq!(result.status, "noop");
+    let m = manifest::read(&manifest_path).unwrap();
+    assert!(m.branch_by_slug_str("doomed").is_none());
+    assert!(!dir.path().join("branches/doomed.md").exists());
+    assert!(m.leaf_by_slug_str("leaf-b").is_none());
 }

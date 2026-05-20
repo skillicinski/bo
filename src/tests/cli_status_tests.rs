@@ -1,5 +1,6 @@
 use super::*;
 use crate::domain::manifest::{self, BranchRecord, LeafRecord, Manifest, TreeMeta};
+use crate::domain::{Slug, Timestamp, Title, Url};
 use std::fs;
 use tempfile::TempDir;
 
@@ -21,8 +22,8 @@ fn write_manifest(
     let m = Manifest {
         tree: TreeMeta {
             name: "test".to_string(),
-            created_at: "2026-05-14T09:00:00Z".to_string(),
-            last_compiled_at: last_compiled_at.map(str::to_string),
+            created_at: Timestamp::parse("2026-05-14T09:00:00Z").unwrap(),
+            last_compiled_at: last_compiled_at.map(|s| Timestamp::parse(s).unwrap()),
         },
         leaves: leaves.to_vec(),
         branches: branches.to_vec(),
@@ -32,24 +33,24 @@ fn write_manifest(
 
 fn leaf(slug: &str, url: &str, collected_at: &str) -> LeafRecord {
     LeafRecord {
-        slug: slug.to_string(),
+        slug: Slug::parse(slug).unwrap(),
         file: format!("{}.md", slug),
-        title: slug.to_string(),
-        url: url.to_string(),
-        collected_at: collected_at.to_string(),
+        title: Title::new(slug),
+        url: Url::parse(url).unwrap(),
+        collected_at: Timestamp::parse(collected_at).unwrap(),
         summary: None,
     }
 }
 
 fn branch_record(slug: &str, ts: &str, leaf_slugs: &[&str]) -> BranchRecord {
     BranchRecord {
-        slug: slug.to_string(),
+        slug: Slug::parse(slug).unwrap(),
         file: format!("branches/{}.md", slug),
-        title: slug.to_string(),
-        created_at: ts.to_string(),
-        updated_at: ts.to_string(),
+        title: Title::new(slug),
+        created_at: Timestamp::parse(ts).unwrap(),
+        updated_at: Timestamp::parse(ts).unwrap(),
         stale: false,
-        leaves: leaf_slugs.iter().map(|s| s.to_string()).collect(),
+        leaves: leaf_slugs.iter().map(|s| Slug::parse(s).unwrap()).collect(),
     }
 }
 
@@ -151,7 +152,7 @@ fn branch_count_and_last_compiled() {
     assert_eq!(result.branches.total, 2);
     assert_eq!(
         result.branches.last_compiled_at.as_deref(),
-        Some("2026-05-14T20:00:00Z")
+        Some("2026-05-14T20:00:00.000Z")
     );
 }
 

@@ -1,7 +1,13 @@
 use super::*;
 use crate::domain::manifest;
+use crate::domain::{Slug, Timestamp, Title, Url};
 use std::fs;
+use std::path::Path;
 use tempfile::TempDir;
+
+fn collect_html_test(url: &str, html: &str, output_dir: &Path) -> Result<Document, CollectError> {
+    collect_html_with_summarizer(url, html, output_dir, |_, _| Ok("test summary".to_string()))
+}
 
 #[test]
 fn collect_input_expands_txt_url_list() {
@@ -98,15 +104,15 @@ fn batch_collect_skips_existing_manifest_duplicates_without_fetching() {
         &manifest::Manifest {
             tree: manifest::TreeMeta {
                 name: "test".to_string(),
-                created_at: "2026-01-01T00:00:00Z".to_string(),
+                created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                 last_compiled_at: None,
             },
             leaves: vec![manifest::LeafRecord {
-                slug: "already".to_string(),
+                slug: Slug::parse("already").unwrap(),
                 file: "already.md".to_string(),
-                title: "Already".to_string(),
-                url: url.to_string(),
-                collected_at: "2026-01-01T00:00:00Z".to_string(),
+                title: Title::new("Already"),
+                url: Url::parse(url).unwrap(),
+                collected_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                 summary: None,
             }],
             branches: Vec::new(),
@@ -156,12 +162,13 @@ fn unsupported_youtube_embed_rejected_without_writes() {
 fn ordinary_html_collection_writes_leaf_and_manifest() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
-    let document = collect_html("https://example.com/article", ARTICLE_HTML, dir.path()).unwrap();
+    let document =
+        collect_html_test("https://example.com/article", ARTICLE_HTML, dir.path()).unwrap();
 
     assert!(dir.path().join(&document.filename).exists());
     let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.leaves.len(), 1);
-    assert_eq!(m.leaves[0].url, "https://example.com/article");
+    assert_eq!(m.leaves[0].url.as_str(), "https://example.com/article");
     assert!(!dir.path().join(".bo/index.jsonl").exists());
 }
 
@@ -194,15 +201,15 @@ fn collect_url_rejects_duplicate_youtube_url_before_network_fetch() {
         &manifest::Manifest {
             tree: manifest::TreeMeta {
                 name: "test".to_string(),
-                created_at: "2026-01-01T00:00:00Z".to_string(),
+                created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                 last_compiled_at: None,
             },
             leaves: vec![manifest::LeafRecord {
-                slug: "existing".to_string(),
+                slug: Slug::parse("existing").unwrap(),
                 file: "existing.md".to_string(),
-                title: "Existing Video".to_string(),
-                url: url.to_string(),
-                collected_at: "2026-01-01T00:00:00Z".to_string(),
+                title: Title::new("Existing Video"),
+                url: Url::parse(url).unwrap(),
+                collected_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                 summary: None,
             }],
             branches: Vec::new(),
@@ -220,13 +227,13 @@ fn collect_html_keeps_exact_match_duplicate_semantics_for_youtube_urls() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
 
-    collect_html(
+    collect_html_test(
         "https://www.youtube.com/watch?v=a1mhk7mAetk",
         ARTICLE_HTML,
         dir.path(),
     )
     .unwrap();
-    collect_html("https://youtu.be/a1mhk7mAetk", ARTICLE_HTML, dir.path()).unwrap();
+    collect_html_test("https://youtu.be/a1mhk7mAetk", ARTICLE_HTML, dir.path()).unwrap();
 
     let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.leaves.len(), 2);
@@ -343,7 +350,7 @@ fn assert_rejected_with(result: Result<Document, CollectError>, url: &str, reaso
 fn full_pipeline_happy_path() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
-    let page = collect_html("https://example.com/article", SAMPLE_HTML, dir.path()).unwrap();
+    let page = collect_html_test("https://example.com/article", SAMPLE_HTML, dir.path()).unwrap();
 
     assert!(dir.path().join(&page.filename).exists());
 
@@ -360,16 +367,16 @@ fn full_pipeline_happy_path() {
 
     let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.leaves.len(), 1);
-    assert_eq!(m.leaves[0].url, "https://example.com/article");
+    assert_eq!(m.leaves[0].url.as_str(), "https://example.com/article");
 }
 
 #[test]
 fn duplicate_rejected() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
-    collect_html("https://example.com/article", SAMPLE_HTML, dir.path()).unwrap();
+    collect_html_test("https://example.com/article", SAMPLE_HTML, dir.path()).unwrap();
 
-    let result = collect_html("https://example.com/article", SAMPLE_HTML, dir.path());
+    let result = collect_html_test("https://example.com/article", SAMPLE_HTML, dir.path());
     assert!(result.is_err());
     assert!(result
         .unwrap_err()
@@ -385,8 +392,10 @@ fn slug_collision_disambiguated() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
 
-    let page1 = collect_html("https://example.com/intro1", COLLISION_HTML_1, dir.path()).unwrap();
-    let page2 = collect_html("https://example.com/intro2", COLLISION_HTML_2, dir.path()).unwrap();
+    let page1 =
+        collect_html_test("https://example.com/intro1", COLLISION_HTML_1, dir.path()).unwrap();
+    let page2 =
+        collect_html_test("https://example.com/intro2", COLLISION_HTML_2, dir.path()).unwrap();
 
     assert!(dir.path().join(&page1.filename).exists());
     assert!(dir.path().join(&page2.filename).exists());
@@ -410,7 +419,7 @@ fn empty_extraction_no_artifacts() {
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let empty_html = "<html><body></body></html>";
 
-    let result = collect_html("https://example.com/empty", empty_html, dir.path());
+    let result = collect_html_test("https://example.com/empty", empty_html, dir.path());
     assert!(result.is_err());
 
     assert_no_collection_artifacts(&dir);
@@ -422,7 +431,7 @@ fn redirect_stub_rejected_without_artifacts() {
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let url = "https://blog.rust-lang.org/2015/05/11/traits.html";
 
-    let result = collect_html(url, REDIRECT_STUB_HTML, dir.path());
+    let result = collect_html_test(url, REDIRECT_STUB_HTML, dir.path());
 
     assert_rejected_with(result, url, "redirect stub");
     assert_no_collection_artifacts(&dir);
@@ -434,7 +443,7 @@ fn x_js_shell_rejected_without_artifacts() {
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let url = "https://x.com/lifeof_jer/status/2048103471019434248";
 
-    let result = collect_html(url, X_JS_SHELL_HTML, dir.path());
+    let result = collect_html_test(url, X_JS_SHELL_HTML, dir.path());
 
     assert_rejected_with(result, url, "JS-rendered content");
     assert_no_collection_artifacts(&dir);
@@ -446,7 +455,7 @@ fn openreview_footer_only_rejected_without_artifacts() {
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let url = "https://openreview.net/forum?id=OAudWSf7aH";
 
-    let result = collect_html(url, OPENREVIEW_FOOTER_HTML, dir.path());
+    let result = collect_html_test(url, OPENREVIEW_FOOTER_HTML, dir.path());
 
     assert_rejected_with(result, url, "boilerplate-only content");
     assert_no_collection_artifacts(&dir);
@@ -458,7 +467,7 @@ fn cloudflare_block_rejected_without_artifacts() {
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let url = "https://medium.com/@loci.ai/deploying-vllm-on-ecs-with-ec2-82d58b482125";
 
-    let result = collect_html(url, CLOUDFLARE_BLOCK_HTML, dir.path());
+    let result = collect_html_test(url, CLOUDFLARE_BLOCK_HTML, dir.path());
 
     assert_rejected_with(result, url, "blocked by site");
     assert_no_collection_artifacts(&dir);
@@ -469,7 +478,7 @@ fn mdbook_page_with_bad_ui_title_and_substantive_body_is_accepted() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
 
-    let result = collect_html(
+    let result = collect_html_test(
         "https://doc.rust-lang.org/book/ch04-00-understanding-ownership.html",
         MDBOOK_WITH_BAD_UI_TITLE_HTML,
         dir.path(),
@@ -489,7 +498,7 @@ fn mdbook_page_with_bad_ui_title_and_substantive_body_is_accepted() {
 
     let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.leaves.len(), 1);
-    assert_eq!(m.leaves[0].title, "Understanding Ownership");
+    assert_eq!(m.leaves[0].title.as_str(), "Understanding Ownership");
 }
 
 #[test]
@@ -498,10 +507,10 @@ fn failed_url_can_be_resubmitted() {
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let empty_html = "<html><body></body></html>";
 
-    let result = collect_html("https://example.com/flaky", empty_html, dir.path());
+    let result = collect_html_test("https://example.com/flaky", empty_html, dir.path());
     assert!(result.is_err());
 
-    let result = collect_html("https://example.com/flaky", SAMPLE_HTML, dir.path());
+    let result = collect_html_test("https://example.com/flaky", SAMPLE_HTML, dir.path());
     assert!(result.is_ok());
 }
 
@@ -510,8 +519,8 @@ fn near_duplicate_urls_both_stored() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
 
-    collect_html("https://example.com/article", SAMPLE_HTML, dir.path()).unwrap();
-    collect_html(
+    collect_html_test("https://example.com/article", SAMPLE_HTML, dir.path()).unwrap();
+    collect_html_test(
         "https://example.com/article?ref=twitter",
         SAMPLE_HTML,
         dir.path(),
@@ -535,7 +544,7 @@ fn seed_for_collect(dir: &TempDir, name: &str) {
     let m = manifest::Manifest {
         tree: TreeMeta {
             name: name.to_string(),
-            created_at: "2026-05-19T12:00:00Z".to_string(),
+            created_at: Timestamp::parse("2026-05-19T12:00:00Z").unwrap(),
             last_compiled_at: None,
         },
         leaves: Vec::new(),
@@ -562,12 +571,12 @@ fn collect_appends_leaf_record_to_manifest_with_full_metadata() {
     let m = manifest::read(&manifest_path).unwrap();
     assert_eq!(m.leaves.len(), 1);
     let rec = &m.leaves[0];
-    assert_eq!(rec.slug, doc.filename.strip_suffix(".md").unwrap());
+    assert_eq!(rec.slug.as_str(), doc.filename.strip_suffix(".md").unwrap());
     assert_eq!(rec.file, doc.filename);
-    assert_eq!(rec.title, "Test Article");
-    assert_eq!(rec.url, "https://example.com/article");
+    assert_eq!(rec.title.as_str(), "Test Article");
+    assert_eq!(rec.url.as_str(), "https://example.com/article");
     assert!(
-        rec.collected_at.contains('T'),
+        rec.collected_at.to_string().contains('T'),
         "collected_at iso8601: {}",
         rec.collected_at
     );
@@ -601,8 +610,8 @@ fn collect_writes_only_manifest_records() {
     for (n, rec) in m.leaves.iter().enumerate() {
         let n = n + 1;
         assert_eq!(rec.file, format!("page-{n}.md"));
-        assert_eq!(rec.url, format!("https://example.com/page{n}"));
-        assert_eq!(rec.title, format!("Page {n}"));
+        assert_eq!(rec.url.as_str(), &format!("https://example.com/page{n}"));
+        assert_eq!(rec.title.as_str(), format!("Page {n}"));
     }
 }
 
@@ -634,11 +643,11 @@ fn dedup_uses_manifest_not_index_jsonl() {
     let manifest_path = dir.path().join(".bo/manifest.json");
     let mut m = manifest::read(&manifest_path).unwrap();
     m.leaves.push(crate::domain::manifest::LeafRecord {
-        slug: "already-collected".to_string(),
+        slug: Slug::parse("already-collected").unwrap(),
         file: "already-collected.md".to_string(),
-        title: "Already".to_string(),
-        url: "https://example.com/article".to_string(),
-        collected_at: "2026-01-01T00:00:00Z".to_string(),
+        title: Title::new("Already"),
+        url: Url::parse("https://example.com/article").unwrap(),
+        collected_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         summary: None,
     });
     manifest::write(&manifest_path, &m).unwrap();
@@ -668,6 +677,6 @@ fn fresh_collect_after_3b_does_not_write_index_secondary() {
 
     let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.leaves.len(), 1);
-    assert_eq!(m.leaves[0].url, "https://example.com/page");
+    assert_eq!(m.leaves[0].url.as_str(), "https://example.com/page");
     assert!(!dir.path().join(".bo/index.jsonl").exists());
 }

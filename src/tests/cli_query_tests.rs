@@ -1,4 +1,6 @@
 use super::*;
+use crate::domain::{Slug, Timestamp, Title, Url};
+use crate::engine::llm::{model::Model, FinishReason, LlmProvider, LlmResponse};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::fs;
@@ -7,7 +9,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tempfile::TempDir;
 
-use crate::engine::llm::{FinishReason, LlmProvider, LlmResponse};
+fn test_model() -> Model {
+    Model::parse("gpt-4o").unwrap()
+}
 
 // ── term extraction tests ────────────────────────────────────────────
 
@@ -142,15 +146,11 @@ fn make_manifest(dir: &Path, entries: &[(&str, &str, &str)]) {
                         .map(str::to_string)
                 });
             crate::domain::manifest::LeafRecord {
-                slug: Path::new(file)
-                    .file_stem()
-                    .unwrap()
-                    .to_string_lossy()
-                    .into_owned(),
+                slug: Slug::generate(&Path::new(file).file_stem().unwrap().to_string_lossy(), ""),
                 file: file.to_string(),
-                title: title.to_string(),
-                url: url.to_string(),
-                collected_at: String::new(),
+                title: Title::new(title),
+                url: Url::parse(url).unwrap(),
+                collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                 summary,
             }
         })
@@ -162,7 +162,7 @@ fn make_manifest(dir: &Path, entries: &[(&str, &str, &str)]) {
         &crate::domain::manifest::Manifest {
             tree: crate::domain::manifest::TreeMeta {
                 name: "query".to_string(),
-                created_at: "2025-01-01T00:00:00Z".to_string(),
+                created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                 last_compiled_at: None,
             },
             leaves,
@@ -227,11 +227,11 @@ fn retrieve_or_semantics_scores_partial_matches() {
     let results = retrieve_leaves(tree, &terms).unwrap();
 
     // ownership leaf should rank highest (both terms match densely)
-    assert_eq!(results[0].slug, "ownership");
+    assert_eq!(results[0].slug.as_str(), "ownership");
     // lifetimes should match (contains "rust")
-    assert!(results.iter().any(|r| r.slug == "lifetimes"));
+    assert!(results.iter().any(|r| r.slug.as_str() == "lifetimes"));
     // cooking should NOT match
-    assert!(!results.iter().any(|r| r.slug == "cooking"));
+    assert!(!results.iter().any(|r| r.slug.as_str() == "cooking"));
 }
 
 #[test]
@@ -295,7 +295,7 @@ fn retrieve_missing_summary_uses_body_fallback() {
     let terms = vec!["rust".to_string()];
     let results = retrieve_leaves(tree, &terms).unwrap();
 
-    assert_eq!(results[0].slug, "nosummary");
+    assert_eq!(results[0].slug.as_str(), "nosummary");
     // Summary should be the body fallback (body is short, so full body used)
     assert!(results[0].summary.contains("Rust programming"));
 }
@@ -361,7 +361,7 @@ fn validate_preserves_valid_wikilinks_exactly() {
 
     assert_eq!(answer, "Answer cites [[valid-leaf]] exactly.");
     assert_eq!(citations.len(), 1);
-    assert_eq!(citations[0].slug, "valid-leaf");
+    assert_eq!(citations[0].slug.as_str(), "valid-leaf");
 }
 
 #[test]
@@ -391,7 +391,7 @@ fn validate_strips_invalid_citations() {
 
     // Invalid slug removed from citations list
     assert_eq!(citations.len(), 1);
-    assert_eq!(citations[0].slug, "valid-leaf");
+    assert_eq!(citations[0].slug.as_str(), "valid-leaf");
 }
 
 #[test]
@@ -430,7 +430,7 @@ fn validate_leaves_malformed_nested_empty_and_unclosed_wikilinks_unchanged() {
         "Keep [[ and [[foo and [[]] and [[foo] and [[foo[[bar]] but keep [[leaf-a]]."
     );
     assert_eq!(citations.len(), 1);
-    assert_eq!(citations[0].slug, "leaf-a");
+    assert_eq!(citations[0].slug.as_str(), "leaf-a");
 }
 
 #[test]
@@ -444,7 +444,7 @@ fn validate_includes_valid_prose_wikilink_missing_from_cited_slugs() {
     let (_answer, citations) = validate_citations(response, &retrieved);
 
     assert_eq!(citations.len(), 1);
-    assert_eq!(citations[0].slug, "leaf-a");
+    assert_eq!(citations[0].slug.as_str(), "leaf-a");
 }
 
 #[test]
@@ -515,7 +515,7 @@ fn validate_preserves_all_valid_citations() {
 
 #[test]
 fn query_budget_known_128k_model() {
-    let budget = compute_query_context_budget("gpt-4o").unwrap();
+    let budget = compute_query_context_budget(&test_model()).unwrap();
 
     assert_eq!(budget.model, "gpt-4o");
     assert_eq!(budget.context_tokens, 128_000);
@@ -532,7 +532,7 @@ fn query_budget_known_128k_model() {
 
 #[test]
 fn query_budget_known_1m_model() {
-    let budget = compute_query_context_budget("gpt-4.1-mini").unwrap();
+    let budget = compute_query_context_budget(&Model::parse("gpt-4.1-mini").unwrap()).unwrap();
 
     assert_eq!(budget.model, "gpt-4.1-mini");
     assert_eq!(budget.context_tokens, 1_000_000);
@@ -577,20 +577,11 @@ impl LlmProvider for CountingProvider {
 }
 
 #[test]
-fn unknown_model_fails_before_provider_invocation() {
-    let dir = single_leaf_query_tree();
-    let provider = CountingProvider::new();
-
-    let err = run_with_provider(
-        dir.path(),
-        "what is rust safety",
-        &provider,
-        "unknown-model",
-    )
-    .unwrap_err();
-
-    assert!(matches!(err, QueryError::UnknownModelContext { .. }));
-    assert_eq!(provider.calls(), 0);
+fn unknown_model_rejected_at_parse_boundary() {
+    // Model validation now happens at parse time (config boundary),
+    // not at query execution time. An invalid model string cannot reach
+    // the query pipeline as a &Model.
+    assert!(Model::parse("unknown-model").is_err());
 }
 
 #[test]
@@ -714,13 +705,13 @@ fn query_retries_transient_failure_and_succeeds() {
         dir.path(),
         "what is rust safety",
         &provider,
-        "gpt-4o",
+        &test_model(),
         short_query_policy(3),
     )
     .unwrap();
 
     assert_eq!(provider.calls(), 2);
-    assert_eq!(result.citations[0].slug, "only-leaf");
+    assert_eq!(result.citations[0].slug.as_str(), "only-leaf");
 }
 
 #[test]
@@ -732,7 +723,7 @@ fn query_timeout_returns_llm_error() {
         dir.path(),
         "what is rust safety",
         &provider,
-        "gpt-4o",
+        &test_model(),
         short_query_policy(1),
     )
     .unwrap_err();
@@ -753,7 +744,7 @@ fn query_length_finish_reason_fails_before_parse() {
         dir.path(),
         "what is rust safety",
         &provider,
-        "gpt-4o",
+        &test_model(),
         short_query_policy(1),
     )
     .unwrap_err();
@@ -770,7 +761,7 @@ fn query_content_filter_finish_reason_fails_before_parse() {
         dir.path(),
         "what is rust safety",
         &provider,
-        "gpt-4o",
+        &test_model(),
         short_query_policy(1),
     )
     .unwrap_err();
@@ -799,7 +790,7 @@ fn weak_incidental_match_returns_low_relevance_before_provider_call() {
     );
     let provider = CountingProvider::new();
 
-    let err = run_with_provider(dir.path(), "rust", &provider, "gpt-4o").unwrap_err();
+    let err = run_with_provider(dir.path(), "rust", &provider, &test_model()).unwrap_err();
 
     match err {
         QueryError::LowRelevance {
@@ -846,7 +837,7 @@ fn generic_query_returns_low_relevance_before_provider_call() {
         dir.path(),
         "important systems patterns",
         &provider,
-        "gpt-4o",
+        &test_model(),
     )
     .unwrap_err();
 
@@ -872,14 +863,14 @@ fn answerable_one_source_query_invokes_provider_and_succeeds() {
         dir.path(),
         "what is rust safety",
         &provider,
-        "gpt-4o",
+        &test_model(),
         short_query_policy(1),
     )
     .unwrap();
 
     assert_eq!(provider.calls(), 1);
     assert_eq!(result.citations.len(), 1);
-    assert_eq!(result.citations[0].slug, "only-leaf");
+    assert_eq!(result.citations[0].slug.as_str(), "only-leaf");
 }
 
 // ── context assembly tests ───────────────────────────────────────────
@@ -966,7 +957,7 @@ fn zero_citations_returns_insufficient_sources_error() {
         dir.path(),
         "what is rust safety",
         &provider,
-        "gpt-4o",
+        &test_model(),
         short_query_policy(1),
     )
     .unwrap_err();
@@ -994,11 +985,11 @@ fn one_valid_citation_returns_ok() {
         dir.path(),
         "what is rust safety",
         &provider,
-        "gpt-4o",
+        &test_model(),
         short_query_policy(1),
     )
     .unwrap();
 
     assert_eq!(result.citations.len(), 1);
-    assert_eq!(result.citations[0].slug, "only-leaf");
+    assert_eq!(result.citations[0].slug.as_str(), "only-leaf");
 }

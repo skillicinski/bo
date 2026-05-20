@@ -1,4 +1,4 @@
-use crate::cli::json::JsonWarning;
+use crate::cli::json::{JsonError, JsonWarning};
 use crate::engine::auth::{self, AuthError, OpenAiApiKey};
 use crate::engine::config::{self as engine_config, Config, ConfigError};
 use crate::engine::llm::models::{is_supported_model, supported_model_ids};
@@ -116,7 +116,8 @@ pub fn render_auth_human(result: &ConfigAuthResult) -> String {
 // ── config set/get ───────────────────────────────────────────────────────────
 
 const MODEL_KEY: &str = "model";
-const VALID_KEYS: &[&str] = &[MODEL_KEY];
+const COMPILE_MODEL_KEY: &str = "compile_model";
+const VALID_KEYS: &[&str] = &[MODEL_KEY, COMPILE_MODEL_KEY];
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ConfigCommandResult {
@@ -156,6 +157,32 @@ impl ConfigCommandError {
             _ => None,
         }
     }
+
+    pub fn json_error(&self) -> JsonError {
+        match self {
+            ConfigCommandError::UnknownKey { key } => JsonError::with_details(
+                "usage_error",
+                self.to_string(),
+                json!({
+                    "key": key,
+                    "valid_keys": self.valid_keys().unwrap_or(&[]),
+                    "exit_code": self.exit_code(),
+                }),
+            ),
+            ConfigCommandError::UnsupportedModel { model } => JsonError::with_details(
+                "usage_error",
+                self.to_string(),
+                json!({
+                    "model": model,
+                    "supported_models": self.supported_models().unwrap_or_default(),
+                    "exit_code": self.exit_code(),
+                }),
+            ),
+            ConfigCommandError::Read(_) | ConfigCommandError::Write(_) => {
+                JsonError::new("io_error", self.to_string())
+            }
+        }
+    }
 }
 
 impl fmt::Display for ConfigCommandError {
@@ -184,10 +211,16 @@ pub fn get(key: &str, config_path: &Path) -> Result<ConfigCommandResult, ConfigC
     validate_key(key)?;
     let config = read_or_default(config_path)?;
 
+    let value = match key {
+        MODEL_KEY => config.effective_model(),
+        COMPILE_MODEL_KEY => config.effective_compile_model(),
+        _ => unreachable!("validated config key"),
+    };
+
     Ok(ConfigCommandResult {
         action: "get".to_string(),
-        key: MODEL_KEY.to_string(),
-        value: config.effective_model().to_string(),
+        key: key.to_string(),
+        value: value.to_string(),
     })
 }
 
@@ -204,14 +237,18 @@ pub fn set(
     }
 
     let mut config = read_or_default(config_path)?;
-    config.model = Some(model.clone());
+    match key {
+        MODEL_KEY => config.model = Some(model.clone()),
+        COMPILE_MODEL_KEY => config.compile_model = Some(model.clone()),
+        _ => unreachable!("validated config key"),
+    }
 
     engine_config::write_config(&config, config_path)
         .map_err(|error| ConfigCommandError::Write(format!("failed to write config: {}", error)))?;
 
     Ok(ConfigCommandResult {
         action: "set".to_string(),
-        key: MODEL_KEY.to_string(),
+        key: key.to_string(),
         value: model,
     })
 }
@@ -225,7 +262,7 @@ pub fn render_human(result: &ConfigCommandResult) -> String {
 }
 
 fn validate_key(key: &str) -> Result<(), ConfigCommandError> {
-    if key == MODEL_KEY {
+    if VALID_KEYS.contains(&key) {
         Ok(())
     } else {
         Err(ConfigCommandError::UnknownKey {

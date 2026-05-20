@@ -5,6 +5,7 @@
 //
 //   OPENAI_API_KEY=sk-... cargo test --test integration_compile -- --ignored
 
+use bo::domain::{Timestamp, Title};
 use std::fs;
 
 use bo::cli::compile;
@@ -53,22 +54,25 @@ fn setup_fixture_collection() -> tempfile::TempDir {
     let mut leaves = Vec::new();
 
     for doc in FIXTURE_DOCS {
+        let title = Title::new(doc.title);
+        let url = bo::domain::Url::parse(doc.url).unwrap();
+        let ts = Timestamp::parse("2025-06-01T10:00:00Z").unwrap();
         bo::domain::leaf::write(
             &dir.path().join(doc.file),
-            Some(doc.title),
-            doc.url,
-            "2025-06-01T10:00:00Z",
+            Some(&title),
+            &url,
+            &ts,
             doc.body,
             None,
         )
         .unwrap();
 
         leaves.push(LeafRecord {
-            slug: doc.file.trim_end_matches(".md").to_string(),
+            slug: bo::domain::Slug::parse(doc.file.trim_end_matches(".md")).unwrap(),
             file: doc.file.to_string(),
-            title: doc.title.to_string(),
-            url: doc.url.to_string(),
-            collected_at: "2025-06-01T10:00:00Z".to_string(),
+            title: Title::new(doc.title),
+            url: bo::domain::Url::parse(doc.url).unwrap(),
+            collected_at: Timestamp::parse("2025-06-01T10:00:00Z").unwrap(),
             summary: None,
         });
     }
@@ -78,7 +82,7 @@ fn setup_fixture_collection() -> tempfile::TempDir {
         &Manifest {
             tree: TreeMeta {
                 name: "compile-fixture".to_string(),
-                created_at: "2025-06-01T09:00:00Z".to_string(),
+                created_at: Timestamp::parse("2025-06-01T09:00:00Z").unwrap(),
                 last_compiled_at: None,
             },
             leaves,
@@ -98,6 +102,7 @@ fn make_config(output_dir: &std::path::Path) -> SeededConfig {
             created_at: None,
         },
         model: Some("gpt-4o-mini".to_string()), // cheaper model for tests
+        compile_model: None,
     }
 }
 
@@ -236,4 +241,194 @@ fn compile_rerun_preserves_created_at() {
         created_at_1, created_at_2,
         "created_at changed on second compile run"
     );
+}
+
+// ── crash recovery integration tests ─────────────────────────────────────────
+
+#[test]
+fn crash_mid_compile_rollback_cleans_staged_files() {
+    // Simulate: compile started, pending.json written, staged .tmp exists,
+    // but manifest was NOT updated (crash before commit).
+    // Next invocation should rollback: delete .tmp, clear pending.
+    let dir = setup_fixture_collection();
+    let tree_dir = dir.path();
+    let bo_dir = tree_dir.join(".bo");
+
+    // Mark all leaves as compiled so compile returns noop after recovery
+    let manifest_path = bo_dir.join("manifest.json");
+    let mut m = manifest::read(&manifest_path).unwrap();
+    m.tree.last_compiled_at = Some(Timestamp::parse("2099-01-01T00:00:00Z").unwrap());
+    manifest::write(&manifest_path, &m).unwrap();
+
+    // Record manifest hash before "crash"
+    let manifest_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
+
+    // Write a staged .tmp file (simulating a branch about to be written)
+    fs::create_dir_all(tree_dir.join("branches")).unwrap();
+    let staged_content = b"# Fake Branch\n\nThis should be rolled back.\n";
+    let staged_path = tree_dir.join("branches/fake-branch.md.tmp");
+    fs::write(&staged_path, staged_content).unwrap();
+
+    // Write pending.json with a dead PID and old timestamp (not a live lock)
+    let pending = bo::engine::pending::PendingOperation {
+        op: bo::engine::pending::OpKind::Compile {
+            mode: bo::engine::pending::CompileMode::Full,
+        },
+        started_at: "2020-01-01T00:00:00Z".to_string(),
+        pid: 99999,
+        pre_manifest_hash: manifest_hash,
+        writes: vec![bo::engine::pending::PendingWrite {
+            path: "branches/fake-branch.md".to_string(),
+            content_hash: bo::engine::pending::content_hash(staged_content),
+        }],
+        deletes: vec![],
+    };
+    let pending_path = bo_dir.join("pending.json");
+    bo::engine::pending::write(&pending_path, &pending).unwrap();
+
+    // Now run compile — should detect stale pending, rollback, then proceed normally
+    let cfg = make_config(tree_dir);
+    let result = compile::cmd_compile(&cfg);
+
+    // The staged file should be gone (rolled back)
+    assert!(
+        !staged_path.exists(),
+        "staged .tmp should be deleted on rollback"
+    );
+    // pending.json should be cleared
+    assert!(
+        !pending_path.exists(),
+        "pending.json should be cleared after recovery"
+    );
+    // Compile itself should succeed (noop or compiled depending on state)
+    assert!(
+        result.is_ok(),
+        "compile should succeed after recovery: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn crash_mid_compile_roll_forward_applies_staged_writes() {
+    // Simulate: compile started, pending.json written, staged .tmp exists,
+    // AND manifest WAS updated (crash after commit but before rename).
+    // Next invocation should roll forward: rename .tmp to final, clear pending.
+    let dir = setup_fixture_collection();
+    let tree_dir = dir.path();
+    let bo_dir = tree_dir.join(".bo");
+
+    // Mark all leaves as compiled
+    let manifest_path = bo_dir.join("manifest.json");
+    let mut m = manifest::read(&manifest_path).unwrap();
+    m.tree.last_compiled_at = Some(Timestamp::parse("2099-01-01T00:00:00Z").unwrap());
+    manifest::write(&manifest_path, &m).unwrap();
+
+    // Write a staged .tmp file
+    fs::create_dir_all(tree_dir.join("branches")).unwrap();
+    let branch_content =
+        b"---\ntitle: Recovered Branch\n---\n\n# Recovered Branch\n\nThis was recovered.\n";
+    let staged_path = tree_dir.join("branches/recovered-branch.md.tmp");
+    let final_path = tree_dir.join("branches/recovered-branch.md");
+    fs::write(&staged_path, branch_content).unwrap();
+
+    // Use a DIFFERENT hash than current manifest (simulating that manifest was already committed)
+    let fake_pre_hash = "deadbeef".to_string();
+
+    let pending = bo::engine::pending::PendingOperation {
+        op: bo::engine::pending::OpKind::Compile {
+            mode: bo::engine::pending::CompileMode::Full,
+        },
+        started_at: "2020-01-01T00:00:00Z".to_string(),
+        pid: 99999,
+        pre_manifest_hash: fake_pre_hash,
+        writes: vec![bo::engine::pending::PendingWrite {
+            path: "branches/recovered-branch.md".to_string(),
+            content_hash: bo::engine::pending::content_hash(branch_content),
+        }],
+        deletes: vec![],
+    };
+    let pending_path = bo_dir.join("pending.json");
+    bo::engine::pending::write(&pending_path, &pending).unwrap();
+
+    // Run compile — should roll forward
+    let cfg = make_config(tree_dir);
+    let result = compile::cmd_compile(&cfg);
+
+    // The staged file should be renamed to final
+    assert!(
+        !staged_path.exists(),
+        "staged .tmp should be gone after roll-forward"
+    );
+    assert!(
+        final_path.exists(),
+        "final file should exist after roll-forward"
+    );
+    let content = fs::read_to_string(&final_path).unwrap();
+    assert!(content.contains("Recovered Branch"));
+    // pending.json cleared
+    assert!(!pending_path.exists(), "pending.json should be cleared");
+    assert!(
+        result.is_ok(),
+        "compile should succeed after recovery: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn crash_mid_collect_rollback_leaves_tree_unchanged() {
+    // Simulate: collect started, pending.json written for a collect op,
+    // staged leaf .tmp exists, manifest NOT updated.
+    // Next compile invocation should rollback the stale collect.
+    let dir = setup_fixture_collection();
+    let tree_dir = dir.path();
+    let bo_dir = tree_dir.join(".bo");
+
+    // Mark all leaves as compiled
+    let manifest_path = bo_dir.join("manifest.json");
+    let mut m = manifest::read(&manifest_path).unwrap();
+    m.tree.last_compiled_at = Some(Timestamp::parse("2099-01-01T00:00:00Z").unwrap());
+    manifest::write(&manifest_path, &m).unwrap();
+
+    let manifest_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
+
+    // Staged leaf file from interrupted collect
+    let staged_leaf =
+        b"---\ntitle: Interrupted\nurl: https://example.com/interrupted\n---\n\nBody.\n";
+    let staged_path = tree_dir.join("interrupted.md.tmp");
+    fs::write(&staged_path, staged_leaf).unwrap();
+
+    let pending = bo::engine::pending::PendingOperation {
+        op: bo::engine::pending::OpKind::Collect {
+            url: "https://example.com/interrupted".to_string(),
+        },
+        started_at: "2020-01-01T00:00:00Z".to_string(),
+        pid: 99999,
+        pre_manifest_hash: manifest_hash,
+        writes: vec![bo::engine::pending::PendingWrite {
+            path: "interrupted.md".to_string(),
+            content_hash: bo::engine::pending::content_hash(staged_leaf),
+        }],
+        deletes: vec![],
+    };
+    bo::engine::pending::write(&bo_dir.join("pending.json"), &pending).unwrap();
+
+    // Run compile — should recover (rollback) first, then proceed
+    let cfg = make_config(tree_dir);
+    let _result = compile::cmd_compile(&cfg);
+
+    // Staged file rolled back
+    assert!(
+        !staged_path.exists(),
+        "staged collect .tmp should be rolled back"
+    );
+    assert!(
+        !tree_dir.join("interrupted.md").exists(),
+        "interrupted leaf should not appear"
+    );
+    // Manifest unchanged by the failed collect
+    let _manifest_after = fs::read_to_string(bo_dir.join("manifest.json")).unwrap();
+    // Note: compile may update manifest (last_compiled_at), so just verify no interrupted leaf
+    let m = manifest::read(&bo_dir.join("manifest.json")).unwrap();
+    assert!(m.leaf_by_slug_str("interrupted").is_none());
+    assert!(!bo_dir.join("pending.json").exists());
 }

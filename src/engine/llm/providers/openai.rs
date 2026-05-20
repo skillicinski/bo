@@ -10,7 +10,6 @@ use async_openai::{
 };
 use async_trait::async_trait;
 use serde_json::Value;
-use std::time::Duration;
 
 use crate::engine::llm::{FinishReason, LlmError, LlmProvider, LlmResponse, Message, Role};
 
@@ -21,10 +20,8 @@ pub struct OpenAiProvider {
 impl OpenAiProvider {
     pub fn new(api_key: &str) -> Self {
         let config = OpenAIConfig::new().with_api_key(api_key);
-        let mut backoff_builder = backoff::ExponentialBackoffBuilder::new();
-        backoff_builder.with_max_elapsed_time(Some(Duration::ZERO));
         Self {
-            client: Client::build(reqwest::Client::new(), config, backoff_builder.build()),
+            client: Client::with_config(config),
         }
     }
 }

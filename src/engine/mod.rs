@@ -5,4 +5,5 @@ pub mod fetch;
 pub mod llm;
 pub mod pending;
 pub mod quality;
+pub mod retrieval;
 pub mod summary;

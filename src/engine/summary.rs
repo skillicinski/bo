@@ -4,10 +4,9 @@
 //   generate_fallback(body) — deterministic, first ~200 words of body
 //   generate_llm(body, title, provider, model, policy) — async LLM structured-output call
 //
-// The orchestrator `generate` tries LLM when OpenAI auth is configured,
-// falls back to deterministic only when no key/provider is configured.
+// Orchestration (auth resolution, runtime construction, stderr logging) lives in
+// the CLI layer — this module exposes only the pure/async building blocks.
 
-use crate::engine::auth::{self, AuthResolutionError};
 use crate::engine::llm::{
     complete_with_policy, FinishReason, LlmCallPolicy, LlmError, LlmProvider, Message,
 };
@@ -20,7 +19,7 @@ use std::time::Duration;
 pub const SUMMARY_TARGET_WORDS: usize = 200;
 pub const SUMMARY_INPUT_MAX_WORDS: usize = 4000;
 
-const SUMMARY_LLM_POLICY: LlmCallPolicy = LlmCallPolicy {
+pub const SUMMARY_LLM_POLICY: LlmCallPolicy = LlmCallPolicy {
     timeout: Duration::from_secs(30),
     max_attempts: 3,
     initial_backoff: Duration::from_millis(500),
@@ -148,34 +147,6 @@ pub async fn generate_llm(
     }
 
     Ok(parsed.summary)
-}
-
-// ── orchestrator ─────────────────────────────────────────────────────────────
-
-/// Generate a summary for a leaf. Uses deterministic fallback when no provider
-/// is configured. If a provider call is attempted, provider failures are errors.
-pub fn generate(body: &str, title: Option<&str>, model: &str) -> Result<String, SummaryError> {
-    let api_key = match auth::resolve_openai_api_key(&auth::auth_path()) {
-        Ok(resolved) => resolved.api_key,
-        Err(AuthResolutionError::Missing) => return Ok(generate_fallback(body)),
-        Err(error) => return Err(SummaryError::Runtime(error.to_string())),
-    };
-
-    eprintln!("summarizing...");
-
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| SummaryError::Runtime(format!("failed to create async runtime: {}", e)))?;
-
-    let provider = crate::engine::llm::OpenAiProvider::new(api_key.as_str());
-    rt.block_on(generate_llm(
-        body,
-        title,
-        &provider,
-        model,
-        SUMMARY_LLM_POLICY,
-    ))
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────

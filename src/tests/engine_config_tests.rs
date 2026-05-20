@@ -17,6 +17,7 @@ fn make_seeded_config(output_dir: &str) -> Config {
     Config {
         tree: Some(make_tree(output_dir)),
         model: None,
+        compile_model: None,
     }
 }
 
@@ -76,12 +77,32 @@ fn model_roundtrip_with_value() {
     let config = Config {
         tree: Some(make_tree("/tmp/bo")),
         model: Some("gpt-4.1-mini".to_string()),
+        compile_model: None,
     };
     write_config(&config, &path).unwrap();
 
     let loaded = read_config(&path).unwrap();
     assert_eq!(loaded.model.as_deref(), Some("gpt-4.1-mini"));
     assert_eq!(loaded.effective_model(), "gpt-4.1-mini");
+}
+
+#[test]
+fn compile_model_roundtrip_with_value() {
+    let dir = TempDir::new().unwrap();
+    let path = temp_config_path(&dir);
+
+    let config = Config {
+        tree: Some(make_tree("/tmp/bo")),
+        model: Some("gpt-4o-mini".to_string()),
+        compile_model: Some("gpt-4.1-mini".to_string()),
+    };
+    write_config(&config, &path).unwrap();
+
+    let loaded = read_config(&path).unwrap();
+    assert_eq!(loaded.model.as_deref(), Some("gpt-4o-mini"));
+    assert_eq!(loaded.compile_model.as_deref(), Some("gpt-4.1-mini"));
+    assert_eq!(loaded.effective_model(), "gpt-4o-mini");
+    assert_eq!(loaded.effective_compile_model(), "gpt-4.1-mini");
 }
 
 #[test]
@@ -96,6 +117,7 @@ fn name_and_created_at_roundtrip() {
             created_at: Some("2026-04-14T09:00:00Z".to_string()),
         }),
         model: None,
+        compile_model: None,
     };
     write_config(&config, &path).unwrap();
 
@@ -115,7 +137,31 @@ fn model_absent_uses_default() {
 
     let loaded = read_config(&path).unwrap();
     assert!(loaded.model.is_none());
-    assert_eq!(loaded.effective_model(), DEFAULT_MODEL);
+    assert!(loaded.compile_model.is_none());
+    assert_eq!(loaded.effective_model(), "gpt-4o");
+    assert_eq!(loaded.effective_compile_model(), "gpt-4o");
+}
+
+#[test]
+fn compile_model_absent_falls_back_to_model() {
+    let cfg = Config {
+        tree: Some(make_tree("/tmp/bo")),
+        model: Some("gpt-4o-mini".to_string()),
+        compile_model: None,
+    };
+
+    assert_eq!(cfg.effective_compile_model(), "gpt-4o-mini");
+}
+
+#[test]
+fn compile_model_absent_and_model_absent_falls_back_to_default() {
+    let cfg = Config {
+        tree: Some(make_tree("/tmp/bo")),
+        model: None,
+        compile_model: None,
+    };
+
+    assert_eq!(cfg.effective_compile_model(), "gpt-4o");
 }
 
 #[test]
@@ -141,6 +187,7 @@ fn write_config_without_tree_omits_tree_key() {
         &Config {
             tree: None,
             model: Some("gpt-4.1-mini".to_string()),
+            compile_model: None,
         },
         &path,
     )
@@ -157,6 +204,7 @@ fn seeded_conversion_succeeds_when_tree_exists() {
     let cfg = Config {
         tree: Some(make_tree("/tmp/bo")),
         model: Some("gpt-4.1-mini".to_string()),
+        compile_model: None,
     };
 
     let seeded = cfg.into_seeded().unwrap();
@@ -170,6 +218,7 @@ fn seeded_conversion_fails_when_tree_missing() {
     let cfg = Config {
         tree: None,
         model: Some("gpt-4.1-mini".to_string()),
+        compile_model: None,
     };
 
     assert!(cfg.into_seeded().is_none());
@@ -180,9 +229,38 @@ fn seeded_config_uses_default_model_when_absent() {
     let cfg = Config {
         tree: Some(make_tree("/tmp/bo")),
         model: None,
+        compile_model: None,
     };
 
     let seeded = cfg.into_seeded().unwrap();
 
-    assert_eq!(seeded.effective_model(), DEFAULT_MODEL);
+    assert_eq!(seeded.effective_model(), "gpt-4o");
+    assert_eq!(seeded.effective_compile_model(), "gpt-4o");
+}
+
+#[test]
+fn seeded_config_effective_compile_model_prefers_compile_model() {
+    let cfg = Config {
+        tree: Some(make_tree("/tmp/bo")),
+        model: Some("gpt-4o-mini".to_string()),
+        compile_model: Some("gpt-4.1-mini".to_string()),
+    };
+
+    let seeded = cfg.into_seeded().unwrap();
+
+    assert_eq!(seeded.effective_model(), "gpt-4o-mini");
+    assert_eq!(seeded.effective_compile_model(), "gpt-4.1-mini");
+}
+
+#[test]
+fn seeded_config_effective_compile_model_falls_back_to_model() {
+    let cfg = Config {
+        tree: Some(make_tree("/tmp/bo")),
+        model: Some("gpt-4o-mini".to_string()),
+        compile_model: None,
+    };
+
+    let seeded = cfg.into_seeded().unwrap();
+
+    assert_eq!(seeded.effective_compile_model(), "gpt-4o-mini");
 }

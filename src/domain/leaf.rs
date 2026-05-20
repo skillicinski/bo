@@ -12,6 +12,7 @@
 // when bo compile updates the frontmatter later.
 
 use crate::domain::frontmatter::{self, FrontmatterError};
+use crate::domain::{Timestamp, Title, Url};
 use serde_yaml_ng::Mapping;
 use std::{fmt, fs, io, path::Path};
 
@@ -42,9 +43,9 @@ impl fmt::Display for LeafError {
 /// Creates parent directories if needed.
 pub fn write(
     path: &Path,
-    title: Option<&str>,
-    url: &str,
-    collected_at: &str,
+    title: Option<&Title>,
+    url: &Url,
+    collected_at: &Timestamp,
     body: &str,
     summary: Option<&str>,
 ) -> io::Result<()> {
@@ -60,23 +61,28 @@ pub fn write(
 /// Kept private; callers should use `write`. Separated only so that the
 /// formatting logic can be exercised in tests without touching the filesystem.
 pub(crate) fn format_content(
-    title: Option<&str>,
-    url: &str,
-    collected_at: &str,
+    title: Option<&Title>,
+    url: &Url,
+    collected_at: &Timestamp,
     body: &str,
     summary: Option<&str>,
 ) -> String {
     let title_yaml = match title {
-        Some(t) => format!("\"{}\"", t.replace('\\', "\\\\").replace('"', "\\\"")),
+        Some(t) => format!(
+            "\"{}\"",
+            t.as_str().replace('\\', "\\\\").replace('"', "\\\"")
+        ),
         None => "\"\"".to_string(),
     };
+
+    let ts_str = collected_at.to_rfc3339_millis();
 
     let mut doc = String::new();
     doc.push_str("---\n");
     doc.push_str(&format!("title: {}\n", title_yaml));
-    doc.push_str(&format!("url: {}\n", url));
-    doc.push_str(&format!("collected_at: {}\n", collected_at));
-    doc.push_str(&format!("updated_at: {}\n", collected_at));
+    doc.push_str(&format!("url: {}\n", url.as_str()));
+    doc.push_str(&format!("collected_at: {}\n", ts_str));
+    doc.push_str(&format!("updated_at: {}\n", ts_str));
 
     if let Some(s) = summary {
         if !s.is_empty() {
@@ -97,7 +103,7 @@ pub(crate) fn format_content(
     doc.push_str("---\n\n");
 
     if let Some(t) = title {
-        doc.push_str(&format!("# {}\n\n", t));
+        doc.push_str(&format!("# {}\n\n", t.as_str()));
     }
 
     doc.push_str(body);

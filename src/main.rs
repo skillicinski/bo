@@ -1,7 +1,5 @@
-use bo::cli::collect::{
-    self, BatchCollectResult, CollectError, CollectItemStatus, CollectOutput, CollectResult,
-};
-use bo::cli::compile::{self, BranchResult, CompileError, CompileResult};
+use bo::cli::collect::{self, BatchCollectResult, CollectError, CollectOutput};
+use bo::cli::compile::{self, CompileError, CompileOptions, CompileResult};
 use bo::cli::config as cli_config;
 use bo::cli::json::{self as json_output, JsonError, JsonWarning};
 use bo::cli::list::{self, ListOptions};
@@ -64,7 +62,11 @@ enum Commands {
         action: ConfigCommands,
     },
     /// Compile collected documents into a linked knowledge graph
-    Compile,
+    Compile {
+        /// Recompile the full corpus and allow complete branch graph rewrite
+        #[arg(long)]
+        all: bool,
+    },
     /// List collected leaves in the current tree
     List {
         /// Maximum number of leaves to show
@@ -201,13 +203,13 @@ impl CliError {
             }
             CliError::Seed(error) => JsonError::new("io_error", error.to_string()),
             CliError::Raze(error) => JsonError::new("io_error", error.to_string()),
-            CliError::Collect(error) => collect_json_error(error),
-            CliError::List(error) => JsonError::new(list_error_code(error), error.to_string()),
-            CliError::Search(error) => JsonError::new(search_error_code(error), error.to_string()),
-            CliError::Show(error) => show_json_error(error),
-            CliError::Compile(error) => compile_json_error(error),
+            CliError::Collect(error) => error.json_error(),
+            CliError::List(error) => error.json_error(),
+            CliError::Search(error) => error.json_error(),
+            CliError::Show(error) => error.json_error(),
+            CliError::Compile(error) => error.json_error(),
             CliError::Status(error) => JsonError::new("io_error", error.to_string()),
-            CliError::ConfigCommand(error) => config_command_json_error(error),
+            CliError::ConfigCommand(error) => error.json_error(),
         }
     }
 }
@@ -228,119 +230,6 @@ impl fmt::Display for CliError {
             CliError::Compile(error) => write!(f, "{}", error),
             CliError::Status(error) => write!(f, "{}", error),
             CliError::ConfigCommand(error) => write!(f, "{}", error),
-        }
-    }
-}
-
-fn collect_json_error(error: &CollectError) -> JsonError {
-    match error {
-        CollectError::DuplicateUrl { existing_file } => JsonError::with_details(
-            collect::error_code(error),
-            error.to_string(),
-            json!({ "existing_file": existing_file }),
-        ),
-        CollectError::Rejected { url, reason } => JsonError::with_details(
-            collect::error_code(error),
-            error.to_string(),
-            json!({ "url": url, "reason": reason.to_string() }),
-        ),
-        _ => JsonError::new(collect::error_code(error), error.to_string()),
-    }
-}
-
-fn list_error_code(error: &list::ListError) -> &'static str {
-    match error {
-        list::ListError::Io(_) => "io_error",
-        list::ListError::Json(_) => "json_error",
-        list::ListError::Manifest(_) => "manifest_error",
-    }
-}
-
-fn search_error_code(error: &search::SearchError) -> &'static str {
-    match error {
-        search::SearchError::Io(_) => "io_error",
-        search::SearchError::Json(_) => "json_error",
-        search::SearchError::Manifest(_) => "manifest_error",
-    }
-}
-
-fn show_json_error(error: &show::ShowError) -> JsonError {
-    match error {
-        show::ShowError::NotFound { title } => {
-            JsonError::with_details("not_found", error.to_string(), json!({ "title": title }))
-        }
-        show::ShowError::Ambiguous { title, candidates } => JsonError::with_details(
-            "ambiguous",
-            error.to_string(),
-            json!({ "title": title, "candidates": candidates }),
-        ),
-        show::ShowError::Io(_) => JsonError::new("io_error", error.to_string()),
-        show::ShowError::Json(_) => JsonError::new("json_error", error.to_string()),
-        show::ShowError::Manifest(_) => JsonError::new("manifest_error", error.to_string()),
-        show::ShowError::SuspiciousPath { file }
-        | show::ShowError::MissingFile { file }
-        | show::ShowError::InvalidFrontmatter { file, .. } => JsonError::with_details(
-            show_error_code(error),
-            error.to_string(),
-            json!({ "file": file }),
-        ),
-        show::ShowError::UnreadableFile { file, source: _ } => {
-            JsonError::with_details("io_error", error.to_string(), json!({ "file": file }))
-        }
-    }
-}
-
-fn show_error_code(error: &show::ShowError) -> &'static str {
-    match error {
-        show::ShowError::SuspiciousPath { .. } => "suspicious_path",
-        show::ShowError::MissingFile { .. } => "not_found",
-        show::ShowError::InvalidFrontmatter { .. } => "validation_error",
-        _ => "unknown_error",
-    }
-}
-
-fn compile_json_error(error: &CompileError) -> JsonError {
-    match error {
-        CompileError::ContextOverflow => JsonError::new("context_overflow", error.to_string()),
-        CompileError::Truncated => JsonError::new("truncated", error.to_string()),
-        CompileError::ContentFilter => JsonError::new("content_filter", error.to_string()),
-        CompileError::Llm(_) => JsonError::new("llm_error", error.to_string()),
-        CompileError::Io(_) => JsonError::new("io_error", error.to_string()),
-        CompileError::Busy(_) => JsonError::new("tree_busy", error.to_string()),
-        CompileError::Validation(message) => JsonError::with_details(
-            "validation_error",
-            message.clone(),
-            json!({
-                "phase": "compile_validation",
-                "files_changed": false,
-                "next_step": compile::VALIDATION_NEXT_STEP
-            }),
-        ),
-    }
-}
-
-fn config_command_json_error(error: &cli_config::ConfigCommandError) -> JsonError {
-    match error {
-        cli_config::ConfigCommandError::UnknownKey { key } => JsonError::with_details(
-            "usage_error",
-            error.to_string(),
-            json!({
-                "key": key,
-                "valid_keys": error.valid_keys().unwrap_or(&[]),
-                "exit_code": error.exit_code(),
-            }),
-        ),
-        cli_config::ConfigCommandError::UnsupportedModel { model } => JsonError::with_details(
-            "usage_error",
-            error.to_string(),
-            json!({
-                "model": model,
-                "supported_models": error.supported_models().unwrap_or_default(),
-                "exit_code": error.exit_code(),
-            }),
-        ),
-        cli_config::ConfigCommandError::Read(_) | cli_config::ConfigCommandError::Write(_) => {
-            JsonError::new("io_error", error.to_string())
         }
     }
 }
@@ -408,26 +297,27 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 emit_json_success("collect", &result, Vec::new(), stdout)
             }
             Ok(CollectOutput::Single(result)) => {
-                write_human_or_error(render_collect_human(&result, stdout), stderr)
+                write_human_or_error(collect::render_human(&result, stdout), stderr)
             }
             Ok(CollectOutput::Batch(result)) if json => emit_batch_collect_json(&result, stdout),
             Ok(CollectOutput::Batch(result)) => {
                 let exit_code = if result.has_failures() { 1 } else { 0 };
-                match render_batch_collect_human(&result, stdout) {
+                match collect::render_batch_human(&result, stdout) {
                     Ok(()) => exit_code,
                     Err(_) => 1,
                 }
             }
             Err(error) => emit_cli_error("collect", json, error, stdout, stderr),
         },
-        Commands::Compile => match require_seeded_config()
-            .and_then(|cfg| compile::run_compile(&cfg).map_err(CliError::Compile))
-        {
+        Commands::Compile { all } => match require_seeded_config().and_then(|cfg| {
+            compile::run_compile_with_options(&cfg, CompileOptions { all })
+                .map_err(CliError::Compile)
+        }) {
             Ok(result) if json => {
                 let warnings = compile_warnings(&result);
                 emit_json_success("compile", &result, warnings, stdout)
             }
-            Ok(result) => write_human_or_error(render_compile_human(&result, stdout), stderr),
+            Ok(result) => write_human_or_error(compile::render_human(&result, stdout), stderr),
             Err(error) => emit_cli_error("compile", json, error, stdout, stderr),
         },
         Commands::List {
@@ -505,11 +395,11 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 }
                 Err(error) => {
                     let exit_code = error.exit_code();
-                    let json_error = query_json_error(&error);
+                    let json_error = error.json_error();
                     if json {
                         emit_json_error("query", json_error, Vec::new(), stdout, exit_code)
                     } else {
-                        render_query_error_human(&error, stderr, exit_code)
+                        query::render_error_human(&error, stderr, exit_code)
                     }
                 }
             }
@@ -684,24 +574,6 @@ fn write_human_or_error<E: Write>(result: io::Result<()>, _stderr: &mut E) -> i3
     }
 }
 
-fn render_query_error_human<E: Write>(
-    error: &query::QueryError,
-    stderr: &mut E,
-    exit_code: i32,
-) -> i32 {
-    if writeln!(stderr, "error: {}", error).is_err() {
-        return 1;
-    }
-
-    if let Some(next_step) = error.next_step() {
-        if writeln!(stderr, "next step: {}", next_step).is_err() {
-            return 1;
-        }
-    }
-
-    exit_code
-}
-
 // ── command execution ────────────────────────────────────────────────────────
 
 fn require_seeded_config() -> Result<SeededConfig, CliError> {
@@ -801,11 +673,11 @@ fn execute_collect(inputs: Vec<String>) -> Result<CollectOutput, CliError> {
     let cfg = require_seeded_config()?;
     let output_dir = cfg.tree.output_dir.clone();
     let collect_dir = output_dir.clone();
-    let model = cfg.effective_model().to_string();
+    let model = cfg.effective_model();
 
     collect::collect_inputs_with_collector(inputs, &output_dir, |url| {
         eprintln!("fetching {}...", url);
-        collect::collect_url_with_model(url, &collect_dir, &model)
+        collect::collect_url_with_model(url, &collect_dir, model.as_str())
     })
     .map_err(CliError::Collect)
 }
@@ -875,131 +747,11 @@ fn execute_query_with_provider_resolver<F>(
 where
     F: FnOnce() -> Result<Box<dyn LlmProvider>, query::QueryError>,
 {
-    let model = cfg.effective_model().to_string();
+    let model = cfg.effective_model();
     let prepared = query::prepare(&cfg.tree.output_dir, question, &model)?;
     let provider = resolve_provider()?;
     query::run_prepared_with_provider(prepared, provider.as_ref())
 }
-
-fn query_json_error(error: &query::QueryError) -> JsonError {
-    JsonError::with_details(error.code(), error.to_string(), error.details())
-}
-
-// ── human rendering ──────────────────────────────────────────────────────────
-
-fn render_collect_human<W: Write>(result: &CollectResult, stdout: &mut W) -> io::Result<()> {
-    writeln!(stdout, "✓ collected: {} → {}", result.url, result.file)
-}
-
-fn render_batch_collect_human<W: Write>(
-    result: &BatchCollectResult,
-    stdout: &mut W,
-) -> io::Result<()> {
-    for item in &result.items {
-        let label = item.url.as_deref().unwrap_or(&item.input);
-        match item.status {
-            CollectItemStatus::Collected => writeln!(
-                stdout,
-                "✓ collected: {} → {}",
-                label,
-                item.file.as_deref().unwrap_or("")
-            )?,
-            CollectItemStatus::Skipped => writeln!(
-                stdout,
-                "↷ skipped: {} ({})",
-                label,
-                item.message.as_deref().unwrap_or("skipped")
-            )?,
-            CollectItemStatus::Failed => writeln!(
-                stdout,
-                "✗ failed: {} ({})",
-                label,
-                item.message.as_deref().unwrap_or("failed")
-            )?,
-        }
-    }
-
-    writeln!(
-        stdout,
-        "collect summary: {} collected, {} skipped, {} failed",
-        result.summary.collected, result.summary.skipped, result.summary.failed
-    )
-}
-
-fn render_compile_human<W: Write>(result: &CompileResult, stdout: &mut W) -> io::Result<()> {
-    if result.status == "noop" {
-        match result.reason.as_deref() {
-            Some("empty_tree") => writeln!(stdout, "bo is empty!"),
-            Some("single_leaf") => writeln!(stdout, "bo only has 1 leaf!"),
-            _ => writeln!(stdout, "compiled: no work to do"),
-        }?;
-        return Ok(());
-    }
-
-    render_compile_summary_human(
-        &result.branches,
-        result.leaves_updated,
-        &result.leaves_skipped,
-        stdout,
-    )
-}
-
-fn render_compile_summary_human<W: Write>(
-    branches: &[BranchResult],
-    leaves_updated: usize,
-    leaves_skipped: &[String],
-    stdout: &mut W,
-) -> io::Result<()> {
-    if branches.is_empty() {
-        writeln!(stdout, "compiled: no branches found")?;
-    } else {
-        writeln!(
-            stdout,
-            "compiled: {} {} across {} leaves",
-            branches.len(),
-            if branches.len() == 1 {
-                "branch"
-            } else {
-                "branches"
-            },
-            leaves_updated
-        )?;
-        for branch in branches {
-            writeln!(
-                stdout,
-                "  ✓ {} ({} {})",
-                branch.slug,
-                branch.leaf_count,
-                if branch.leaf_count == 1 {
-                    "leaf"
-                } else {
-                    "leaves"
-                }
-            )?;
-        }
-    }
-
-    if !leaves_skipped.is_empty() {
-        writeln!(stdout)?;
-        writeln!(
-            stdout,
-            "  ⚠ skipped {} {} (unparseable frontmatter):",
-            leaves_skipped.len(),
-            if leaves_skipped.len() == 1 {
-                "leaf"
-            } else {
-                "leaves"
-            }
-        )?;
-        for file in leaves_skipped {
-            writeln!(stdout, "    - {}", file)?;
-        }
-    }
-
-    Ok(())
-}
-
-// ── warning extraction ───────────────────────────────────────────────────────
 
 fn list_warnings(result: &list::ListResult) -> Vec<JsonWarning> {
     result

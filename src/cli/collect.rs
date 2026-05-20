@@ -14,20 +14,24 @@
 //
 // Dependency direction: collect → adapters, fetch, quality, extract, leaf, slug, index.
 
-use chrono::Utc;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 use crate::adapters::youtube::{self, YoutubeError, YoutubeUrlMatch};
+use crate::cli::json::JsonError;
 use crate::domain::manifest::{self, LeafRecord, Manifest, TreeMeta};
-use crate::domain::{leaf, slug};
+use crate::domain::slug::Slug;
+use crate::domain::{leaf, slug, Timestamp, Title, Url};
+use crate::engine::auth::{self, AuthResolutionError};
 use crate::engine::llm::models::DEFAULT_MODEL;
 use crate::engine::pending::{self, OpKind, PendingWrite};
 use crate::engine::quality::RejectReason;
 use crate::engine::{extract, fetch, quality, summary};
+use serde_json::json;
 
 // ── types ────────────────────────────────────────────────────────────────────
 
@@ -134,6 +138,24 @@ pub fn error_code(error: &CollectError) -> &'static str {
         CollectError::Manifest(_) => "manifest_error",
         CollectError::Pending(pending::PendingError::Busy { .. }) => "tree_busy",
         CollectError::Pending(_) => "pending_error",
+    }
+}
+
+impl CollectError {
+    pub fn json_error(&self) -> JsonError {
+        match self {
+            CollectError::DuplicateUrl { existing_file } => JsonError::with_details(
+                error_code(self),
+                self.to_string(),
+                json!({ "existing_file": existing_file }),
+            ),
+            CollectError::Rejected { url, reason } => JsonError::with_details(
+                error_code(self),
+                self.to_string(),
+                json!({ "url": url, "reason": reason.to_string() }),
+            ),
+            _ => JsonError::new(error_code(self), self.to_string()),
+        }
     }
 }
 
@@ -296,10 +318,39 @@ pub fn collect_html_with_model(
     output_dir: &Path,
     model: &str,
 ) -> Result<Document, CollectError> {
+    collect_html_with_summarizer(url, html, output_dir, |body, title| {
+        let api_key = match auth::resolve_openai_api_key(&auth::auth_path()) {
+            Ok(resolved) => resolved.api_key,
+            Err(AuthResolutionError::Missing) => return Ok(summary::generate_fallback(body)),
+            Err(e) => return Err(summary::SummaryError::Runtime(e.to_string())),
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| summary::SummaryError::Runtime(format!("runtime: {}", e)))?;
+        let provider = crate::engine::llm::OpenAiProvider::new(api_key.as_str());
+        rt.block_on(summary::generate_llm(
+            body,
+            title,
+            &provider,
+            model,
+            summary::SUMMARY_LLM_POLICY,
+        ))
+    })
+}
+
+pub fn collect_html_with_summarizer<F>(
+    url: &str,
+    html: &str,
+    output_dir: &Path,
+    summarize: F,
+) -> Result<Document, CollectError>
+where
+    F: FnOnce(&str, Option<&str>) -> Result<String, summary::SummaryError>,
+{
     recover_pending_if_needed(output_dir)?;
     ensure_not_duplicate(url, output_dir)?;
 
-    // Reject obvious non-document HTML before extraction.
     if let Some(reason) = quality::classify_html(html) {
         return Err(CollectError::Rejected {
             url: url.to_string(),
@@ -307,10 +358,8 @@ pub fn collect_html_with_model(
         });
     }
 
-    // Extract
     let content = extract::extract_content(html)?;
 
-    // Reject extracted boilerplate/shell content before writing artifacts.
     if let Some(reason) =
         quality::classify_extracted(content.title.as_deref(), &content.body_markdown)
     {
@@ -320,12 +369,13 @@ pub fn collect_html_with_model(
         });
     }
 
-    write_new_document_with_model(
+    let summary_result = summarize(&content.body_markdown, content.title.as_deref());
+    write_new_document_with_summary_result(
         url,
         content.title.as_deref(),
         &content.body_markdown,
         output_dir,
-        model,
+        summary_result,
     )
 }
 
@@ -605,7 +655,7 @@ pub fn duplicate_file(url: &str, output_dir: &Path) -> Result<Option<String>, Co
     Ok(manifest
         .leaves
         .iter()
-        .find(|l| l.url == url)
+        .find(|l| l.url.as_str() == url)
         .map(|l| l.file.clone()))
 }
 
@@ -633,13 +683,40 @@ fn write_new_document_with_model(
     output_dir: &Path,
     model: &str,
 ) -> Result<Document, CollectError> {
-    write_new_document_with_summary_result(
-        url,
-        title,
-        body_markdown,
-        output_dir,
-        summary::generate(body_markdown, title, model),
-    )
+    let summary_result = {
+        let api_key = match auth::resolve_openai_api_key(&auth::auth_path()) {
+            Ok(resolved) => resolved.api_key,
+            Err(AuthResolutionError::Missing) => {
+                return write_new_document_with_summary_result(
+                    url,
+                    title,
+                    body_markdown,
+                    output_dir,
+                    Ok(summary::generate_fallback(body_markdown)),
+                );
+            }
+            Err(e) => {
+                return Err(CollectError::Summary(summary::SummaryError::Runtime(
+                    e.to_string(),
+                )))
+            }
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                CollectError::Summary(summary::SummaryError::Runtime(format!("runtime: {}", e)))
+            })?;
+        let provider = crate::engine::llm::OpenAiProvider::new(api_key.as_str());
+        rt.block_on(summary::generate_llm(
+            body_markdown,
+            title,
+            &provider,
+            model,
+            summary::SUMMARY_LLM_POLICY,
+        ))
+    };
+    write_new_document_with_summary_result(url, title, body_markdown, output_dir, summary_result)
 }
 
 fn write_new_document_with_summary_result(
@@ -653,16 +730,25 @@ fn write_new_document_with_summary_result(
     recover_pending_if_needed(output_dir)?;
 
     let title_ref = title.unwrap_or("");
-    let base_slug = slug::slugify(title_ref, url);
+    let base_slug = Slug::generate(title_ref, url);
     let filename = slug::resolve_slug(&base_slug, url, output_dir);
-    let now_str = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let now = Timestamp::now();
+    let domain_url = Url::parse(url)
+        .unwrap_or_else(|_| Url::parse(&format!("http://{}", url)).expect("url fallback"));
+    let domain_title = title.map(Title::new);
     let leaf_file = format!("{}.md", filename);
     let summary_field = if summary_text.is_empty() {
         None
     } else {
         Some(summary_text.as_str())
     };
-    let leaf_content = leaf::format_content(title, url, &now_str, body_markdown, summary_field);
+    let leaf_content = leaf::format_content(
+        domain_title.as_ref(),
+        &domain_url,
+        &now,
+        body_markdown,
+        summary_field,
+    );
     let leaf_write = PendingWrite {
         path: leaf_file.clone(),
         content_hash: pending::content_hash(leaf_content.as_bytes()),
@@ -677,7 +763,7 @@ fn write_new_document_with_summary_result(
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "unnamed".to_string()),
-                created_at: now_str.clone(),
+                created_at: now.clone(),
                 last_compiled_at: None,
             },
             leaves: Vec::new(),
@@ -686,7 +772,7 @@ fn write_new_document_with_summary_result(
         Err(e) => return Err(CollectError::Manifest(e)),
     };
 
-    if let Some(existing) = current.leaves.iter().find(|leaf| leaf.url == url) {
+    if let Some(existing) = current.leaves.iter().find(|leaf| leaf.url.as_str() == url) {
         return Err(CollectError::DuplicateUrl {
             existing_file: existing.file.clone(),
         });
@@ -695,9 +781,9 @@ fn write_new_document_with_summary_result(
     let leaf_record = LeafRecord {
         slug: filename.clone(),
         file: leaf_file.clone(),
-        title: title.unwrap_or_default().to_string(),
-        url: url.to_string(),
-        collected_at: now_str.clone(),
+        title: Title::new(title.unwrap_or_default()),
+        url: domain_url,
+        collected_at: now,
         summary: if summary_text.is_empty() {
             None
         } else {
@@ -730,3 +816,44 @@ fn write_new_document_with_summary_result(
 #[cfg(test)]
 #[path = "../tests/cli_collect_tests.rs"]
 mod tests;
+
+// ── human rendering ──────────────────────────────────────────────────────────
+
+pub fn render_human<W: Write>(result: &CollectResult, stdout: &mut W) -> std::io::Result<()> {
+    writeln!(stdout, "✓ collected: {} → {}", result.url, result.file)
+}
+
+pub fn render_batch_human<W: Write>(
+    result: &BatchCollectResult,
+    stdout: &mut W,
+) -> std::io::Result<()> {
+    for item in &result.items {
+        let label = item.url.as_deref().unwrap_or(&item.input);
+        match item.status {
+            CollectItemStatus::Collected => writeln!(
+                stdout,
+                "✓ collected: {} → {}",
+                label,
+                item.file.as_deref().unwrap_or("")
+            )?,
+            CollectItemStatus::Skipped => writeln!(
+                stdout,
+                "↷ skipped: {} ({})",
+                label,
+                item.message.as_deref().unwrap_or("skipped")
+            )?,
+            CollectItemStatus::Failed => writeln!(
+                stdout,
+                "✗ failed: {} ({})",
+                label,
+                item.message.as_deref().unwrap_or("failed")
+            )?,
+        }
+    }
+
+    writeln!(
+        stdout,
+        "collect summary: {} collected, {} skipped, {} failed",
+        result.summary.collected, result.summary.skipped, result.summary.failed
+    )
+}

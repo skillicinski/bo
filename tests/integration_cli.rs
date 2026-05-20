@@ -3,6 +3,7 @@
 // Uses $HOME override to redirect config to a temp dir, avoiding any
 // interaction with the real ~/.bo/config.json.
 
+use bo::domain::{Slug, Timestamp, Title, Url};
 use serde_json::Value;
 use std::fs;
 use std::io::Write;
@@ -83,7 +84,7 @@ fn config_auth(home: &Path, args: &[&str], input: &str) -> Output {
 }
 
 fn append_index_entry(tree: &Path, file: &str, title: &str) {
-    upsert_manifest_leaf(tree, file, title, "");
+    upsert_manifest_leaf(tree, file, title, "2025-01-01T00:00:00Z");
 }
 
 fn upsert_manifest_leaf(tree: &Path, file: &str, title: &str, collected_at: &str) {
@@ -92,16 +93,16 @@ fn upsert_manifest_leaf(tree: &Path, file: &str, title: &str, collected_at: &str
     let slug = file.trim_end_matches(".md").to_string();
     let url = format!("https://example.com/{}", file.trim_end_matches(".md"));
     if let Some(existing) = manifest.leaves.iter_mut().find(|leaf| leaf.file == file) {
-        existing.title = title.to_string();
-        existing.url = url;
-        existing.collected_at = collected_at.to_string();
+        existing.title = Title::new(title);
+        existing.url = Url::parse(&url).unwrap();
+        existing.collected_at = Timestamp::parse(collected_at).unwrap();
     } else {
         manifest.leaves.push(bo::domain::manifest::LeafRecord {
-            slug,
+            slug: Slug::parse(&slug).unwrap_or_else(|_| Slug::generate(&slug, "")),
             file: file.to_string(),
-            title: title.to_string(),
-            url,
-            collected_at: collected_at.to_string(),
+            title: Title::new(title),
+            url: Url::parse(&url).unwrap(),
+            collected_at: Timestamp::parse(collected_at).unwrap(),
             summary: None,
         });
     }
@@ -114,7 +115,7 @@ fn set_manifest_branches_for_leaf(tree: &Path, file: &str, branches: &[&str], ti
     let leaf_slug = file.trim_end_matches(".md").to_string();
 
     for branch in &mut manifest.branches {
-        branch.leaves.retain(|slug| slug != &leaf_slug);
+        branch.leaves.retain(|slug| slug.as_str() != leaf_slug);
     }
 
     for branch_slug in branches {
@@ -124,20 +125,20 @@ fn set_manifest_branches_for_leaf(tree: &Path, file: &str, branches: &[&str], ti
         if let Some(branch) = manifest
             .branches
             .iter_mut()
-            .find(|branch| branch.slug == *branch_slug)
+            .find(|branch| branch.slug.as_str() == *branch_slug)
         {
-            if !branch.leaves.iter().any(|slug| slug == &leaf_slug) {
-                branch.leaves.push(leaf_slug.clone());
+            if !branch.leaves.iter().any(|slug| slug.as_str() == leaf_slug) {
+                branch.leaves.push(Slug::parse(&leaf_slug).unwrap());
             }
         } else {
             manifest.branches.push(bo::domain::manifest::BranchRecord {
-                slug: (*branch_slug).to_string(),
+                slug: Slug::parse(branch_slug).unwrap(),
                 file: format!("branches/{branch_slug}.md"),
-                title: (*branch_slug).to_string(),
-                created_at: timestamp.to_string(),
-                updated_at: timestamp.to_string(),
+                title: Title::new(*branch_slug),
+                created_at: Timestamp::parse(timestamp).unwrap(),
+                updated_at: Timestamp::parse(timestamp).unwrap(),
                 stale: false,
-                leaves: vec![leaf_slug.clone()],
+                leaves: vec![Slug::parse(&leaf_slug).unwrap()],
             });
         }
     }
@@ -189,7 +190,7 @@ fn write_basic_list_tree(tree: &Path) {
         "alpha-entry.md",
         "Alpha Entry",
         "2025-01-10T09:30:00Z",
-        Some(&["branch_a", "branch_b"]),
+        Some(&["branch-a", "branch-b"]),
     );
 
     append_index_entry(tree, "gamma-entry.md", "Gamma Entry");
@@ -198,7 +199,7 @@ fn write_basic_list_tree(tree: &Path) {
         "gamma-entry.md",
         "Gamma Entry",
         "2025-02-01T07:15:00Z",
-        Some(&["branch_a_extra"]),
+        Some(&["branch-a-extra"]),
     );
 }
 
@@ -209,7 +210,7 @@ fn write_json_list_tree(tree: &Path) {
         "live-entry.md",
         "Live Entry",
         "2025-03-01T12:00:00Z",
-        Some(&["branch_a"]),
+        Some(&["branch-a"]),
     );
 
     append_index_entry(tree, "missing-entry.md", "Missing Entry");
@@ -245,7 +246,7 @@ fn write_combined_flags_tree(tree: &Path) {
         "a-oldest.md",
         "A Oldest",
         "2025-01-01T00:00:00Z",
-        Some(&["branch_a"]),
+        Some(&["branch-a"]),
     );
 
     append_index_entry(tree, "a-middle.md", "A Middle");
@@ -254,7 +255,7 @@ fn write_combined_flags_tree(tree: &Path) {
         "a-middle.md",
         "A Middle",
         "2025-03-15T00:00:00Z",
-        Some(&["branch_a"]),
+        Some(&["branch-a"]),
     );
 
     append_index_entry(tree, "b-other.md", "B Other");
@@ -263,7 +264,7 @@ fn write_combined_flags_tree(tree: &Path) {
         "b-other.md",
         "B Other",
         "2025-07-01T00:00:00Z",
-        Some(&["branch_b"]),
+        Some(&["branch-b"]),
     );
 
     append_index_entry(tree, "a-old.md", "A Old");
@@ -272,7 +273,7 @@ fn write_combined_flags_tree(tree: &Path) {
         "a-old.md",
         "A Old",
         "2025-01-15T00:00:00Z",
-        Some(&["branch_a"]),
+        Some(&["branch-a"]),
     );
 
     append_index_entry(tree, "a-newest.md", "A Newest");
@@ -281,7 +282,7 @@ fn write_combined_flags_tree(tree: &Path) {
         "a-newest.md",
         "A Newest",
         "2025-06-01T00:00:00Z",
-        Some(&["branch_a"]),
+        Some(&["branch-a"]),
     );
 
     append_index_entry(tree, "a-oldish.md", "A Oldish");
@@ -290,7 +291,7 @@ fn write_combined_flags_tree(tree: &Path) {
         "a-oldish.md",
         "A Oldish",
         "2025-01-10T00:00:00Z",
-        Some(&["branch_a"]),
+        Some(&["branch-a"]),
     );
 
     append_index_entry(tree, "a-older.md", "A Older");
@@ -299,7 +300,7 @@ fn write_combined_flags_tree(tree: &Path) {
         "a-older.md",
         "A Older",
         "2025-02-01T00:00:00Z",
-        Some(&["branch_a"]),
+        Some(&["branch-a"]),
     );
 }
 
@@ -514,7 +515,7 @@ fn config_get_unknown_key_exits_two_and_lists_valid_key() {
 }
 
 #[test]
-fn config_set_unknown_key_exits_two_and_lists_valid_key() {
+fn config_set_compile_model_succeeds() {
     let home = TempDir::new().unwrap();
 
     let out = bo(home.path())
@@ -522,10 +523,10 @@ fn config_set_unknown_key_exits_two_and_lists_valid_key() {
         .output()
         .unwrap();
 
-    assert_eq!(out.status.code(), Some(2));
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("compile_model"), "stderr: {stderr}");
-    assert!(stderr.contains("model"), "stderr: {stderr}");
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("compile_model"), "stdout: {stdout}");
+    assert!(stdout.contains("gpt-4.1-mini"), "stdout: {stdout}");
 }
 
 #[test]
@@ -619,7 +620,7 @@ fn list_on_synthetic_tree_uses_index_order_and_shows_dates_and_branch_arrays() {
     assert!(stdout.contains("2025-01-05"), "stdout: {stdout}");
     assert!(stdout.contains("2025-01-10"), "stdout: {stdout}");
     assert!(stdout.contains("2025-02-01"), "stdout: {stdout}");
-    assert!(stdout.contains("[branch_a, branch_b]"), "stdout: {stdout}");
+    assert!(stdout.contains("[branch-a, branch-b]"), "stdout: {stdout}");
     assert!(stdout.contains("[]"), "stdout: {stdout}");
 }
 
@@ -657,7 +658,7 @@ fn list_branch_filter_is_exact_and_missing_branch_is_not_an_error() {
     assert!(seeded.status.success());
     write_basic_list_tree(&tree);
 
-    let out = list(home.path(), &["--branch", "branch_a"]);
+    let out = list(home.path(), &["--branch", "branch-a"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -756,7 +757,7 @@ fn list_combined_flags_filter_sort_limit_and_emit_json() {
 
     let out = list(
         home.path(),
-        &["--branch", "branch_a", "--recent", "--limit", "5", "--json"],
+        &["--branch", "branch-a", "--recent", "--limit", "5", "--json"],
     );
     assert!(
         out.status.success(),
@@ -800,8 +801,8 @@ fn list_combined_flags_filter_sort_limit_and_emit_json() {
         assert!(
             branches
                 .iter()
-                .any(|branch| branch.as_str() == Some("branch_a")),
-            "row missing branch_a: {row}"
+                .any(|branch| branch.as_str() == Some("branch-a")),
+            "row missing branch-a: {row}"
         );
     }
     assert!(!files.contains(&"b-other.md"));
