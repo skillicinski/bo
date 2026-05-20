@@ -22,12 +22,14 @@ use std::fs;
 use std::path::Path;
 
 use crate::adapters::youtube::{self, YoutubeError, YoutubeUrlMatch};
+use crate::cli::json::JsonError;
 use crate::domain::manifest::{self, LeafRecord, Manifest, TreeMeta};
 use crate::domain::{leaf, slug};
 use crate::engine::llm::models::DEFAULT_MODEL;
 use crate::engine::pending::{self, OpKind, PendingWrite};
 use crate::engine::quality::RejectReason;
 use crate::engine::{extract, fetch, quality, summary};
+use serde_json::json;
 
 // ── types ────────────────────────────────────────────────────────────────────
 
@@ -134,6 +136,24 @@ pub fn error_code(error: &CollectError) -> &'static str {
         CollectError::Manifest(_) => "manifest_error",
         CollectError::Pending(pending::PendingError::Busy { .. }) => "tree_busy",
         CollectError::Pending(_) => "pending_error",
+    }
+}
+
+impl CollectError {
+    pub fn json_error(&self) -> JsonError {
+        match self {
+            CollectError::DuplicateUrl { existing_file } => JsonError::with_details(
+                error_code(self),
+                self.to_string(),
+                json!({ "existing_file": existing_file }),
+            ),
+            CollectError::Rejected { url, reason } => JsonError::with_details(
+                error_code(self),
+                self.to_string(),
+                json!({ "url": url, "reason": reason.to_string() }),
+            ),
+            _ => JsonError::new(error_code(self), self.to_string()),
+        }
     }
 }
 

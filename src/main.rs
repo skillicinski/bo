@@ -205,13 +205,13 @@ impl CliError {
             }
             CliError::Seed(error) => JsonError::new("io_error", error.to_string()),
             CliError::Raze(error) => JsonError::new("io_error", error.to_string()),
-            CliError::Collect(error) => collect_json_error(error),
-            CliError::List(error) => JsonError::new(list_error_code(error), error.to_string()),
-            CliError::Search(error) => JsonError::new(search_error_code(error), error.to_string()),
-            CliError::Show(error) => show_json_error(error),
-            CliError::Compile(error) => compile_json_error(error),
+            CliError::Collect(error) => error.json_error(),
+            CliError::List(error) => error.json_error(),
+            CliError::Search(error) => error.json_error(),
+            CliError::Show(error) => error.json_error(),
+            CliError::Compile(error) => error.json_error(),
             CliError::Status(error) => JsonError::new("io_error", error.to_string()),
-            CliError::ConfigCommand(error) => config_command_json_error(error),
+            CliError::ConfigCommand(error) => error.json_error(),
         }
     }
 }
@@ -232,135 +232,6 @@ impl fmt::Display for CliError {
             CliError::Compile(error) => write!(f, "{}", error),
             CliError::Status(error) => write!(f, "{}", error),
             CliError::ConfigCommand(error) => write!(f, "{}", error),
-        }
-    }
-}
-
-fn collect_json_error(error: &CollectError) -> JsonError {
-    match error {
-        CollectError::DuplicateUrl { existing_file } => JsonError::with_details(
-            collect::error_code(error),
-            error.to_string(),
-            json!({ "existing_file": existing_file }),
-        ),
-        CollectError::Rejected { url, reason } => JsonError::with_details(
-            collect::error_code(error),
-            error.to_string(),
-            json!({ "url": url, "reason": reason.to_string() }),
-        ),
-        _ => JsonError::new(collect::error_code(error), error.to_string()),
-    }
-}
-
-fn list_error_code(error: &list::ListError) -> &'static str {
-    match error {
-        list::ListError::Io(_) => "io_error",
-        list::ListError::Json(_) => "json_error",
-        list::ListError::Manifest(_) => "manifest_error",
-    }
-}
-
-fn search_error_code(error: &search::SearchError) -> &'static str {
-    match error {
-        search::SearchError::Io(_) => "io_error",
-        search::SearchError::Json(_) => "json_error",
-        search::SearchError::Manifest(_) => "manifest_error",
-    }
-}
-
-fn show_json_error(error: &show::ShowError) -> JsonError {
-    match error {
-        show::ShowError::NotFound { title } => {
-            JsonError::with_details("not_found", error.to_string(), json!({ "title": title }))
-        }
-        show::ShowError::Ambiguous { title, candidates } => JsonError::with_details(
-            "ambiguous",
-            error.to_string(),
-            json!({ "title": title, "candidates": candidates }),
-        ),
-        show::ShowError::Io(_) => JsonError::new("io_error", error.to_string()),
-        show::ShowError::Json(_) => JsonError::new("json_error", error.to_string()),
-        show::ShowError::Manifest(_) => JsonError::new("manifest_error", error.to_string()),
-        show::ShowError::SuspiciousPath { file }
-        | show::ShowError::MissingFile { file }
-        | show::ShowError::InvalidFrontmatter { file, .. } => JsonError::with_details(
-            show_error_code(error),
-            error.to_string(),
-            json!({ "file": file }),
-        ),
-        show::ShowError::UnreadableFile { file, source: _ } => {
-            JsonError::with_details("io_error", error.to_string(), json!({ "file": file }))
-        }
-    }
-}
-
-fn show_error_code(error: &show::ShowError) -> &'static str {
-    match error {
-        show::ShowError::SuspiciousPath { .. } => "suspicious_path",
-        show::ShowError::MissingFile { .. } => "not_found",
-        show::ShowError::InvalidFrontmatter { .. } => "validation_error",
-        _ => "unknown_error",
-    }
-}
-
-fn compile_json_error(error: &CompileError) -> JsonError {
-    match error {
-        CompileError::ContextOverflow {
-            model,
-            estimated_tokens,
-            context_tokens,
-        } => JsonError::with_details(
-            "context_overflow",
-            error.to_string(),
-            json!({
-                "model": model,
-                "estimated_tokens": estimated_tokens,
-                "context_tokens": context_tokens,
-                "next_steps": [
-                    "bo config set compile_model gpt-4.1-mini",
-                    "bo config set compile_model gpt-4.1",
-                ],
-            }),
-        ),
-        CompileError::Truncated => JsonError::new("truncated", error.to_string()),
-        CompileError::ContentFilter => JsonError::new("content_filter", error.to_string()),
-        CompileError::Llm(_) => JsonError::new("llm_error", error.to_string()),
-        CompileError::Io(_) => JsonError::new("io_error", error.to_string()),
-        CompileError::Busy(_) => JsonError::new("tree_busy", error.to_string()),
-        CompileError::Validation(message) => JsonError::with_details(
-            "validation_error",
-            message.clone(),
-            json!({
-                "phase": "compile_validation",
-                "files_changed": false,
-                "next_step": compile::VALIDATION_NEXT_STEP
-            }),
-        ),
-    }
-}
-
-fn config_command_json_error(error: &cli_config::ConfigCommandError) -> JsonError {
-    match error {
-        cli_config::ConfigCommandError::UnknownKey { key } => JsonError::with_details(
-            "usage_error",
-            error.to_string(),
-            json!({
-                "key": key,
-                "valid_keys": error.valid_keys().unwrap_or(&[]),
-                "exit_code": error.exit_code(),
-            }),
-        ),
-        cli_config::ConfigCommandError::UnsupportedModel { model } => JsonError::with_details(
-            "usage_error",
-            error.to_string(),
-            json!({
-                "model": model,
-                "supported_models": error.supported_models().unwrap_or_default(),
-                "exit_code": error.exit_code(),
-            }),
-        ),
-        cli_config::ConfigCommandError::Read(_) | cli_config::ConfigCommandError::Write(_) => {
-            JsonError::new("io_error", error.to_string())
         }
     }
 }
@@ -526,7 +397,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 }
                 Err(error) => {
                     let exit_code = error.exit_code();
-                    let json_error = query_json_error(&error);
+                    let json_error = error.json_error();
                     if json {
                         emit_json_error("query", json_error, Vec::new(), stdout, exit_code)
                     } else {
@@ -900,10 +771,6 @@ where
     let prepared = query::prepare(&cfg.tree.output_dir, question, &model)?;
     let provider = resolve_provider()?;
     query::run_prepared_with_provider(prepared, provider.as_ref())
-}
-
-fn query_json_error(error: &query::QueryError) -> JsonError {
-    JsonError::with_details(error.code(), error.to_string(), error.details())
 }
 
 // ── human rendering ──────────────────────────────────────────────────────────

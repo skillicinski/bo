@@ -1,8 +1,10 @@
 // bo show — deterministic inspection for a single collected leaf.
 
+use crate::cli::json::JsonError;
 use crate::domain::manifest::{self, LeafRecord};
 use crate::domain::tree::Tree;
 use serde::Serialize;
+use serde_json::json;
 use serde_yaml_ng::{Mapping, Value};
 use std::fmt;
 use std::fs;
@@ -113,6 +115,41 @@ impl From<io::Error> for ShowError {
 impl From<serde_json::Error> for ShowError {
     fn from(e: serde_json::Error) -> Self {
         ShowError::Json(e)
+    }
+}
+
+impl ShowError {
+    fn code(&self) -> &'static str {
+        match self {
+            ShowError::SuspiciousPath { .. } => "suspicious_path",
+            ShowError::MissingFile { .. } => "not_found",
+            ShowError::InvalidFrontmatter { .. } => "validation_error",
+            _ => "unknown_error",
+        }
+    }
+
+    pub fn json_error(&self) -> JsonError {
+        match self {
+            ShowError::NotFound { title } => {
+                JsonError::with_details("not_found", self.to_string(), json!({ "title": title }))
+            }
+            ShowError::Ambiguous { title, candidates } => JsonError::with_details(
+                "ambiguous",
+                self.to_string(),
+                json!({ "title": title, "candidates": candidates }),
+            ),
+            ShowError::Io(_) => JsonError::new("io_error", self.to_string()),
+            ShowError::Json(_) => JsonError::new("json_error", self.to_string()),
+            ShowError::Manifest(_) => JsonError::new("manifest_error", self.to_string()),
+            ShowError::SuspiciousPath { file }
+            | ShowError::MissingFile { file }
+            | ShowError::InvalidFrontmatter { file, .. } => {
+                JsonError::with_details(self.code(), self.to_string(), json!({ "file": file }))
+            }
+            ShowError::UnreadableFile { file, source: _ } => {
+                JsonError::with_details("io_error", self.to_string(), json!({ "file": file }))
+            }
+        }
     }
 }
 

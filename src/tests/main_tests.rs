@@ -89,11 +89,12 @@ fn compile_noop_json_data_contains_reason() {
 
 #[test]
 fn compile_context_overflow_json_recommends_compile_model() {
-    let error = compile_json_error(&CompileError::ContextOverflow {
+    let error = CompileError::ContextOverflow {
         model: "gpt-4o-mini".to_string(),
         estimated_tokens: Some(250_000),
         context_tokens: Some(128_000),
-    });
+    }
+    .json_error();
 
     assert_eq!(error.code, "context_overflow");
     assert_eq!(error.details["model"], "gpt-4o-mini");
@@ -111,9 +112,7 @@ fn compile_context_overflow_json_recommends_compile_model() {
 
 #[test]
 fn compile_validation_json_error_includes_next_action() {
-    let error = compile_json_error(&CompileError::Validation(
-        "invalid compile response".to_string(),
-    ));
+    let error = CompileError::Validation("invalid compile response".to_string()).json_error();
 
     assert_eq!(error.code, "validation_error");
     assert_eq!(error.message, "invalid compile response");
@@ -124,10 +123,11 @@ fn compile_validation_json_error_includes_next_action() {
 
 #[test]
 fn query_json_error_includes_low_relevance_details() {
-    let error = query_json_error(&query::QueryError::LowRelevance {
+    let error = query::QueryError::LowRelevance {
         reason: query::LowRelevanceReason::GenericQuery,
         matched_sources: 8,
-    });
+    }
+    .json_error();
 
     assert_eq!(error.code, "low_relevance");
     assert_eq!(error.details["reason"], "generic_query");
@@ -149,7 +149,7 @@ fn query_json_no_answer_errors_include_next_steps() {
     ];
 
     for error in errors {
-        let json_error = query_json_error(&error);
+        let json_error = error.json_error();
         assert_eq!(json_error.code, error.code());
         assert!(
             json_error.details["next_step"].is_string(),

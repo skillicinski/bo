@@ -1,4 +1,4 @@
-use crate::cli::json::JsonWarning;
+use crate::cli::json::{JsonError, JsonWarning};
 use crate::engine::auth::{self, AuthError, OpenAiApiKey};
 use crate::engine::config::{self as engine_config, Config, ConfigError};
 use crate::engine::llm::models::{is_supported_model, supported_model_ids};
@@ -155,6 +155,32 @@ impl ConfigCommandError {
         match self {
             ConfigCommandError::UnsupportedModel { .. } => Some(supported_models()),
             _ => None,
+        }
+    }
+
+    pub fn json_error(&self) -> JsonError {
+        match self {
+            ConfigCommandError::UnknownKey { key } => JsonError::with_details(
+                "usage_error",
+                self.to_string(),
+                json!({
+                    "key": key,
+                    "valid_keys": self.valid_keys().unwrap_or(&[]),
+                    "exit_code": self.exit_code(),
+                }),
+            ),
+            ConfigCommandError::UnsupportedModel { model } => JsonError::with_details(
+                "usage_error",
+                self.to_string(),
+                json!({
+                    "model": model,
+                    "supported_models": self.supported_models().unwrap_or_default(),
+                    "exit_code": self.exit_code(),
+                }),
+            ),
+            ConfigCommandError::Read(_) | ConfigCommandError::Write(_) => {
+                JsonError::new("io_error", self.to_string())
+            }
         }
     }
 }

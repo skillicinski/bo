@@ -5,6 +5,7 @@
 // This module is self-contained and does not share retrieval logic with
 // `cli::search` (different semantics: OR vs AND, different purpose).
 
+use crate::cli::json::JsonError;
 use crate::domain::frontmatter;
 use crate::engine::llm::{
     complete_with_policy, context_window_tokens, FinishReason, LlmCallPolicy, LlmError,
@@ -237,6 +238,10 @@ impl QueryError {
             }),
             _ => json!({}),
         }
+    }
+
+    pub fn json_error(&self) -> JsonError {
+        JsonError::with_details(self.code(), self.to_string(), self.details())
     }
 }
 

@@ -1,5 +1,6 @@
 // bo list — deterministic tree inspection for collected leaves.
 
+use crate::cli::json::JsonError;
 use crate::domain::manifest::{self, LeafRecord, Manifest};
 use crate::domain::tree::Tree;
 use chrono::{DateTime, FixedOffset};
@@ -70,6 +71,20 @@ impl From<serde_json::Error> for ListError {
 impl From<manifest::ManifestError> for ListError {
     fn from(e: manifest::ManifestError) -> Self {
         ListError::Manifest(e)
+    }
+}
+
+impl ListError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            ListError::Io(_) => "io_error",
+            ListError::Json(_) => "json_error",
+            ListError::Manifest(_) => "manifest_error",
+        }
+    }
+
+    pub fn json_error(&self) -> JsonError {
+        JsonError::new(self.code(), self.to_string())
     }
 }
 

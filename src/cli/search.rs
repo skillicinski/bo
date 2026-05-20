@@ -1,5 +1,6 @@
 // bo search — deterministic lexical search over collected leaves.
 
+use crate::cli::json::JsonError;
 use crate::domain::frontmatter;
 use crate::domain::manifest;
 use crate::domain::tree::Tree;
@@ -81,6 +82,20 @@ impl From<serde_json::Error> for SearchError {
 impl From<manifest::ManifestError> for SearchError {
     fn from(e: manifest::ManifestError) -> Self {
         SearchError::Manifest(e)
+    }
+}
+
+impl SearchError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            SearchError::Io(_) => "io_error",
+            SearchError::Json(_) => "json_error",
+            SearchError::Manifest(_) => "manifest_error",
+        }
+    }
+
+    pub fn json_error(&self) -> JsonError {
+        JsonError::new(self.code(), self.to_string())
     }
 }
 
