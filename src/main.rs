@@ -1,6 +1,4 @@
-use bo::cli::collect::{
-    self, BatchCollectResult, CollectError, CollectItemStatus, CollectOutput, CollectResult,
-};
+use bo::cli::collect::{self, BatchCollectResult, CollectError, CollectOutput};
 use bo::cli::compile::{self, CompileError, CompileOptions, CompileResult};
 use bo::cli::config as cli_config;
 use bo::cli::json::{self as json_output, JsonError, JsonWarning};
@@ -299,12 +297,12 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 emit_json_success("collect", &result, Vec::new(), stdout)
             }
             Ok(CollectOutput::Single(result)) => {
-                write_human_or_error(render_collect_human(&result, stdout), stderr)
+                write_human_or_error(collect::render_human(&result, stdout), stderr)
             }
             Ok(CollectOutput::Batch(result)) if json => emit_batch_collect_json(&result, stdout),
             Ok(CollectOutput::Batch(result)) => {
                 let exit_code = if result.has_failures() { 1 } else { 0 };
-                match render_batch_collect_human(&result, stdout) {
+                match collect::render_batch_human(&result, stdout) {
                     Ok(()) => exit_code,
                     Err(_) => 1,
                 }
@@ -319,7 +317,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 let warnings = compile_warnings(&result);
                 emit_json_success("compile", &result, warnings, stdout)
             }
-            Ok(result) => write_human_or_error(render_compile_human(&result, stdout), stderr),
+            Ok(result) => write_human_or_error(compile::render_human(&result, stdout), stderr),
             Err(error) => emit_cli_error("compile", json, error, stdout, stderr),
         },
         Commands::List {
@@ -401,7 +399,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                     if json {
                         emit_json_error("query", json_error, Vec::new(), stdout, exit_code)
                     } else {
-                        render_query_error_human(&error, stderr, exit_code)
+                        query::render_error_human(&error, stderr, exit_code)
                     }
                 }
             }
@@ -574,24 +572,6 @@ fn write_human_or_error<E: Write>(result: io::Result<()>, _stderr: &mut E) -> i3
         Ok(()) => 0,
         Err(_) => 1,
     }
-}
-
-fn render_query_error_human<E: Write>(
-    error: &query::QueryError,
-    stderr: &mut E,
-    exit_code: i32,
-) -> i32 {
-    if writeln!(stderr, "error: {}", error).is_err() {
-        return 1;
-    }
-
-    if let Some(next_step) = error.next_step() {
-        if writeln!(stderr, "next step: {}", next_step).is_err() {
-            return 1;
-        }
-    }
-
-    exit_code
 }
 
 // ── command execution ────────────────────────────────────────────────────────
@@ -772,127 +752,6 @@ where
     let provider = resolve_provider()?;
     query::run_prepared_with_provider(prepared, provider.as_ref())
 }
-
-// ── human rendering ──────────────────────────────────────────────────────────
-
-fn render_collect_human<W: Write>(result: &CollectResult, stdout: &mut W) -> io::Result<()> {
-    writeln!(stdout, "✓ collected: {} → {}", result.url, result.file)
-}
-
-fn render_batch_collect_human<W: Write>(
-    result: &BatchCollectResult,
-    stdout: &mut W,
-) -> io::Result<()> {
-    for item in &result.items {
-        let label = item.url.as_deref().unwrap_or(&item.input);
-        match item.status {
-            CollectItemStatus::Collected => writeln!(
-                stdout,
-                "✓ collected: {} → {}",
-                label,
-                item.file.as_deref().unwrap_or("")
-            )?,
-            CollectItemStatus::Skipped => writeln!(
-                stdout,
-                "↷ skipped: {} ({})",
-                label,
-                item.message.as_deref().unwrap_or("skipped")
-            )?,
-            CollectItemStatus::Failed => writeln!(
-                stdout,
-                "✗ failed: {} ({})",
-                label,
-                item.message.as_deref().unwrap_or("failed")
-            )?,
-        }
-    }
-
-    writeln!(
-        stdout,
-        "collect summary: {} collected, {} skipped, {} failed",
-        result.summary.collected, result.summary.skipped, result.summary.failed
-    )
-}
-
-fn render_compile_human<W: Write>(result: &CompileResult, stdout: &mut W) -> io::Result<()> {
-    if result.status == "noop" {
-        match result.reason.as_deref() {
-            Some("empty_tree") => writeln!(stdout, "bo is empty!"),
-            Some("single_leaf") => writeln!(stdout, "bo only has 1 leaf!"),
-            Some("no new leaves since last compile") => writeln!(stdout, "nothing new to compile"),
-            _ => writeln!(stdout, "compiled: no work to do"),
-        }?;
-        return Ok(());
-    }
-
-    render_compile_summary_human(result, stdout)
-}
-
-fn render_compile_summary_human<W: Write>(
-    result: &CompileResult,
-    stdout: &mut W,
-) -> io::Result<()> {
-    if let (Some(mode), Some(model)) = (&result.mode, &result.model) {
-        let ctx = result
-            .context_mode
-            .as_ref()
-            .map(|c| format!(", {c:?}"))
-            .unwrap_or_default();
-        writeln!(stdout, "compiled ({mode:?}{ctx}) using {model}")?;
-    } else {
-        writeln!(stdout, "compiled")?;
-    }
-
-    if result.branches.is_empty() {
-        writeln!(stdout, "  no branches found")?;
-    } else {
-        writeln!(
-            stdout,
-            "  {} {} from {} processed leaves",
-            result.branches.len(),
-            if result.branches.len() == 1 {
-                "branch"
-            } else {
-                "branches"
-            },
-            result.leaves_processed
-        )?;
-        for branch in &result.branches {
-            writeln!(
-                stdout,
-                "  ✓ {} ({} {})",
-                branch.slug,
-                branch.leaf_count,
-                if branch.leaf_count == 1 {
-                    "leaf"
-                } else {
-                    "leaves"
-                }
-            )?;
-        }
-    }
-
-    if !result.leaves_skipped.is_empty() {
-        writeln!(stdout)?;
-        writeln!(
-            stdout,
-            "  ⚠ skipped {} {} (unparseable frontmatter):",
-            result.leaves_skipped.len(),
-            if result.leaves_skipped.len() == 1 {
-                "leaf"
-            } else {
-                "leaves"
-            }
-        )?;
-        for file in &result.leaves_skipped {
-            writeln!(stdout, "    - {}", file)?;
-        }
-    }
-
-    Ok(())
-}
-
-// ── warning extraction ───────────────────────────────────────────────────────
 
 fn list_warnings(result: &list::ListResult) -> Vec<JsonWarning> {
     result

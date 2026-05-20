@@ -1050,6 +1050,27 @@ fn run_prepared_with_policy(
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+/// Render a query error to stderr in human-friendly form.
+///
+/// Returns the supplied `exit_code` on success, or `1` if writing failed.
+pub fn render_error_human<E: std::io::Write>(
+    error: &QueryError,
+    stderr: &mut E,
+    exit_code: i32,
+) -> i32 {
+    if writeln!(stderr, "error: {}", error).is_err() {
+        return 1;
+    }
+
+    if let Some(next_step) = error.next_step() {
+        if writeln!(stderr, "next step: {}", next_step).is_err() {
+            return 1;
+        }
+    }
+
+    exit_code
+}
+
 /// Generate a summary fallback from the first ~200 words of body.
 fn summary_fallback(body: &str) -> String {
     let words: Vec<&str> = body.split_whitespace().collect();

@@ -420,6 +420,13 @@ pub fn print_result(result: &CompileResult) {
     render::print_result(result);
 }
 
+pub fn render_human<W: std::io::Write>(
+    result: &CompileResult,
+    stdout: &mut W,
+) -> std::io::Result<()> {
+    render::render_human(result, stdout)
+}
+
 #[cfg(test)]
 #[path = "../../tests/cli_compile_tests.rs"]
 mod tests;

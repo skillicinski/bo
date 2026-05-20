@@ -60,7 +60,7 @@ fn compile_noop_human_output_is_exact_message() {
     };
     let mut stdout = Vec::new();
 
-    render_compile_human(&result, &mut stdout).unwrap();
+    compile::render_human(&result, &mut stdout).unwrap();
 
     assert_eq!(
         String::from_utf8(stdout).unwrap(),
