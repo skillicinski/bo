@@ -17,7 +17,7 @@ use crate::domain::manifest;
 use crate::domain::tree::Tree;
 use crate::engine::auth;
 use crate::engine::config::SeededConfig;
-use crate::engine::llm::{LlmCallPolicy, LlmProvider, Model, OpenAiProvider};
+use crate::engine::llm::{LlmCallPolicy, LlmProvider, Model};
 use crate::engine::pending;
 
 mod execute;
@@ -277,14 +277,14 @@ pub fn run_compile_with_options(
 
     let api_key =
         auth::resolve_api_key(cfg.provider).map_err(|e| CompileError::Llm(e.to_string()))?;
-    let provider = OpenAiProvider::new(&api_key);
+    let provider = crate::engine::llm::create_provider(cfg.provider, &api_key);
     let compile_model = cfg
         .effective_compile_model()
         .map_err(|e| CompileError::Llm(e.to_string()))?;
     run_compile_with_provider_started_at(
         cfg,
         options,
-        &provider,
+        provider.as_ref(),
         &compile_model,
         &compile_started_at,
     )

@@ -342,11 +342,18 @@ pub fn collect_html_with_model(
             .enable_all()
             .build()
             .map_err(|e| summary::SummaryError::Runtime(format!("runtime: {}", e)))?;
-        let provider = crate::engine::llm::OpenAiProvider::new(&api_key);
+        let provider: Box<dyn crate::engine::llm::LlmProvider> = match provider {
+            crate::engine::llm::Provider::OpenAI => {
+                Box::new(crate::engine::llm::OpenAiProvider::new(&api_key))
+            }
+            crate::engine::llm::Provider::Deepseek => {
+                Box::new(crate::engine::llm::DeepSeekProvider::new(&api_key))
+            }
+        };
         rt.block_on(summary::generate_llm(
             body,
             title,
-            &provider,
+            provider.as_ref(),
             model,
             summary::SUMMARY_LLM_POLICY,
         ))
@@ -722,11 +729,18 @@ fn write_new_document_with_model(
             .map_err(|e| {
                 CollectError::Summary(summary::SummaryError::Runtime(format!("runtime: {}", e)))
             })?;
-        let provider = crate::engine::llm::OpenAiProvider::new(&api_key);
+        let provider: Box<dyn crate::engine::llm::LlmProvider> = match provider {
+            crate::engine::llm::Provider::OpenAI => {
+                Box::new(crate::engine::llm::OpenAiProvider::new(&api_key))
+            }
+            crate::engine::llm::Provider::Deepseek => {
+                Box::new(crate::engine::llm::DeepSeekProvider::new(&api_key))
+            }
+        };
         rt.block_on(summary::generate_llm(
             body_markdown,
             title,
-            &provider,
+            provider.as_ref(),
             model,
             summary::SUMMARY_LLM_POLICY,
         ))

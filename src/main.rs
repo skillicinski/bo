@@ -10,7 +10,7 @@ use bo::cli::show::{self, ShowOptions};
 use bo::cli::status;
 use bo::engine::auth;
 use bo::engine::config::{self, ConfigError, SeededConfig};
-use bo::engine::llm::{LlmProvider, OpenAiProvider, Provider};
+use bo::engine::llm::{self, LlmProvider, Provider};
 use clap::{error::ErrorKind as ClapErrorKind, Parser, Subcommand};
 use serde::Serialize;
 use serde_json::json;
@@ -658,7 +658,7 @@ fn execute_query(question: &str) -> Result<query::QueryResult, query::QueryError
     execute_query_with_provider_resolver(&cfg, question, || {
         let api_key = auth::resolve_api_key(cfg.provider)
             .map_err(|e| query::QueryError::NoProvider(e.to_string()))?;
-        Ok(Box::new(OpenAiProvider::new(&api_key)) as Box<dyn LlmProvider>)
+        Ok(llm::create_provider(cfg.provider, &api_key))
     })
 }
 

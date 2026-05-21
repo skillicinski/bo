@@ -46,25 +46,26 @@ pub fn seed(
             .join(&output_dir)
     };
 
-    let (existing_model, existing_compile_model) = match config::read_config(config_path) {
-        Ok(existing) => {
-            if let Some(tree) = existing.tree {
-                return Ok(SeedResult {
-                    status: "already_seeded".to_string(),
-                    output_dir: path_string(&tree.output_dir),
-                    tree_name: tree.name,
-                });
+    let (existing_model, existing_compile_model, existing_provider) =
+        match config::read_config(config_path) {
+            Ok(existing) => {
+                if let Some(tree) = existing.tree {
+                    return Ok(SeedResult {
+                        status: "already_seeded".to_string(),
+                        output_dir: path_string(&tree.output_dir),
+                        tree_name: tree.name,
+                    });
+                }
+                (existing.model, existing.compile_model, existing.provider)
             }
-            (existing.model, existing.compile_model)
-        }
-        Err(ConfigError::NotFound) => (None, None),
-        Err(error) => {
-            return Err(SeedError::ConfigRead(format!(
-                "failed to read config: {}",
-                error
-            )));
-        }
-    };
+            Err(ConfigError::NotFound) => (None, None, Provider::OpenAI),
+            Err(error) => {
+                return Err(SeedError::ConfigRead(format!(
+                    "failed to read config: {}",
+                    error
+                )));
+            }
+        };
 
     std::fs::create_dir_all(&output_dir).map_err(|error| {
         SeedError::CreateOutputDir(format!("failed to create output directory: {error}"))
@@ -87,7 +88,7 @@ pub fn seed(
 
     config::write_config(
         &Config {
-            provider: Provider::OpenAI,
+            provider: existing_provider,
             tree: Some(TreeConfig {
                 output_dir: output_dir.clone(),
                 name: tree_name.clone(),

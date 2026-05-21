@@ -11,6 +11,14 @@ pub use model::{Model, UnsupportedModel};
 pub use models::context_window_tokens;
 pub use providers::{DeepSeekProvider, OpenAiProvider};
 
+/// Create the correct LlmProvider for a given provider with the API key.
+pub fn create_provider(provider: Provider, api_key: &str) -> Box<dyn LlmProvider> {
+    match provider {
+        Provider::OpenAI => Box::new(OpenAiProvider::new(api_key)),
+        Provider::Deepseek => Box::new(DeepSeekProvider::new(api_key)),
+    }
+}
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
