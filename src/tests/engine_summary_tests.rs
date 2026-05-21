@@ -86,6 +86,7 @@ impl LlmProvider for SummaryFakeProvider {
         _model: &str,
         _max_tokens: u32,
         _response_schema: Option<&Value>,
+        _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
         if call <= self.fail_attempts {
@@ -122,6 +123,7 @@ impl LlmProvider for SummaryHangingProvider {
         _model: &str,
         _max_tokens: u32,
         _response_schema: Option<&Value>,
+        _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_secs(5)).await;

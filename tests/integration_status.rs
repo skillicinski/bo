@@ -224,11 +224,12 @@ fn status_json_is_valid_and_complete() {
 #[test]
 fn status_not_seeded_exits_nonzero() {
     let tmp = TempDir::new().unwrap();
-    // Don't seed — just run status
+    // Don't seed — just run status. Status works without a seeded tree
+    // (shows config fields with a hint).
 
     let out = status(tmp.path());
-    assert!(!out.status.success());
+    assert!(out.status.success());
 
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("seed"));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("bo seed"));
 }

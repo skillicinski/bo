@@ -121,9 +121,10 @@ pub async fn generate_llm(
         "additionalProperties": false
     });
 
-    let response = complete_with_policy(provider, &messages, model, 512, Some(&schema), policy)
-        .await
-        .map_err(SummaryError::Llm)?;
+    let response =
+        complete_with_policy(provider, &messages, model, 512, Some(&schema), true, policy)
+            .await
+            .map_err(SummaryError::Llm)?;
 
     match response.finish_reason {
         FinishReason::Stop => {}

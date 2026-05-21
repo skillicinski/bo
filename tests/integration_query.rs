@@ -12,7 +12,7 @@ use std::fs;
 use tempfile::TempDir;
 
 fn test_model() -> Model {
-    Model::parse("gpt-4o").unwrap()
+    Model::parse("gpt-4o", bo::engine::llm::Provider::OpenAI).unwrap()
 }
 
 // ── mock provider ────────────────────────────────────────────────────────────
@@ -41,6 +41,7 @@ impl LlmProvider for MockProvider {
         _model: &str,
         _max_tokens: u32,
         _response_schema: Option<&Value>,
+        _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         Ok(LlmResponse {
             content: self.response.clone(),
@@ -408,10 +409,11 @@ fn live_api_query() {
     let dir = setup_test_tree();
     let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
 
-    let result = query::run(
+    let provider = bo::engine::llm::OpenAiProvider::new(&api_key);
+    let result = query::run_with_provider(
         dir.path(),
         "how does Rust ensure memory safety without a garbage collector?",
-        &api_key,
+        &provider,
         &test_model(),
     )
     .unwrap();

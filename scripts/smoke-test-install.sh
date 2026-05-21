@@ -45,14 +45,10 @@ echo -n "  bo --help ... "
 HOME="$FAKE_HOME" "$BO" --help > /dev/null 2>&1
 echo "OK"
 
-# 2. config get model (no seed required)
-echo -n "  bo config get model ... "
-MODEL=$(HOME="$FAKE_HOME" "$BO" config get model 2>/dev/null)
-if [[ "$MODEL" != "gpt-4o" ]]; then
-    echo "FAIL: expected 'gpt-4o', got '$MODEL'"
-    exit 1
-fi
-echo "OK (default: $MODEL)"
+# 2. config --model (no seed required, default model accepted)
+echo -n "  bo config --model gpt-4.1-mini ... "
+HOME="$FAKE_HOME" "$BO" config --model gpt-4.1-mini > /dev/null 2>&1
+echo "OK"
 
 # 3. seed into a tree
 TREE_DIR="$FAKE_HOME/test-tree"
@@ -65,21 +61,16 @@ echo -n "  bo list (empty) ... "
 HOME="$FAKE_HOME" "$BO" list > /dev/null 2>&1
 echo "OK"
 
-# 5. config set model
-echo -n "  bo config set model gpt-4.1-mini ... "
-HOME="$FAKE_HOME" "$BO" config set model gpt-4.1-mini > /dev/null 2>&1
-echo "OK"
-
-# 6. config get model (after set)
-echo -n "  bo config get model (after set) ... "
-MODEL=$(HOME="$FAKE_HOME" "$BO" config get model 2>/dev/null)
-if [[ "$MODEL" != "gpt-4.1-mini" ]]; then
-    echo "FAIL: expected 'gpt-4.1-mini', got '$MODEL'"
+# 5. status shows model after config
+echo -n "  bo status shows model ... "
+STATUS=$(HOME="$FAKE_HOME" "$BO" status 2>/dev/null)
+if ! echo "$STATUS" | grep -q "gpt-4.1-mini"; then
+    echo "FAIL: expected gpt-4.1-mini in status output"
     exit 1
 fi
-echo "OK ($MODEL)"
+echo "OK"
 
-# 7. JSON output works
+# 6. JSON output works
 echo -n "  bo --json list ... "
 JSON=$(HOME="$FAKE_HOME" "$BO" --json list 2>/dev/null)
 if ! echo "$JSON" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null; then
@@ -88,15 +79,15 @@ if ! echo "$JSON" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/nu
 fi
 echo "OK"
 
-# 8. search (no results, but shouldn't crash)
-echo -n "  bo search nonexistent (exits 1, no crash) ... "
-if HOME="$FAKE_HOME" "$BO" search nonexistent > /dev/null 2>&1; then
+# 7. show nonexistent (exits 1, no crash)
+echo -n "  bo show nonexistent (exits 1, no crash) ... "
+if HOME="$FAKE_HOME" "$BO" show nonexistent > /dev/null 2>&1; then
     echo "FAIL: expected exit 1"
     exit 1
 fi
 echo "OK (exit 1 as expected)"
 
-# 9. Verify no .env or repo files needed
+# 8. Verify no .env or repo files needed
 echo -n "  no repo-relative files required ... "
 if [[ -f "$WORK_DIR/.env" ]] || [[ -f "$FAKE_HOME/.env" ]]; then
     echo "FAIL: .env file found"

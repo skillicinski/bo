@@ -33,6 +33,7 @@ pub fn setup_tree(tmp: &TempDir) -> (PathBuf, PathBuf) {
 
     config::write_config(
         &config::Config {
+            provider: crate::engine::llm::Provider::OpenAI,
             tree: Some(crate::domain::tree::TreeConfig {
                 output_dir: tree_dir.clone(),
                 name: Some("tree".to_string()),

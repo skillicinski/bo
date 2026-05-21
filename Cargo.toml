@@ -30,7 +30,6 @@ async-openai = { version = "0.38", features = ["chat-completion"] }
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt", "macros", "time"] }
 serde_yaml_ng = "0.10"
-rpassword = "7.5.2"
 
 [dev-dependencies]
 serial_test = "3.4.0"

@@ -9,7 +9,6 @@
 use crate::cli::json::JsonError;
 use crate::engine::llm::{
     complete_with_policy, FinishReason, LlmCallPolicy, LlmError, LlmProvider, Message, Model,
-    OpenAiProvider,
 };
 use crate::engine::retrieval::{self, ScoringPolicy};
 use serde::{Deserialize, Serialize};
@@ -781,6 +780,7 @@ fn synthesize_with_provider(
             model,
             QUERY_MAX_COMPLETION_TOKENS,
             Some(&schema),
+            false,
             policy,
         ))
         .map_err(QueryError::Llm)?;
@@ -905,18 +905,6 @@ pub fn render_json(result: &QueryResult) -> Result<String, QueryError> {
 }
 
 // ── orchestrator ─────────────────────────────────────────────────────────────
-
-/// Run the full query pipeline.
-pub fn run(
-    tree_dir: &Path,
-    question: &str,
-    api_key: &str,
-    model: &Model,
-) -> Result<QueryResult, QueryError> {
-    let prepared = prepare(tree_dir, question, model)?;
-    let provider = OpenAiProvider::new(api_key);
-    run_prepared_with_provider(prepared, &provider)
-}
 
 /// Run query preflight up to, but not including, provider-backed synthesis.
 pub fn prepare(

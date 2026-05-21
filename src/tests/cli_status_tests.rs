@@ -70,7 +70,7 @@ fn empty_tree_reports_zero_leaves() {
     let dir = TempDir::new().unwrap();
     setup_tree(dir.path());
 
-    let result = compute_status(dir.path(), "test-tree").unwrap();
+    let result = compute_status(dir.path(), "test-tree", None).unwrap();
 
     assert_eq!(result.leaves.total, 0);
     assert_eq!(result.leaves.uncompiled, 0);
@@ -99,7 +99,7 @@ fn uncompiled_leaves_detected() {
     write_leaf_file(dir.path(), "b.md", "https://b.com");
     write_leaf_file(dir.path(), "c.md", "https://c.com");
 
-    let result = compute_status(dir.path(), "test").unwrap();
+    let result = compute_status(dir.path(), "test", None).unwrap();
 
     assert_eq!(result.leaves.total, 3);
     assert_eq!(result.leaves.uncompiled, 3);
@@ -126,7 +126,7 @@ fn compiled_leaves_not_flagged() {
     write_leaf_file(dir.path(), "a.md", "https://a.com");
     write_leaf_file(dir.path(), "b.md", "https://b.com");
 
-    let result = compute_status(dir.path(), "test").unwrap();
+    let result = compute_status(dir.path(), "test", None).unwrap();
 
     assert_eq!(result.leaves.total, 2);
     assert_eq!(result.leaves.uncompiled, 1);
@@ -147,7 +147,7 @@ fn branch_count_and_last_compiled() {
         Some("2026-05-14T20:00:00Z"),
     );
 
-    let result = compute_status(dir.path(), "test").unwrap();
+    let result = compute_status(dir.path(), "test", None).unwrap();
 
     assert_eq!(result.branches.total, 2);
     assert_eq!(
@@ -173,7 +173,7 @@ fn orphan_manifest_entry_detected() {
     write_leaf_file(dir.path(), "exists.md", "https://e.com");
     // Don't create gone.md
 
-    let result = compute_status(dir.path(), "test").unwrap();
+    let result = compute_status(dir.path(), "test", None).unwrap();
 
     assert_eq!(result.health.orphan_index_entries.len(), 1);
     assert_eq!(result.health.orphan_index_entries[0].file, "gone.md");
@@ -189,7 +189,7 @@ fn missing_from_index_detected() {
     // Create a leaf file that's not in the manifest
     write_leaf_file(dir.path(), "orphan-leaf.md", "https://orphan.com");
 
-    let result = compute_status(dir.path(), "test").unwrap();
+    let result = compute_status(dir.path(), "test", None).unwrap();
 
     assert_eq!(result.health.missing_from_index.len(), 1);
     assert_eq!(result.health.missing_from_index[0], "orphan-leaf.md");
@@ -209,7 +209,7 @@ fn non_leaf_md_not_flagged_as_missing() {
     )
     .unwrap();
 
-    let result = compute_status(dir.path(), "test").unwrap();
+    let result = compute_status(dir.path(), "test", None).unwrap();
 
     assert!(result.health.missing_from_index.is_empty());
 }
@@ -223,7 +223,7 @@ fn size_computed_correctly() {
     let content = "x".repeat(400);
     fs::write(dir.path().join("test.md"), &content).unwrap();
 
-    let result = compute_status(dir.path(), "test").unwrap();
+    let result = compute_status(dir.path(), "test", None).unwrap();
 
     assert_eq!(result.size.bytes, 400);
     assert_eq!(result.size.estimated_tokens, 100);
@@ -242,7 +242,7 @@ fn single_uncompiled_leaf_produces_correct_result() {
     );
     write_leaf_file(dir.path(), "a.md", "https://a.com");
 
-    let result = compute_status(dir.path(), "my-research").unwrap();
+    let result = compute_status(dir.path(), "my-research", None).unwrap();
 
     assert_eq!(result.tree_name, "my-research");
     assert_eq!(result.leaves.total, 1);

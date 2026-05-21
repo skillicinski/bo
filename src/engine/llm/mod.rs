@@ -9,12 +9,42 @@ pub mod providers;
 
 pub use model::{Model, UnsupportedModel};
 pub use models::context_window_tokens;
-pub use providers::OpenAiProvider;
+pub use providers::{DeepSeekProvider, OpenAiProvider};
+
+/// Create the correct LlmProvider for a given provider with the API key.
+pub fn create_provider(provider: Provider, api_key: &str) -> Box<dyn LlmProvider> {
+    match provider {
+        Provider::OpenAI => Box::new(OpenAiProvider::new(api_key)),
+        Provider::Deepseek => Box::new(DeepSeekProvider::new(api_key)),
+    }
+}
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
 use std::time::Duration;
+
+// ── Provider enum ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Provider {
+    #[serde(rename = "openai")]
+    OpenAI,
+    #[serde(rename = "deepseek")]
+    Deepseek,
+}
+
+impl fmt::Display for Provider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Provider::OpenAI => write!(f, "openai"),
+            Provider::Deepseek => write!(f, "deepseek"),
+        }
+    }
+}
+
+pub const ALL_PROVIDERS: &[&str] = &["openai", "deepseek"];
 
 // ── public types ──────────────────────────────────────────────────────────────
 
@@ -72,6 +102,7 @@ pub async fn complete_with_policy(
     model: &str,
     max_tokens: u32,
     response_schema: Option<&Value>,
+    reasoning_disabled: bool,
     policy: LlmCallPolicy,
 ) -> Result<LlmResponse, LlmError> {
     if policy.max_attempts == 0 {
@@ -85,7 +116,13 @@ pub async fn complete_with_policy(
     for attempt in 1..=policy.max_attempts {
         let result = tokio::time::timeout(
             policy.timeout,
-            provider.complete(messages, model, max_tokens, response_schema),
+            provider.complete(
+                messages,
+                model,
+                max_tokens,
+                response_schema,
+                reasoning_disabled,
+            ),
         )
         .await;
 
@@ -199,6 +236,7 @@ pub trait LlmProvider: Send + Sync {
         model: &str,
         max_tokens: u32,
         response_schema: Option<&Value>,
+        reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError>;
 }
 

@@ -30,6 +30,7 @@ impl LlmProvider for TransientThenSuccessProvider {
         _model: &str,
         _max_tokens: u32,
         _response_schema: Option<&Value>,
+        _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
         if call <= self.fail_attempts {
@@ -66,6 +67,7 @@ impl LlmProvider for PermanentFailureProvider {
         _model: &str,
         _max_tokens: u32,
         _response_schema: Option<&Value>,
+        _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Err(LlmError::Parse("invalid response".to_string()))
@@ -96,6 +98,7 @@ impl LlmProvider for HangingProvider {
         _model: &str,
         _max_tokens: u32,
         _response_schema: Option<&Value>,
+        _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_secs(5)).await;
@@ -116,36 +119,76 @@ fn short_retry_policy(max_attempts: usize) -> LlmCallPolicy {
 
 #[test]
 fn model_catalog_exposes_default_model() {
-    assert_eq!(models::DEFAULT_MODEL, "gpt-4o");
-    assert!(models::is_supported_model(models::DEFAULT_MODEL));
+    assert_eq!(models::DEFAULT_MODEL, "gpt-4.1-mini");
+    assert!(models::is_supported_model(
+        Provider::OpenAI,
+        models::DEFAULT_MODEL
+    ));
 }
 
 #[test]
-fn model_catalog_lists_supported_models() {
-    let ids: Vec<&str> = models::supported_model_ids().collect();
+fn model_catalog_lists_openai_models() {
+    let models = models::models_for(Provider::OpenAI);
+    let ids: Vec<&str> = models.iter().map(|m| m.id).collect();
     assert!(ids.contains(&"gpt-4o"));
     assert!(ids.contains(&"gpt-4.1-mini"));
 }
 
 #[test]
+fn model_catalog_lists_deepseek_models() {
+    let models = models::models_for(Provider::Deepseek);
+    let ids: Vec<&str> = models.iter().map(|m| m.id).collect();
+    assert!(ids.contains(&"deepseek-v4-flash"));
+    assert!(ids.contains(&"deepseek-v4-pro"));
+}
+
+#[test]
 fn context_window_lookup_returns_known_windows() {
-    assert_eq!(context_window_tokens("gpt-4o"), Some(128_000));
-    assert_eq!(context_window_tokens("gpt-4.1-mini"), Some(1_000_000));
+    assert_eq!(
+        context_window_tokens(Provider::OpenAI, "gpt-4o"),
+        Some(128_000)
+    );
+    assert_eq!(
+        context_window_tokens(Provider::OpenAI, "gpt-4.1-mini"),
+        Some(1_000_000)
+    );
+}
+
+#[test]
+fn deepseek_context_window() {
+    assert_eq!(
+        context_window_tokens(Provider::Deepseek, "deepseek-v4-pro"),
+        Some(1_000_000)
+    );
 }
 
 #[test]
 fn model_catalog_rejects_unsupported_models() {
-    assert!(!models::is_supported_model("unknown-model"));
-    assert_eq!(context_window_tokens("unknown-model"), None);
+    assert!(!models::is_supported_model(
+        Provider::OpenAI,
+        "unknown-model"
+    ));
+    assert_eq!(
+        context_window_tokens(Provider::OpenAI, "unknown-model"),
+        None
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn complete_with_policy_succeeds_after_one_transient_failure() {
     let provider = TransientThenSuccessProvider::new(1);
 
-    let response = complete_with_policy(&provider, &[], "gpt-4o", 10, None, short_retry_policy(3))
-        .await
-        .unwrap();
+    let response = complete_with_policy(
+        &provider,
+        &[],
+        "gpt-4o",
+        10,
+        None,
+        false,
+        short_retry_policy(3),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(response.content, "ok");
     assert_eq!(provider.calls(), 2);
@@ -155,9 +198,17 @@ async fn complete_with_policy_succeeds_after_one_transient_failure() {
 async fn complete_with_policy_exhausts_after_three_transient_attempts() {
     let provider = TransientThenSuccessProvider::new(usize::MAX);
 
-    let err = complete_with_policy(&provider, &[], "gpt-4o", 10, None, short_retry_policy(3))
-        .await
-        .unwrap_err();
+    let err = complete_with_policy(
+        &provider,
+        &[],
+        "gpt-4o",
+        10,
+        None,
+        false,
+        short_retry_policy(3),
+    )
+    .await
+    .unwrap_err();
 
     assert_eq!(provider.calls(), 3);
     assert!(matches!(err, LlmError::RetryExhausted { attempts: 3, .. }));
@@ -167,9 +218,17 @@ async fn complete_with_policy_exhausts_after_three_transient_attempts() {
 async fn complete_with_policy_times_out_hanging_provider() {
     let provider = HangingProvider::new();
 
-    let err = complete_with_policy(&provider, &[], "gpt-4o", 10, None, short_retry_policy(1))
-        .await
-        .unwrap_err();
+    let err = complete_with_policy(
+        &provider,
+        &[],
+        "gpt-4o",
+        10,
+        None,
+        false,
+        short_retry_policy(1),
+    )
+    .await
+    .unwrap_err();
 
     assert_eq!(provider.calls(), 1);
     match err {
@@ -187,9 +246,17 @@ async fn complete_with_policy_times_out_hanging_provider() {
 async fn complete_with_policy_does_not_retry_permanent_error() {
     let provider = PermanentFailureProvider::new();
 
-    let err = complete_with_policy(&provider, &[], "gpt-4o", 10, None, short_retry_policy(3))
-        .await
-        .unwrap_err();
+    let err = complete_with_policy(
+        &provider,
+        &[],
+        "gpt-4o",
+        10,
+        None,
+        false,
+        short_retry_policy(3),
+    )
+    .await
+    .unwrap_err();
 
     assert_eq!(provider.calls(), 1);
     assert!(matches!(err, LlmError::Parse(_)));

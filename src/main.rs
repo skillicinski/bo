@@ -10,13 +10,13 @@ use bo::cli::show::{self, ShowOptions};
 use bo::cli::status;
 use bo::engine::auth;
 use bo::engine::config::{self, ConfigError, SeededConfig};
-use bo::engine::llm::{LlmProvider, OpenAiProvider};
+use bo::engine::llm::{self, LlmProvider, Provider};
 use clap::{error::ErrorKind as ClapErrorKind, Parser, Subcommand};
 use serde::Serialize;
 use serde_json::json;
 use std::ffi::OsString;
 use std::fmt;
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
 
@@ -55,10 +55,17 @@ enum Commands {
         #[arg(required = true, value_name = "URL_OR_URLS_FILE", num_args = 1..)]
         inputs: Vec<String>,
     },
-    /// Read or update bo configuration
+    /// Configure bo settings (provider, model, compile_model)
     Config {
-        #[command(subcommand)]
-        action: ConfigCommands,
+        /// LLM provider (openai or deepseek)
+        #[arg(long)]
+        provider: Option<String>,
+        /// Model for LLM operations
+        #[arg(long)]
+        model: Option<String>,
+        /// Model for compile operations (falls back to --model)
+        #[arg(long)]
+        compile_model: Option<String>,
     },
     /// Compile collected documents into a linked knowledge graph
     Compile {
@@ -114,27 +121,6 @@ enum Commands {
     Status,
 }
 
-#[derive(Subcommand, Debug)]
-enum ConfigCommands {
-    /// Configure provider authentication
-    Auth {
-        /// Provider to configure. Valid providers: openai
-        #[arg(long)]
-        provider: String,
-    },
-    /// Print a config value
-    Get {
-        /// Config key to read
-        key: String,
-    },
-    /// Set a config value
-    Set {
-        /// Config key to update
-        key: String,
-        /// Value to store
-        value: String,
-    },
-}
 // ── JSON payloads ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
@@ -148,7 +134,6 @@ struct ShowJsonData<'a> {
 enum CliError {
     NotSeeded,
     ConfigRead(String),
-    ConfigAuth(cli_config::ConfigAuthError),
     Seed(seed::SeedError),
     Raze(raze::RazeError),
     Collect(CollectError),
@@ -156,14 +141,13 @@ enum CliError {
     Show(show::ShowError),
     Compile(CompileError),
     Status(status::StatusError),
-    ConfigCommand(cli_config::ConfigCommandError),
+    ConfigWrite(cli_config::ConfigWriteError),
 }
 
 impl CliError {
     fn exit_code(&self) -> i32 {
         match self {
-            CliError::ConfigAuth(error) => error.exit_code(),
-            CliError::ConfigCommand(error) => error.exit_code(),
+            CliError::ConfigWrite(error) => error.exit_code(),
             CliError::Collect(CollectError::Pending(bo::engine::pending::PendingError::Busy {
                 ..
             }))
@@ -177,9 +161,6 @@ impl CliError {
         match self {
             CliError::NotSeeded => JsonError::new("not_seeded", NOT_SEEDED_MSG),
             CliError::ConfigRead(message) => JsonError::new("io_error", message.clone()),
-            CliError::ConfigAuth(error) => {
-                JsonError::with_details(error.code(), error.to_string(), error.details())
-            }
             CliError::Seed(error) => JsonError::new("io_error", error.to_string()),
             CliError::Raze(error) => JsonError::new("io_error", error.to_string()),
             CliError::Collect(error) => error.json_error(),
@@ -187,7 +168,9 @@ impl CliError {
             CliError::Show(error) => error.json_error(),
             CliError::Compile(error) => error.json_error(),
             CliError::Status(error) => JsonError::new("io_error", error.to_string()),
-            CliError::ConfigCommand(error) => error.json_error(),
+            CliError::ConfigWrite(error) => {
+                JsonError::with_details(error.code(), error.to_string(), error.details())
+            }
         }
     }
 }
@@ -197,7 +180,6 @@ impl fmt::Display for CliError {
         match self {
             CliError::NotSeeded => write!(f, "{}", NOT_SEEDED_MSG),
             CliError::ConfigRead(message) => write!(f, "{}", message),
-            CliError::ConfigAuth(error) => write!(f, "{}", error),
             CliError::Seed(error) => write!(f, "{}", error),
             CliError::Raze(error) => write!(f, "{}", error),
             CliError::Collect(error) => write!(f, "{}", error),
@@ -205,7 +187,7 @@ impl fmt::Display for CliError {
             CliError::Show(error) => write!(f, "{}", error),
             CliError::Compile(error) => write!(f, "{}", error),
             CliError::Status(error) => write!(f, "{}", error),
-            CliError::ConfigCommand(error) => write!(f, "{}", error),
+            CliError::ConfigWrite(error) => write!(f, "{}", error),
         }
     }
 }
@@ -241,33 +223,49 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 Err(error) => emit_cli_error("seed", json, CliError::Seed(error), stdout, stderr),
             }
         }
-        Commands::Config { action } => match action {
-            ConfigCommands::Auth { provider } => match execute_config_auth(provider, stderr) {
-                Ok(output) if json => {
-                    emit_json_success("config", &output.result, output.warnings, stdout)
-                }
-                Ok(output) => {
-                    for warning in &output.warnings {
-                        let _ = writeln!(stderr, "warning: {}", warning.message);
+        Commands::Config {
+            provider,
+            model,
+            compile_model,
+        } => {
+            let provider_opt = match provider {
+                Some(ref p) => Some(match p.as_str() {
+                    "openai" => Provider::OpenAI,
+                    "deepseek" => Provider::Deepseek,
+                    other => {
+                        let err = cli_config::ConfigWriteError::UnknownProvider {
+                            raw: other.to_string(),
+                        };
+                        return emit_cli_error(
+                            "config",
+                            json,
+                            CliError::ConfigWrite(err),
+                            stdout,
+                            stderr,
+                        );
                     }
-                    write_human_or_error(
-                        write!(stdout, "{}", cli_config::render_auth_human(&output.result)),
-                        stderr,
-                    )
-                }
-                Err(error) => emit_cli_error("config", json, error, stdout, stderr),
-            },
-            action @ (ConfigCommands::Get { .. } | ConfigCommands::Set { .. }) => {
-                match execute_config(action) {
-                    Ok(result) if json => emit_json_success("config", &result, Vec::new(), stdout),
-                    Ok(result) => write_human_or_error(
-                        write!(stdout, "{}", cli_config::render_human(&result)),
-                        stderr,
-                    ),
-                    Err(error) => emit_cli_error("config", json, error, stdout, stderr),
+                }),
+                None => None,
+            };
+
+            match cli_config::write_config(
+                cli_config::WriteConfigOptions {
+                    provider: provider_opt,
+                    model,
+                    compile_model,
+                },
+                &config::config_path(),
+            ) {
+                Ok(result) if json => emit_json_success("config", &result, Vec::new(), stdout),
+                Ok(result) => write_human_or_error(
+                    write!(stdout, "{}", cli_config::render_human(&result)),
+                    stderr,
+                ),
+                Err(error) => {
+                    emit_cli_error("config", json, CliError::ConfigWrite(error), stdout, stderr)
                 }
             }
-        },
+        }
         Commands::Collect { inputs } => match execute_collect(inputs) {
             Ok(CollectOutput::Single(result)) if json => {
                 emit_json_success("collect", &result, Vec::new(), stdout)
@@ -540,10 +538,30 @@ fn require_seeded_config() -> Result<SeededConfig, CliError> {
 }
 
 fn execute_status() -> Result<status::StatusResult, CliError> {
-    let cfg = require_seeded_config()?;
-    let tree = bo::domain::tree::Tree::from_config(&cfg.tree);
-    let tree_name = tree.name.unwrap_or_else(|| "unnamed".to_string());
-    status::compute_status(&cfg.tree.output_dir, &tree_name).map_err(CliError::Status)
+    let config = match config::read_config(&config::config_path()) {
+        Ok(c) => Some(c),
+        Err(ConfigError::NotFound) => None,
+        Err(e) => {
+            return Err(CliError::ConfigRead(format!(
+                "failed to read config: {}",
+                e
+            )))
+        }
+    };
+
+    let (tree_dir, tree_name) = match config.as_ref().and_then(|c| c.tree.as_ref()) {
+        Some(tree_cfg) => {
+            let tree = bo::domain::tree::Tree::from_config(tree_cfg);
+            let name = tree.name.unwrap_or_else(|| "unnamed".to_string());
+            (tree_cfg.output_dir.clone(), name)
+        }
+        None => {
+            // Not seeded — return config-only status
+            return Ok(status::config_only_status(config.as_ref()));
+        }
+    };
+
+    status::compute_status(&tree_dir, &tree_name, config.as_ref()).map_err(CliError::Status)
 }
 
 fn execute_raze(include_auth: bool) -> Result<raze::RazeOutput, CliError> {
@@ -583,52 +601,17 @@ fn execute_raze(include_auth: bool) -> Result<raze::RazeOutput, CliError> {
     }
 }
 
-fn execute_config_auth<E: Write>(
-    provider: String,
-    stderr: &mut E,
-) -> Result<cli_config::ConfigAuthOutput, CliError> {
-    cli_config::validate_provider(&provider).map_err(CliError::ConfigAuth)?;
-    let api_key = read_openai_api_key(stderr).map_err(CliError::ConfigAuth)?;
-    cli_config::run_auth(&provider, api_key, &auth::auth_path()).map_err(CliError::ConfigAuth)
-}
-
-fn read_openai_api_key<E: Write>(stderr: &mut E) -> Result<String, cli_config::ConfigAuthError> {
-    write!(stderr, "OpenAI API key: ")
-        .and_then(|()| stderr.flush())
-        .map_err(|error| cli_config::ConfigAuthError::Auth(auth::AuthError::Io(error)))?;
-
-    if io::stdin().is_terminal() {
-        return rpassword::read_password()
-            .map_err(|error| cli_config::ConfigAuthError::Auth(auth::AuthError::Io(error)));
-    }
-
-    let mut line = String::new();
-    io::stdin()
-        .lock()
-        .read_line(&mut line)
-        .map_err(|error| cli_config::ConfigAuthError::Auth(auth::AuthError::Io(error)))?;
-
-    Ok(line.trim_end_matches(['\r', '\n']).to_string())
-}
-
-fn execute_config(action: ConfigCommands) -> Result<cli_config::ConfigCommandResult, CliError> {
-    let result = match action {
-        ConfigCommands::Get { key } => cli_config::get(&key, &config::config_path()),
-        ConfigCommands::Set { key, value } => cli_config::set(&key, &value, &config::config_path()),
-        ConfigCommands::Auth { .. } => unreachable!("auth handled separately"),
-    };
-
-    result.map_err(CliError::ConfigCommand)
-}
 fn execute_collect(inputs: Vec<String>) -> Result<CollectOutput, CliError> {
     let cfg = require_seeded_config()?;
     let output_dir = cfg.tree.output_dir.clone();
     let collect_dir = output_dir.clone();
-    let model = cfg.effective_model();
+    let model = cfg
+        .effective_model()
+        .map_err(|e| CliError::ConfigRead(e.to_string()))?;
 
     collect::collect_inputs_with_collector(inputs, &output_dir, |url| {
         eprintln!("fetching {}...", url);
-        collect::collect_url_with_model(url, &collect_dir, model.as_str())
+        collect::collect_url_with_model(url, &collect_dir, model.as_str(), cfg.provider)
     })
     .map_err(CliError::Collect)
 }
@@ -673,9 +656,9 @@ fn execute_query(question: &str) -> Result<query::QueryResult, query::QueryError
     })?;
 
     execute_query_with_provider_resolver(&cfg, question, || {
-        let api_key = auth::resolve_openai_api_key(&auth::auth_path())
-            .map_err(|error| query::QueryError::NoProvider(error.to_string()))?;
-        Ok(Box::new(OpenAiProvider::new(api_key.api_key.as_str())) as Box<dyn LlmProvider>)
+        let api_key = auth::resolve_api_key(cfg.provider)
+            .map_err(|e| query::QueryError::NoProvider(e.to_string()))?;
+        Ok(llm::create_provider(cfg.provider, &api_key))
     })
 }
 
@@ -687,7 +670,9 @@ fn execute_query_with_provider_resolver<F>(
 where
     F: FnOnce() -> Result<Box<dyn LlmProvider>, query::QueryError>,
 {
-    let model = cfg.effective_model();
+    let model = cfg
+        .effective_model()
+        .map_err(|e| query::QueryError::NoProvider(e.to_string()))?;
     let prepared = query::prepare(&cfg.tree.output_dir, question, &model)?;
     let provider = resolve_provider()?;
     query::run_prepared_with_provider(prepared, provider.as_ref())

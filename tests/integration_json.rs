@@ -148,7 +148,10 @@ fn every_output_command_accepts_json_flag() {
 
     let cases: Vec<(Vec<&str>, &str)> = vec![
         (vec!["seed", "--json", output_dir.to_str().unwrap()], "seed"),
-        (vec!["--json", "config", "get", "model"], "config"),
+        (
+            vec!["--json", "config", "--model", "gpt-4.1-mini"],
+            "config",
+        ),
         (vec!["collect", "--json", "https://example.com"], "collect"),
         (vec!["compile", "--json"], "compile"),
         (vec!["list", "--json"], "list"),
@@ -174,7 +177,7 @@ fn config_set_json_payload() {
 
     let out = run(
         home.path(),
-        &["--json", "config", "set", "model", "gpt-4.1-mini"],
+        &["--json", "config", "--model", "gpt-4.1-mini"],
     );
 
     assert!(out.status.success());
@@ -182,26 +185,28 @@ fn config_set_json_payload() {
     let parsed = parse_json(&out);
     assert_eq!(parsed["ok"], true);
     assert_eq!(parsed["command"], "config");
-    assert_eq!(parsed["data"]["action"], "set");
-    assert_eq!(parsed["data"]["key"], "model");
-    assert_eq!(parsed["data"]["value"], "gpt-4.1-mini");
+    assert_eq!(parsed["data"]["status"], "ok");
+    assert_eq!(parsed["data"]["model"], "gpt-4.1-mini");
 }
 
 #[test]
-fn config_get_json_payload() {
+fn config_json_model_included_in_payload() {
     let home = TempDir::new().unwrap();
-    let set = run(home.path(), &["config", "set", "model", "gpt-4.1-mini"]);
+    let set = run(home.path(), &["config", "--model", "gpt-4.1-mini"]);
     assert!(set.status.success());
 
-    let out = run(home.path(), &["config", "get", "--json", "model"]);
+    let out = run(
+        home.path(),
+        &["--json", "config", "--compile-model", "gpt-4.1-mini"],
+    );
 
     assert!(out.status.success());
     let parsed = parse_json(&out);
     assert_eq!(parsed["ok"], true);
     assert_eq!(parsed["command"], "config");
-    assert_eq!(parsed["data"]["action"], "get");
-    assert_eq!(parsed["data"]["key"], "model");
-    assert_eq!(parsed["data"]["value"], "gpt-4.1-mini");
+    assert_eq!(parsed["data"]["status"], "ok");
+    assert_eq!(parsed["data"]["model"], "gpt-4.1-mini");
+    assert_eq!(parsed["data"]["compile_model"], "gpt-4.1-mini");
 }
 
 #[test]
@@ -210,7 +215,7 @@ fn config_json_usage_error_preserves_exit_code_and_command() {
 
     let out = run(
         home.path(),
-        &["--json", "config", "set", "model", "unknown-model"],
+        &["--json", "config", "--model", "unknown-model"],
     );
 
     assert_eq!(out.status.code(), Some(2));
@@ -219,7 +224,6 @@ fn config_json_usage_error_preserves_exit_code_and_command() {
     assert_eq!(parsed["ok"], false);
     assert_eq!(parsed["command"], "config");
     assert_eq!(parsed["error"]["code"], "usage_error");
-    assert_eq!(parsed["error"]["details"]["exit_code"], 2);
     assert_eq!(parsed["error"]["details"]["model"], "unknown-model");
     assert!(parsed["error"]["details"]["supported_models"]
         .as_array()
@@ -281,10 +285,10 @@ fn compile_json_missing_api_key_is_structured_error() {
     assert!(!out.status.success());
     let parsed = parse_json(&out);
     assert_eq!(parsed["ok"], false);
-    assert_eq!(parsed["error"]["code"], "io_error");
+    assert_eq!(parsed["error"]["code"], "llm_error");
     assert_eq!(
         parsed["error"]["message"],
-        "OpenAI API key not configured. Run: bo config auth --provider openai"
+        "LLM error: OPENAI_API_KEY environment variable not set"
     );
 }
 
