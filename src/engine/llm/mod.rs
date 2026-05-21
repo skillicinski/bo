@@ -102,6 +102,7 @@ pub async fn complete_with_policy(
     model: &str,
     max_tokens: u32,
     response_schema: Option<&Value>,
+    reasoning_disabled: bool,
     policy: LlmCallPolicy,
 ) -> Result<LlmResponse, LlmError> {
     if policy.max_attempts == 0 {
@@ -115,7 +116,13 @@ pub async fn complete_with_policy(
     for attempt in 1..=policy.max_attempts {
         let result = tokio::time::timeout(
             policy.timeout,
-            provider.complete(messages, model, max_tokens, response_schema),
+            provider.complete(
+                messages,
+                model,
+                max_tokens,
+                response_schema,
+                reasoning_disabled,
+            ),
         )
         .await;
 
@@ -229,6 +236,7 @@ pub trait LlmProvider: Send + Sync {
         model: &str,
         max_tokens: u32,
         response_schema: Option<&Value>,
+        reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError>;
 }
 

@@ -41,6 +41,7 @@ impl LlmProvider for MockProvider {
         _model: &str,
         _max_tokens: u32,
         _response_schema: Option<&Value>,
+        _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         Ok(LlmResponse {
             content: self.response.clone(),

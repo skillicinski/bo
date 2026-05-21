@@ -780,6 +780,7 @@ fn synthesize_with_provider(
             model,
             QUERY_MAX_COMPLETION_TOKENS,
             Some(&schema),
+            false,
             policy,
         ))
         .map_err(QueryError::Llm)?;

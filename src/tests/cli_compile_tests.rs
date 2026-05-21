@@ -153,6 +153,7 @@ impl LlmProvider for StaticProvider {
         _model: &str,
         _max_tokens: u32,
         _response_schema: Option<&Value>,
+        _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(LlmResponse {
@@ -186,6 +187,7 @@ impl LlmProvider for ModelRecordingProvider {
         model: &str,
         _max_tokens: u32,
         _response_schema: Option<&Value>,
+        _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         *self.model.lock().unwrap() = Some(model.to_string());
         Ok(LlmResponse {

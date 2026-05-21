@@ -25,6 +25,7 @@ impl LlmProvider for DeepSeekProvider {
         model: &str,
         max_tokens: u32,
         response_schema: Option<&Value>,
+        reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         // 1. Convert messages to Deepseek chat format.
         let deepseek_messages: Vec<Value> = messages
@@ -90,6 +91,10 @@ impl LlmProvider for DeepSeekProvider {
 
         if has_schema {
             body["response_format"] = serde_json::json!({"type": "json_object"});
+        }
+
+        if reasoning_disabled {
+            body["thinking"] = serde_json::json!({"type": "disabled"});
         }
 
         // 4. POST to DeepSeek API.

@@ -34,6 +34,7 @@ impl LlmProvider for OpenAiProvider {
         model: &str,
         max_tokens: u32,
         response_schema: Option<&Value>,
+        _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         let api_messages: Vec<ChatCompletionRequestMessage> = messages
             .iter()

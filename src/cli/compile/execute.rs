@@ -144,6 +144,7 @@ async fn call_llm_with_provider(
         model,
         MAX_COMPLETION_TOKENS,
         Some(schema),
+        false,
         policy,
     )
     .await
