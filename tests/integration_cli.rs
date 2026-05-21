@@ -48,6 +48,7 @@ fn raze_with_args(home: &Path, args: &[&str]) -> Output {
     bo(home)
         .arg("raze")
         .args(args)
+        .env("BO_RAZE_NON_INTERACTIVE", "1")
         .output()
         .expect("failed to run bo raze")
 }

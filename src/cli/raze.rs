@@ -4,11 +4,14 @@ use crate::engine::pending::{self, OpKind};
 
 use serde::Serialize;
 use serde_json::json;
-use std::io::ErrorKind as IoErrorKind;
+use std::io::{BufRead, ErrorKind as IoErrorKind, Write};
 use std::path::{Component, Path};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RazeResult {
+    /// Signals the user declined confirmation. All other fields are zero/false when cancelled.
+    #[serde(default)]
+    pub cancelled: bool,
     pub deleted_files: usize,
     pub deleted_index: bool,
     pub removed_output_dir: bool,
@@ -73,6 +76,31 @@ pub fn raze_with_auth(
         Err(manifest::ManifestError::TreeNotInitialized) => None,
         Err(error) => return Err(RazeError::Io(format!("failed to read manifest: {error}"))),
     };
+
+    // Confirmation gate (skipped in unit tests via #[cfg(not(test))]).
+    // Integration tests use BO_RAZE_NON_INTERACTIVE=1 to bypass.
+    #[cfg(not(test))]
+    {
+        let include_auth = auth_cleanup.deletes_auth();
+        if confirm_raze_interactive(output_dir, manifest.as_ref(), include_auth)? {
+            return Ok(RazeOutput {
+                result: RazeResult {
+                    cancelled: true,
+                    deleted_files: 0,
+                    deleted_index: false,
+                    removed_output_dir: false,
+                    output_dir_left_in_place: false,
+                    deleted_config: false,
+                    deleted_auth: false,
+                    preserved_auth: !include_auth,
+                    output_dir: path_string(output_dir),
+                    config_path: path_string(config_path),
+                    auth_path: path_string(auth_path),
+                },
+                warnings: vec![],
+            });
+        }
+    }
 
     let mut warnings = Vec::new();
     let mut deletes: Vec<String> = Vec::new();
@@ -152,6 +180,7 @@ pub fn raze_with_auth(
 
     Ok(RazeOutput {
         result: RazeResult {
+            cancelled: false,
             deleted_files,
             deleted_index,
             removed_output_dir,
@@ -175,6 +204,7 @@ pub fn raze_auth_only(auth_path: &Path) -> Result<Option<RazeOutput>, RazeError>
 
     Ok(Some(RazeOutput {
         result: RazeResult {
+            cancelled: false,
             deleted_files: 0,
             deleted_index: false,
             removed_output_dir: false,
@@ -188,6 +218,86 @@ pub fn raze_auth_only(auth_path: &Path) -> Result<Option<RazeOutput>, RazeError>
         },
         warnings: Vec::new(),
     }))
+}
+
+/// Run the confirmation gate with real stdin/stderr. Returns `Ok(true)` if the
+/// user cancelled (caller should return early with no mutation). Returns
+/// `Ok(false)` if confirmed or bypassed via `BO_RAZE_NON_INTERACTIVE`. Returns
+/// `Err` if stdin is not a TTY and the env bypass is not set.
+#[cfg(not(test))]
+fn confirm_raze_interactive(
+    tree_root: &Path,
+    manifest: Option<&manifest::Manifest>,
+    include_auth: bool,
+) -> Result<bool, RazeError> {
+    if std::env::var("BO_RAZE_NON_INTERACTIVE").is_ok() {
+        return Ok(false);
+    }
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() {
+        return Err(RazeError::Io(
+            "raze requires an interactive terminal for confirmation. Refusing to run non-interactively."
+                .into(),
+        ));
+    }
+    let confirmed = confirm_raze(
+        tree_root,
+        manifest,
+        include_auth,
+        &mut std::io::BufReader::new(std::io::stdin()),
+        &mut std::io::stderr(),
+    )?;
+    Ok(!confirmed)
+}
+
+/// Print confirmation prompt to `writer`, read response from `reader`.
+/// Returns `true` for exact "yes\n", `false` for anything else.
+fn confirm_raze(
+    tree_root: &Path,
+    manifest: Option<&manifest::Manifest>,
+    include_auth: bool,
+    reader: &mut impl BufRead,
+    writer: &mut impl Write,
+) -> Result<bool, RazeError> {
+    fn map_io_error(error: std::io::Error) -> RazeError {
+        RazeError::Io(error.to_string())
+    }
+    writeln!(
+        writer,
+        "This will permanently delete the tree at {}:",
+        tree_root.display()
+    )
+    .map_err(map_io_error)?;
+    if let Some(m) = manifest {
+        writeln!(
+            writer,
+            "  {} leaves, {} branches",
+            m.leaves.len(),
+            m.branches.len()
+        )
+        .map_err(map_io_error)?;
+    } else {
+        writeln!(
+            writer,
+            "  unable to read manifest \u{2014} cannot determine leaf/branch count"
+        )
+        .map_err(map_io_error)?;
+    }
+    if include_auth {
+        writeln!(writer, "  Auth credentials: will be deleted").map_err(map_io_error)?;
+    } else {
+        writeln!(
+            writer,
+            "  Auth credentials: preserved (use --include-auth to also delete)"
+        )
+        .map_err(map_io_error)?;
+    }
+    write!(writer, "Type 'yes' to confirm: ").map_err(map_io_error)?;
+    writer.flush().map_err(map_io_error)?;
+
+    let mut buf = String::new();
+    reader.read_line(&mut buf).map_err(map_io_error)?;
+    Ok(buf == "yes\n")
 }
 
 fn recover_pending_if_needed(output_dir: &Path) -> Result<(), RazeError> {
@@ -231,6 +341,10 @@ fn delete_optional_file(path: &Path, label: &str) -> Result<bool, RazeError> {
 }
 
 pub fn render_human(result: &RazeResult) -> String {
+    if result.cancelled {
+        return "raze cancelled\n".into();
+    }
+
     let mut out = String::new();
 
     if !result.output_dir.is_empty() {
