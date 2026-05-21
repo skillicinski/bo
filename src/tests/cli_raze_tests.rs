@@ -1,73 +1,15 @@
 use super::*;
-use crate::domain::manifest::{self, LeafRecord, Manifest, TreeMeta};
-use crate::domain::{Slug, Timestamp, Title, Url};
-use crate::engine::config;
+use crate::domain::Timestamp;
 use std::fs;
+use std::io::Cursor;
 use tempfile::TempDir;
 
-fn setup_tree(tmp: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
-    let tree_dir = tmp.path().join("tree");
-    let config_path = tmp.path().join("config.json");
-    fs::create_dir_all(&tree_dir).unwrap();
-    let bo_dir = tree_dir.join(".bo");
-    fs::create_dir_all(&bo_dir).unwrap();
-    manifest::write(
-        &bo_dir.join("manifest.json"),
-        &Manifest {
-            tree: TreeMeta {
-                name: "tree".to_string(),
-                created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
-                last_compiled_at: None,
-            },
-            leaves: Vec::new(),
-            branches: Vec::new(),
-        },
-    )
-    .unwrap();
+#[path = "fixtures/mod.rs"]
+mod fixtures;
 
-    config::write_config(
-        &config::Config {
-            tree: Some(crate::domain::tree::TreeConfig {
-                output_dir: tree_dir.clone(),
-                name: Some("tree".to_string()),
-                created_at: Some("2025-01-01T00:00:00Z".to_string()),
-            }),
-            model: None,
-            compile_model: None,
-        },
-        &config_path,
-    )
-    .unwrap();
-
-    (tree_dir, config_path)
-}
-
-fn auth_path_for_config(config_path: &std::path::Path) -> std::path::PathBuf {
-    config_path.with_file_name("auth.json")
-}
-
-fn add_leaf(tree_dir: &std::path::Path, file: &str) {
-    add_manifest_leaf(tree_dir, file);
-    fs::write(tree_dir.join(file), "# content\n").unwrap();
-}
-
-fn add_manifest_leaf(tree_dir: &std::path::Path, file: &str) {
-    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let manifest_path = tree_dir.join(".bo/manifest.json");
-    let mut manifest = manifest::read(&manifest_path).unwrap();
-    // Use a valid slug even for adversarial file paths
-    let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let slug = Slug::parse(&format!("leaf-{}", idx)).unwrap();
-    manifest.leaves.push(LeafRecord {
-        slug,
-        file: file.to_string(),
-        title: Title::new(file.trim_end_matches(".md")),
-        url: Url::parse("https://example.com/test").unwrap(),
-        collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
-        summary: None,
-    });
-    manifest::write(&manifest_path, &manifest).unwrap();
-}
+use fixtures::{
+    add_leaf, add_manifest_leaf, auth_path_for_config, make_leaf_record, make_manifest, setup_tree,
+};
 
 #[test]
 fn deletes_indexed_files() {
@@ -340,8 +282,6 @@ fn render_human_shows_preserved_auth() {
 
 // ─── confirmation gate tests ────────────────────────────────────────────────
 
-use std::io::Cursor;
-
 #[test]
 fn confirm_accepts_exact_yes() {
     let mut reader = Cursor::new(b"yes\n");
@@ -411,35 +351,13 @@ fn confirm_shows_tree_path() {
 
 #[test]
 fn confirm_shows_leaf_and_branch_counts() {
-    use crate::domain::manifest::{LeafRecord, Manifest, TreeMeta};
-    use crate::domain::{Slug, Timestamp, Title, Url};
-
-    let manifest = Manifest {
-        tree: TreeMeta {
-            name: "test".to_string(),
-            created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
-            last_compiled_at: None,
-        },
-        leaves: vec![
-            LeafRecord {
-                slug: Slug::parse("leaf-1").unwrap(),
-                file: "a.md".to_string(),
-                title: Title::new("a"),
-                url: Url::parse("https://example.com/a").unwrap(),
-                collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
-                summary: None,
-            },
-            LeafRecord {
-                slug: Slug::parse("leaf-2").unwrap(),
-                file: "b.md".to_string(),
-                title: Title::new("b"),
-                url: Url::parse("https://example.com/b").unwrap(),
-                collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
-                summary: None,
-            },
+    let manifest = make_manifest(
+        "test",
+        vec![
+            make_leaf_record("leaf-1", "a.md"),
+            make_leaf_record("leaf-2", "b.md"),
         ],
-        branches: vec![],
-    };
+    );
 
     let mut reader = Cursor::new(b"yes\n");
     let mut writer = Vec::new();
