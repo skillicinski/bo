@@ -12,6 +12,7 @@ use tempfile::TempDir;
 fn bo(home: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_bo"));
     cmd.env("HOME", home);
+    cmd.env("BO_RAZE_NON_INTERACTIVE", "1");
     cmd
 }
 

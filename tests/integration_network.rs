@@ -72,7 +72,10 @@ fn add(home: &Path, url: &str) -> Output {
 }
 
 fn raze(home: &Path) {
-    let _ = bo(home).arg("raze").output();
+    let _ = bo(home)
+        .arg("raze")
+        .env("BO_RAZE_NON_INTERACTIVE", "1")
+        .output();
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────

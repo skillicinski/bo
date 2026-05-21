@@ -279,6 +279,7 @@ fn empty_tree_produces_zero_deletes() {
 #[test]
 fn render_human_includes_file_count() {
     let result = RazeResult {
+        cancelled: false,
         deleted_files: 3,
         deleted_index: true,
         removed_output_dir: true,
@@ -301,6 +302,7 @@ fn render_human_includes_file_count() {
 #[test]
 fn render_human_shows_dir_left_in_place() {
     let result = RazeResult {
+        cancelled: false,
         deleted_files: 0,
         deleted_index: false,
         removed_output_dir: false,
@@ -319,6 +321,7 @@ fn render_human_shows_dir_left_in_place() {
 #[test]
 fn render_human_shows_preserved_auth() {
     let result = RazeResult {
+        cancelled: false,
         deleted_files: 0,
         deleted_index: false,
         removed_output_dir: false,
@@ -333,4 +336,172 @@ fn render_human_shows_preserved_auth() {
     let output = render_human(&result);
     assert!(output.contains("preserved auth"));
     assert!(output.contains("/tmp/.bo/auth.json"));
+}
+
+// ─── confirmation gate tests ────────────────────────────────────────────────
+
+use std::io::Cursor;
+
+#[test]
+fn confirm_accepts_exact_yes() {
+    let mut reader = Cursor::new(b"yes\n");
+    let mut writer = Vec::new();
+    let result = confirm_raze(
+        std::path::Path::new("/tmp/tree"),
+        None,
+        false,
+        &mut reader,
+        &mut writer,
+    )
+    .unwrap();
+    assert!(result);
+    let output = String::from_utf8(writer).unwrap();
+    assert!(output.contains("Type 'yes' to confirm:"));
+}
+
+#[test]
+fn confirm_rejects_variants() {
+    for input in &["Yes\n", "YES\n", "y\n", "\n"] {
+        let mut reader = Cursor::new(input.as_bytes());
+        let mut writer = Vec::new();
+        let result = confirm_raze(
+            std::path::Path::new("/tmp/tree"),
+            None,
+            false,
+            &mut reader,
+            &mut writer,
+        )
+        .unwrap();
+        assert!(!result, "should reject {:?}", input);
+    }
+}
+
+#[test]
+fn confirm_rejects_random() {
+    for input in &["no\n", "maybe\n", "foo\n", "yes \n"] {
+        let mut reader = Cursor::new(input.as_bytes());
+        let mut writer = Vec::new();
+        let result = confirm_raze(
+            std::path::Path::new("/tmp/tree"),
+            None,
+            false,
+            &mut reader,
+            &mut writer,
+        )
+        .unwrap();
+        assert!(!result, "should reject {:?}", input);
+    }
+}
+
+#[test]
+fn confirm_shows_tree_path() {
+    let mut reader = Cursor::new(b"yes\n");
+    let mut writer = Vec::new();
+    confirm_raze(
+        std::path::Path::new("/home/user/my-tree"),
+        None,
+        false,
+        &mut reader,
+        &mut writer,
+    )
+    .unwrap();
+    let output = String::from_utf8(writer).unwrap();
+    assert!(output.contains("/home/user/my-tree"));
+}
+
+#[test]
+fn confirm_shows_leaf_and_branch_counts() {
+    use crate::domain::manifest::{LeafRecord, Manifest, TreeMeta};
+    use crate::domain::{Slug, Timestamp, Title, Url};
+
+    let manifest = Manifest {
+        tree: TreeMeta {
+            name: "test".to_string(),
+            created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+            last_compiled_at: None,
+        },
+        leaves: vec![
+            LeafRecord {
+                slug: Slug::parse("leaf-1").unwrap(),
+                file: "a.md".to_string(),
+                title: Title::new("a"),
+                url: Url::parse("https://example.com/a").unwrap(),
+                collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+                summary: None,
+            },
+            LeafRecord {
+                slug: Slug::parse("leaf-2").unwrap(),
+                file: "b.md".to_string(),
+                title: Title::new("b"),
+                url: Url::parse("https://example.com/b").unwrap(),
+                collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+                summary: None,
+            },
+        ],
+        branches: vec![],
+    };
+
+    let mut reader = Cursor::new(b"yes\n");
+    let mut writer = Vec::new();
+    confirm_raze(
+        std::path::Path::new("/tmp/tree"),
+        Some(&manifest),
+        false,
+        &mut reader,
+        &mut writer,
+    )
+    .unwrap();
+    let output = String::from_utf8(writer).unwrap();
+    assert!(output.contains("2 leaves, 0 branches"));
+}
+
+#[test]
+fn confirm_missing_manifest_shows_degraded_message() {
+    let mut reader = Cursor::new(b"yes\n");
+    let mut writer = Vec::new();
+    confirm_raze(
+        std::path::Path::new("/tmp/tree"),
+        None,
+        false,
+        &mut reader,
+        &mut writer,
+    )
+    .unwrap();
+    let output = String::from_utf8(writer).unwrap();
+    assert!(output.contains("unable to read manifest"));
+}
+
+#[test]
+fn confirm_with_auth_shows_will_be_deleted() {
+    let mut reader = Cursor::new(b"yes\n");
+    let mut writer = Vec::new();
+    confirm_raze(
+        std::path::Path::new("/tmp/tree"),
+        None,
+        true,
+        &mut reader,
+        &mut writer,
+    )
+    .unwrap();
+    let output = String::from_utf8(writer).unwrap();
+    assert!(output.contains("will be deleted"));
+}
+
+#[test]
+fn render_human_cancelled_shows_message() {
+    let result = RazeResult {
+        cancelled: true,
+        deleted_files: 0,
+        deleted_index: false,
+        removed_output_dir: false,
+        output_dir_left_in_place: false,
+        deleted_config: false,
+        deleted_auth: false,
+        preserved_auth: false,
+        output_dir: String::new(),
+        config_path: String::new(),
+        auth_path: String::new(),
+    };
+    let output = render_human(&result);
+    assert_eq!(output, "raze cancelled\n");
 }
