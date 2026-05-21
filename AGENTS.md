@@ -57,6 +57,10 @@ PRs don't need "Verification", "Tests", or "How to test" sections. CI gates ever
 
 When creating new PRs, the body should begin with a itemised list that describe the core functional changes to the project. Each item should begin with a null-subject verb, eg. "added", "removed", "updated", "refactored", "bumped" to describe the type of operation on the code, followed by a one-line summary of the change itself.
 
+Link related issues and stacked PRs at the bottom of the PR body, separated from the summary by `---` on its own line:
+- `Closes #<number>` for issues this PR resolves
+- `Stacked on #<number>` for an open PR this builds on top of
+
 ## Releasing
 
 1. Update `CHANGELOG.md` with the new version section.
