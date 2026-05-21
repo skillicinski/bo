@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use serde_json::Value;
 
 use crate::domain::{branch, manifest, tree::Tree, Timestamp};
-use crate::engine::auth::AuthResolutionError;
+
 use crate::engine::config::SeededConfig;
 use crate::engine::llm::{
     complete_with_policy, FinishReason, LlmCallPolicy, LlmError, LlmProvider, Message, Model,
@@ -158,10 +158,6 @@ async fn call_llm_with_provider(
             reason
         ))),
     }
-}
-
-pub(super) fn compile_auth_error(error: AuthResolutionError) -> CompileError {
-    CompileError::Io(error.to_string())
 }
 
 pub(super) fn map_compile_llm_error(error: LlmError) -> CompileError {

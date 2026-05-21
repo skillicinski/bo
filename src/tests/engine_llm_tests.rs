@@ -116,27 +116,59 @@ fn short_retry_policy(max_attempts: usize) -> LlmCallPolicy {
 
 #[test]
 fn model_catalog_exposes_default_model() {
-    assert_eq!(models::DEFAULT_MODEL, "gpt-4o");
-    assert!(models::is_supported_model(models::DEFAULT_MODEL));
+    assert_eq!(models::DEFAULT_MODEL, "gpt-4.1-mini");
+    assert!(models::is_supported_model(
+        Provider::OpenAI,
+        models::DEFAULT_MODEL
+    ));
 }
 
 #[test]
-fn model_catalog_lists_supported_models() {
-    let ids: Vec<&str> = models::supported_model_ids().collect();
+fn model_catalog_lists_openai_models() {
+    let models = models::models_for(Provider::OpenAI);
+    let ids: Vec<&str> = models.iter().map(|m| m.id).collect();
     assert!(ids.contains(&"gpt-4o"));
     assert!(ids.contains(&"gpt-4.1-mini"));
 }
 
 #[test]
+fn model_catalog_lists_deepseek_models() {
+    let models = models::models_for(Provider::Deepseek);
+    let ids: Vec<&str> = models.iter().map(|m| m.id).collect();
+    assert!(ids.contains(&"deepseek-v4-flash"));
+    assert!(ids.contains(&"deepseek-v4-pro"));
+}
+
+#[test]
 fn context_window_lookup_returns_known_windows() {
-    assert_eq!(context_window_tokens("gpt-4o"), Some(128_000));
-    assert_eq!(context_window_tokens("gpt-4.1-mini"), Some(1_000_000));
+    assert_eq!(
+        context_window_tokens(Provider::OpenAI, "gpt-4o"),
+        Some(128_000)
+    );
+    assert_eq!(
+        context_window_tokens(Provider::OpenAI, "gpt-4.1-mini"),
+        Some(1_000_000)
+    );
+}
+
+#[test]
+fn deepseek_context_window() {
+    assert_eq!(
+        context_window_tokens(Provider::Deepseek, "deepseek-v4-pro"),
+        Some(1_000_000)
+    );
 }
 
 #[test]
 fn model_catalog_rejects_unsupported_models() {
-    assert!(!models::is_supported_model("unknown-model"));
-    assert_eq!(context_window_tokens("unknown-model"), None);
+    assert!(!models::is_supported_model(
+        Provider::OpenAI,
+        "unknown-model"
+    ));
+    assert_eq!(
+        context_window_tokens(Provider::OpenAI, "unknown-model"),
+        None
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

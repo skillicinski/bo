@@ -22,6 +22,9 @@
 
 use crate::domain::tree::TreeConfig;
 use crate::engine::llm::model::Model;
+use crate::engine::llm::models;
+use crate::engine::llm::Provider;
+use crate::engine::llm::UnsupportedModel;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::io;
@@ -29,11 +32,15 @@ use std::path::{Path, PathBuf};
 
 // ── Config ──────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+fn default_provider() -> Provider {
+    Provider::OpenAI
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// Active tree metadata. Absent when config exists before `bo seed`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tree: Option<TreeConfig>,
+    /// LLM provider. Defaults to OpenAI.
+    #[serde(default = "default_provider")]
+    pub provider: Provider,
 
     /// Global model used by LLM-backed stages. Defaults to `DEFAULT_MODEL` when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -42,27 +49,42 @@ pub struct Config {
     /// Optional model used by compile. Falls back to `model`, then `DEFAULT_MODEL`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compile_model: Option<String>,
+
+    /// Active tree metadata. Absent when config exists before `bo seed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree: Option<TreeConfig>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            provider: Provider::OpenAI,
+            model: None,
+            compile_model: None,
+            tree: None,
+        }
+    }
 }
 
 impl Config {
-    pub fn effective_model(&self) -> Model {
-        self.model
-            .as_deref()
-            .and_then(|s| Model::parse(s).ok())
-            .unwrap_or_else(Model::default_model)
+    pub fn effective_model(&self) -> Result<Model, UnsupportedModel> {
+        let model_id = self.model.as_deref().unwrap_or(models::DEFAULT_MODEL);
+        Model::parse(model_id, self.provider)
     }
 
-    pub fn effective_compile_model(&self) -> Model {
-        self.compile_model
+    pub fn effective_compile_model(&self) -> Result<Model, UnsupportedModel> {
+        let model_id = self
+            .compile_model
             .as_deref()
             .or(self.model.as_deref())
-            .and_then(|s| Model::parse(s).ok())
-            .unwrap_or_else(Model::default_model)
+            .unwrap_or(models::DEFAULT_MODEL);
+        Model::parse(model_id, self.provider)
     }
 
     pub fn into_seeded(self) -> Option<SeededConfig> {
         self.tree.map(|tree| SeededConfig {
             tree,
+            provider: self.provider,
             model: self.model,
             compile_model: self.compile_model,
         })
@@ -71,25 +93,25 @@ impl Config {
 
 #[derive(Debug, Clone)]
 pub struct SeededConfig {
+    pub provider: Provider,
     pub tree: TreeConfig,
     pub model: Option<String>,
     pub compile_model: Option<String>,
 }
 
 impl SeededConfig {
-    pub fn effective_model(&self) -> Model {
-        self.model
-            .as_deref()
-            .and_then(|s| Model::parse(s).ok())
-            .unwrap_or_else(Model::default_model)
+    pub fn effective_model(&self) -> Result<Model, UnsupportedModel> {
+        let model_id = self.model.as_deref().unwrap_or(models::DEFAULT_MODEL);
+        Model::parse(model_id, self.provider)
     }
 
-    pub fn effective_compile_model(&self) -> Model {
-        self.compile_model
+    pub fn effective_compile_model(&self) -> Result<Model, UnsupportedModel> {
+        let model_id = self
+            .compile_model
             .as_deref()
             .or(self.model.as_deref())
-            .and_then(|s| Model::parse(s).ok())
-            .unwrap_or_else(Model::default_model)
+            .unwrap_or(models::DEFAULT_MODEL);
+        Model::parse(model_id, self.provider)
     }
 }
 

@@ -267,6 +267,7 @@ fn query_uses_model_not_compile_model() {
 
     let provider = QueryModelRecordingProvider::new();
     let cfg = SeededConfig {
+        provider: bo::engine::llm::Provider::OpenAI,
         tree: TreeConfig {
             output_dir: dir.path().to_path_buf(),
             name: Some("test-tree".to_string()),
@@ -347,6 +348,7 @@ fn assert_no_provider_resolver_not_called(
 
 fn seeded_config(tree: &Path) -> SeededConfig {
     SeededConfig {
+        provider: bo::engine::llm::Provider::OpenAI,
         tree: TreeConfig {
             output_dir: tree.to_path_buf(),
             name: Some("test-tree".to_string()),

@@ -81,6 +81,7 @@ fn seeds_config_without_tree_and_preserves_model() {
 
     config::write_config(
         &config::Config {
+            provider: crate::engine::llm::Provider::OpenAI,
             tree: None,
             model: Some("gpt-4.1-mini".to_string()),
             compile_model: None,

@@ -96,6 +96,7 @@ fn setup_fixture_collection() -> tempfile::TempDir {
 
 fn make_config(output_dir: &std::path::Path) -> SeededConfig {
     SeededConfig {
+        provider: bo::engine::llm::Provider::OpenAI,
         tree: bo::domain::tree::TreeConfig {
             output_dir: output_dir.to_path_buf(),
             name: None,

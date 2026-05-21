@@ -1,7 +1,9 @@
-// Release-supported model metadata.
+// Provider-aware model metadata.
 //
-// The current provider surface is OpenAI-only. These model IDs and context
-// windows are OpenAI model capabilities, not a provider-agnostic namespace.
+// Each provider has its own supported model list. Functions dispatch on the
+// Provider enum to return the correct list.
+
+use super::Provider;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModelInfo {
@@ -9,9 +11,9 @@ pub struct ModelInfo {
     pub context_tokens: usize,
 }
 
-pub const DEFAULT_MODEL: &str = "gpt-4o";
+pub const DEFAULT_MODEL: &str = "gpt-4.1-mini";
 
-pub const OPENAI_SUPPORTED_MODELS: &[ModelInfo] = &[
+pub const OPENAI_MODELS: &[ModelInfo] = &[
     ModelInfo {
         id: "gpt-4o",
         context_tokens: 128_000,
@@ -34,21 +36,35 @@ pub const OPENAI_SUPPORTED_MODELS: &[ModelInfo] = &[
     },
 ];
 
-pub fn supported_model_ids() -> impl Iterator<Item = &'static str> {
-    OPENAI_SUPPORTED_MODELS.iter().map(|entry| entry.id)
+pub const DEEPSEEK_MODELS: &[ModelInfo] = &[
+    ModelInfo {
+        id: "deepseek-v4-flash",
+        context_tokens: 1_000_000,
+    },
+    ModelInfo {
+        id: "deepseek-v4-pro",
+        context_tokens: 1_000_000,
+    },
+];
+
+pub fn models_for(provider: Provider) -> &'static [ModelInfo] {
+    match provider {
+        Provider::OpenAI => OPENAI_MODELS,
+        Provider::Deepseek => DEEPSEEK_MODELS,
+    }
 }
 
-pub fn is_supported_model(model: &str) -> bool {
-    model_info(model).is_some()
-}
-
-pub fn context_window_tokens(model: &str) -> Option<usize> {
-    model_info(model).map(|entry| entry.context_tokens)
-}
-
-fn model_info(model: &str) -> Option<&'static ModelInfo> {
-    let model = model.trim();
-    OPENAI_SUPPORTED_MODELS
+pub fn is_supported_model(provider: Provider, model_id: &str) -> bool {
+    let model_id = model_id.trim();
+    models_for(provider)
         .iter()
-        .find(|entry| entry.id == model)
+        .any(|entry| entry.id == model_id)
+}
+
+pub fn context_window_tokens(provider: Provider, model_id: &str) -> Option<usize> {
+    let model_id = model_id.trim();
+    models_for(provider)
+        .iter()
+        .find(|entry| entry.id == model_id)
+        .map(|entry| entry.context_tokens)
 }

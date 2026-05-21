@@ -1,103 +1,11 @@
 use super::*;
 use crate::domain::tree::TreeConfig;
-use crate::engine::auth::{read_auth, write_openai_auth, OpenAiApiKey};
 use crate::engine::config::{self as engine_config, Config};
+use crate::engine::llm::Provider;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-// ── auth tests ───────────────────────────────────────────────────────────────
-
-fn auth_path(dir: &TempDir) -> std::path::PathBuf {
-    dir.path().join(".bo").join("auth.json")
-}
-
-fn stored_key(path: &std::path::Path) -> Option<String> {
-    read_auth(path)
-        .ok()?
-        .providers
-        .openai?
-        .api_key
-        .map(|key| key.as_str().to_string())
-}
-
-#[test]
-fn config_auth_stores_openai_key_and_returns_non_secret_status() {
-    let dir = TempDir::new().unwrap();
-    let path = auth_path(&dir);
-
-    let output = run_auth("openai", "sk-configured", &path).unwrap();
-
-    assert_eq!(stored_key(&path).as_deref(), Some("sk-configured"));
-    assert_eq!(output.result.status, "ok");
-    assert_eq!(output.result.provider, "openai");
-    assert_eq!(output.result.auth, "configured");
-    assert!(!serde_json::to_string(&output.result)
-        .unwrap()
-        .contains("sk-configured"));
-}
-
-#[test]
-fn config_auth_overwrites_existing_openai_key() {
-    let dir = TempDir::new().unwrap();
-    let path = auth_path(&dir);
-
-    run_auth("openai", "sk-old", &path).unwrap();
-    run_auth("openai", "sk-new", &path).unwrap();
-
-    assert_eq!(stored_key(&path).as_deref(), Some("sk-new"));
-}
-
-#[test]
-fn config_auth_rejects_empty_key_without_overwriting_existing_key() {
-    let dir = TempDir::new().unwrap();
-    let path = auth_path(&dir);
-    write_openai_auth(&path, OpenAiApiKey::new("sk-existing").unwrap()).unwrap();
-
-    let error = run_auth("openai", "   ", &path).unwrap_err();
-
-    assert!(matches!(error, ConfigAuthError::Auth(_)));
-    assert_eq!(stored_key(&path).as_deref(), Some("sk-existing"));
-}
-
-#[test]
-fn config_auth_rejects_unknown_provider_and_lists_valid_provider() {
-    let dir = TempDir::new().unwrap();
-    let path = auth_path(&dir);
-
-    let error = run_auth("OpenAI", "sk-unused", &path).unwrap_err();
-
-    assert_eq!(error.exit_code(), 2);
-    assert!(matches!(error, ConfigAuthError::UnknownProvider { .. }));
-    assert!(error.to_string().contains("openai"));
-    assert!(!path.exists());
-}
-
-#[test]
-fn config_auth_error_formatting_does_not_include_key_input() {
-    let dir = TempDir::new().unwrap();
-    let path = auth_path(&dir);
-
-    let error = run_auth("unknown", "sk-should-not-appear", &path).unwrap_err();
-
-    assert!(!error.to_string().contains("sk-should-not-appear"));
-    assert!(!error.details().to_string().contains("sk-should-not-appear"));
-}
-
-#[test]
-fn render_auth_human_contains_provider_but_not_secret() {
-    let result = ConfigAuthResult {
-        status: "ok".to_string(),
-        provider: "openai".to_string(),
-        auth: "configured".to_string(),
-    };
-
-    let rendered = render_auth_human(&result);
-
-    assert!(rendered.contains("openai"));
-    assert!(!rendered.contains("sk-"));
-}
-
-// ── config set/get tests ─────────────────────────────────────────────────────
+// ── config write tests ───────────────────────────────────────────────────────
 
 fn temp_config_path(dir: &TempDir) -> PathBuf {
     dir.path().join(".bo").join("config.json")
@@ -105,6 +13,7 @@ fn temp_config_path(dir: &TempDir) -> PathBuf {
 
 fn seeded_config() -> Config {
     Config {
+        provider: Provider::OpenAI,
         tree: Some(TreeConfig {
             output_dir: PathBuf::from("/tmp/tree"),
             name: Some("tree".to_string()),
@@ -117,6 +26,7 @@ fn seeded_config() -> Config {
 
 fn seeded_config_with_models() -> Config {
     Config {
+        provider: Provider::OpenAI,
         tree: Some(TreeConfig {
             output_dir: PathBuf::from("/tmp/tree"),
             name: Some("tree".to_string()),
@@ -128,28 +38,42 @@ fn seeded_config_with_models() -> Config {
 }
 
 #[test]
-fn get_absent_config_returns_default_model() {
+fn write_absent_config_creates_default_with_model() {
     let dir = TempDir::new().unwrap();
     let path = temp_config_path(&dir);
 
-    let result = get("model", &path).unwrap();
+    let result = write_config(
+        WriteConfigOptions {
+            provider: None,
+            model: Some("gpt-4.1-mini".to_string()),
+            compile_model: None,
+        },
+        &path,
+    )
+    .unwrap();
 
-    assert_eq!(result.action, "get");
-    assert_eq!(result.key, "model");
-    assert_eq!(result.value, "gpt-4o");
-    assert!(!path.exists());
+    assert_eq!(result.status, "ok");
+    assert_eq!(result.model.as_deref(), Some("gpt-4.1-mini"));
+    let loaded = engine_config::read_config(&path).unwrap();
+    assert_eq!(loaded.model.as_deref(), Some("gpt-4.1-mini"));
 }
 
 #[test]
-fn set_creates_config() {
+fn write_creates_config() {
     let dir = TempDir::new().unwrap();
     let path = temp_config_path(&dir);
 
-    let result = set("model", "gpt-4.1-mini", &path).unwrap();
+    let result = write_config(
+        WriteConfigOptions {
+            provider: None,
+            model: Some("gpt-4.1-mini".to_string()),
+            compile_model: None,
+        },
+        &path,
+    )
+    .unwrap();
 
-    assert_eq!(result.action, "set");
-    assert_eq!(result.key, "model");
-    assert_eq!(result.value, "gpt-4.1-mini");
+    assert_eq!(result.status, "ok");
     let loaded = engine_config::read_config(&path).unwrap();
     assert_eq!(loaded.model.as_deref(), Some("gpt-4.1-mini"));
     assert!(loaded.compile_model.is_none());
@@ -157,11 +81,12 @@ fn set_creates_config() {
 }
 
 #[test]
-fn get_compile_model_returns_fallback_model_when_unset() {
+fn write_model_with_existing_compile_model_preserves_fallback() {
     let dir = TempDir::new().unwrap();
     let path = temp_config_path(&dir);
     engine_config::write_config(
         &Config {
+            provider: Provider::OpenAI,
             tree: None,
             model: Some("gpt-4o-mini".to_string()),
             compile_model: None,
@@ -170,35 +95,39 @@ fn get_compile_model_returns_fallback_model_when_unset() {
     )
     .unwrap();
 
-    let result = get("compile_model", &path).unwrap();
+    // Writing only model should keep model=..., compile_model unchanged
+    let result = write_config(
+        WriteConfigOptions {
+            provider: None,
+            model: Some("gpt-4o".to_string()),
+            compile_model: None,
+        },
+        &path,
+    )
+    .unwrap();
 
-    assert_eq!(result.action, "get");
-    assert_eq!(result.key, "compile_model");
-    assert_eq!(result.value, "gpt-4o-mini");
+    assert_eq!(result.status, "ok");
+    let loaded = engine_config::read_config(&path).unwrap();
+    assert_eq!(loaded.model.as_deref(), Some("gpt-4o"));
+    assert_eq!(loaded.compile_model.as_deref(), None);
 }
 
 #[test]
-fn get_compile_model_returns_default_when_models_unset() {
+fn write_compile_model_persists_only_compile_model() {
     let dir = TempDir::new().unwrap();
     let path = temp_config_path(&dir);
 
-    let result = get("compile_model", &path).unwrap();
+    let result = write_config(
+        WriteConfigOptions {
+            provider: None,
+            model: None,
+            compile_model: Some("gpt-4.1-mini".to_string()),
+        },
+        &path,
+    )
+    .unwrap();
 
-    assert_eq!(result.key, "compile_model");
-    assert_eq!(result.value, "gpt-4o");
-    assert!(!path.exists());
-}
-
-#[test]
-fn set_compile_model_persists_only_compile_model() {
-    let dir = TempDir::new().unwrap();
-    let path = temp_config_path(&dir);
-
-    let result = set("compile_model", "gpt-4.1-mini", &path).unwrap();
-
-    assert_eq!(result.action, "set");
-    assert_eq!(result.key, "compile_model");
-    assert_eq!(result.value, "gpt-4.1-mini");
+    assert_eq!(result.status, "ok");
     let loaded = engine_config::read_config(&path).unwrap();
     assert!(loaded.model.is_none());
     assert_eq!(loaded.compile_model.as_deref(), Some("gpt-4.1-mini"));
@@ -206,23 +135,39 @@ fn set_compile_model_persists_only_compile_model() {
 }
 
 #[test]
-fn set_trims_model_value() {
+fn write_trims_model_value() {
     let dir = TempDir::new().unwrap();
     let path = temp_config_path(&dir);
 
-    set("model", " gpt-4.1-mini ", &path).unwrap();
+    write_config(
+        WriteConfigOptions {
+            provider: None,
+            model: Some(" gpt-4.1-mini ".to_string()),
+            compile_model: None,
+        },
+        &path,
+    )
+    .unwrap();
 
     let loaded = engine_config::read_config(&path).unwrap();
     assert_eq!(loaded.model.as_deref(), Some("gpt-4.1-mini"));
 }
 
 #[test]
-fn set_preserves_tree_metadata() {
+fn write_preserves_tree_metadata() {
     let dir = TempDir::new().unwrap();
     let path = temp_config_path(&dir);
     engine_config::write_config(&seeded_config(), &path).unwrap();
 
-    set("model", "gpt-4.1-mini", &path).unwrap();
+    write_config(
+        WriteConfigOptions {
+            provider: None,
+            model: Some("gpt-4.1-mini".to_string()),
+            compile_model: None,
+        },
+        &path,
+    )
+    .unwrap();
 
     let loaded = engine_config::read_config(&path).unwrap();
     assert_eq!(loaded.model.as_deref(), Some("gpt-4.1-mini"));
@@ -232,12 +177,20 @@ fn set_preserves_tree_metadata() {
 }
 
 #[test]
-fn set_model_preserves_compile_model_and_tree_metadata() {
+fn write_model_preserves_compile_model_and_tree_metadata() {
     let dir = TempDir::new().unwrap();
     let path = temp_config_path(&dir);
     engine_config::write_config(&seeded_config_with_models(), &path).unwrap();
 
-    set("model", "gpt-4.1", &path).unwrap();
+    write_config(
+        WriteConfigOptions {
+            provider: None,
+            model: Some("gpt-4.1".to_string()),
+            compile_model: None,
+        },
+        &path,
+    )
+    .unwrap();
 
     let loaded = engine_config::read_config(&path).unwrap();
     assert_eq!(loaded.model.as_deref(), Some("gpt-4.1"));
@@ -248,84 +201,124 @@ fn set_model_preserves_compile_model_and_tree_metadata() {
 }
 
 #[test]
-fn unknown_get_key_is_usage_error() {
+fn write_unsupported_model_is_usage_error() {
     let dir = TempDir::new().unwrap();
     let path = temp_config_path(&dir);
 
-    let err = get("query_model", &path).unwrap_err();
+    let err = write_config(
+        WriteConfigOptions {
+            provider: None,
+            model: Some("unknown-model".to_string()),
+            compile_model: None,
+        },
+        &path,
+    )
+    .unwrap_err();
 
     assert_eq!(err.exit_code(), 2);
-    assert!(matches!(err, ConfigCommandError::UnknownKey { .. }));
-    assert_eq!(err.valid_keys().unwrap(), &["model", "compile_model"]);
+    assert!(matches!(err, ConfigWriteError::UnsupportedModel { .. }));
 }
 
 #[test]
-fn unknown_set_key_is_usage_error_before_model_validation() {
+fn write_unsupported_model_for_deepseek_is_usage_error() {
     let dir = TempDir::new().unwrap();
     let path = temp_config_path(&dir);
 
-    let err = set("query_model", "unknown-model", &path).unwrap_err();
+    let err = write_config(
+        WriteConfigOptions {
+            provider: Some(Provider::Deepseek),
+            model: Some("gpt-4o".to_string()),
+            compile_model: None,
+        },
+        &path,
+    )
+    .unwrap_err();
 
     assert_eq!(err.exit_code(), 2);
-    assert!(matches!(err, ConfigCommandError::UnknownKey { .. }));
+    assert!(matches!(err, ConfigWriteError::UnsupportedModel { .. }));
 }
 
 #[test]
-fn unsupported_model_is_usage_error() {
+fn write_unsupported_compile_model_is_usage_error() {
     let dir = TempDir::new().unwrap();
     let path = temp_config_path(&dir);
 
-    let err = set("model", "unknown-model", &path).unwrap_err();
+    let err = write_config(
+        WriteConfigOptions {
+            provider: None,
+            model: None,
+            compile_model: Some("unknown-model".to_string()),
+        },
+        &path,
+    )
+    .unwrap_err();
 
     assert_eq!(err.exit_code(), 2);
-    assert!(matches!(err, ConfigCommandError::UnsupportedModel { .. }));
-    assert!(err.supported_models().unwrap().contains(&"gpt-4.1-mini"));
+    assert!(matches!(err, ConfigWriteError::UnsupportedModel { .. }));
 }
 
 #[test]
-fn unsupported_compile_model_is_usage_error() {
-    let dir = TempDir::new().unwrap();
-    let path = temp_config_path(&dir);
-
-    let err = set("compile_model", "unknown-model", &path).unwrap_err();
-
-    assert_eq!(err.exit_code(), 2);
-    assert!(matches!(err, ConfigCommandError::UnsupportedModel { .. }));
-    assert!(err.supported_models().unwrap().contains(&"gpt-4.1-mini"));
-}
-
-#[test]
-fn malformed_config_is_not_overwritten_by_set() {
+fn write_malformed_config_is_not_overwritten() {
     let dir = TempDir::new().unwrap();
     let path = temp_config_path(&dir);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, "not json").unwrap();
 
-    let err = set("model", "gpt-4.1-mini", &path).unwrap_err();
+    let err = write_config(
+        WriteConfigOptions {
+            provider: None,
+            model: Some("gpt-4.1-mini".to_string()),
+            compile_model: None,
+        },
+        &path,
+    )
+    .unwrap_err();
 
     assert_eq!(err.exit_code(), 1);
-    assert!(matches!(err, ConfigCommandError::Read(_)));
+    assert!(matches!(err, ConfigWriteError::Read(_)));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "not json");
 }
 
 #[test]
-fn render_get_human_is_shell_friendly() {
-    let rendered = render_human(&ConfigCommandResult {
-        action: "get".to_string(),
-        key: "model".to_string(),
-        value: "gpt-4.1-mini".to_string(),
-    });
+fn write_deepseek_provider() {
+    let dir = TempDir::new().unwrap();
+    let path = temp_config_path(&dir);
 
-    assert_eq!(rendered, "gpt-4.1-mini\n");
+    let result = write_config(
+        WriteConfigOptions {
+            provider: Some(Provider::Deepseek),
+            model: Some("deepseek-v4-flash".to_string()),
+            compile_model: None,
+        },
+        &path,
+    )
+    .unwrap();
+
+    assert_eq!(result.provider, "deepseek");
+    assert_eq!(result.model.as_deref(), Some("deepseek-v4-flash"));
 }
 
 #[test]
-fn render_set_human_is_concise() {
-    let rendered = render_human(&ConfigCommandResult {
-        action: "set".to_string(),
-        key: "model".to_string(),
-        value: "gpt-4.1-mini".to_string(),
+fn render_human_includes_provider() {
+    let rendered = render_human(&ConfigWriteResult {
+        status: "ok".to_string(),
+        provider: "openai".to_string(),
+        model: Some("gpt-4.1-mini".to_string()),
+        compile_model: None,
     });
 
-    assert_eq!(rendered, "model = gpt-4.1-mini\n");
+    assert!(rendered.contains("provider: openai"));
+    assert!(rendered.contains("model: gpt-4.1-mini"));
+}
+
+#[test]
+fn render_human_omits_none_compile_model() {
+    let rendered = render_human(&ConfigWriteResult {
+        status: "ok".to_string(),
+        provider: "openai".to_string(),
+        model: Some("gpt-4.1-mini".to_string()),
+        compile_model: None,
+    });
+
+    assert!(!rendered.contains("compile_model"));
 }

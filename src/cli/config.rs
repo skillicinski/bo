@@ -1,289 +1,184 @@
-use crate::cli::json::{JsonError, JsonWarning};
-use crate::engine::auth::{self, AuthError, OpenAiApiKey};
+// Flag-based config writing for bo.
+//
+// Replaces the old get/set/auth subcommands with a flag-driven interface:
+//   bo config --provider deepseek --model deepseek-v4-flash
+//
+// Reads existing config, applies the requested changes, validates model
+// compatibility with the (new or existing) provider, and writes back.
+
 use crate::engine::config::{self as engine_config, Config, ConfigError};
-use crate::engine::llm::models::{is_supported_model, supported_model_ids};
+use crate::engine::llm::models::{self, models_for};
+use crate::engine::llm::{Provider, ALL_PROVIDERS};
 use serde::Serialize;
 use serde_json::json;
 use std::fmt;
 use std::path::Path;
 
-// ── auth ─────────────────────────────────────────────────────────────────────
+// ── Options ─────────────────────────────────────────────────────────────────
 
-pub const OPENAI_PROVIDER: &str = "openai";
-pub const VALID_PROVIDERS: &[&str] = &[OPENAI_PROVIDER];
+#[derive(Debug, Clone)]
+pub struct WriteConfigOptions {
+    pub provider: Option<Provider>,
+    pub model: Option<String>,
+    pub compile_model: Option<String>,
+}
+
+// ── Result types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ConfigAuthResult {
+pub struct ConfigWriteResult {
     pub status: String,
     pub provider: String,
-    pub auth: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compile_model: Option<String>,
 }
 
 #[derive(Debug)]
-pub struct ConfigAuthOutput {
-    pub result: ConfigAuthResult,
-    pub warnings: Vec<JsonWarning>,
+pub enum ConfigWriteError {
+    UnknownProvider { raw: String },
+    UnsupportedModel { model: String, provider: Provider },
+    Read(String),
+    Write(String),
 }
 
-#[derive(Debug)]
-pub enum ConfigAuthError {
-    UnknownProvider { provider: String },
-    Auth(AuthError),
-}
-
-impl ConfigAuthError {
+impl ConfigWriteError {
     pub fn exit_code(&self) -> i32 {
         match self {
-            ConfigAuthError::UnknownProvider { .. } => 2,
-            ConfigAuthError::Auth(_) => 1,
+            ConfigWriteError::UnknownProvider { .. } => 2,
+            ConfigWriteError::UnsupportedModel { .. } => 2,
+            ConfigWriteError::Read(_) => 1,
+            ConfigWriteError::Write(_) => 1,
         }
     }
 
     pub fn code(&self) -> &'static str {
         match self {
-            ConfigAuthError::UnknownProvider { .. } => "usage_error",
-            ConfigAuthError::Auth(AuthError::EmptyApiKey) => "validation_error",
-            ConfigAuthError::Auth(AuthError::Io(_)) => "io_error",
-            ConfigAuthError::Auth(AuthError::Parse(_)) => "auth_error",
-            ConfigAuthError::Auth(AuthError::NotFound) => "auth_error",
+            ConfigWriteError::UnknownProvider { .. } => "usage_error",
+            ConfigWriteError::UnsupportedModel { .. } => "usage_error",
+            ConfigWriteError::Read(_) => "io_error",
+            ConfigWriteError::Write(_) => "io_error",
         }
     }
 
     pub fn details(&self) -> serde_json::Value {
         match self {
-            ConfigAuthError::UnknownProvider { .. } => {
-                json!({ "valid_providers": VALID_PROVIDERS, "exit_code": self.exit_code() })
-            }
-            ConfigAuthError::Auth(_) => json!({}),
+            ConfigWriteError::UnknownProvider { raw } => json!({
+                "provider": raw,
+                "valid_providers": ALL_PROVIDERS,
+            }),
+            ConfigWriteError::UnsupportedModel { model, provider } => json!({
+                "model": model,
+                "provider": provider.to_string(),
+                "supported_models": models_for(*provider).iter().map(|m| m.id).collect::<Vec<_>>(),
+            }),
+            _ => json!({}),
         }
     }
 }
 
-impl fmt::Display for ConfigAuthError {
+impl fmt::Display for ConfigWriteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ConfigAuthError::UnknownProvider { provider } => write!(
+            ConfigWriteError::UnknownProvider { raw } => write!(
                 f,
                 "unknown provider '{}'; valid providers: {}",
-                provider,
-                VALID_PROVIDERS.join(", ")
+                raw,
+                ALL_PROVIDERS.join(", ")
             ),
-            ConfigAuthError::Auth(error) => write!(f, "{error}"),
-        }
-    }
-}
-
-pub fn validate_provider(provider: &str) -> Result<(), ConfigAuthError> {
-    if provider == OPENAI_PROVIDER {
-        Ok(())
-    } else {
-        Err(ConfigAuthError::UnknownProvider {
-            provider: provider.to_string(),
-        })
-    }
-}
-
-pub fn run_auth(
-    provider: &str,
-    raw_api_key: impl Into<String>,
-    auth_path: &Path,
-) -> Result<ConfigAuthOutput, ConfigAuthError> {
-    validate_provider(provider)?;
-
-    let api_key = OpenAiApiKey::new(raw_api_key.into()).map_err(ConfigAuthError::Auth)?;
-    let outcome = auth::write_openai_auth(auth_path, api_key).map_err(ConfigAuthError::Auth)?;
-
-    let warnings = outcome
-        .permission_warning
-        .into_iter()
-        .map(|warning| JsonWarning::new("auth_permissions_not_restricted", warning.message))
-        .collect();
-
-    Ok(ConfigAuthOutput {
-        result: ConfigAuthResult {
-            status: "ok".to_string(),
-            provider: OPENAI_PROVIDER.to_string(),
-            auth: "configured".to_string(),
-        },
-        warnings,
-    })
-}
-
-pub fn render_auth_human(result: &ConfigAuthResult) -> String {
-    format!("{} auth configured\n", result.provider)
-}
-
-// ── config set/get ───────────────────────────────────────────────────────────
-
-const MODEL_KEY: &str = "model";
-const COMPILE_MODEL_KEY: &str = "compile_model";
-const VALID_KEYS: &[&str] = &[MODEL_KEY, COMPILE_MODEL_KEY];
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ConfigCommandResult {
-    pub action: String,
-    pub key: String,
-    pub value: String,
-}
-
-#[derive(Debug)]
-pub enum ConfigCommandError {
-    UnknownKey { key: String },
-    UnsupportedModel { model: String },
-    Read(String),
-    Write(String),
-}
-
-impl ConfigCommandError {
-    pub fn exit_code(&self) -> i32 {
-        match self {
-            ConfigCommandError::UnknownKey { .. } | ConfigCommandError::UnsupportedModel { .. } => {
-                2
+            ConfigWriteError::UnsupportedModel { model, provider } => {
+                let supported: Vec<&str> = models_for(*provider).iter().map(|m| m.id).collect();
+                write!(
+                    f,
+                    "unsupported model '{}' for provider '{}'; supported models: {}",
+                    model,
+                    provider,
+                    supported.join(", ")
+                )
             }
-            ConfigCommandError::Read(_) | ConfigCommandError::Write(_) => 1,
-        }
-    }
-
-    pub fn valid_keys(&self) -> Option<&'static [&'static str]> {
-        match self {
-            ConfigCommandError::UnknownKey { .. } => Some(VALID_KEYS),
-            _ => None,
-        }
-    }
-
-    pub fn supported_models(&self) -> Option<Vec<&'static str>> {
-        match self {
-            ConfigCommandError::UnsupportedModel { .. } => Some(supported_models()),
-            _ => None,
-        }
-    }
-
-    pub fn json_error(&self) -> JsonError {
-        match self {
-            ConfigCommandError::UnknownKey { key } => JsonError::with_details(
-                "usage_error",
-                self.to_string(),
-                json!({
-                    "key": key,
-                    "valid_keys": self.valid_keys().unwrap_or(&[]),
-                    "exit_code": self.exit_code(),
-                }),
-            ),
-            ConfigCommandError::UnsupportedModel { model } => JsonError::with_details(
-                "usage_error",
-                self.to_string(),
-                json!({
-                    "model": model,
-                    "supported_models": self.supported_models().unwrap_or_default(),
-                    "exit_code": self.exit_code(),
-                }),
-            ),
-            ConfigCommandError::Read(_) | ConfigCommandError::Write(_) => {
-                JsonError::new("io_error", self.to_string())
-            }
+            ConfigWriteError::Read(msg) => write!(f, "failed to read config: {}", msg),
+            ConfigWriteError::Write(msg) => write!(f, "failed to write config: {}", msg),
         }
     }
 }
 
-impl fmt::Display for ConfigCommandError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ConfigCommandError::UnknownKey { key } => write!(
-                f,
-                "unknown config key '{}'; valid keys: {}",
-                key,
-                VALID_KEYS.join(", ")
-            ),
-            ConfigCommandError::UnsupportedModel { model } => write!(
-                f,
-                "unsupported model '{}'; supported models: {}",
-                model,
-                supported_models().join(", ")
-            ),
-            ConfigCommandError::Read(message) | ConfigCommandError::Write(message) => {
-                write!(f, "{}", message)
-            }
+impl std::error::Error for ConfigWriteError {}
+
+// ── Write logic ──────────────────────────────────────────────────────────────
+
+pub fn write_config(
+    options: WriteConfigOptions,
+    config_path: &Path,
+) -> Result<ConfigWriteResult, ConfigWriteError> {
+    // Read existing config, or start with defaults
+    let mut config = match engine_config::read_config(config_path) {
+        Ok(c) => c,
+        Err(ConfigError::NotFound) => Config::default(),
+        Err(e) => {
+            return Err(ConfigWriteError::Read(format!(
+                "failed to read config: {}",
+                e
+            )))
         }
-    }
-}
-
-pub fn get(key: &str, config_path: &Path) -> Result<ConfigCommandResult, ConfigCommandError> {
-    validate_key(key)?;
-    let config = read_or_default(config_path)?;
-
-    let value = match key {
-        MODEL_KEY => config.effective_model(),
-        COMPILE_MODEL_KEY => config.effective_compile_model(),
-        _ => unreachable!("validated config key"),
     };
 
-    Ok(ConfigCommandResult {
-        action: "get".to_string(),
-        key: key.to_string(),
-        value: value.to_string(),
-    })
-}
+    // Determine effective provider for model validation:
+    // Use the new provider if --provider was set, else the existing config's provider
+    let effective_provider = options.provider.unwrap_or(config.provider);
 
-pub fn set(
-    key: &str,
-    value: &str,
-    config_path: &Path,
-) -> Result<ConfigCommandResult, ConfigCommandError> {
-    validate_key(key)?;
-
-    let model = value.trim().to_string();
-    if !is_supported_model(&model) {
-        return Err(ConfigCommandError::UnsupportedModel { model });
+    // Apply provider if specified
+    if let Some(provider) = options.provider {
+        config.provider = provider;
     }
 
-    let mut config = read_or_default(config_path)?;
-    match key {
-        MODEL_KEY => config.model = Some(model.clone()),
-        COMPILE_MODEL_KEY => config.compile_model = Some(model.clone()),
-        _ => unreachable!("validated config key"),
+    // Validate and apply model if specified
+    if let Some(ref model) = options.model {
+        let trimmed = model.trim().to_string();
+        if !models::is_supported_model(effective_provider, &trimmed) {
+            return Err(ConfigWriteError::UnsupportedModel {
+                model: trimmed,
+                provider: effective_provider,
+            });
+        }
+        config.model = Some(trimmed);
     }
 
+    // Validate and apply compile_model if specified
+    if let Some(ref cm) = options.compile_model {
+        let trimmed = cm.trim().to_string();
+        if !models::is_supported_model(effective_provider, &trimmed) {
+            return Err(ConfigWriteError::UnsupportedModel {
+                model: trimmed,
+                provider: effective_provider,
+            });
+        }
+        config.compile_model = Some(trimmed);
+    }
+
+    // Write config
     engine_config::write_config(&config, config_path)
-        .map_err(|error| ConfigCommandError::Write(format!("failed to write config: {}", error)))?;
+        .map_err(|e| ConfigWriteError::Write(format!("failed to write config: {}", e)))?;
 
-    Ok(ConfigCommandResult {
-        action: "set".to_string(),
-        key: key.to_string(),
-        value: model,
+    Ok(ConfigWriteResult {
+        status: "ok".to_string(),
+        provider: config.provider.to_string(),
+        model: config.model,
+        compile_model: config.compile_model,
     })
 }
 
-pub fn render_human(result: &ConfigCommandResult) -> String {
-    match result.action.as_str() {
-        "get" => format!("{}\n", result.value),
-        "set" => format!("{} = {}\n", result.key, result.value),
-        _ => format!("{}\n", result.value),
-    }
-}
+// ── Human output ─────────────────────────────────────────────────────────────
 
-fn validate_key(key: &str) -> Result<(), ConfigCommandError> {
-    if VALID_KEYS.contains(&key) {
-        Ok(())
-    } else {
-        Err(ConfigCommandError::UnknownKey {
-            key: key.to_string(),
-        })
+pub fn render_human(result: &ConfigWriteResult) -> String {
+    let mut lines = vec![format!("provider: {}", result.provider)];
+    if let Some(ref m) = result.model {
+        lines.push(format!("model: {}", m));
     }
-}
-
-fn read_or_default(config_path: &Path) -> Result<Config, ConfigCommandError> {
-    match engine_config::read_config(config_path) {
-        Ok(config) => Ok(config),
-        Err(ConfigError::NotFound) => Ok(Config::default()),
-        Err(error) => Err(ConfigCommandError::Read(format!(
-            "failed to read config: {}",
-            error
-        ))),
+    if let Some(ref cm) = result.compile_model {
+        lines.push(format!("compile_model: {}", cm));
     }
-}
-
-fn supported_models() -> Vec<&'static str> {
-    supported_model_ids().collect()
+    lines.join("\n") + "\n"
 }
 
 #[cfg(test)]

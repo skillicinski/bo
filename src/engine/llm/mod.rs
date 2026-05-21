@@ -9,12 +9,34 @@ pub mod providers;
 
 pub use model::{Model, UnsupportedModel};
 pub use models::context_window_tokens;
-pub use providers::OpenAiProvider;
+pub use providers::{DeepSeekProvider, OpenAiProvider};
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
 use std::time::Duration;
+
+// ── Provider enum ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Provider {
+    #[serde(rename = "openai")]
+    OpenAI,
+    #[serde(rename = "deepseek")]
+    Deepseek,
+}
+
+impl fmt::Display for Provider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Provider::OpenAI => write!(f, "openai"),
+            Provider::Deepseek => write!(f, "deepseek"),
+        }
+    }
+}
+
+pub const ALL_PROVIDERS: &[&str] = &["openai", "deepseek"];
 
 // ── public types ──────────────────────────────────────────────────────────────
 

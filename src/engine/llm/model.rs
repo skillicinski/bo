@@ -1,49 +1,57 @@
 // Validated model identifier.
 //
-// A `Model` is guaranteed to reference a supported model from
-// `OPENAI_SUPPORTED_MODELS`. Context window size is available without
+// A `Model` is guaranteed to reference a supported model from the
+// provider's model registry. Context window size is available without
 // a fallible lookup.
 
-use super::models::{self, ModelInfo, OPENAI_SUPPORTED_MODELS};
+use super::models::ModelInfo;
+use super::{models, Provider};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// A validated model identifier known to be in `OPENAI_SUPPORTED_MODELS`.
+/// A validated model identifier known to be in the provider's supported set.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Model {
     info: &'static ModelInfo,
 }
 
-/// Error returned when a model identifier is not in the supported set.
+/// Error returned when a model identifier is not in the provider's supported set.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnsupportedModel {
     pub id: String,
+    pub provider: Provider,
 }
 
 impl fmt::Display for UnsupportedModel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "unsupported model: {}", self.id)
+        write!(
+            f,
+            "unsupported model '{}' for provider '{}'",
+            self.id, self.provider
+        )
     }
 }
 
 impl std::error::Error for UnsupportedModel {}
 
 impl Model {
-    /// Parse and validate a model identifier against the supported set.
-    pub fn parse(id: &str) -> Result<Self, UnsupportedModel> {
+    /// Parse and validate a model identifier against the provider's supported set.
+    pub fn parse(id: &str, provider: Provider) -> Result<Self, UnsupportedModel> {
         let trimmed = id.trim();
-        let info = OPENAI_SUPPORTED_MODELS
+        let info = models::models_for(provider)
             .iter()
             .find(|entry| entry.id == trimmed)
             .ok_or_else(|| UnsupportedModel {
                 id: trimmed.to_string(),
+                provider,
             })?;
         Ok(Self { info })
     }
 
-    /// The default model (`gpt-4o`).
+    /// The default model (`gpt-4.1-mini`).
     pub fn default_model() -> Self {
-        Self::parse(models::DEFAULT_MODEL).expect("default model must be in supported set")
+        Self::parse(models::DEFAULT_MODEL, Provider::OpenAI)
+            .expect("default model must be in supported set")
     }
 
     /// The raw model identifier string.
@@ -78,7 +86,7 @@ impl Serialize for Model {
 impl<'de> Deserialize<'de> for Model {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        Self::parse(&s).map_err(|e| serde::de::Error::custom(e.to_string()))
+        Self::parse(&s, Provider::OpenAI).map_err(|e| serde::de::Error::custom(e.to_string()))
     }
 }
 

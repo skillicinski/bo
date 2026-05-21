@@ -6,9 +6,9 @@
 use bo::domain::{Slug, Timestamp, Title, Url};
 use serde_json::Value;
 use std::fs;
-use std::io::Write;
+
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 use tempfile::TempDir;
 
 fn bo(home: &Path) -> Command {
@@ -59,29 +59,6 @@ fn config_path(home: &TempDir) -> std::path::PathBuf {
 
 fn auth_path(home: &TempDir) -> std::path::PathBuf {
     home.path().join(".bo").join("auth.json")
-}
-
-fn config_auth(home: &Path, args: &[&str], input: &str) -> Output {
-    let mut child = bo(home)
-        .arg("config")
-        .arg("auth")
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to run bo config auth");
-
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin should be piped")
-        .write_all(input.as_bytes())
-        .expect("failed to write API key to stdin");
-
-    child
-        .wait_with_output()
-        .expect("failed to wait for bo config auth")
 }
 
 fn append_index_entry(tree: &Path, file: &str, title: &str) {
@@ -394,13 +371,13 @@ fn config_get_without_config_prints_default_model() {
     let home = TempDir::new().unwrap();
 
     let out = bo(home.path())
-        .args(["config", "get", "model"])
+        .args(["config", "--model", "gpt-4.1-mini"])
         .output()
         .unwrap();
 
     assert!(out.status.success());
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "gpt-4o\n");
-    assert!(!config_path(&home).exists());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("model: gpt-4.1-mini"), "stdout: {stdout}");
 }
 
 #[test]
@@ -408,7 +385,7 @@ fn config_set_get_roundtrip() {
     let home = TempDir::new().unwrap();
 
     let set = bo(home.path())
-        .args(["config", "set", "model", "gpt-4.1-mini"])
+        .args(["config", "--model", "gpt-4.1-mini"])
         .output()
         .unwrap();
     assert!(
@@ -416,17 +393,14 @@ fn config_set_get_roundtrip() {
         "stderr: {}",
         String::from_utf8_lossy(&set.stderr)
     );
-    assert_eq!(
-        String::from_utf8_lossy(&set.stdout),
-        "model = gpt-4.1-mini\n"
-    );
+    let stdout = String::from_utf8_lossy(&set.stdout);
+    assert!(stdout.contains("provider: openai"), "stdout: {stdout}");
+    assert!(stdout.contains("model: gpt-4.1-mini"), "stdout: {stdout}");
 
-    let get = bo(home.path())
-        .args(["config", "get", "model"])
-        .output()
-        .unwrap();
-    assert!(get.status.success());
-    assert_eq!(String::from_utf8_lossy(&get.stdout), "gpt-4.1-mini\n");
+    // Verify config persisted
+    let contents = fs::read_to_string(config_path(&home)).unwrap();
+    let parsed: Value = serde_json::from_str(&contents).unwrap();
+    assert_eq!(parsed["model"], "gpt-4.1-mini");
 }
 
 #[test]
@@ -434,7 +408,7 @@ fn config_set_before_seed_creates_config_only_file() {
     let home = TempDir::new().unwrap();
 
     let out = bo(home.path())
-        .args(["config", "set", "model", "gpt-4.1-mini"])
+        .args(["config", "--model", "gpt-4.1-mini"])
         .output()
         .unwrap();
 
@@ -451,7 +425,7 @@ fn seed_after_config_set_preserves_model() {
     let tree = home.path().join("tree");
 
     let set = bo(home.path())
-        .args(["config", "set", "model", "gpt-4.1-mini"])
+        .args(["config", "--model", "gpt-4.1-mini"])
         .output()
         .unwrap();
     assert!(set.status.success());
@@ -475,16 +449,17 @@ fn config_only_file_still_counts_as_not_seeded_for_tree_commands() {
         vec!["collect", "https://example.com"],
         vec!["compile"],
         vec!["list"],
-        vec!["status"],
         vec!["show", "Rust"],
         vec!["query", "what", "is", "rust"],
         vec!["raze"],
     ];
+    // Note: `bo status` is intentionally NOT in the cases above.
+    // Status now works without a seeded tree (shows config fields with a hint).
 
     for args in cases {
         let home = TempDir::new().unwrap();
         let set = bo(home.path())
-            .args(["config", "set", "model", "gpt-4.1-mini"])
+            .args(["config", "--model", "gpt-4.1-mini"])
             .output()
             .unwrap();
         assert!(set.status.success());
@@ -501,18 +476,37 @@ fn config_only_file_still_counts_as_not_seeded_for_tree_commands() {
 }
 
 #[test]
+fn status_works_with_config_only_no_seeded_tree() {
+    let home = TempDir::new().unwrap();
+
+    let set = bo(home.path())
+        .args(["config", "--model", "gpt-4.1-mini"])
+        .output()
+        .unwrap();
+    assert!(set.status.success());
+
+    let out = bo(home.path()).args(["status"]).output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("provider:"));
+    assert!(stdout.contains("gpt-4.1-mini"));
+    assert!(stdout.contains("bo seed"));
+}
+
+#[test]
 fn config_get_unknown_key_exits_two_and_lists_valid_key() {
     let home = TempDir::new().unwrap();
 
     let out = bo(home.path())
-        .args(["config", "get", "query_model"])
+        .args(["config", "--provider", "cohere"])
         .output()
         .unwrap();
 
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("query_model"), "stderr: {stderr}");
-    assert!(stderr.contains("model"), "stderr: {stderr}");
+    assert!(stderr.contains("cohere"), "stderr: {stderr}");
+    assert!(stderr.contains("openai"), "stderr: {stderr}");
+    assert!(stderr.contains("deepseek"), "stderr: {stderr}");
 }
 
 #[test]
@@ -520,7 +514,7 @@ fn config_set_compile_model_succeeds() {
     let home = TempDir::new().unwrap();
 
     let out = bo(home.path())
-        .args(["config", "set", "compile_model", "gpt-4.1-mini"])
+        .args(["config", "--compile-model", "gpt-4.1-mini"])
         .output()
         .unwrap();
 
@@ -535,7 +529,7 @@ fn config_set_unsupported_model_exits_two_and_lists_supported_models() {
     let home = TempDir::new().unwrap();
 
     let out = bo(home.path())
-        .args(["config", "set", "model", "unknown-model"])
+        .args(["config", "--model", "unknown-model"])
         .output()
         .unwrap();
 
@@ -1021,156 +1015,6 @@ fn show_duplicate_title_reports_ambiguity_with_candidates() {
     assert!(stderr.contains("ambiguous"), "stderr: {stderr}");
     assert!(stderr.contains("duplicate-a.md"), "stderr: {stderr}");
     assert!(stderr.contains("duplicate-b.md"), "stderr: {stderr}");
-}
-
-// ── config auth ──────────────────────────────────────────────────────────────
-
-#[test]
-fn config_auth_stores_openai_auth_separately_from_config() {
-    let home = TempDir::new().unwrap();
-    let secret = "sk-config-auth-one";
-
-    let out = config_auth(
-        home.path(),
-        &["--provider", "openai"],
-        &format!("{secret}\n"),
-    );
-    assert!(
-        out.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stdout.contains("openai auth configured"),
-        "stdout: {stdout}"
-    );
-    assert!(!stdout.contains(secret));
-    assert!(!stderr.contains(secret));
-
-    assert!(auth_path(&home).exists());
-    assert!(!config_path(&home).exists());
-
-    let auth: Value = serde_json::from_str(&fs::read_to_string(auth_path(&home)).unwrap()).unwrap();
-    assert_eq!(auth["providers"]["openai"]["api_key"], secret);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = fs::metadata(auth_path(&home)).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
-    }
-}
-
-#[test]
-fn config_auth_overwrites_existing_key_without_printing_either_key() {
-    let home = TempDir::new().unwrap();
-    let first = "sk-config-auth-first";
-    let second = "sk-config-auth-second";
-
-    let first_out = config_auth(
-        home.path(),
-        &["--provider", "openai"],
-        &format!("{first}\n"),
-    );
-    assert!(first_out.status.success());
-
-    let second_out = config_auth(
-        home.path(),
-        &["--provider", "openai"],
-        &format!("{second}\n"),
-    );
-    assert!(second_out.status.success());
-
-    let auth = fs::read_to_string(auth_path(&home)).unwrap();
-    assert!(auth.contains(second));
-    assert!(!auth.contains(first));
-
-    for output in [&first_out, &second_out] {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(!stdout.contains(first));
-        assert!(!stdout.contains(second));
-        assert!(!stderr.contains(first));
-        assert!(!stderr.contains(second));
-    }
-}
-
-#[test]
-fn config_auth_json_success_has_expected_shape_and_no_secret() {
-    let home = TempDir::new().unwrap();
-    let secret = "sk-config-auth-json";
-    let mut child = bo(home.path())
-        .args(["--json", "config", "auth", "--provider", "openai"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to run bo config auth");
-
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(format!("{secret}\n").as_bytes())
-        .unwrap();
-
-    let out = child.wait_with_output().unwrap();
-    assert!(
-        out.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!stdout.contains(secret));
-    assert!(!stderr.contains(secret));
-
-    let payload: Value = serde_json::from_slice(&out.stdout).expect("stdout was not valid JSON");
-    assert_eq!(payload["ok"], true);
-    assert_eq!(payload["command"], "config");
-    assert_eq!(payload["data"]["status"], "ok");
-    assert_eq!(payload["data"]["provider"], "openai");
-    assert_eq!(payload["data"]["auth"], "configured");
-    assert!(payload["data"].get("api_key").is_none());
-}
-
-#[test]
-fn config_auth_unknown_provider_exits_2_and_does_not_prompt() {
-    let home = TempDir::new().unwrap();
-
-    let out = bo(home.path())
-        .args(["config", "auth", "--provider", "OpenAI"])
-        .output()
-        .expect("failed to run bo config auth");
-
-    assert_eq!(out.status.code(), Some(2));
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("unknown provider"), "stderr: {stderr}");
-    assert!(stderr.contains("openai"), "stderr: {stderr}");
-    assert!(!stderr.contains("OpenAI API key"), "stderr: {stderr}");
-    assert!(!auth_path(&home).exists());
-}
-
-#[test]
-fn config_auth_json_unknown_provider_lists_valid_providers() {
-    let home = TempDir::new().unwrap();
-
-    let out = bo(home.path())
-        .args(["--json", "config", "auth", "--provider", "unknown"])
-        .output()
-        .expect("failed to run bo config auth");
-
-    assert_eq!(out.status.code(), Some(2));
-    let payload: Value = serde_json::from_slice(&out.stdout).expect("stdout was not valid JSON");
-    assert_eq!(payload["ok"], false);
-    assert_eq!(payload["command"], "config");
-    assert_eq!(payload["error"]["code"], "usage_error");
-    assert_eq!(payload["error"]["details"]["valid_providers"][0], "openai");
-    assert!(!String::from_utf8_lossy(&out.stderr).contains("OpenAI API key"));
 }
 
 // ── query auth ──────────────────────────────────────────────────────────────

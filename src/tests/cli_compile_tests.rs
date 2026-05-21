@@ -9,14 +9,15 @@ use std::sync::Mutex;
 use tempfile::TempDir;
 
 use crate::domain::manifest::{self, BranchRecord, LeafRecord, Manifest, TreeMeta};
-use crate::engine::auth::MISSING_OPENAI_AUTH_MESSAGE;
+
 use crate::engine::config::SeededConfig;
-use crate::engine::llm::{LlmError, LlmProvider, LlmResponse, Message};
+use crate::engine::llm::{LlmError, LlmProvider, LlmResponse, Message, Provider};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 fn make_test_config(output_dir: &std::path::Path) -> SeededConfig {
     SeededConfig {
+        provider: Provider::OpenAI,
         tree: crate::domain::tree::TreeConfig {
             output_dir: output_dir.to_path_buf(),
             name: None,
@@ -243,7 +244,10 @@ fn compile_errors_without_api_key() {
     let result = cmd_compile(&cfg);
     assert!(result.is_err());
     let msg = result.unwrap_err();
-    assert_eq!(msg, MISSING_OPENAI_AUTH_MESSAGE);
+    assert_eq!(
+        msg,
+        "LLM error: OPENAI_API_KEY environment variable not set"
+    );
 }
 
 // ── first compile creates branches ────────────────────────────────────────────
@@ -274,7 +278,7 @@ fn first_compile_creates_branches_and_reports_incremental_mode() {
         &cfg,
         CompileOptions::default(),
         &provider,
-        &cfg.effective_compile_model(),
+        &cfg.effective_compile_model().unwrap(),
     )
     .unwrap();
 
@@ -319,7 +323,7 @@ fn no_op_when_no_new_leaves_and_no_stale_branches() {
         &cfg,
         CompileOptions::default(),
         &provider,
-        &cfg.effective_compile_model(),
+        &cfg.effective_compile_model().unwrap(),
     )
     .unwrap();
 
@@ -346,6 +350,7 @@ fn compile_uses_effective_compile_model() {
     write_leaf(dir.path(), "leaf-a", "A", "https://example.com/a");
     write_leaf(dir.path(), "leaf-b", "B", "https://example.com/b");
     let cfg = SeededConfig {
+        provider: Provider::OpenAI,
         tree: crate::domain::tree::TreeConfig {
             output_dir: dir.path().to_path_buf(),
             name: None,
@@ -360,7 +365,7 @@ fn compile_uses_effective_compile_model() {
         &cfg,
         CompileOptions::default(),
         &provider,
-        &cfg.effective_compile_model(),
+        &cfg.effective_compile_model().unwrap(),
     )
     .unwrap();
 
@@ -401,7 +406,7 @@ fn full_mode_deletes_omitted_branch_files() {
         &cfg,
         CompileOptions { all: true },
         &provider,
-        &cfg.effective_compile_model(),
+        &cfg.effective_compile_model().unwrap(),
     )
     .unwrap();
 
@@ -453,7 +458,7 @@ fn incremental_compile_preserves_existing_branches() {
         &cfg,
         CompileOptions::default(),
         &provider,
-        &cfg.effective_compile_model(),
+        &cfg.effective_compile_model().unwrap(),
     )
     .unwrap();
 
@@ -525,7 +530,7 @@ fn deleted_leaf_rebuilds_stale_branch() {
         &cfg,
         CompileOptions::default(),
         &provider,
-        &cfg.effective_compile_model(),
+        &cfg.effective_compile_model().unwrap(),
     )
     .unwrap();
 
@@ -584,7 +589,7 @@ fn stale_branch_below_threshold_removed() {
         &cfg,
         CompileOptions::default(),
         &provider,
-        &cfg.effective_compile_model(),
+        &cfg.effective_compile_model().unwrap(),
     )
     .unwrap();
 

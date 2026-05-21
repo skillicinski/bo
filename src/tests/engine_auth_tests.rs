@@ -30,177 +30,139 @@ impl Drop for EnvGuard {
     }
 }
 
-fn auth_file_path(dir: &TempDir) -> std::path::PathBuf {
-    dir.path().join(".bo").join("auth.json")
-}
-
-fn stored_key(path: &std::path::Path) -> Option<String> {
-    read_auth(path)
-        .ok()?
-        .providers
-        .openai?
-        .api_key
-        .map(|key| key.as_str().to_string())
-}
-
-#[test]
-fn openai_key_accepts_non_empty_trimmed_input() {
-    let key = OpenAiApiKey::new("  sk-test-value  ").unwrap();
-
-    assert_eq!(key.as_str(), "sk-test-value");
-}
-
-#[test]
-fn openai_key_rejects_empty_input() {
-    let error = OpenAiApiKey::new("  ").unwrap_err();
-
-    assert!(matches!(error, AuthError::EmptyApiKey));
-}
-
-#[test]
-fn openai_key_formatting_is_redacted() {
-    let key = OpenAiApiKey::new("sk-secret-value").unwrap();
-
-    assert!(!format!("{key:?}").contains("sk-secret-value"));
-    assert!(!format!("{key}").contains("sk-secret-value"));
-    assert!(format!("{key:?}").contains("redacted"));
+fn write_auth_json(auth_dir: &TempDir, key_name: &str, value: &str) {
+    let auth_dir_path = auth_dir.path().join(".bo");
+    std::fs::create_dir_all(&auth_dir_path).unwrap();
+    let content = format!(r#"{{"{}": "{}"}}"#, key_name, value);
+    std::fs::write(auth_dir_path.join("auth.json"), content).unwrap();
 }
 
 #[test]
 #[serial]
-fn auth_path_uses_home_bo_auth_json() {
-    let home = TempDir::new().unwrap();
-    let _home_guard = EnvGuard::set("HOME", home.path().to_str().unwrap());
-
-    assert_eq!(auth_path(), home.path().join(".bo").join("auth.json"));
-}
-
-#[test]
-fn write_then_read_round_trip_stores_openai_key() {
+fn test_env_var_openai() {
     let dir = TempDir::new().unwrap();
-    let path = auth_file_path(&dir);
-    let key = OpenAiApiKey::new("sk-round-trip").unwrap();
+    let _guard = EnvGuard::set("OPENAI_API_KEY", "sk-openai-env");
+    let _home_guard = EnvGuard::set("HOME", dir.path().to_str().unwrap());
 
-    write_openai_auth(&path, key).unwrap();
-
-    assert_eq!(stored_key(&path).as_deref(), Some("sk-round-trip"));
-    assert!(path.exists());
-}
-
-#[test]
-fn write_openai_auth_overwrites_existing_key() {
-    let dir = TempDir::new().unwrap();
-    let path = auth_file_path(&dir);
-
-    write_openai_auth(&path, OpenAiApiKey::new("sk-old").unwrap()).unwrap();
-    write_openai_auth(&path, OpenAiApiKey::new("sk-new").unwrap()).unwrap();
-
-    assert_eq!(stored_key(&path).as_deref(), Some("sk-new"));
-}
-
-#[cfg(unix)]
-#[test]
-fn write_openai_auth_applies_restrictive_unix_permissions() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = TempDir::new().unwrap();
-    let path = auth_file_path(&dir);
-
-    write_openai_auth(&path, OpenAiApiKey::new("sk-permissions").unwrap()).unwrap();
-
-    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600);
+    let result = resolve_api_key(Provider::OpenAI).unwrap();
+    assert_eq!(result, "sk-openai-env");
 }
 
 #[test]
 #[serial]
-fn resolver_uses_environment_key_before_reading_stored_auth() {
+fn test_env_var_deepseek() {
     let dir = TempDir::new().unwrap();
-    let path = auth_file_path(&dir);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path, "{not json").unwrap();
-    let _api_key_guard = EnvGuard::set("OPENAI_API_KEY", "  sk-env  ");
+    let _guard = EnvGuard::set("DEEPSEEK_API_KEY", "sk-deepseek-env");
+    let _home_guard = EnvGuard::set("HOME", dir.path().to_str().unwrap());
 
-    let resolved = resolve_openai_api_key(&path).unwrap();
-
-    assert_eq!(resolved.source, AuthSource::Environment);
-    assert_eq!(resolved.api_key.as_str(), "sk-env");
+    let result = resolve_api_key(Provider::Deepseek).unwrap();
+    assert_eq!(result, "sk-deepseek-env");
 }
 
 #[test]
 #[serial]
-fn resolver_ignores_empty_environment_and_uses_stored_auth() {
+fn test_env_var_trims_whitespace() {
     let dir = TempDir::new().unwrap();
-    let path = auth_file_path(&dir);
-    write_openai_auth(&path, OpenAiApiKey::new("sk-stored").unwrap()).unwrap();
-    let _api_key_guard = EnvGuard::set("OPENAI_API_KEY", "   ");
+    let _guard = EnvGuard::set("OPENAI_API_KEY", "  sk-openai-env  ");
+    let _home_guard = EnvGuard::set("HOME", dir.path().to_str().unwrap());
 
-    let resolved = resolve_openai_api_key(&path).unwrap();
-
-    assert_eq!(resolved.source, AuthSource::StoredAuth);
-    assert_eq!(resolved.api_key.as_str(), "sk-stored");
+    let result = resolve_api_key(Provider::OpenAI).unwrap();
+    assert_eq!(result, "sk-openai-env");
 }
 
 #[test]
 #[serial]
-fn resolver_reports_missing_auth_with_setup_message() {
+fn test_empty_env_var_falls_through_to_auth_json() {
     let dir = TempDir::new().unwrap();
-    let path = auth_file_path(&dir);
-    let _api_key_guard = EnvGuard::unset("OPENAI_API_KEY");
+    let _guard = EnvGuard::set("OPENAI_API_KEY", "   ");
+    let _home_guard = EnvGuard::set("HOME", dir.path().to_str().unwrap());
+    write_auth_json(&dir, "openai_api_key", "sk-json-fallback");
 
-    let error = resolve_openai_api_key(&path).unwrap_err();
-
-    assert!(matches!(error, AuthResolutionError::Missing));
-    assert_eq!(error.to_string(), MISSING_OPENAI_AUTH_MESSAGE);
+    let result = resolve_api_key(Provider::OpenAI).unwrap();
+    assert_eq!(result, "sk-json-fallback");
 }
 
 #[test]
 #[serial]
-fn resolver_reports_malformed_auth_without_file_contents() {
+fn test_auth_json_fallback_openai() {
     let dir = TempDir::new().unwrap();
-    let path = auth_file_path(&dir);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path, "sk-leak-marker").unwrap();
-    let _api_key_guard = EnvGuard::unset("OPENAI_API_KEY");
+    let _guard = EnvGuard::unset("OPENAI_API_KEY");
+    let _home_guard = EnvGuard::set("HOME", dir.path().to_str().unwrap());
+    write_auth_json(&dir, "openai_api_key", "sk-json-key");
 
-    let error = resolve_openai_api_key(&path).unwrap_err();
-    let message = error.to_string();
-
-    assert!(matches!(error, AuthResolutionError::Read(_)));
-    assert!(!message.contains("sk-leak-marker"));
+    let result = resolve_api_key(Provider::OpenAI).unwrap();
+    assert_eq!(result, "sk-json-key");
 }
 
 #[test]
 #[serial]
-fn resolver_treats_missing_provider_or_key_as_missing_auth() {
+fn test_auth_json_fallback_deepseek() {
     let dir = TempDir::new().unwrap();
-    let path = auth_file_path(&dir);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let _api_key_guard = EnvGuard::unset("OPENAI_API_KEY");
+    let _guard = EnvGuard::unset("DEEPSEEK_API_KEY");
+    let _home_guard = EnvGuard::set("HOME", dir.path().to_str().unwrap());
+    write_auth_json(&dir, "deepseek_api_key", "sk-deepseek-json");
 
-    std::fs::write(&path, r#"{"providers":{}}"#).unwrap();
-    assert!(matches!(
-        resolve_openai_api_key(&path).unwrap_err(),
-        AuthResolutionError::Missing
-    ));
-
-    std::fs::write(&path, r#"{"providers":{"openai":{}}}"#).unwrap();
-    assert!(matches!(
-        resolve_openai_api_key(&path).unwrap_err(),
-        AuthResolutionError::Missing
-    ));
+    let result = resolve_api_key(Provider::Deepseek).unwrap();
+    assert_eq!(result, "sk-deepseek-json");
 }
 
 #[test]
 #[serial]
-fn resolver_rejects_empty_stored_key() {
+fn test_missing_key_error() {
     let dir = TempDir::new().unwrap();
-    let path = auth_file_path(&dir);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path, r#"{"providers":{"openai":{"api_key":"   "}}}"#).unwrap();
-    let _api_key_guard = EnvGuard::unset("OPENAI_API_KEY");
+    let _openai_guard = EnvGuard::unset("OPENAI_API_KEY");
+    let _deepseek_guard = EnvGuard::unset("DEEPSEEK_API_KEY");
+    let _home_guard = EnvGuard::set("HOME", dir.path().to_str().unwrap());
 
-    let error = resolve_openai_api_key(&path).unwrap_err();
+    let error = resolve_api_key(Provider::OpenAI).unwrap_err();
+    assert!(matches!(error, AuthError::Missing { provider } if provider == Provider::OpenAI));
+    assert_eq!(
+        error.to_string(),
+        "OPENAI_API_KEY environment variable not set"
+    );
+}
 
-    assert!(matches!(error, AuthResolutionError::Read(_)));
+#[test]
+#[serial]
+fn test_env_takes_precedence_over_auth_json() {
+    let dir = TempDir::new().unwrap();
+    let _guard = EnvGuard::set("OPENAI_API_KEY", "sk-env-wins");
+    let _home_guard = EnvGuard::set("HOME", dir.path().to_str().unwrap());
+    write_auth_json(&dir, "openai_api_key", "sk-should-not-be-used");
+
+    let result = resolve_api_key(Provider::OpenAI).unwrap();
+    assert_eq!(result, "sk-env-wins");
+}
+
+#[test]
+#[serial]
+fn test_auth_path_default() {
+    let dir = TempDir::new().unwrap();
+    let _home_guard = EnvGuard::set("HOME", dir.path().to_str().unwrap());
+
+    assert_eq!(auth_path(), dir.path().join(".bo").join("auth.json"));
+}
+
+#[test]
+#[serial]
+fn test_display_missing_openai() {
+    let error = AuthError::Missing {
+        provider: Provider::OpenAI,
+    };
+    assert_eq!(
+        error.to_string(),
+        "OPENAI_API_KEY environment variable not set"
+    );
+}
+
+#[test]
+#[serial]
+fn test_display_missing_deepseek() {
+    let error = AuthError::Missing {
+        provider: Provider::Deepseek,
+    };
+    assert_eq!(
+        error.to_string(),
+        "DEEPSEEK_API_KEY environment variable not set"
+    );
 }

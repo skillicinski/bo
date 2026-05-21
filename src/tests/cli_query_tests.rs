@@ -1,6 +1,6 @@
 use super::*;
 use crate::domain::{Slug, Timestamp, Title, Url};
-use crate::engine::llm::{model::Model, FinishReason, LlmProvider, LlmResponse};
+use crate::engine::llm::{model::Model, FinishReason, LlmProvider, LlmResponse, Provider};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::fs;
@@ -10,7 +10,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 fn test_model() -> Model {
-    Model::parse("gpt-4o").unwrap()
+    Model::parse("gpt-4o", Provider::OpenAI).unwrap()
 }
 
 // ── term extraction tests ────────────────────────────────────────────
@@ -532,7 +532,9 @@ fn query_budget_known_128k_model() {
 
 #[test]
 fn query_budget_known_1m_model() {
-    let budget = compute_query_context_budget(&Model::parse("gpt-4.1-mini").unwrap()).unwrap();
+    let budget =
+        compute_query_context_budget(&Model::parse("gpt-4.1-mini", Provider::OpenAI).unwrap())
+            .unwrap();
 
     assert_eq!(budget.model, "gpt-4.1-mini");
     assert_eq!(budget.context_tokens, 1_000_000);
@@ -581,7 +583,7 @@ fn unknown_model_rejected_at_parse_boundary() {
     // Model validation now happens at parse time (config boundary),
     // not at query execution time. An invalid model string cannot reach
     // the query pipeline as a &Model.
-    assert!(Model::parse("unknown-model").is_err());
+    assert!(Model::parse("unknown-model", Provider::OpenAI).is_err());
 }
 
 #[test]

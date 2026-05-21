@@ -276,13 +276,16 @@ pub fn run_compile_with_options(
     }
 
     let api_key =
-        auth::resolve_openai_api_key(&auth::auth_path()).map_err(execute::compile_auth_error)?;
-    let provider = OpenAiProvider::new(api_key.api_key.as_str());
+        auth::resolve_api_key(cfg.provider).map_err(|e| CompileError::Llm(e.to_string()))?;
+    let provider = OpenAiProvider::new(&api_key);
+    let compile_model = cfg
+        .effective_compile_model()
+        .map_err(|e| CompileError::Llm(e.to_string()))?;
     run_compile_with_provider_started_at(
         cfg,
         options,
         &provider,
-        &cfg.effective_compile_model(),
+        &compile_model,
         &compile_started_at,
     )
 }

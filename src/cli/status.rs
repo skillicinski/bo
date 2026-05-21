@@ -8,6 +8,8 @@
 use crate::domain::frontmatter;
 use crate::domain::manifest;
 use crate::domain::tree::Tree;
+use crate::engine::config::Config;
+use crate::engine::llm::models;
 
 use serde::Serialize;
 use std::collections::HashSet;
@@ -24,6 +26,16 @@ pub struct StatusResult {
     pub size: SizeStatus,
     pub health: HealthReport,
     pub hints: Vec<String>,
+    // Config fields
+    pub provider: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compile_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_context_tokens: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compile_model_context_tokens: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -82,7 +94,11 @@ impl From<manifest::ManifestError> for StatusError {
 
 // ── pipeline ──────────────────────────────────────────────────────────────────
 
-pub fn compute_status(tree_dir: &Path, tree_name: &str) -> Result<StatusResult, StatusError> {
+pub fn compute_status(
+    tree_dir: &Path,
+    tree_name: &str,
+    config: Option<&Config>,
+) -> Result<StatusResult, StatusError> {
     let tree = Tree {
         name: None,
         created_at: None,
@@ -120,6 +136,8 @@ pub fn compute_status(tree_dir: &Path, tree_name: &str) -> Result<StatusResult, 
     let health = compute_health(tree_dir, &manifest);
     let hints = generate_hints(&leaves, &branches, &health);
 
+    let (provider, model, compile_model, model_ctx, compile_ctx) = config_fields(config);
+
     Ok(StatusResult {
         tree_name: tree_name.to_string(),
         leaves,
@@ -127,10 +145,77 @@ pub fn compute_status(tree_dir: &Path, tree_name: &str) -> Result<StatusResult, 
         size,
         health,
         hints,
+        provider,
+        model,
+        compile_model,
+        model_context_tokens: model_ctx,
+        compile_model_context_tokens: compile_ctx,
     })
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+fn config_fields(
+    config: Option<&Config>,
+) -> (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<usize>,
+    Option<usize>,
+) {
+    let cfg = match config {
+        Some(c) => c,
+        None => return (String::from("openai"), None, None, None, None),
+    };
+    let provider = cfg.provider.to_string();
+    let model_ctx = cfg
+        .model
+        .as_deref()
+        .and_then(|m| models::context_window_tokens(cfg.provider, m));
+    let compile_ctx = cfg
+        .compile_model
+        .as_deref()
+        .and_then(|m| models::context_window_tokens(cfg.provider, m));
+    (
+        provider,
+        cfg.model.clone(),
+        cfg.compile_model.clone(),
+        model_ctx,
+        compile_ctx,
+    )
+}
+
+/// Return a StatusResult when the tree hasn't been seeded yet — config fields only.
+pub fn config_only_status(config: Option<&Config>) -> StatusResult {
+    let (provider, model, compile_model, model_ctx, compile_ctx) = config_fields(config);
+    StatusResult {
+        tree_name: String::new(),
+        leaves: LeafStatus {
+            total: 0,
+            uncompiled: 0,
+            uncompiled_slugs: Vec::new(),
+        },
+        branches: BranchStatus {
+            total: 0,
+            last_compiled_at: None,
+        },
+        size: SizeStatus {
+            bytes: 0,
+            estimated_tokens: 0,
+        },
+        health: HealthReport {
+            orphan_index_entries: Vec::new(),
+            missing_from_index: Vec::new(),
+        },
+        hints: vec!["run 'bo seed <output-dir>' to create a tree".to_string()],
+        provider,
+        model,
+        compile_model,
+        model_context_tokens: model_ctx,
+        compile_model_context_tokens: compile_ctx,
+    }
+}
 
 fn compute_size(tree_dir: &Path, branches_dir: &Path) -> SizeStatus {
     let mut total_bytes: u64 = 0;
@@ -267,7 +352,28 @@ const UNCOMPILED_DISPLAY_CAP: usize = 10;
 pub fn render_human(result: &StatusResult) -> String {
     let mut out = String::new();
 
-    out.push_str(&format!("bo \u{00b7} {}\n", result.tree_name));
+    if !result.tree_name.is_empty() {
+        out.push_str(&format!("bo \u{00b7} {}\n", result.tree_name));
+    }
+    out.push('\n');
+
+    // Config display
+    out.push_str(&format!("  provider:      {}\n", result.provider));
+    if let Some(ref model) = result.model {
+        let ctx = result
+            .model_context_tokens
+            .map(|t| format!(" ({}K context)", t / 1000))
+            .unwrap_or_default();
+        out.push_str(&format!("  model:         {}{}\n", model, ctx));
+    }
+    if let Some(ref cm) = result.compile_model {
+        let ctx = result
+            .compile_model_context_tokens
+            .map(|t| format!(" ({}K context)", t / 1000))
+            .unwrap_or_default();
+        out.push_str(&format!("  compile_model: {}{}\n", cm, ctx));
+    }
+
     out.push('\n');
 
     if result.leaves.uncompiled > 0 {

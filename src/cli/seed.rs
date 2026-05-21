@@ -2,6 +2,7 @@ use crate::domain::manifest::{self, Manifest, TreeMeta};
 use crate::domain::tree::TreeConfig;
 use crate::domain::Timestamp;
 use crate::engine::config::{self, Config, ConfigError};
+use crate::engine::llm::Provider;
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -86,6 +87,7 @@ pub fn seed(
 
     config::write_config(
         &Config {
+            provider: Provider::OpenAI,
             tree: Some(TreeConfig {
                 output_dir: output_dir.clone(),
                 name: tree_name.clone(),
