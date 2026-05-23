@@ -36,11 +36,11 @@ const COMPILE_PROMPT_OVERHEAD_TOKENS: usize = 4096;
 const TOKEN_ESTIMATE_BYTES_PER_TOKEN: usize = 4;
 const NO_NEW_LEAVES_REASON: &str = "no new leaves since last compile";
 const COMPILE_MODEL_NEXT_STEPS: [&str; 2] = [
-    "bo config set compile_model gpt-4.1-mini",
-    "bo config set compile_model gpt-4.1",
+    "bo config --compile-model gpt-4.1-mini",
+    "bo config --compile-model gpt-4.1",
 ];
 
-pub const VALIDATION_NEXT_STEP: &str = "No files were changed. Try `bo compile` again; if this repeats, switch models with `bo config set model <model>` or report the validation message.";
+pub const VALIDATION_NEXT_STEP: &str = "No files were changed. Try `bo compile` again; if this repeats, switch models with `bo config --model <model>` or report the validation message.";
 
 const COMPILE_LLM_POLICY: LlmCallPolicy = LlmCallPolicy {
     timeout: Duration::from_secs(180),
