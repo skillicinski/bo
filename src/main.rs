@@ -26,7 +26,11 @@ const KNOWN_COMMANDS: &[&str] = &[
 ];
 
 #[derive(Parser, Debug)]
-#[command(name = "bo", about = "Collect web pages into a local markdown tree")]
+#[command(
+    name = "bo",
+    about = "Collect web pages into a local markdown tree",
+    version
+)]
 struct Cli {
     /// Emit machine-readable JSON
     #[arg(long, global = true)]

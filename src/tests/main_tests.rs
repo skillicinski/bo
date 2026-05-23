@@ -103,12 +103,12 @@ fn compile_context_overflow_json_recommends_compile_model() {
     assert_eq!(error.details["context_tokens"], 128_000);
     assert!(error
         .message
-        .contains("bo config set compile_model gpt-4.1-mini"));
+        .contains("bo config --compile-model gpt-4.1-mini"));
     assert!(error.details["next_steps"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|step| step == "bo config set compile_model gpt-4.1"));
+        .any(|step| step == "bo config --compile-model gpt-4.1"));
 }
 
 #[test]

@@ -39,8 +39,8 @@ src/
 - **Formatting:** `cargo fmt`
 - **No agent loops in bo itself** — LLM calls are single-shot structured output. Orchestration belongs to the calling agent, not bo.
 - **`--json` flag** on all commands for machine consumption.
-- **Config:** `~/.bo/config.json` — created by `bo seed` or `bo config set`.
-- **Auth:** `~/.bo/auth.json` — created by `bo config auth`. Separate from config.
+- **Config:** `~/.bo/config.json` — created by `bo seed` or `bo config --provider/--model/--compile-model`.
+- **Auth:** `~/.bo/auth.json` — flat keys `openai_api_key` / `deepseek_api_key`. Hand-edited or set via env var. Separate from config.
 
 ## Changelog
 
@@ -72,8 +72,8 @@ The `release.yml` workflow runs CI and creates a GitHub Release with notes extra
 
 ## Current state (v0.0.1)
 
-Commands shipping: `seed`, `collect`, `list`, `search`, `show`, `query`, `compile`, `config`, `raze`.
+Commands shipping: `seed`, `collect`, `list`, `show`, `query`, `compile`, `config`, `status`, `raze`.
 
 ## LLM provider
 
-OpenAI-compatible only (for now). Auth resolved via: `OPENAI_API_KEY` env var → `~/.bo/auth.json` → error. Single `model` config field (default `gpt-4o`), configurable via `bo config set model`.
+OpenAI-compatible only (for now). Two providers: `openai` (default) and `deepseek`. Auth resolved via provider-specific env var (`OPENAI_API_KEY` / `DEEPSEEK_API_KEY`) → `~/.bo/auth.json` → error. Models configured via `bo config --model <id>` (and optional `--compile-model <id>`). Default model: `gpt-4.1-mini`.
