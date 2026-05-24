@@ -127,11 +127,6 @@ enum Commands {
 
 // ── JSON payloads ────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize)]
-struct ShowJsonData<'a> {
-    leaf: &'a show::ShowResult,
-}
-
 // ── errors ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -316,9 +311,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
             Err(error) => emit_cli_error("list", json, error, stdout, stderr),
         },
         Commands::Show { title, full } => match execute_show(title, full) {
-            Ok(result) if json => {
-                emit_json_success("show", ShowJsonData { leaf: &result }, Vec::new(), stdout)
-            }
+            Ok(result) if json => emit_json_success("show", &result, Vec::new(), stdout),
             Ok(result) => {
                 write_human_or_error(write!(stdout, "{}", show::render_human(&result)), stderr)
             }
@@ -350,7 +343,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                     let exit_code = error.exit_code();
                     let json_error = error.json_error();
                     if json {
-                        emit_json_error("query", json_error, Vec::new(), stdout, exit_code)
+                        emit_json_error("query", json_error, Vec::new(), exit_code)
                     } else {
                         query::render_error_human(&error, stderr, exit_code)
                     }
@@ -394,7 +387,7 @@ fn render_parse_error<W: Write, E: Write>(
                 "exit_code": exit_code,
             }),
         );
-        return emit_json_error(command, json_error, Vec::new(), stdout, exit_code);
+        return emit_json_error(command, json_error, Vec::new(), exit_code);
     }
 
     write_rendered(stderr, &error.render().to_string(), exit_code)
@@ -460,7 +453,6 @@ fn emit_json_success<W: Write, T: Serialize>(
                 format!("failed to serialize JSON response: {error}"),
             ),
             Vec::new(),
-            stdout,
             1,
         ),
     }
@@ -472,7 +464,6 @@ fn emit_batch_collect_json<W: Write>(result: &BatchCollectResult, stdout: &mut W
             "collect",
             JsonError::with_details("batch_failed", result.failure_message(), json!(result)),
             Vec::new(),
-            stdout,
             1,
         );
     }
@@ -480,15 +471,15 @@ fn emit_batch_collect_json<W: Write>(result: &BatchCollectResult, stdout: &mut W
     emit_json_success("collect", result, Vec::new(), stdout)
 }
 
-fn emit_json_error<W: Write>(
+fn emit_json_error(
     command: &str,
     error: JsonError,
     warnings: Vec<JsonWarning>,
-    stdout: &mut W,
     exit_code: i32,
 ) -> i32 {
+    let mut stderr = io::stderr();
     match json_output::error_string(command, error, warnings) {
-        Ok(encoded) => match writeln!(stdout, "{}", encoded) {
+        Ok(encoded) => match writeln!(stderr, "{}", encoded) {
             Ok(()) => exit_code,
             Err(_) => 1,
         },
@@ -500,18 +491,12 @@ fn emit_cli_error<W: Write, E: Write>(
     command: &str,
     json: bool,
     error: CliError,
-    stdout: &mut W,
+    _stdout: &mut W,
     stderr: &mut E,
 ) -> i32 {
     let exit_code = error.exit_code();
     if json {
-        return emit_json_error(
-            command,
-            error.to_json_error(),
-            Vec::new(),
-            stdout,
-            exit_code,
-        );
+        return emit_json_error(command, error.to_json_error(), Vec::new(), exit_code);
     }
 
     match writeln!(stderr, "error: {}", error) {
@@ -556,7 +541,7 @@ fn execute_status() -> Result<status::StatusResult, CliError> {
     let (tree_dir, tree_name) = match config.as_ref().and_then(|c| c.tree.as_ref()) {
         Some(tree_cfg) => {
             let tree = bo::domain::tree::Tree::from_config(tree_cfg);
-            let name = tree.name.unwrap_or_else(|| "unnamed".to_string());
+            let name = tree.name.clone();
             (tree_cfg.output_dir.clone(), name)
         }
         None => {
@@ -581,7 +566,7 @@ fn execute_raze(include_auth: bool) -> Result<raze::RazeOutput, CliError> {
                 raze::AuthCleanup::Preserve
             };
             raze::raze_with_auth(
-                &tree.tree.output_dir,
+                &tree.tree_cfg.output_dir,
                 &config_path,
                 &auth_path,
                 auth_cleanup,
@@ -607,7 +592,7 @@ fn execute_raze(include_auth: bool) -> Result<raze::RazeOutput, CliError> {
 
 fn execute_collect(inputs: Vec<String>) -> Result<CollectOutput, CliError> {
     let cfg = require_seeded_config()?;
-    let output_dir = cfg.tree.output_dir.clone();
+    let output_dir = cfg.tree_cfg.output_dir.clone();
     let collect_dir = output_dir.clone();
     let model = cfg
         .effective_model()
@@ -637,7 +622,7 @@ fn execute_list(
     };
     let cfg = require_seeded_config()?;
     list::list_tree(
-        &cfg.tree.output_dir,
+        &cfg.tree_cfg.output_dir,
         &list::ListOptions {
             view,
             terms: terms.iter().map(|t| t.to_lowercase()).collect(),
@@ -651,7 +636,7 @@ fn execute_list(
 
 fn execute_show(title: String, full: bool) -> Result<show::ShowResult, CliError> {
     let cfg = require_seeded_config()?;
-    show::show_leaf(&cfg.tree.output_dir, &title, &ShowOptions { full }).map_err(CliError::Show)
+    show::show_leaf(&cfg.tree_cfg.output_dir, &title, &ShowOptions { full }).map_err(CliError::Show)
 }
 
 fn execute_query(question: &str) -> Result<query::QueryResult, query::QueryError> {
@@ -677,7 +662,7 @@ where
     let model = cfg
         .effective_model()
         .map_err(|e| query::QueryError::NoProvider(e.to_string()))?;
-    let prepared = query::prepare(&cfg.tree.output_dir, question, &model)?;
+    let prepared = query::prepare(&cfg.tree_cfg.output_dir, question, &model)?;
     let provider = resolve_provider()?;
     query::run_prepared_with_provider(prepared, provider.as_ref())
 }

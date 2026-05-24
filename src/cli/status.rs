@@ -100,7 +100,7 @@ pub fn compute_status(
     config: Option<&Config>,
 ) -> Result<StatusResult, StatusError> {
     let tree = Tree {
-        name: None,
+        name: "unnamed".to_string(),
         created_at: None,
         output_dir: tree_dir.to_path_buf(),
     };

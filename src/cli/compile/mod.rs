@@ -235,7 +235,7 @@ fn preflight_noop(
     cfg: &SeededConfig,
     options: CompileOptions,
 ) -> Result<Option<CompileResult>, CompileError> {
-    let tree = Tree::from_config(&cfg.tree);
+    let tree = Tree::from_config(&cfg.tree_cfg);
     execute::recover_pending_if_needed(&tree.output_dir)?;
     let manifest = manifest::read(&tree.manifest_path())
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
@@ -261,7 +261,7 @@ pub fn run_compile_with_options(
     }
 
     // Stale repair + noop check run before auth (no LLM needed)
-    let tree = Tree::from_config(&cfg.tree);
+    let tree = Tree::from_config(&cfg.tree_cfg);
     execute::recover_pending_if_needed(&tree.output_dir)?;
     let _stale_repair = plan::repair_stale_branches(
         cfg,
@@ -297,6 +297,13 @@ pub fn run_compile_with_provider(
     model: &Model,
 ) -> Result<CompileResult, CompileError> {
     let compile_started_at = execute::compile_timestamp_now();
+    // Stale repair (mirrors the repair in run_compile_with_options).
+    let tree = Tree::from_config(&cfg.tree_cfg);
+    let _stale_repair = plan::repair_stale_branches(
+        cfg,
+        &manifest::read(&tree.manifest_path())
+            .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?,
+    )?;
     run_compile_with_provider_started_at(cfg, options, provider, model, &compile_started_at)
 }
 
@@ -307,17 +314,10 @@ fn run_compile_with_provider_started_at(
     model: &Model,
     compile_started_at: &crate::domain::Timestamp,
 ) -> Result<CompileResult, CompileError> {
-    let tree = Tree::from_config(&cfg.tree);
+    let tree = Tree::from_config(&cfg.tree_cfg);
     execute::recover_pending_if_needed(&tree.output_dir)?;
 
-    // ── deterministic stale repair (pre-LLM) ────────────────────────────────
-    let _stale_repair = plan::repair_stale_branches(
-        cfg,
-        &manifest::read(&tree.manifest_path())
-            .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?,
-    )?;
-
-    // ── read manifest (post-repair) and check for work ──────────────────────
+    // ── read manifest and check for work ────────────────────────────────────
     let manifest = manifest::read(&tree.manifest_path())
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
     let expected_manifest_hash = pending::manifest_hash(&tree.output_dir)?;
@@ -328,23 +328,16 @@ fn run_compile_with_provider_started_at(
         return Ok(CompileResult::noop(NO_NEW_LEAVES_REASON));
     }
 
-    match manifest.leaves.len() {
-        0 => return Ok(CompileResult::noop("empty_tree")),
-        1 => return Ok(CompileResult::noop("single_leaf")),
-        _ => {}
-    }
-
     // ── load valid leaves ────────────────────────────────────────────────────
     let (loaded_leaves, skipped_leaves) = plan::read_valid_leaves(cfg, &manifest.leaves);
 
-    if loaded_leaves.is_empty() {
-        return Err(CompileError::Io(format!(
-            "all {} leaves have unparseable frontmatter or are missing — nothing to compile",
-            skipped_leaves.len()
-        )));
-    }
-
     if loaded_leaves.len() < 2 {
+        if loaded_leaves.is_empty() {
+            return Err(CompileError::Io(format!(
+                "all {} leaves have unparseable frontmatter or are missing — nothing to compile",
+                skipped_leaves.len()
+            )));
+        }
         return Ok(CompileResult::noop("single_leaf"));
     }
 

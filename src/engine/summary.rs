@@ -63,7 +63,7 @@ impl fmt::Display for SummaryError {
 
 /// Generate a summary by extracting the first ~200 words of body content.
 /// Truncates at a word boundary. Returns empty string for empty body.
-pub fn generate_fallback(body: &str) -> String {
+pub(crate) fn generate_fallback(body: &str) -> String {
     let words: Vec<&str> = body.split_whitespace().collect();
     if words.len() <= SUMMARY_TARGET_WORDS {
         words.join(" ")
@@ -73,7 +73,7 @@ pub fn generate_fallback(body: &str) -> String {
 }
 
 /// Truncate body to the first `max_words` words for LLM input.
-pub fn truncate_body(body: &str, max_words: usize) -> String {
+fn truncate_body(body: &str, max_words: usize) -> String {
     let words: Vec<&str> = body.split_whitespace().collect();
     if words.len() <= max_words {
         words.join(" ")

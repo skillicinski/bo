@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::engine::llm::{FinishReason, LlmError, LlmProvider, LlmResponse, Message, Role};
+use crate::engine::llm::{
+    sanitize_provider_error_message, FinishReason, LlmError, LlmProvider, LlmResponse, Message,
+    Role,
+};
 
 pub struct DeepSeekProvider {
     client: reqwest::Client,
@@ -119,9 +122,15 @@ impl LlmProvider for DeepSeekProvider {
 
         // 5. Parse response JSON.
         let response_json: Value = serde_json::from_str(&response_text).map_err(|e| {
-            let sanitized = sanitize_error_message(&response_text);
+            let sanitized = sanitize_provider_error_message(&response_text);
             LlmError::Parse(format!("{}; body: {}", e, sanitized))
         })?;
+
+        // Validate structured output against schema when present.
+        if let Some(schema) = response_schema {
+            let content_val = &response_json["choices"][0]["message"]["content"];
+            validate_structured_output(content_val, schema)?;
+        }
 
         // 6. Extract content and finish_reason.
         let content = response_json["choices"][0]["message"]["content"]
@@ -150,12 +159,12 @@ impl LlmProvider for DeepSeekProvider {
 // ── error mapping ─────────────────────────────────────────────────────────────
 
 fn map_reqwest_error(error: &reqwest::Error) -> LlmError {
-    let message = sanitize_error_message(&error.to_string());
+    let message = sanitize_provider_error_message(&error.to_string());
     LlmError::Network(message)
 }
 
 fn map_http_error(status: reqwest::StatusCode, body: &str) -> LlmError {
-    let sanitized = sanitize_error_message(body);
+    let sanitized = sanitize_provider_error_message(body);
     let message = if sanitized.is_empty() {
         format!("HTTP {}", status.as_u16())
     } else {
@@ -171,18 +180,25 @@ fn map_http_error(status: reqwest::StatusCode, body: &str) -> LlmError {
     }
 }
 
-fn sanitize_error_message(message: &str) -> String {
-    message
-        .split_whitespace()
-        .map(|token| {
-            if token.contains("sk-") {
-                "<redacted>".to_string()
-            } else {
-                token.to_string()
+fn validate_structured_output(content_val: &Value, schema: &Value) -> Result<(), LlmError> {
+    if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
+        // Content may be a JSON string (parse it) or already an object.
+        let parsed: Value = if content_val.is_string() {
+            serde_json::from_str(content_val.as_str().unwrap_or_default()).unwrap_or(Value::Null)
+        } else {
+            content_val.clone()
+        };
+        for key in required {
+            let key_str = key.as_str().unwrap_or_default();
+            if parsed.get(key_str).is_none() {
+                return Err(LlmError::Api(format!(
+                    "DeepSeek response missing required field '{}' in structured output",
+                    key_str
+                )));
             }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

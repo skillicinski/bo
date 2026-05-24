@@ -30,6 +30,8 @@ pub enum FrontmatterError {
     Missing,
     /// YAML inside the delimiters could not be parsed.
     Parse(String),
+    /// YAML serialization failed (should not occur for standard Mapping values).
+    Serialization(String),
 }
 
 impl fmt::Display for FrontmatterError {
@@ -37,6 +39,9 @@ impl fmt::Display for FrontmatterError {
         match self {
             FrontmatterError::Missing => write!(f, "no frontmatter delimiters found"),
             FrontmatterError::Parse(msg) => write!(f, "invalid YAML frontmatter: {}", msg),
+            FrontmatterError::Serialization(msg) => {
+                write!(f, "YAML serialization error: {}", msg)
+            }
         }
     }
 }
@@ -61,9 +66,10 @@ pub fn parse(content: &str) -> Result<(Mapping, String), FrontmatterError> {
 /// Used when creating brand-new files (branch files).  The body must NOT
 /// include a leading blank line; `render` inserts the `---` separator and
 /// the blank line itself.
-pub fn render(mapping: &Mapping, body: &str) -> String {
-    let yaml = serde_yaml_ng::to_string(mapping).unwrap_or_default();
-    format!("---\n{}---\n\n{}", yaml, body)
+pub fn render(mapping: &Mapping, body: &str) -> Result<String, FrontmatterError> {
+    let yaml = serde_yaml_ng::to_string(mapping)
+        .map_err(|e| FrontmatterError::Serialization(e.to_string()))?;
+    Ok(format!("---\n{}---\n\n{}", yaml, body))
 }
 
 // ── set_field ─────────────────────────────────────────────────────────────────

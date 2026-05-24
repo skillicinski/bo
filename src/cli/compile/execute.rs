@@ -203,7 +203,7 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
     run_mode: CompileRunMode,
     expected_manifest_hash: &str,
 ) -> Result<CompileSummary, CompileError> {
-    let tree = Tree::from_config(&cfg.tree);
+    let tree = Tree::from_config(&cfg.tree_cfg);
     recover_pending_if_needed(&tree.output_dir)?;
 
     // Load current manifest. Used to preserve branch `created_at` and carry
@@ -212,7 +212,7 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
         Ok(m) => m,
         Err(manifest::ManifestError::TreeNotInitialized) => manifest::Manifest {
             tree: manifest::TreeMeta {
-                name: tree.name.clone().unwrap_or_else(|| "unnamed".to_string()),
+                name: tree.name.clone(),
                 created_at: tree
                     .created_at
                     .as_deref()

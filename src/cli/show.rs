@@ -168,7 +168,7 @@ pub fn show_leaf(
     }
 
     let tree = Tree {
-        name: None,
+        name: "unnamed".to_string(),
         created_at: None,
         output_dir: tree_dir.to_path_buf(),
     };
@@ -362,24 +362,46 @@ fn has_disallowed_components(path: &Path) -> bool {
 }
 
 fn parse_leaf_document(content: &str) -> Result<LeafDocument, String> {
-    let rest = content
-        .strip_prefix("---\n")
-        .ok_or_else(|| "no frontmatter delimiters found".to_string())?;
-    let close_pos = rest
-        .find("\n---")
+    // Guard: no opening delimiter means no frontmatter at all.
+    if !content.starts_with("---\n") {
+        return Ok(LeafDocument {
+            frontmatter: Mapping::new(),
+            frontmatter_raw: String::new(),
+            body: content.to_string(),
+        });
+    }
+
+    // Search for closing delimiter after the opening "---\n".
+    let after_open = &content["---\n".len()..];
+    let (close_delim, close_pos) = after_open
+        .find("\n---\n")
+        .map(|pos| ("\n---\n", pos))
+        .or_else(|| {
+            after_open
+                .ends_with("\n---")
+                .then(|| ("\n---", after_open.len() - "\n---".len()))
+        })
+        .or_else(|| after_open.starts_with("---\n").then_some(("---\n", 0)))
+        .or_else(|| (after_open == "---").then_some(("---", 0)))
         .ok_or_else(|| "no frontmatter delimiters found".to_string())?;
 
-    let yaml = &rest[..close_pos + 1];
-    let frontmatter = serde_yaml_ng::from_str::<Mapping>(yaml).map_err(|e| e.to_string())?;
+    // YAML text between opening and closing delimiters.
+    let fm_text = &after_open[..close_pos];
+    let frontmatter = serde_yaml_ng::from_str::<Mapping>(fm_text).map_err(|e| e.to_string())?;
 
-    let after_marker_start = "---\n".len() + close_pos + "\n---".len();
-    let after_marker = &content[after_marker_start..];
-    let raw_end = after_marker_start + usize::from(after_marker.starts_with('\n'));
-    let after_closing_line = after_marker.strip_prefix('\n').unwrap_or(after_marker);
-    let body = after_closing_line
-        .strip_prefix('\n')
-        .unwrap_or(after_closing_line)
-        .to_string();
+    // raw_end: span from content[0] to just past the closing delimiter.
+    // The delimiter itself includes the trailing newline, so no extra \n check needed.
+    let raw_end = "---\n".len() + close_pos + close_delim.len();
+
+    // Body: everything after the closing delimiter.
+    let mut body = content[raw_end..].to_string();
+    // Strip one \n (newline right after delimiter), then one blank-line separator \n.
+    if body.starts_with('\n') {
+        body = body[1..].to_string();
+    }
+    if body.starts_with('\n') {
+        body = body[1..].to_string();
+    }
 
     Ok(LeafDocument {
         frontmatter,
@@ -492,3 +514,102 @@ impl MatchedCandidate {
 #[cfg(test)]
 #[path = "../tests/cli_show_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod parse_leaf_tests {
+    use super::*;
+
+    #[test]
+    fn no_frontmatter_at_all_returns_all_body() {
+        let doc = parse_leaf_document("just body text").unwrap();
+        assert!(doc.frontmatter.is_empty());
+        assert_eq!(doc.frontmatter_raw, "");
+        assert_eq!(doc.body, "just body text");
+    }
+
+    #[test]
+    fn normal_frontmatter_parsed_correctly() {
+        let doc = parse_leaf_document("---\ntitle: foo\n---\nbody").unwrap();
+        assert_eq!(
+            doc.frontmatter.get("title").and_then(Value::as_str),
+            Some("foo")
+        );
+        assert_eq!(doc.frontmatter_raw, "---\ntitle: foo\n---\n");
+        assert_eq!(doc.body, "body");
+    }
+
+    #[test]
+    fn empty_frontmatter() {
+        let doc = parse_leaf_document("---\n---\nbody").unwrap();
+        assert!(doc.frontmatter.is_empty());
+        assert_eq!(doc.frontmatter_raw, "---\n---\n");
+        assert_eq!(doc.body, "body");
+    }
+
+    #[test]
+    fn empty_frontmatter_at_eof() {
+        let doc = parse_leaf_document("---\n---").unwrap();
+        assert!(doc.frontmatter.is_empty());
+        assert_eq!(doc.frontmatter_raw, "---\n---");
+        assert_eq!(doc.body, "");
+    }
+
+    #[test]
+    fn only_opening_delimiter_no_closing_is_error() {
+        let err = parse_leaf_document("---\nsome: content\nbut no closing").unwrap_err();
+        assert!(err.contains("no frontmatter delimiters found"));
+    }
+
+    #[test]
+    fn yaml_value_containing_delimiter_not_treated_as_delimiter() {
+        let doc = parse_leaf_document("---\ntitle: \"foo --- bar\"\n---\nbody").unwrap();
+        assert_eq!(
+            doc.frontmatter.get("title").and_then(Value::as_str),
+            Some("foo --- bar")
+        );
+        assert_eq!(doc.body, "body");
+    }
+
+    #[test]
+    fn delimiter_in_body_not_treated_as_frontmatter_delimiter() {
+        let doc = parse_leaf_document("---\ntitle: x\n---\nbody with \n--- in it").unwrap();
+        assert_eq!(
+            doc.frontmatter.get("title").and_then(Value::as_str),
+            Some("x")
+        );
+        assert_eq!(doc.body, "body with \n--- in it");
+    }
+
+    #[test]
+    fn multiline_frontmatter_with_various_yaml_types() {
+        let input =
+            "---\ntitle: test\ncount: 42\ntags:\n  - rust\n  - cli\ndraft: true\n---\nbody text";
+        let doc = parse_leaf_document(input).unwrap();
+        assert_eq!(
+            doc.frontmatter.get("title").and_then(Value::as_str),
+            Some("test")
+        );
+        assert_eq!(
+            doc.frontmatter.get("count").and_then(Value::as_i64),
+            Some(42)
+        );
+        assert_eq!(doc.body, "body text");
+    }
+
+    #[test]
+    fn closing_delimiter_at_eof_no_trailing_newline() {
+        let doc = parse_leaf_document("---\ntitle: foo\n---").unwrap();
+        assert_eq!(
+            doc.frontmatter.get("title").and_then(Value::as_str),
+            Some("foo")
+        );
+        assert_eq!(doc.frontmatter_raw, "---\ntitle: foo\n---");
+        assert_eq!(doc.body, "");
+    }
+
+    #[test]
+    fn body_with_blank_line_separator_is_stripped() {
+        let doc = parse_leaf_document("---\ntitle: x\n---\n\nbody after blank line").unwrap();
+        assert_eq!(doc.body, "body after blank line");
+    }
+}

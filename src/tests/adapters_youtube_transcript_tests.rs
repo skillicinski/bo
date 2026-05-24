@@ -85,3 +85,13 @@ fn output_has_no_timestamps_or_links() {
     assert!(!body.contains("0:00"));
     assert!(!body.contains("]("));
 }
+
+#[test]
+fn decodes_triple_encoded_entities() {
+    // XML text: &amp;amp;lt;
+    // XML parser expands &amp; → &, giving &amp;lt;
+    // decode loop: &amp;lt; → &lt; → <
+    let xml = r#"<transcript><text start="0">&amp;amp;lt;</text></transcript>"#;
+    let body = parse_transcript_markdown(xml).unwrap();
+    assert_eq!(body, "<");
+}

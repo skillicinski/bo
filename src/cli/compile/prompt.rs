@@ -81,7 +81,7 @@ pub(super) fn build_incremental_user_message(
             branch_record.title,
             leaves_str.join(",")
         ));
-        let branch_path = cfg.tree.output_dir.join(&branch_record.file);
+        let branch_path = cfg.tree_cfg.output_dir.join(&branch_record.file);
         if let Ok(content) = fs::read_to_string(branch_path) {
             if let Ok((_, body)) = frontmatter::parse(&content) {
                 msg.push_str("<branch_body>\n");

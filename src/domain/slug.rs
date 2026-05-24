@@ -136,9 +136,9 @@ pub fn resolve_slug(slug: &Slug, url: &str, output_dir: &Path) -> Slug {
 
 // ── backward compat: free function preserved for callers that don't need the struct ──
 
-/// Generate a kebab-case slug string from a title string.
-/// Falls back to extracting a slug from the URL path if the title is empty/non-ASCII.
-pub fn slugify(title: &str, url: &str) -> String {
+/// Internal helper for callers that need a raw String slug without the newtype
+/// wrapper. Prefer [`Slug::generate`] for new code.
+pub(crate) fn slugify(title: &str, url: &str) -> String {
     Slug::generate(title, url).0
 }
 
@@ -203,6 +203,7 @@ fn slugify_from_url(url: &str) -> String {
 }
 
 fn truncate_at_boundary(s: &str, max: usize) -> String {
+    debug_assert!(s.is_ascii(), "slug truncation requires ASCII input");
     if s.len() <= max {
         return s.to_string();
     }

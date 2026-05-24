@@ -276,7 +276,7 @@ pub fn collect_url_with_model(
     match youtube::classify_url(url) {
         YoutubeUrlMatch::Supported(supported) => {
             ensure_not_duplicate(supported.normalized_url(), output_dir)?;
-            let transcript = youtube::collect_transcript(url)?;
+            let transcript = youtube::collect_transcript(&supported)?;
             return write_new_document_with_model(
                 &transcript.url,
                 Some(&transcript.title),
@@ -342,14 +342,7 @@ pub fn collect_html_with_model(
             .enable_all()
             .build()
             .map_err(|e| summary::SummaryError::Runtime(format!("runtime: {}", e)))?;
-        let provider: Box<dyn crate::engine::llm::LlmProvider> = match provider {
-            crate::engine::llm::Provider::OpenAI => {
-                Box::new(crate::engine::llm::OpenAiProvider::new(&api_key))
-            }
-            crate::engine::llm::Provider::Deepseek => {
-                Box::new(crate::engine::llm::DeepSeekProvider::new(&api_key))
-            }
-        };
+        let provider = crate::engine::llm::create_provider(provider, &api_key);
         rt.block_on(summary::generate_llm(
             body,
             title,
@@ -369,7 +362,6 @@ pub fn collect_html_with_summarizer<F>(
 where
     F: FnOnce(&str, Option<&str>) -> Result<String, summary::SummaryError>,
 {
-    recover_pending_if_needed(output_dir)?;
     ensure_not_duplicate(url, output_dir)?;
 
     if let Some(reason) = quality::classify_html(html) {
@@ -729,14 +721,7 @@ fn write_new_document_with_model(
             .map_err(|e| {
                 CollectError::Summary(summary::SummaryError::Runtime(format!("runtime: {}", e)))
             })?;
-        let provider: Box<dyn crate::engine::llm::LlmProvider> = match provider {
-            crate::engine::llm::Provider::OpenAI => {
-                Box::new(crate::engine::llm::OpenAiProvider::new(&api_key))
-            }
-            crate::engine::llm::Provider::Deepseek => {
-                Box::new(crate::engine::llm::DeepSeekProvider::new(&api_key))
-            }
-        };
+        let provider = crate::engine::llm::create_provider(provider, &api_key);
         rt.block_on(summary::generate_llm(
             body_markdown,
             title,

@@ -2,12 +2,9 @@
 
 use crate::domain::frontmatter;
 use crate::domain::manifest::Manifest;
+use crate::engine::summary;
 use std::fs;
 use std::path::Path;
-
-// ── constants ────────────────────────────────────────────────────────────────
-
-const SUMMARY_FALLBACK_WORDS: usize = 200;
 
 // ── public types ─────────────────────────────────────────────────────────────
 
@@ -72,7 +69,7 @@ pub fn score_corpus(
         let summary = leaf
             .summary
             .clone()
-            .unwrap_or_else(|| summary_fallback(&body));
+            .unwrap_or_else(|| summary::generate_fallback(&body));
 
         let searchable = format!("{} {} {}", title, summary, body).to_lowercase();
         let word_count = searchable.split_whitespace().count();
@@ -122,17 +119,6 @@ pub fn score_corpus(
     }
 
     results
-}
-
-// ── private helpers ──────────────────────────────────────────────────────────
-
-fn summary_fallback(body: &str) -> String {
-    let words: Vec<&str> = body.split_whitespace().collect();
-    if words.len() <= SUMMARY_FALLBACK_WORDS {
-        words.join(" ")
-    } else {
-        words[..SUMMARY_FALLBACK_WORDS].join(" ")
-    }
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────

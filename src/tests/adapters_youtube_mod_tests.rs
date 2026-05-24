@@ -19,7 +19,11 @@ fn fetches_known_captioned_shorts_url() {
 }
 
 fn assert_captioned_video_collects(url: &str) {
-    let doc = collect_transcript(url).unwrap();
+    let supported = match classify_url(url) {
+        YoutubeUrlMatch::Supported(supported) => supported,
+        _ => panic!("expected supported URL"),
+    };
+    let doc = collect_transcript(&supported).unwrap();
     assert!(!doc.title.trim().is_empty());
     assert!(!doc.body_markdown.trim().is_empty());
     assert!(!doc.body_markdown.contains("ytInitialData"));

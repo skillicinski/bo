@@ -20,7 +20,7 @@ fn old_config() -> TreeConfig {
 #[test]
 fn from_full_config_preserves_all_fields() {
     let tree = Tree::from_config(&full_config());
-    assert_eq!(tree.name.as_deref(), Some("my-research"));
+    assert_eq!(tree.name, "my-research");
     assert_eq!(tree.created_at.as_deref(), Some("2026-04-14T09:00:00Z"));
     assert_eq!(tree.output_dir, PathBuf::from("/tmp/my-research"));
 }
@@ -29,8 +29,20 @@ fn from_full_config_preserves_all_fields() {
 fn from_old_config_derives_name_from_dir_basename() {
     let tree = Tree::from_config(&old_config());
     // name is derived from "old-tree" (basename of /tmp/old-tree)
-    assert_eq!(tree.name.as_deref(), Some("old-tree"));
+    assert_eq!(tree.name, "old-tree");
     assert!(tree.created_at.is_none());
+}
+
+#[test]
+fn from_config_root_dir_gets_unnamed_fallback() {
+    // When output_dir is "/" (root), file_name() is None, so fallback to "unnamed"
+    let config = TreeConfig {
+        output_dir: PathBuf::from("/"),
+        name: None,
+        created_at: None,
+    };
+    let tree = Tree::from_config(&config);
+    assert_eq!(tree.name, "unnamed");
 }
 
 #[test]
@@ -42,7 +54,7 @@ fn from_config_name_explicit_beats_derived() {
         created_at: None,
     };
     let tree = Tree::from_config(&config);
-    assert_eq!(tree.name.as_deref(), Some("explicit-name"));
+    assert_eq!(tree.name, "explicit-name");
 }
 
 #[test]

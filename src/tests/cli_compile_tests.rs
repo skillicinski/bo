@@ -17,14 +17,17 @@ use crate::engine::llm::{LlmError, LlmProvider, LlmResponse, Message, Provider};
 
 fn make_test_config(output_dir: &std::path::Path) -> SeededConfig {
     SeededConfig {
-        provider: Provider::OpenAI,
-        tree: crate::domain::tree::TreeConfig {
+        config: crate::engine::config::Config {
+            provider: Provider::OpenAI,
+            model: Some("gpt-4o-mini".to_string()),
+            compile_model: None,
+            tree: None,
+        },
+        tree_cfg: crate::domain::tree::TreeConfig {
             output_dir: output_dir.to_path_buf(),
             name: None,
             created_at: None,
         },
-        model: Some("gpt-4o-mini".to_string()),
-        compile_model: None,
     }
 }
 
@@ -352,14 +355,17 @@ fn compile_uses_effective_compile_model() {
     write_leaf(dir.path(), "leaf-a", "A", "https://example.com/a");
     write_leaf(dir.path(), "leaf-b", "B", "https://example.com/b");
     let cfg = SeededConfig {
-        provider: Provider::OpenAI,
-        tree: crate::domain::tree::TreeConfig {
+        config: crate::engine::config::Config {
+            provider: Provider::OpenAI,
+            model: Some("gpt-4o-mini".to_string()),
+            compile_model: Some("gpt-4.1-mini".to_string()),
+            tree: None,
+        },
+        tree_cfg: crate::domain::tree::TreeConfig {
             output_dir: dir.path().to_path_buf(),
             name: None,
             created_at: None,
         },
-        model: Some("gpt-4o-mini".to_string()),
-        compile_model: Some("gpt-4.1-mini".to_string()),
     };
     let provider = ModelRecordingProvider::new();
 

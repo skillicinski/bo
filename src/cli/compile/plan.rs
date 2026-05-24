@@ -207,13 +207,13 @@ pub(super) fn repair_stale_branches(
     };
 
     // Write repaired manifest
-    let tree = crate::domain::tree::Tree::from_config(&cfg.tree);
+    let tree = crate::domain::tree::Tree::from_config(&cfg.tree_cfg);
     crate::domain::manifest::write(&tree.manifest_path(), &repaired_manifest)
         .map_err(|e| CompileError::Io(format!("failed to write repaired manifest: {}", e)))?;
 
     // Delete branch files
     for file in &branch_deletes {
-        let path = cfg.tree.output_dir.join(file);
+        let path = cfg.tree_cfg.output_dir.join(file);
         if path.exists() {
             std::fs::remove_file(&path).ok();
         }
@@ -262,7 +262,7 @@ pub(super) fn classify_leaf_files(
     let mut skipped_leaf_slugs = Vec::new();
 
     for leaf in &manifest.leaves {
-        let leaf_path = cfg.tree.output_dir.join(&leaf.file);
+        let leaf_path = cfg.tree_cfg.output_dir.join(&leaf.file);
         let is_new = new_leaf_slugs.contains(leaf.slug.as_str());
         let is_branch_referenced = branch_referenced_slugs.contains(leaf.slug.as_str());
 
@@ -317,7 +317,7 @@ pub(super) fn read_valid_leaves(
     let mut skipped = Vec::new();
 
     for entry in entries {
-        let leaf_path = cfg.tree.output_dir.join(&entry.file);
+        let leaf_path = cfg.tree_cfg.output_dir.join(&entry.file);
         match fs::read_to_string(&leaf_path) {
             Ok(content) => match frontmatter::parse(&content) {
                 Ok((mapping, body)) => {

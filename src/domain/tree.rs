@@ -36,15 +36,13 @@ pub struct TreeConfig {
 
 /// The top-level entity in bo's knowledge graph.
 ///
-/// Constructed from a [`TreeConfig`] via [`Tree::from_config`].  Fields that
-/// were not present in older config files are represented as `None`.
+/// Constructed from a [`TreeConfig`] via [`Tree::from_config`].
+/// The `name` is always populated — derived from the directory basename
+/// or "unnamed" as a final fallback.
 #[derive(Debug, Clone)]
 pub struct Tree {
     /// Human-readable name for this tree.
-    ///
-    /// `Some` when the config was written by a version of bo that records the
-    /// name; `None` for trees seeded before this field was introduced.
-    pub name: Option<String>,
+    pub name: String,
 
     /// ISO 8601 UTC timestamp of when `bo seed` first ran for this tree.
     ///
@@ -62,11 +60,12 @@ impl Tree {
     /// config), it is derived from the basename of `config.output_dir`,
     /// falling back to `"unnamed"` if the path has no final component.
     pub fn from_config(config: &TreeConfig) -> Self {
-        let name = config.name.clone().or_else(|| {
+        let name = config.name.clone().unwrap_or_else(|| {
             config
                 .output_dir
                 .file_name()
                 .map(|n: &std::ffi::OsStr| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "unnamed".to_string())
         });
 
         Tree {

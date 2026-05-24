@@ -137,6 +137,81 @@ fn write_does_not_double_newline_if_body_already_ends_with_one() {
     assert!(!content.ends_with("\n\n"));
 }
 
+// ── format_content title escaping tests (P1.2) ───────────────────────────
+
+#[test]
+fn format_content_title_with_newlines_is_valid_yaml() {
+    let title = Title::new("Line 1\nLine 2\nLine 3");
+    let content = format_content(
+        Some(&title),
+        &url("https://example.com"),
+        &ts("2025-01-15T09:32:00Z"),
+        "Body.",
+        None,
+    );
+    // Should contain escaped newlines in YAML
+    assert!(content.contains("\\n"));
+    // Content must be parseable as YAML frontmatter
+    let (mapping, _) = frontmatter::parse(&content).unwrap();
+    assert_eq!(
+        mapping.get("title").and_then(|v| v.as_str()),
+        Some("Line 1\nLine 2\nLine 3")
+    );
+}
+
+#[test]
+fn format_content_title_with_tabs_is_valid_yaml() {
+    let title = Title::new("Col1\tCol2");
+    let content = format_content(
+        Some(&title),
+        &url("https://example.com"),
+        &ts("2025-01-15T09:32:00Z"),
+        "Body.",
+        None,
+    );
+    assert!(content.contains("\\t"));
+    let (mapping, _) = frontmatter::parse(&content).unwrap();
+    assert_eq!(
+        mapping.get("title").and_then(|v| v.as_str()),
+        Some("Col1\tCol2")
+    );
+}
+
+#[test]
+fn format_content_title_with_cr_is_valid_yaml() {
+    let title = Title::new("With\rCarriage");
+    let content = format_content(
+        Some(&title),
+        &url("https://example.com"),
+        &ts("2025-01-15T09:32:00Z"),
+        "Body.",
+        None,
+    );
+    assert!(content.contains("\\r"));
+    let (mapping, _) = frontmatter::parse(&content).unwrap();
+    assert_eq!(
+        mapping.get("title").and_then(|v| v.as_str()),
+        Some("With\rCarriage")
+    );
+}
+
+#[test]
+fn format_content_title_with_backslash_and_quote_is_valid_yaml() {
+    let title = Title::new(r#"Path \to\file and "quoted""#);
+    let content = format_content(
+        Some(&title),
+        &url("https://example.com"),
+        &ts("2025-01-15T09:32:00Z"),
+        "Body.",
+        None,
+    );
+    let (mapping, _) = frontmatter::parse(&content).unwrap();
+    assert_eq!(
+        mapping.get("title").and_then(|v| v.as_str()),
+        Some(r#"Path \to\file and "quoted""#)
+    );
+}
+
 // ── read_frontmatter ──────────────────────────────────────────────────────
 
 #[test]

@@ -218,7 +218,7 @@ fn seeded_conversion_succeeds_when_tree_exists() {
 
     let seeded = cfg.into_seeded().unwrap();
 
-    assert_eq!(seeded.tree.output_dir, PathBuf::from("/tmp/bo"));
+    assert_eq!(seeded.tree_cfg.output_dir, PathBuf::from("/tmp/bo"));
     assert_eq!(seeded.effective_model().unwrap(), "gpt-4.1-mini");
 }
 

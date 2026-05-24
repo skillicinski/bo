@@ -96,14 +96,17 @@ fn setup_fixture_collection() -> tempfile::TempDir {
 
 fn make_config(output_dir: &std::path::Path) -> SeededConfig {
     SeededConfig {
-        provider: bo::engine::llm::Provider::OpenAI,
-        tree: bo::domain::tree::TreeConfig {
+        config: bo::engine::config::Config {
+            provider: bo::engine::llm::Provider::OpenAI,
+            model: Some("gpt-4o-mini".to_string()), // cheaper model for tests
+            compile_model: None,
+            tree: None,
+        },
+        tree_cfg: bo::domain::tree::TreeConfig {
             output_dir: output_dir.to_path_buf(),
             name: None,
             created_at: None,
         },
-        model: Some("gpt-4o-mini".to_string()), // cheaper model for tests
-        compile_model: None,
     }
 }
 

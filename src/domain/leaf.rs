@@ -68,10 +68,16 @@ pub(crate) fn format_content(
     summary: Option<&str>,
 ) -> String {
     let title_yaml = match title {
-        Some(t) => format!(
-            "\"{}\"",
-            t.as_str().replace('\\', "\\\\").replace('"', "\\\"")
-        ),
+        Some(t) => {
+            let escaped = t
+                .as_str()
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+                .replace('\t', "\\t")
+                .replace('\r', "\\r");
+            format!("\"{}\"", escaped)
+        }
         None => "\"\"".to_string(),
     };
 

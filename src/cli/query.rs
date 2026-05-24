@@ -474,7 +474,7 @@ fn compute_retrieval_diagnostics(
 /// Retrieve top-k leaves scored by term density (OR semantics).
 fn retrieve_leaves(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedLeaf>, QueryError> {
     let tree = crate::domain::tree::Tree {
-        name: None,
+        name: "unnamed".to_string(),
         created_at: None,
         output_dir: tree_dir.to_path_buf(),
     };

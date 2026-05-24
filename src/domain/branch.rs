@@ -87,6 +87,7 @@ pub(crate) fn format_content(
     };
 
     frontmatter::render(&mapping, &full_body)
+        .unwrap_or_else(|e| panic!("yaml serialization failure in branch frontmatter: {e}"))
 }
 
 #[cfg(test)]

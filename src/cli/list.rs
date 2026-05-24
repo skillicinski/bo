@@ -161,7 +161,7 @@ impl ListError {
 
 pub fn list_tree(tree_dir: &Path, options: &ListOptions) -> Result<ListResult, ListError> {
     let tree = Tree {
-        name: None,
+        name: "unnamed".to_string(),
         created_at: None,
         output_dir: tree_dir.to_path_buf(),
     };

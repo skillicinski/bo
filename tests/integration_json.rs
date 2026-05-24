@@ -21,9 +21,21 @@ fn run(home: &Path, args: &[&str]) -> Output {
 }
 
 fn parse_json(output: &Output) -> Value {
+    // JSON errors are written to stderr; success responses go to stdout.
+    // Try stdout first, then fall back to stderr.
     let stdout = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str(&stdout)
-        .unwrap_or_else(|e| panic!("stdout is not valid JSON: {e}\nstdout:\n{stdout}"))
+    if !stdout.trim().is_empty() {
+        return serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("stdout is not valid JSON: {e}\nstdout:\n{stdout}"));
+    }
+    // Stderr may contain progress messages before the JSON (e.g. "fetching...").
+    // Find the first '{' and parse from there.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json_start = stderr
+        .find('{')
+        .unwrap_or_else(|| panic!("no JSON object found in stderr:\n{stderr}"));
+    serde_json::from_str(&stderr[json_start..])
+        .unwrap_or_else(|e| panic!("stderr is not valid JSON: {e}\nstderr:\n{stderr}"))
 }
 
 fn seed_tree(home: &TempDir, name: &str) -> std::path::PathBuf {
@@ -74,7 +86,6 @@ fn json_parser_error_for_missing_subcommand() {
     let home = TempDir::new().unwrap();
     let out = run(home.path(), &["--json"]);
     assert!(!out.status.success());
-    assert!(out.stderr.is_empty());
     let parsed = parse_json(&out);
     assert_eq!(parsed["ok"], false);
     assert_eq!(parsed["command"], "bo");
@@ -219,7 +230,6 @@ fn config_json_usage_error_preserves_exit_code_and_command() {
     );
 
     assert_eq!(out.status.code(), Some(2));
-    assert!(out.stderr.is_empty());
     let parsed = parse_json(&out);
     assert_eq!(parsed["ok"], false);
     assert_eq!(parsed["command"], "config");

@@ -77,7 +77,7 @@ fn render_produces_valid_document() {
         Value::String("2025-01-01T00:00:00Z".into()),
     );
 
-    let doc = render(&m, "# My Branch\n\nBody.\n");
+    let doc = render(&m, "# My Branch\n\nBody.\n").unwrap();
     assert!(doc.starts_with("---\n"));
     assert!(doc.contains("title: My Branch"));
     assert!(doc.contains("---\n\n# My Branch"));
@@ -98,10 +98,31 @@ fn render_round_trips_through_parse() {
         Value::Sequence(vec![Value::String("a.md".into())]),
     );
 
-    let doc = render(&m, "# Test\n\nBody.\n");
+    let doc = render(&m, "# Test\n\nBody.\n").unwrap();
     let (parsed_m, body) = parse(&doc).unwrap();
     assert_eq!(parsed_m.get("title").and_then(|v| v.as_str()), Some("Test"));
     assert!(body.contains("Body."));
+}
+
+#[test]
+fn render_returns_ok_for_standard_mapping() {
+    // Standard Mapping values should always serialize successfully
+    // and round-trip through parse — no silent empty YAML on failure.
+    let mut m = Mapping::new();
+    set_field(&mut m, "count", Value::Number(42.into()));
+    set_field(&mut m, "flag", Value::Bool(true));
+    set_field(&mut m, "null_val", Value::Null);
+    let result = render(&m, "body");
+    assert!(result.is_ok());
+    let doc = result.unwrap();
+    let (parsed_m, body) = parse(&doc).unwrap();
+    assert_eq!(parsed_m.get("count").and_then(|v| v.as_i64()), Some(42));
+    assert_eq!(parsed_m.get("flag").and_then(|v| v.as_bool()), Some(true));
+    assert!(parsed_m
+        .get("null_val")
+        .map(|v| v.is_null())
+        .unwrap_or(false));
+    assert!(body.contains("body"));
 }
 
 // ── set_field tests ───────────────────────────────────────────────────────
