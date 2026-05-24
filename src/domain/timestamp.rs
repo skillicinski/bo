@@ -37,10 +37,6 @@ impl Timestamp {
     pub fn to_rfc3339_millis(&self) -> String {
         self.0.to_rfc3339_opts(SecondsFormat::Millis, true)
     }
-
-    pub fn as_datetime(&self) -> DateTime<Utc> {
-        self.0
-    }
 }
 
 impl PartialOrd for Timestamp {

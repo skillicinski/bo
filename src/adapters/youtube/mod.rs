@@ -45,27 +45,17 @@ impl fmt::Display for YoutubeError {
     }
 }
 
-pub fn collect_transcript(url: &str) -> Result<YoutubeTranscriptDocument, YoutubeError> {
-    let supported = match classify_url(url) {
-        YoutubeUrlMatch::Supported(supported) => supported,
-        YoutubeUrlMatch::Unsupported { url, reason } => {
-            return Err(YoutubeError::UnsupportedUrl { url, reason })
-        }
-        YoutubeUrlMatch::NotYoutube => {
-            return Err(YoutubeError::UnsupportedUrl {
-                url: url.to_string(),
-                reason: "not a YouTube URL".to_string(),
-            })
-        }
-    };
-
-    fetch_supported_transcript(&supported)
+pub fn collect_transcript(
+    youtube_url: &SupportedYoutubeUrl,
+) -> Result<YoutubeTranscriptDocument, YoutubeError> {
+    fetch_supported_transcript(youtube_url)
 }
 
 pub fn fetch_supported_transcript(
     supported: &SupportedYoutubeUrl,
 ) -> Result<YoutubeTranscriptDocument, YoutubeError> {
-    let player = innertube::fetch_player_response(supported.video_id())?;
+    let client = innertube::build_client()?;
+    let player = innertube::fetch_player_response(&client, supported.video_id())?;
     innertube::ensure_playable(&player)?;
 
     let title = player
@@ -77,7 +67,7 @@ pub fn fetch_supported_transcript(
 
     let track = innertube::select_english_caption_track(&player.caption_tracks())
         .ok_or(YoutubeError::NoEnglishCaptions)?;
-    let xml = innertube::fetch_caption_xml(&track.base_url)?;
+    let xml = innertube::fetch_caption_xml(&client, &track.base_url)?;
     let body_markdown = transcript::parse_transcript_markdown(&xml)?;
 
     Ok(YoutubeTranscriptDocument {

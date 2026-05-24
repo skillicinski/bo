@@ -76,7 +76,6 @@ fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
         title: Title::new(slug),
         created_at: Timestamp::parse(created_at).unwrap(),
         updated_at: Timestamp::parse(created_at).unwrap(),
-        stale: false,
         leaves: vec![Slug::parse("some-leaf").unwrap()],
     });
     m.tree.last_compiled_at = Some(Timestamp::parse(created_at).unwrap());

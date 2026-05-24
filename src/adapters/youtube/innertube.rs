@@ -83,8 +83,10 @@ struct PlayerClient<'a> {
     hl: &'a str,
 }
 
-pub fn fetch_player_response(video_id: &str) -> Result<PlayerResponse, YoutubeError> {
-    let client = build_client()?;
+pub fn fetch_player_response(
+    client: &Client,
+    video_id: &str,
+) -> Result<PlayerResponse, YoutubeError> {
     let request = PlayerRequest {
         video_id,
         context: PlayerContext {
@@ -116,8 +118,7 @@ pub fn fetch_player_response(video_id: &str) -> Result<PlayerResponse, YoutubeEr
         .map_err(|e| YoutubeError::Player(format!("invalid InnerTube response: {e}")))
 }
 
-pub fn fetch_caption_xml(base_url: &str) -> Result<String, YoutubeError> {
-    let client = build_client()?;
+pub fn fetch_caption_xml(client: &Client, base_url: &str) -> Result<String, YoutubeError> {
     let response = client
         .get(base_url)
         .header(reqwest::header::USER_AGENT, ANDROID_USER_AGENT)
@@ -171,7 +172,7 @@ pub fn select_english_caption_track(tracks: &[CaptionTrack]) -> Option<CaptionTr
         .cloned()
 }
 
-fn build_client() -> Result<Client, YoutubeError> {
+pub(crate) fn build_client() -> Result<Client, YoutubeError> {
     Client::builder()
         .timeout(Duration::from_secs(TIMEOUT_SECONDS))
         .build()

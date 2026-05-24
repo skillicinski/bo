@@ -48,6 +48,19 @@ fn supports_short_urls_without_canonicalizing() {
 }
 
 #[test]
+fn supports_www_youtu_be_short_urls() {
+    let result = supported("https://www.youtu.be/a1mhk7mAetk");
+    assert_eq!(result.video_id(), "a1mhk7mAetk");
+
+    let result = supported("http://www.youtu.be/a1mhk7mAetk");
+    assert_eq!(result.video_id(), "a1mhk7mAetk");
+
+    // Regression: plain youtu.be still works
+    let result = supported("https://youtu.be/a1mhk7mAetk");
+    assert_eq!(result.video_id(), "a1mhk7mAetk");
+}
+
+#[test]
 fn supports_shorts_urls() {
     let result = supported("https://www.youtube.com/shorts/a1mhk7mAetk?feature=share");
     assert_eq!(result.video_id(), "a1mhk7mAetk");

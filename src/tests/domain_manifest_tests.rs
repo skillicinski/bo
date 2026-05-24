@@ -1,8 +1,6 @@
 use super::*;
-use crate::domain::tree::{Tree, TreeConfig};
 use crate::domain::{Slug, Timestamp, Title, Url};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tempfile::TempDir;
 
 fn sample_manifest() -> Manifest {
@@ -26,7 +24,6 @@ fn sample_manifest() -> Manifest {
             title: Title::new("Memory Safety"),
             created_at: Timestamp::parse("2026-05-19T14:32:11.000Z").unwrap(),
             updated_at: Timestamp::parse("2026-05-19T14:32:11.000Z").unwrap(),
-            stale: false,
             leaves: vec![Slug::parse("ownership-and-borrowing").unwrap()],
         }],
     }
@@ -45,10 +42,6 @@ fn empty_manifest() -> Manifest {
 }
 
 fn resolution_fixture() -> Manifest {
-    // last compile at T=15:00
-    // alpha + beta collected before → "compiled"
-    // gamma collected after  → "uncompiled"
-    // topic-x: [alpha, beta], topic-y: [beta] (shared with topic-x)
     Manifest {
         tree: TreeMeta {
             name: "fixture".to_string(),
@@ -88,7 +81,6 @@ fn resolution_fixture() -> Manifest {
                 title: Title::new("Topic X"),
                 created_at: Timestamp::parse("2026-05-19T15:00:00Z").unwrap(),
                 updated_at: Timestamp::parse("2026-05-19T15:00:00Z").unwrap(),
-                stale: false,
                 leaves: vec![Slug::parse("alpha").unwrap(), Slug::parse("beta").unwrap()],
             },
             BranchRecord {
@@ -97,7 +89,6 @@ fn resolution_fixture() -> Manifest {
                 title: Title::new("Topic Y"),
                 created_at: Timestamp::parse("2026-05-19T15:00:00Z").unwrap(),
                 updated_at: Timestamp::parse("2026-05-19T15:00:00Z").unwrap(),
-                stale: false,
                 leaves: vec![Slug::parse("beta").unwrap()],
             },
         ],
@@ -157,38 +148,9 @@ fn uncompiled_leaves_empty_when_all_predate_last_compile() {
 }
 
 #[test]
-fn stale_branches_empty_when_no_branch_marked_stale() {
-    let m = resolution_fixture();
-    assert!(m.stale_branches().is_empty());
-}
-
-#[test]
-fn stale_branches_returns_marked_records() {
-    let mut m = resolution_fixture();
-    m.branches[0].stale = true;
-    let stale = m.stale_branches();
-    assert_eq!(stale.len(), 1);
-    assert_eq!(stale[0].slug.as_str(), "topic-x");
-}
-
-#[test]
-fn leaves_for_branch_resolves_slugs_to_records() {
-    let m = resolution_fixture();
-    let leaves = m.leaves_for_branch_str("topic-x");
-    let slugs: Vec<&str> = leaves.iter().map(|l| l.slug.as_str()).collect();
-    assert_eq!(slugs, vec!["alpha", "beta"]);
-}
-
-#[test]
-fn leaves_for_branch_returns_empty_for_unknown_branch() {
-    let m = resolution_fixture();
-    assert!(m.leaves_for_branch_str("missing").is_empty());
-}
-
-#[test]
 fn branches_for_leaf_returns_multiple_when_shared() {
     let m = resolution_fixture();
-    let branches = m.branches_for_leaf_str("beta");
+    let branches = m.branches_for_leaf(&Slug::parse("beta").unwrap());
     let slugs: Vec<&str> = branches.iter().map(|b| b.slug.as_str()).collect();
     assert_eq!(slugs, vec!["topic-x", "topic-y"]);
 }
@@ -196,7 +158,7 @@ fn branches_for_leaf_returns_multiple_when_shared() {
 #[test]
 fn branches_for_leaf_returns_singleton_when_only_one_branch_owns_it() {
     let m = resolution_fixture();
-    let branches = m.branches_for_leaf_str("alpha");
+    let branches = m.branches_for_leaf(&Slug::parse("alpha").unwrap());
     let slugs: Vec<&str> = branches.iter().map(|b| b.slug.as_str()).collect();
     assert_eq!(slugs, vec!["topic-x"]);
 }
@@ -204,191 +166,9 @@ fn branches_for_leaf_returns_singleton_when_only_one_branch_owns_it() {
 #[test]
 fn branches_for_leaf_returns_empty_for_unknown_leaf() {
     let m = resolution_fixture();
-    assert!(m.branches_for_leaf_str("nope").is_empty());
-}
-
-// ── reconstruction (T2.1) ───────────────────────────────────────────────────────
-
-fn write_secondary_tree(root: &Path) {
-    let bo_dir = root.join(".bo");
-    fs::create_dir_all(&bo_dir).unwrap();
-
-    // Three leaves: alpha, beta, gamma. alpha+beta in branch topic-x;
-    // beta also in branch topic-y; gamma uncompiled.
-    let index = r#"{"file":"alpha.md","title":"Alpha","url":"https://example.com/a"}
-{"file":"beta.md","title":"Beta","url":"https://example.com/b"}
-{"file":"gamma.md","title":"Gamma","url":"https://example.com/g"}
-"#;
-    fs::write(bo_dir.join("index.jsonl"), index).unwrap();
-
-    let leaf = |slug: &str, title: &str, url: &str, collected_at: &str, summary: Option<&str>| {
-        let mut s = String::new();
-        s.push_str("---\n");
-        s.push_str(&format!("title: \"{title}\"\n"));
-        s.push_str(&format!("url: {url}\n"));
-        s.push_str(&format!("collected_at: {collected_at}\n"));
-        s.push_str(&format!("updated_at: {collected_at}\n"));
-        if let Some(sum) = summary {
-            s.push_str(&format!("summary: \"{sum}\"\n"));
-        }
-        s.push_str("---\n\n# ");
-        s.push_str(title);
-        s.push_str("\n\nbody.\n");
-        fs::write(root.join(format!("{slug}.md")), s).unwrap();
-    };
-    leaf(
-        "alpha",
-        "Alpha",
-        "https://example.com/a",
-        "2026-05-19T14:00:00Z",
-        Some("sum-alpha"),
-    );
-    leaf(
-        "beta",
-        "Beta",
-        "https://example.com/b",
-        "2026-05-19T14:30:00Z",
-        None,
-    );
-    leaf(
-        "gamma",
-        "Gamma",
-        "https://example.com/g",
-        "2026-05-19T16:00:00Z",
-        Some("sum-gamma"),
-    );
-
-    // Two branches.
-    let branches_dir = root.join("branches");
-    fs::create_dir_all(&branches_dir).unwrap();
-    let branch = |slug: &str, title: &str, created_at: &str, updated_at: &str, leaves: &[&str]| {
-        let mut s = String::new();
-        s.push_str("---\n");
-        s.push_str(&format!("title: {title}\n"));
-        s.push_str(&format!("created_at: {created_at}\n"));
-        s.push_str(&format!("updated_at: {updated_at}\n"));
-        s.push_str("leaves:\n");
-        for l in leaves {
-            s.push_str(&format!("- {l}\n"));
-        }
-        s.push_str("---\n\n# ");
-        s.push_str(title);
-        s.push_str("\n\nbody.\n");
-        fs::write(branches_dir.join(format!("{slug}.md")), s).unwrap();
-    };
-    branch(
-        "topic-x",
-        "Topic X",
-        "2026-05-19T15:00:00Z",
-        "2026-05-19T15:00:00Z",
-        &["alpha.md", "beta.md"],
-    );
-    branch(
-        "topic-y",
-        "Topic Y",
-        "2026-05-19T15:30:00Z",
-        "2026-05-19T15:30:00Z",
-        &["beta.md"],
-    );
-}
-
-fn fixture_tree(td: &TempDir) -> Tree {
-    Tree::from_config(&TreeConfig {
-        output_dir: PathBuf::from(td.path()),
-        name: Some("fixture".to_string()),
-        created_at: Some("2026-05-19T13:00:00Z".to_string()),
-    })
-}
-
-#[test]
-fn read_or_reconstruct_returns_existing_manifest_when_present() {
-    let dir = TempDir::new().unwrap();
-    let tree = fixture_tree(&dir);
-    let original = sample_manifest();
-    write(&tree.manifest_path(), &original).unwrap();
-
-    let loaded = read_or_reconstruct(&tree).unwrap();
-
-    assert_eq!(loaded, original);
-}
-
-#[test]
-fn read_or_reconstruct_does_not_rebuild_from_secondary_when_manifest_absent() {
-    let dir = TempDir::new().unwrap();
-    write_secondary_tree(dir.path());
-    let tree = fixture_tree(&dir);
-
-    let err = read_or_reconstruct(&tree).unwrap_err();
-
-    assert!(matches!(err, ManifestError::TreeNotInitialized));
-    assert!(!tree.manifest_path().exists());
-}
-
-#[test]
-fn read_or_reconstruct_does_not_persist_when_manifest_absent() {
-    let dir = TempDir::new().unwrap();
-    write_secondary_tree(dir.path());
-    let tree = fixture_tree(&dir);
-
-    assert!(!tree.manifest_path().exists());
-
-    let err = read_or_reconstruct(&tree).unwrap_err();
-
-    assert!(matches!(err, ManifestError::TreeNotInitialized));
-    assert!(!tree.manifest_path().exists());
-}
-
-#[test]
-fn read_or_reconstruct_returns_tree_not_initialized_when_secondary_also_empty() {
-    let dir = TempDir::new().unwrap();
-    let tree = fixture_tree(&dir);
-    fs::create_dir_all(dir.path().join(".bo")).unwrap();
-
-    let err = read_or_reconstruct(&tree).unwrap_err();
-    assert!(
-        matches!(err, ManifestError::TreeNotInitialized),
-        "got: {err}"
-    );
-}
-
-#[test]
-fn read_or_reconstruct_propagates_parse_error_without_reconstructing() {
-    let dir = TempDir::new().unwrap();
-    write_secondary_tree(dir.path()); // ensure secondary exists
-    let tree = fixture_tree(&dir);
-    fs::create_dir_all(tree.manifest_path().parent().unwrap()).unwrap();
-    fs::write(tree.manifest_path(), "{not valid").unwrap();
-
-    let err = read_or_reconstruct(&tree).unwrap_err();
-    assert!(matches!(err, ManifestError::Parse(_)), "got: {err}");
-    // The corrupt file should still be on disk — we did not silently overwrite.
-    let raw = fs::read_to_string(tree.manifest_path()).unwrap();
-    assert_eq!(raw, "{not valid");
-}
-
-#[test]
-fn missing_manifest_does_not_use_tree_name_fallbacks() {
-    let dir = TempDir::new().unwrap();
-    write_secondary_tree(dir.path());
-    let tree = Tree::from_config(&TreeConfig {
-        output_dir: PathBuf::from(dir.path()),
-        name: None,
-        created_at: Some("2026-05-19T13:00:00Z".to_string()),
-    });
-
-    let err = read_or_reconstruct(&tree).unwrap_err();
-    assert!(matches!(err, ManifestError::TreeNotInitialized));
-}
-
-#[test]
-fn missing_manifest_does_not_round_trip_secondary_store() {
-    let dir = TempDir::new().unwrap();
-    write_secondary_tree(dir.path());
-    let tree = fixture_tree(&dir);
-
-    let err = read_or_reconstruct(&tree).unwrap_err();
-    assert!(matches!(err, ManifestError::TreeNotInitialized));
-    assert!(read(&tree.manifest_path()).is_err());
+    assert!(m
+        .branches_for_leaf(&Slug::parse("nope").unwrap())
+        .is_empty());
 }
 
 // ── round-trip ───────────────────────────────────────────────────────────────
@@ -423,7 +203,6 @@ fn round_trip_full_manifest_preserves_all_fields() {
         loaded.branches[0].updated_at.to_string(),
         "2026-05-19T14:32:11.000Z"
     );
-    assert!(!loaded.branches[0].stale);
     assert_eq!(
         loaded.leaves[0].summary.as_deref(),
         Some("Rust's ownership rules.")
@@ -436,7 +215,7 @@ fn write_produces_pretty_printed_json() {
     let path = dir.path().join(".bo/manifest.json");
     write(&path, &sample_manifest()).unwrap();
 
-    let content = fs::read_to_string(&path).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
     // Pretty-printed JSON has line breaks and indentation.
     assert!(content.contains('\n'));
     assert!(content.contains("  \"tree\""));
@@ -474,7 +253,7 @@ fn write_does_not_leak_tmp_file_on_success() {
 
     let tmp_path = format!("{}.tmp", path.display());
     assert!(
-        !Path::new(&tmp_path).exists(),
+        !PathBuf::from(&tmp_path).exists(),
         "tmp file leaked: {tmp_path}"
     );
     assert!(path.exists());
@@ -514,8 +293,8 @@ fn write_panics_on_duplicate_branch_slugs_in_debug() {
 fn read_returns_parse_error_on_invalid_json() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join(".bo/manifest.json");
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(&path, "{not valid json").unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "{not valid json").unwrap();
 
     let err = read(&path).unwrap_err();
     assert!(matches!(err, ManifestError::Parse(_)), "got: {err}");

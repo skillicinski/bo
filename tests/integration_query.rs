@@ -232,11 +232,12 @@ fn full_pipeline_with_mock_provider() {
         &["rust-ownership", "nonexistent"],
     );
 
-    let result = query::run_with_provider(
+    let result = query::run_with_provider_and_policy(
         dir.path(),
         "how does Rust handle memory safety?",
         &provider,
         &test_model(),
+        query::QUERY_LLM_POLICY,
     )
     .unwrap();
 
@@ -270,15 +271,16 @@ fn json_output_is_schema_conformant() {
 
     let provider = MockProvider::new("Ownership is key [[rust-ownership]].", &["rust-ownership"]);
 
-    let result = query::run_with_provider(
+    let result = query::run_with_provider_and_policy(
         dir.path(),
         "what is ownership in Rust?",
         &provider,
         &test_model(),
+        query::QUERY_LLM_POLICY,
     )
     .unwrap();
 
-    let json_str = query::render_json(&result).unwrap();
+    let json_str = serde_json::to_string_pretty(&result).unwrap();
     let parsed: Value = serde_json::from_str(&json_str).unwrap();
 
     // Required fields present
@@ -304,11 +306,12 @@ fn no_relevant_sources_returns_error() {
 
     let provider = MockProvider::new("unused", &[]);
 
-    let err = query::run_with_provider(
+    let err = query::run_with_provider_and_policy(
         dir.path(),
         "quantum computing entanglement",
         &provider,
         &test_model(),
+        query::QUERY_LLM_POLICY,
     )
     .unwrap_err();
 
@@ -322,8 +325,14 @@ fn all_stop_words_returns_no_terms_error() {
 
     let provider = MockProvider::new("unused", &[]);
 
-    let err =
-        query::run_with_provider(dir.path(), "what is it?", &provider, &test_model()).unwrap_err();
+    let err = query::run_with_provider_and_policy(
+        dir.path(),
+        "what is it?",
+        &provider,
+        &test_model(),
+        query::QUERY_LLM_POLICY,
+    )
+    .unwrap_err();
 
     assert!(matches!(err, query::QueryError::NoTerms));
     assert_eq!(err.exit_code(), 2);
@@ -353,7 +362,14 @@ fn single_leaf_tree_works() {
 
     let provider = MockProvider::new("Rust focuses on safety [[only-leaf]].", &["only-leaf"]);
 
-    let result = query::run_with_provider(tree, "what is Rust?", &provider, &test_model()).unwrap();
+    let result = query::run_with_provider_and_policy(
+        tree,
+        "what is Rust?",
+        &provider,
+        &test_model(),
+        query::QUERY_LLM_POLICY,
+    )
+    .unwrap();
 
     assert_eq!(result.citations.len(), 1);
     assert_eq!(result.citations[0].slug.as_str(), "only-leaf");
@@ -370,9 +386,14 @@ fn leaf_without_summary_still_retrieved() {
         &["rust-traits"],
     );
 
-    let result =
-        query::run_with_provider(dir.path(), "explain Rust traits", &provider, &test_model())
-            .unwrap();
+    let result = query::run_with_provider_and_policy(
+        dir.path(),
+        "explain Rust traits",
+        &provider,
+        &test_model(),
+        query::QUERY_LLM_POLICY,
+    )
+    .unwrap();
 
     assert_eq!(result.citations.len(), 1);
     assert_eq!(result.citations[0].slug.as_str(), "rust-traits");
@@ -386,11 +407,12 @@ fn zero_citations_returns_insufficient_sources() {
     let provider = MockProvider::new("The PMNS matrix describes neutrino mixing parameters.", &[]);
 
     // "rust ownership" will match leaves, but provider returns zero citations
-    let err = query::run_with_provider(
+    let err = query::run_with_provider_and_policy(
         dir.path(),
         "what is Rust ownership?",
         &provider,
         &test_model(),
+        query::QUERY_LLM_POLICY,
     )
     .unwrap_err();
 
@@ -410,11 +432,12 @@ fn live_api_query() {
     let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
 
     let provider = bo::engine::llm::OpenAiProvider::new(&api_key);
-    let result = query::run_with_provider(
+    let result = query::run_with_provider_and_policy(
         dir.path(),
         "how does Rust ensure memory safety without a garbage collector?",
         &provider,
         &test_model(),
+        query::QUERY_LLM_POLICY,
     )
     .unwrap();
 

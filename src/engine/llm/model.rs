@@ -6,7 +6,6 @@
 
 use super::models::ModelInfo;
 use super::{models, Provider};
-use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// A validated model identifier known to be in the provider's supported set.
@@ -48,12 +47,6 @@ impl Model {
         Ok(Self { info })
     }
 
-    /// The default model (`gpt-4.1-mini`).
-    pub fn default_model() -> Self {
-        Self::parse(models::DEFAULT_MODEL, Provider::OpenAI)
-            .expect("default model must be in supported set")
-    }
-
     /// The raw model identifier string.
     pub fn as_str(&self) -> &str {
         self.info.id
@@ -74,19 +67,6 @@ impl fmt::Display for Model {
 impl PartialEq<&str> for Model {
     fn eq(&self, other: &&str) -> bool {
         self.info.id == *other
-    }
-}
-
-impl Serialize for Model {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.info.id)
-    }
-}
-
-impl<'de> Deserialize<'de> for Model {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(deserializer)?;
-        Self::parse(&s, Provider::OpenAI).map_err(|e| serde::de::Error::custom(e.to_string()))
     }
 }
 

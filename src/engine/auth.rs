@@ -27,7 +27,8 @@ impl fmt::Display for AuthError {
 }
 
 pub fn auth_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let home = std::env::var("HOME")
+        .expect("$HOME environment variable must be set to locate bo configuration");
     PathBuf::from(home).join(".bo").join("auth.json")
 }
 

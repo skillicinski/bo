@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::engine::llm::{FinishReason, LlmError, LlmProvider, LlmResponse, Message, Role};
+use crate::engine::llm::{
+    sanitize_provider_error_message, FinishReason, LlmError, LlmProvider, LlmResponse, Message,
+    Role,
+};
 
 pub struct DeepSeekProvider {
     client: reqwest::Client,
@@ -119,7 +122,7 @@ impl LlmProvider for DeepSeekProvider {
 
         // 5. Parse response JSON.
         let response_json: Value = serde_json::from_str(&response_text).map_err(|e| {
-            let sanitized = sanitize_error_message(&response_text);
+            let sanitized = sanitize_provider_error_message(&response_text);
             LlmError::Parse(format!("{}; body: {}", e, sanitized))
         })?;
 
@@ -150,12 +153,12 @@ impl LlmProvider for DeepSeekProvider {
 // ── error mapping ─────────────────────────────────────────────────────────────
 
 fn map_reqwest_error(error: &reqwest::Error) -> LlmError {
-    let message = sanitize_error_message(&error.to_string());
+    let message = sanitize_provider_error_message(&error.to_string());
     LlmError::Network(message)
 }
 
 fn map_http_error(status: reqwest::StatusCode, body: &str) -> LlmError {
-    let sanitized = sanitize_error_message(body);
+    let sanitized = sanitize_provider_error_message(body);
     let message = if sanitized.is_empty() {
         format!("HTTP {}", status.as_u16())
     } else {
@@ -169,20 +172,6 @@ fn map_http_error(status: reqwest::StatusCode, body: &str) -> LlmError {
     } else {
         LlmError::Server(message)
     }
-}
-
-fn sanitize_error_message(message: &str) -> String {
-    message
-        .split_whitespace()
-        .map(|token| {
-            if token.contains("sk-") {
-                "<redacted>".to_string()
-            } else {
-                token.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 #[cfg(test)]

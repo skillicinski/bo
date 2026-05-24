@@ -1,6 +1,5 @@
 use super::*;
 use crate::domain::{Slug, Timestamp, Title, Url};
-use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::time::SystemTime;
 use tempfile::TempDir;
@@ -345,7 +344,6 @@ fn render_human_branch_centric_formats_nested_leaves() {
                 slug: "topic-x".to_string(),
                 title: "Topic X".to_string(),
                 updated_at: Some("2025-01-01T00:00:00.000Z".to_string()),
-                stale: false,
                 leaves: vec![leaf_row(
                     "alpha",
                     "alpha.md",
@@ -390,14 +388,12 @@ fn render_human_branches_view() {
                     title: "Topic X".to_string(),
                     leaf_count: 3,
                     updated_at: Some("2025-01-01T00:00:00.000Z".to_string()),
-                    stale: false,
                 },
                 BranchRow {
                     slug: "topic-y".to_string(),
                     title: "Topic Y".to_string(),
                     leaf_count: 1,
                     updated_at: Some("2025-01-02T00:00:00.000Z".to_string()),
-                    stale: true,
                 },
             ],
         },
@@ -415,7 +411,6 @@ fn render_human_branches_view() {
         rendered.contains("topic-y | Topic Y | 1 leaves"),
         "{rendered}"
     );
-    assert!(rendered.contains("⚠ stale"), "{rendered}");
 }
 
 #[test]
@@ -532,78 +527,6 @@ fn render_human_branch_centric_no_branches_no_matches_message() {
 }
 
 #[test]
-fn render_json_leaves_parseable_and_omits_index_position() {
-    let result = ListResult {
-        view: ListView::Leaves {
-            items: vec![leaf_row(
-                "alpha",
-                "alpha.md",
-                "Alpha",
-                Some("2025-06-01T10:00:00.000Z"),
-                &["branch-a"],
-                true,
-                &["missing file"],
-                7,
-            )],
-        },
-        total_branches: 1,
-        total_leaves: 1,
-        branch_filter: Some("branch-a".to_string()),
-    };
-
-    let rendered = render_json(&result).unwrap();
-    let parsed: JsonValue = serde_json::from_str(&rendered).unwrap();
-
-    assert!(rendered.contains('\n'));
-    assert_eq!(parsed["view"]["mode"], "Leaves");
-    let row = &parsed["view"]["items"][0];
-    assert_eq!(row["slug"], "alpha");
-    assert_eq!(row["file"], "alpha.md");
-    assert_eq!(row["display_title"], "Alpha");
-    assert_eq!(row["collected_at"], "2025-06-01T10:00:00.000Z");
-    assert_eq!(row["branches"][0], "branch-a");
-    assert_eq!(row["branch_count"], 1);
-    assert_eq!(row["degraded"], true);
-    assert_eq!(row["degradation_reasons"][0], "missing file");
-    assert!(row.get("index_position").is_none());
-}
-
-#[test]
-fn render_json_branch_centric_has_mode_tag() {
-    let result = ListResult {
-        view: ListView::BranchCentric {
-            branches: vec![BranchWithLeaves {
-                slug: "topic-x".to_string(),
-                title: "Topic X".to_string(),
-                updated_at: Some("2025-01-01T00:00:00.000Z".to_string()),
-                stale: false,
-                leaves: vec![leaf_row(
-                    "alpha",
-                    "alpha.md",
-                    "Alpha",
-                    Some("2025-06-01T10:00:00.000Z"),
-                    &["topic-x"],
-                    false,
-                    &[],
-                    0,
-                )],
-            }],
-            unbranched: Vec::new(),
-        },
-        total_branches: 1,
-        total_leaves: 1,
-        branch_filter: None,
-    };
-
-    let rendered = render_json(&result).unwrap();
-    let parsed: JsonValue = serde_json::from_str(&rendered).unwrap();
-    assert_eq!(parsed["view"]["mode"], "BranchCentric");
-    assert_eq!(parsed["view"]["branches"][0]["slug"], "topic-x");
-    assert_eq!(parsed["view"]["branches"][0]["title"], "Topic X");
-    assert_eq!(parsed["view"]["branches"][0]["leaves"][0]["slug"], "alpha");
-}
-
-#[test]
 fn terms_filters_leaves_by_title_and_slug() {
     let dir = TempDir::new().unwrap();
     write_manifest(
@@ -716,7 +639,6 @@ fn degraded_leaves_collects_from_branch_centric() {
                 slug: "topic-x".to_string(),
                 title: "Topic X".to_string(),
                 updated_at: Some("2025-01-01T00:00:00.000Z".to_string()),
-                stale: false,
                 leaves: vec![leaf_row(
                     "alpha",
                     "alpha.md",
@@ -759,7 +681,6 @@ fn degraded_leaves_empty_for_branches_view() {
                 title: "Topic X".to_string(),
                 leaf_count: 1,
                 updated_at: Some("2025-01-01T00:00:00.000Z".to_string()),
-                stale: false,
             }],
         },
         total_branches: 1,
@@ -793,7 +714,6 @@ fn write_manifest(tree_dir: &Path, leaves: &[LeafRecord], branches: &[(&str, &[&
             title: Title::new(slug),
             created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             updated_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
-            stale: false,
             leaves: leaf_slugs.iter().map(|s| Slug::parse(s).unwrap()).collect(),
         })
         .collect();

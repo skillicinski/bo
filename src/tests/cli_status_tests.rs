@@ -49,7 +49,6 @@ fn branch_record(slug: &str, ts: &str, leaf_slugs: &[&str]) -> BranchRecord {
         title: Title::new(slug),
         created_at: Timestamp::parse(ts).unwrap(),
         updated_at: Timestamp::parse(ts).unwrap(),
-        stale: false,
         leaves: leaf_slugs.iter().map(|s| Slug::parse(s).unwrap()).collect(),
     }
 }

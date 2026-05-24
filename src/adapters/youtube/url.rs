@@ -68,7 +68,7 @@ pub fn classify_url(input: &str) -> YoutubeUrlMatch {
         return YoutubeUrlMatch::NotYoutube;
     };
 
-    if host == "youtu.be" {
+    if host == "youtu.be" || host == "www.youtu.be" {
         return classify_youtu_be(parsed);
     }
 

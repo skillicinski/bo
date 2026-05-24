@@ -87,7 +87,6 @@ fn stage_tree(home: &Path) -> std::path::PathBuf {
             title: Title::new("topic-x"),
             created_at: Timestamp::parse("2026-01-02T10:00:00Z").unwrap(),
             updated_at: Timestamp::parse("2026-01-02T10:00:00Z").unwrap(),
-            stale: false,
             leaves: vec![Slug::parse("alpha").unwrap(), Slug::parse("beta").unwrap()],
         }],
     };
@@ -116,7 +115,7 @@ fn manifest_only_reads_work_without_secondary_store() {
 
     assert_eq!(status["leaves"]["total"], 3);
     assert_eq!(list["total_leaves"], 3);
-    assert_eq!(show["leaf"]["file"], "alpha.md");
+    assert_eq!(show["file"], "alpha.md");
 }
 
 #[test]
@@ -130,7 +129,7 @@ fn missing_manifest_is_not_reconstructed() {
     let out = run(tmp.path(), &["status", "--json"]);
     assert!(!out.status.success());
 
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stdout = String::from_utf8_lossy(&out.stderr);
     let json: Value = serde_json::from_str(&stdout).expect("output is JSON");
     assert_eq!(json["error"]["code"], "io_error");
     assert!(!tree_dir.join(".bo/manifest.json").exists());

@@ -2,22 +2,11 @@
 
 use crate::domain::frontmatter;
 use crate::domain::manifest::Manifest;
+use crate::engine::summary;
 use std::fs;
 use std::path::Path;
 
-// ── constants ────────────────────────────────────────────────────────────────
-
-const SUMMARY_FALLBACK_WORDS: usize = 200;
-
 // ── public types ─────────────────────────────────────────────────────────────
-
-/// How to score term matches against leaves.
-pub enum ScoringPolicy {
-    /// AND semantics: leaf must contain ALL terms. Score = sum of occurrences * 1000 / word_count.
-    AllTermsRequired,
-    /// OR semantics: any term hit counts. Score = sum of occurrences * 1000 / word_count.
-    AnyTermCounts,
-}
 
 /// A leaf scored against a set of query terms.
 pub struct ScoredLeaf {
@@ -37,13 +26,9 @@ pub struct ScoredLeaf {
 /// Score all leaves in a manifest against the given terms.
 ///
 /// Reads leaf files from `tree_dir`. Skips missing/unreadable/malformed files.
+/// Uses OR semantics: any term hit counts. Score = sum of occurrences * 1000 / word_count.
 /// Returns only leaves with score > 0, unsorted (caller sorts).
-pub fn score_corpus(
-    tree_dir: &Path,
-    manifest: &Manifest,
-    terms: &[String],
-    policy: ScoringPolicy,
-) -> Vec<ScoredLeaf> {
+pub fn score_corpus(tree_dir: &Path, manifest: &Manifest, terms: &[String]) -> Vec<ScoredLeaf> {
     let mut results = Vec::new();
 
     for (index_position, leaf) in manifest.leaves.iter().enumerate() {
@@ -55,12 +40,7 @@ pub fn score_corpus(
 
         let body = match frontmatter::parse(&content) {
             Ok((_, body)) => body,
-            Err(_) => match policy {
-                // search: fall back to full content for malformed files
-                ScoringPolicy::AllTermsRequired => content.clone(),
-                // query: skip malformed leaves entirely
-                ScoringPolicy::AnyTermCounts => continue,
-            },
+            Err(_) => continue,
         };
 
         let title = if leaf.title.as_str().trim().is_empty() {
@@ -72,7 +52,7 @@ pub fn score_corpus(
         let summary = leaf
             .summary
             .clone()
-            .unwrap_or_else(|| summary_fallback(&body));
+            .unwrap_or_else(|| summary::generate_fallback(&body));
 
         let searchable = format!("{} {} {}", title, summary, body).to_lowercase();
         let word_count = searchable.split_whitespace().count();
@@ -85,13 +65,7 @@ pub fn score_corpus(
             .map(|term| searchable.matches(term.as_str()).count())
             .sum();
 
-        let dominated = match policy {
-            ScoringPolicy::AllTermsRequired => {
-                // All terms must appear in the searchable text
-                !terms.iter().all(|term| searchable.contains(term.as_str()))
-            }
-            ScoringPolicy::AnyTermCounts => total_hits == 0,
-        };
+        let dominated = total_hits == 0;
 
         if dominated {
             continue;
@@ -122,17 +96,6 @@ pub fn score_corpus(
     }
 
     results
-}
-
-// ── private helpers ──────────────────────────────────────────────────────────
-
-fn summary_fallback(body: &str) -> String {
-    let words: Vec<&str> = body.split_whitespace().collect();
-    if words.len() <= SUMMARY_FALLBACK_WORDS {
-        words.join(" ")
-    } else {
-        words[..SUMMARY_FALLBACK_WORDS].join(" ")
-    }
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────

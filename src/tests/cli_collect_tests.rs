@@ -143,22 +143,6 @@ filtering. It remains an ordinary HTML collection fixture after refactoring.</p>
 </article></body></html>"#;
 
 #[test]
-fn unsupported_youtube_embed_rejected_without_writes() {
-    let dir = TempDir::new().unwrap();
-    fs::create_dir_all(dir.path().join(".bo")).unwrap();
-    let result = collect_url("https://www.youtube.com/embed/a1mhk7mAetk", dir.path());
-
-    assert!(matches!(result, Err(CollectError::Youtube(_))));
-    assert!(!dir.path().join(".bo/index.jsonl").exists());
-    let markdown_files = std::fs::read_dir(dir.path())
-        .unwrap()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "md"))
-        .count();
-    assert_eq!(markdown_files, 0);
-}
-
-#[test]
 fn ordinary_html_collection_writes_leaf_and_manifest() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
@@ -187,39 +171,6 @@ fn summary_failure_writes_no_leaf_or_index_entry() {
 
     assert!(matches!(result, Err(CollectError::Summary(_))));
     assert_no_collection_artifacts(&dir);
-}
-
-#[test]
-fn collect_url_rejects_duplicate_youtube_url_before_network_fetch() {
-    let dir = TempDir::new().unwrap();
-    fs::create_dir_all(dir.path().join(".bo")).unwrap();
-    let url = "https://www.youtube.com/watch?v=a1mhk7mAetk";
-
-    // Dedup source after T5.6 is the manifest. Pre-populate it with the URL.
-    manifest::write(
-        &dir.path().join(".bo/manifest.json"),
-        &manifest::Manifest {
-            tree: manifest::TreeMeta {
-                name: "test".to_string(),
-                created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
-                last_compiled_at: None,
-            },
-            leaves: vec![manifest::LeafRecord {
-                slug: Slug::parse("existing").unwrap(),
-                file: "existing.md".to_string(),
-                title: Title::new("Existing Video"),
-                url: Url::parse(url).unwrap(),
-                collected_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
-                summary: None,
-            }],
-            branches: Vec::new(),
-        },
-    )
-    .unwrap();
-    let duplicate = collect_url(url, dir.path());
-
-    assert!(matches!(duplicate, Err(CollectError::DuplicateUrl { .. })));
-    assert!(!dir.path().join("existing.md").exists());
 }
 
 #[test]

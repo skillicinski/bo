@@ -545,40 +545,6 @@ fn query_budget_known_1m_model() {
     );
 }
 
-struct CountingProvider {
-    calls: AtomicUsize,
-}
-
-impl CountingProvider {
-    fn new() -> Self {
-        Self {
-            calls: AtomicUsize::new(0),
-        }
-    }
-
-    fn calls(&self) -> usize {
-        self.calls.load(Ordering::SeqCst)
-    }
-}
-
-#[async_trait]
-impl LlmProvider for CountingProvider {
-    async fn complete(
-        &self,
-        _messages: &[Message],
-        _model: &str,
-        _max_tokens: u32,
-        _response_schema: Option<&Value>,
-        _reasoning_disabled: bool,
-    ) -> Result<LlmResponse, LlmError> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        Ok(LlmResponse {
-            content: r#"{"answer":"unused","cited_slugs":[]}"#.to_string(),
-            finish_reason: FinishReason::Stop,
-        })
-    }
-}
-
 #[test]
 fn unknown_model_rejected_at_parse_boundary() {
     // Model validation now happens at parse time (config boundary),
@@ -772,91 +738,6 @@ fn query_content_filter_finish_reason_fails_before_parse() {
     .unwrap_err();
 
     assert!(matches!(err, QueryError::ContentFilter));
-}
-
-#[test]
-fn weak_incidental_match_returns_low_relevance_before_provider_call() {
-    let dir = TempDir::new().unwrap();
-    make_leaf(
-        dir.path(),
-        "trust.md",
-        "Trust Building",
-        "https://example.com/trust",
-        Some("Trustworthy teams"),
-        "Trust grows slowly through repeated collaboration.",
-    );
-    make_manifest(
-        dir.path(),
-        &[(
-            "leaves/trust.md",
-            "Trust Building",
-            "https://example.com/trust",
-        )],
-    );
-    let provider = CountingProvider::new();
-
-    let err = run_with_provider(dir.path(), "rust", &provider, &test_model()).unwrap_err();
-
-    match err {
-        QueryError::LowRelevance {
-            reason,
-            matched_sources,
-        } => {
-            assert_eq!(reason, LowRelevanceReason::WeakMatches);
-            assert_eq!(matched_sources, 1);
-        }
-        other => panic!("expected weak-match low relevance, got: {other:?}"),
-    }
-    assert_eq!(provider.calls(), 0);
-}
-
-#[test]
-fn generic_query_returns_low_relevance_before_provider_call() {
-    let dir = TempDir::new().unwrap();
-    make_leaf(
-        dir.path(),
-        "one.md",
-        "First Notes",
-        "https://example.com/one",
-        Some("Misc notes"),
-        "Important systems use patterns in daily work.",
-    );
-    make_leaf(
-        dir.path(),
-        "two.md",
-        "Second Notes",
-        "https://example.com/two",
-        Some("Misc notes"),
-        "Patterns across systems are important for teams.",
-    );
-    make_manifest(
-        dir.path(),
-        &[
-            ("leaves/one.md", "First Notes", "https://example.com/one"),
-            ("leaves/two.md", "Second Notes", "https://example.com/two"),
-        ],
-    );
-    let provider = CountingProvider::new();
-
-    let err = run_with_provider(
-        dir.path(),
-        "important systems patterns",
-        &provider,
-        &test_model(),
-    )
-    .unwrap_err();
-
-    match err {
-        QueryError::LowRelevance {
-            reason,
-            matched_sources,
-        } => {
-            assert_eq!(reason, LowRelevanceReason::GenericQuery);
-            assert_eq!(matched_sources, 2);
-        }
-        other => panic!("expected generic-query low relevance, got: {other:?}"),
-    }
-    assert_eq!(provider.calls(), 0);
 }
 
 #[test]

@@ -32,7 +32,7 @@ fn deletes_index_file() {
 
     let output = raze(&tree_dir, &config_path).unwrap();
 
-    assert!(output.result.deleted_index);
+    assert!(output.result.deleted_manifest);
     assert!(!tree_dir.join(".bo").exists());
 }
 
@@ -215,7 +215,7 @@ fn empty_tree_produces_zero_deletes() {
     let output = raze(&tree_dir, &config_path).unwrap();
 
     assert_eq!(output.result.deleted_files, 0);
-    assert!(output.result.deleted_index);
+    assert!(output.result.deleted_manifest);
 }
 
 #[test]
@@ -223,7 +223,7 @@ fn render_human_includes_file_count() {
     let result = RazeResult {
         cancelled: false,
         deleted_files: 3,
-        deleted_index: true,
+        deleted_manifest: true,
         removed_output_dir: true,
         output_dir_left_in_place: false,
         deleted_config: true,
@@ -235,7 +235,7 @@ fn render_human_includes_file_count() {
     };
     let output = render_human(&result);
     assert!(output.contains("3 markdown file(s)"));
-    assert!(output.contains("deleted index"));
+    assert!(output.contains("deleted manifest"));
     assert!(output.contains("removed output directory"));
     assert!(output.contains("deleted config"));
     assert!(output.contains("deleted auth"));
@@ -246,7 +246,7 @@ fn render_human_shows_dir_left_in_place() {
     let result = RazeResult {
         cancelled: false,
         deleted_files: 0,
-        deleted_index: false,
+        deleted_manifest: false,
         removed_output_dir: false,
         output_dir_left_in_place: true,
         deleted_config: false,
@@ -265,7 +265,7 @@ fn render_human_shows_preserved_auth() {
     let result = RazeResult {
         cancelled: false,
         deleted_files: 0,
-        deleted_index: false,
+        deleted_manifest: false,
         removed_output_dir: false,
         output_dir_left_in_place: false,
         deleted_config: true,
@@ -410,7 +410,7 @@ fn render_human_cancelled_shows_message() {
     let result = RazeResult {
         cancelled: true,
         deleted_files: 0,
-        deleted_index: false,
+        deleted_manifest: false,
         removed_output_dir: false,
         output_dir_left_in_place: false,
         deleted_config: false,

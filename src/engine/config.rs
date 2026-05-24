@@ -82,36 +82,23 @@ impl Config {
     }
 
     pub fn into_seeded(self) -> Option<SeededConfig> {
-        self.tree.map(|tree| SeededConfig {
-            tree,
-            provider: self.provider,
-            model: self.model,
-            compile_model: self.compile_model,
+        self.tree.map(|tree_cfg| SeededConfig {
+            tree_cfg,
+            config: Config { tree: None, ..self },
         })
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct SeededConfig {
-    pub provider: Provider,
-    pub tree: TreeConfig,
-    pub model: Option<String>,
-    pub compile_model: Option<String>,
+    pub config: Config,
+    pub tree_cfg: TreeConfig,
 }
 
-impl SeededConfig {
-    pub fn effective_model(&self) -> Result<Model, UnsupportedModel> {
-        let model_id = self.model.as_deref().unwrap_or(models::DEFAULT_MODEL);
-        Model::parse(model_id, self.provider)
-    }
-
-    pub fn effective_compile_model(&self) -> Result<Model, UnsupportedModel> {
-        let model_id = self
-            .compile_model
-            .as_deref()
-            .or(self.model.as_deref())
-            .unwrap_or(models::DEFAULT_MODEL);
-        Model::parse(model_id, self.provider)
+impl std::ops::Deref for SeededConfig {
+    type Target = Config;
+    fn deref(&self) -> &Self::Target {
+        &self.config
     }
 }
 
@@ -134,7 +121,8 @@ impl fmt::Display for ConfigError {
 
 /// Returns the default path to the bo config file: $HOME/.bo/config.json.
 pub fn config_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let home = std::env::var("HOME")
+        .expect("$HOME environment variable must be set to locate bo configuration");
     PathBuf::from(home).join(".bo").join("config.json")
 }
 

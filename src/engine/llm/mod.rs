@@ -11,6 +11,21 @@ pub use model::{Model, UnsupportedModel};
 pub use models::context_window_tokens;
 pub use providers::{DeepSeekProvider, OpenAiProvider};
 
+/// Sanitize a provider error message by redacting API key fragments (sk-…).
+pub(crate) fn sanitize_provider_error_message(message: &str) -> String {
+    message
+        .split_whitespace()
+        .map(|token| {
+            if token.contains("sk-") {
+                "<redacted>".to_string()
+            } else {
+                token.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Create the correct LlmProvider for a given provider with the API key.
 pub fn create_provider(provider: Provider, api_key: &str) -> Box<dyn LlmProvider> {
     match provider {

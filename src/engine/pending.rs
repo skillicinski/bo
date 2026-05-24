@@ -196,7 +196,9 @@ pub fn recover_or_refuse(tree_dir: &Path) -> Result<Option<RecoveryReport>, Pend
 }
 
 pub fn content_hash(bytes: &[u8]) -> String {
-    hex_hash(bytes)
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
 }
 
 pub fn manifest_hash(tree_dir: &Path) -> Result<String, PendingError> {
@@ -369,16 +371,10 @@ fn resolve_relative(tree_dir: &Path, relative: &str) -> Result<PathBuf, PendingE
 
 fn hash_file_or_missing(path: &Path) -> Result<String, PendingError> {
     match fs::read(path) {
-        Ok(bytes) => Ok(hex_hash(&bytes)),
+        Ok(bytes) => Ok(content_hash(&bytes)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(MISSING_MANIFEST_HASH.to_string()),
         Err(e) => Err(PendingError::Io(e)),
     }
-}
-
-fn hex_hash(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {

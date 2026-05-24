@@ -87,9 +87,15 @@ fn push_current(segments: &mut Vec<String>, current: &mut String) {
 }
 
 fn clean_text(input: &str) -> String {
-    let once = decode_common_entities(input);
-    let twice = decode_common_entities(&once);
-    normalize_whitespace(&twice)
+    let mut text = decode_common_entities(input);
+    loop {
+        let decoded = decode_common_entities(&text);
+        if decoded == text {
+            break;
+        }
+        text = decoded;
+    }
+    normalize_whitespace(&text)
 }
 
 fn normalize_whitespace(input: &str) -> String {
@@ -110,9 +116,19 @@ fn decode_common_entities(input: &str) -> String {
         while let Some(&next) = chars.peek() {
             entity.push(next);
             chars.next();
-            if next == ';' || entity.len() > 16 {
+            if next == ';' {
                 break;
             }
+            if entity.len() >= 32 {
+                break;
+            }
+        }
+
+        // If we hit 32-byte limit without finding ';', emit raw &... as literal text
+        if !entity.ends_with(';') {
+            output.push('&');
+            output.push_str(&entity);
+            continue;
         }
 
         let decoded = match entity.as_str() {

@@ -168,7 +168,7 @@ pub fn show_leaf(
     }
 
     let tree = Tree {
-        name: None,
+        name: "unnamed".to_string(),
         created_at: None,
         output_dir: tree_dir.to_path_buf(),
     };
@@ -362,24 +362,46 @@ fn has_disallowed_components(path: &Path) -> bool {
 }
 
 fn parse_leaf_document(content: &str) -> Result<LeafDocument, String> {
-    let rest = content
-        .strip_prefix("---\n")
-        .ok_or_else(|| "no frontmatter delimiters found".to_string())?;
-    let close_pos = rest
-        .find("\n---")
+    // Guard: no opening delimiter means no frontmatter at all.
+    if !content.starts_with("---\n") {
+        return Ok(LeafDocument {
+            frontmatter: Mapping::new(),
+            frontmatter_raw: String::new(),
+            body: content.to_string(),
+        });
+    }
+
+    // Search for closing delimiter after the opening "---\n".
+    let after_open = &content["---\n".len()..];
+    let (close_delim, close_pos) = after_open
+        .find("\n---\n")
+        .map(|pos| ("\n---\n", pos))
+        .or_else(|| {
+            after_open
+                .ends_with("\n---")
+                .then(|| ("\n---", after_open.len() - "\n---".len()))
+        })
+        .or_else(|| after_open.starts_with("---\n").then_some(("---\n", 0)))
+        .or_else(|| (after_open == "---").then_some(("---", 0)))
         .ok_or_else(|| "no frontmatter delimiters found".to_string())?;
 
-    let yaml = &rest[..close_pos + 1];
-    let frontmatter = serde_yaml_ng::from_str::<Mapping>(yaml).map_err(|e| e.to_string())?;
+    // YAML text between opening and closing delimiters.
+    let fm_text = &after_open[..close_pos];
+    let frontmatter = serde_yaml_ng::from_str::<Mapping>(fm_text).map_err(|e| e.to_string())?;
 
-    let after_marker_start = "---\n".len() + close_pos + "\n---".len();
-    let after_marker = &content[after_marker_start..];
-    let raw_end = after_marker_start + usize::from(after_marker.starts_with('\n'));
-    let after_closing_line = after_marker.strip_prefix('\n').unwrap_or(after_marker);
-    let body = after_closing_line
-        .strip_prefix('\n')
-        .unwrap_or(after_closing_line)
-        .to_string();
+    // raw_end: span from content[0] to just past the closing delimiter.
+    // The delimiter itself includes the trailing newline, so no extra \n check needed.
+    let raw_end = "---\n".len() + close_pos + close_delim.len();
+
+    // Body: everything after the closing delimiter.
+    let mut body = content[raw_end..].to_string();
+    // Strip one \n (newline right after delimiter), then one blank-line separator \n.
+    if body.starts_with('\n') {
+        body = body[1..].to_string();
+    }
+    if body.starts_with('\n') {
+        body = body[1..].to_string();
+    }
 
     Ok(LeafDocument {
         frontmatter,
@@ -434,15 +456,6 @@ pub fn render_human(result: &ShowResult) -> String {
     }
 
     output
-}
-
-#[derive(Serialize)]
-struct ShowJsonPayload<'a> {
-    leaf: &'a ShowResult,
-}
-
-pub fn render_json(result: &ShowResult) -> Result<String, ShowError> {
-    serde_json::to_string_pretty(&ShowJsonPayload { leaf: result }).map_err(ShowError::from)
 }
 
 // ── internal types ───────────────────────────────────────────────────────────

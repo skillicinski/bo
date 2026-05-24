@@ -203,7 +203,7 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
     run_mode: CompileRunMode,
     expected_manifest_hash: &str,
 ) -> Result<CompileSummary, CompileError> {
-    let tree = Tree::from_config(&cfg.tree);
+    let tree = Tree::from_config(&cfg.tree_cfg);
     recover_pending_if_needed(&tree.output_dir)?;
 
     // Load current manifest. Used to preserve branch `created_at` and carry
@@ -212,7 +212,7 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
         Ok(m) => m,
         Err(manifest::ManifestError::TreeNotInitialized) => manifest::Manifest {
             tree: manifest::TreeMeta {
-                name: tree.name.clone().unwrap_or_else(|| "unnamed".to_string()),
+                name: tree.name.clone(),
                 created_at: tree
                     .created_at
                     .as_deref()
@@ -238,7 +238,6 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
 
     let mut staged: Vec<StagedWrite> = Vec::new();
     for planned_write in &delta.branch_writes {
-        let _change_kind = planned_write.kind;
         let content = branch::format_content(
             planned_write.record.title.as_str(),
             &planned_write.body,
@@ -273,8 +272,6 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
     pending::apply_deletes(&tree.output_dir, &delta.branch_deletes)?;
     pending::clear(&pending_path)?;
 
-    let _deleted_leaf_slugs = &delta.deleted_leaf_slugs;
-    let _removed_branches = &delta.branches_removed;
     let branch_results: Vec<BranchResult> = delta
         .branches_created
         .iter()

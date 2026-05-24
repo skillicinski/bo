@@ -71,9 +71,9 @@ pub fn fetch_url(url: &str) -> Result<FetchResult, FetchError> {
 
     for attempt in 0..MAX_RETRIES {
         match try_fetch(&client, &canonical_url) {
-            Ok(html) => {
+            Ok((final_url, html)) => {
                 return Ok(FetchResult {
-                    url: canonical_url,
+                    url: final_url,
                     html,
                 })
             }
@@ -101,7 +101,10 @@ pub fn fetch_url(url: &str) -> Result<FetchResult, FetchError> {
     Err(last_err)
 }
 
-fn try_fetch(client: &reqwest::blocking::Client, url: &str) -> Result<String, FetchError> {
+fn try_fetch(
+    client: &reqwest::blocking::Client,
+    url: &str,
+) -> Result<(String, String), FetchError> {
     let response = client.get(url).send().map_err(|e| {
         if e.is_timeout() {
             FetchError::Timeout
@@ -129,11 +132,12 @@ fn try_fetch(client: &reqwest::blocking::Client, url: &str) -> Result<String, Fe
         return Err(FetchError::NotHtml(content_type.to_string()));
     }
 
+    let final_url = response.url().to_string();
     let html = response
         .text()
         .map_err(|e| FetchError::Network(e.to_string()))?;
 
-    Ok(html)
+    Ok((final_url, html))
 }
 
 #[cfg(test)]

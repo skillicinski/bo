@@ -115,7 +115,6 @@ fn set_manifest_branches_for_leaf(tree: &Path, file: &str, branches: &[&str], ti
                 title: Title::new(*branch_slug),
                 created_at: Timestamp::parse(timestamp).unwrap(),
                 updated_at: Timestamp::parse(timestamp).unwrap(),
-                stale: false,
                 leaves: vec![Slug::parse(&leaf_slug).unwrap()],
             });
         }
@@ -925,7 +924,7 @@ fn show_json_output_is_parseable_and_contains_required_fields() {
     let payload: Value = serde_json::from_slice(&out.stdout).expect("stdout was not valid JSON");
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["command"], "show");
-    let leaf = payload["data"].get("leaf").expect("missing leaf object");
+    let leaf = &payload["data"];
 
     assert_eq!(leaf["title"], "Json Title");
     assert_eq!(leaf["file"], "json-title.md");
@@ -965,7 +964,7 @@ fn show_json_full_output_contains_full_body() {
     let payload: Value = serde_json::from_slice(&out.stdout).expect("stdout was not valid JSON");
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["command"], "show");
-    let leaf = payload["data"].get("leaf").expect("missing leaf object");
+    let leaf = &payload["data"];
 
     assert_eq!(leaf["full"], true);
     assert!(

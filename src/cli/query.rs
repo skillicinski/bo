@@ -2,7 +2,6 @@
 //
 // Pipeline: extract terms → retrieve leaves → assemble context → synthesize → format
 //
-// Retrieval is shared with `cli::search` via `engine::retrieval::score_corpus`.
 // This module adds query-specific post-processing: diagnostics, relevance
 // validation, context assembly, and LLM synthesis.
 
@@ -10,7 +9,7 @@ use crate::cli::json::JsonError;
 use crate::engine::llm::{
     complete_with_policy, FinishReason, LlmCallPolicy, LlmError, LlmProvider, Message, Model,
 };
-use crate::engine::retrieval::{self, ScoringPolicy};
+use crate::engine::retrieval;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashSet;
@@ -32,7 +31,7 @@ const MIN_MULTI_TERM_DENSITY: f64 = 8.0;
 const MOSTLY_GENERIC_RATIO_NUMERATOR: usize = 2;
 const MOSTLY_GENERIC_RATIO_DENOMINATOR: usize = 3;
 
-const QUERY_LLM_POLICY: LlmCallPolicy = LlmCallPolicy {
+pub const QUERY_LLM_POLICY: LlmCallPolicy = LlmCallPolicy {
     timeout: Duration::from_secs(60),
     max_attempts: 3,
     initial_backoff: Duration::from_secs(1),
@@ -474,7 +473,7 @@ fn compute_retrieval_diagnostics(
 /// Retrieve top-k leaves scored by term density (OR semantics).
 fn retrieve_leaves(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedLeaf>, QueryError> {
     let tree = crate::domain::tree::Tree {
-        name: None,
+        name: "unnamed".to_string(),
         created_at: None,
         output_dir: tree_dir.to_path_buf(),
     };
@@ -490,7 +489,7 @@ fn retrieve_leaves(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedLea
         return Err(QueryError::EmptyTree);
     }
 
-    let corpus = retrieval::score_corpus(tree_dir, &manifest, terms, ScoringPolicy::AnyTermCounts);
+    let corpus = retrieval::score_corpus(tree_dir, &manifest, terms);
 
     if corpus.is_empty() {
         return Err(QueryError::NoResults);
@@ -898,12 +897,6 @@ pub fn render_human(result: &QueryResult) -> String {
     output
 }
 
-/// Render JSON output (ADR-002 compliant).
-pub fn render_json(result: &QueryResult) -> Result<String, QueryError> {
-    serde_json::to_string_pretty(result)
-        .map_err(|e| QueryError::Parse(format!("JSON serialization failed: {}", e)))
-}
-
 // ── orchestrator ─────────────────────────────────────────────────────────────
 
 /// Run query preflight up to, but not including, provider-backed synthesis.
@@ -938,17 +931,7 @@ pub fn run_prepared_with_provider(
     run_prepared_with_policy(prepared, provider, QUERY_LLM_POLICY)
 }
 
-/// Run the full query pipeline with an injectable provider (for testing).
-pub fn run_with_provider(
-    tree_dir: &Path,
-    question: &str,
-    provider: &dyn LlmProvider,
-    model: &Model,
-) -> Result<QueryResult, QueryError> {
-    run_with_provider_and_policy(tree_dir, question, provider, model, QUERY_LLM_POLICY)
-}
-
-fn run_with_provider_and_policy(
+pub fn run_with_provider_and_policy(
     tree_dir: &Path,
     question: &str,
     provider: &dyn LlmProvider,

@@ -49,7 +49,6 @@ pub struct BranchWithLeaves {
     pub slug: String,
     pub title: String,
     pub updated_at: Option<String>,
-    pub stale: bool,
     pub leaves: Vec<ListLeafRow>,
 }
 
@@ -59,7 +58,6 @@ pub struct BranchRow {
     pub title: String,
     pub leaf_count: usize,
     pub updated_at: Option<String>,
-    pub stale: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -161,7 +159,7 @@ impl ListError {
 
 pub fn list_tree(tree_dir: &Path, options: &ListOptions) -> Result<ListResult, ListError> {
     let tree = Tree {
-        name: None,
+        name: "unnamed".to_string(),
         created_at: None,
         output_dir: tree_dir.to_path_buf(),
     };
@@ -245,7 +243,6 @@ fn build_branch_centric(
                 slug: b.slug.to_string(),
                 title: b.title.to_string(),
                 updated_at: Some(b.updated_at.to_rfc3339_millis()),
-                stale: b.stale,
                 leaves,
             }
         })
@@ -306,7 +303,6 @@ fn build_branches_view(manifest: &Manifest, options: &ListOptions) -> ListView {
             title: b.title.to_string(),
             leaf_count: b.leaves.len(),
             updated_at: Some(b.updated_at.to_rfc3339_millis()),
-            stale: b.stale,
         })
         .collect();
 
@@ -598,10 +594,9 @@ pub fn render_human(result: &ListResult) -> String {
 
             let mut output = String::new();
             for row in rows {
-                let stale_marker = if row.stale { " ⚠ stale" } else { "" };
                 output.push_str(&format!(
-                    "{} | {} | {} leaves{}\n",
-                    row.slug, row.title, row.leaf_count, stale_marker
+                    "{} | {} | {} leaves\n",
+                    row.slug, row.title, row.leaf_count
                 ));
             }
             output
@@ -638,10 +633,6 @@ pub fn render_human(result: &ListResult) -> String {
             output
         }
     }
-}
-
-pub fn render_json(result: &ListResult) -> Result<String, ListError> {
-    serde_json::to_string_pretty(result).map_err(ListError::from)
 }
 
 #[cfg(test)]
