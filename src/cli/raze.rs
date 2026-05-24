@@ -13,7 +13,7 @@ pub struct RazeResult {
     #[serde(default)]
     pub cancelled: bool,
     pub deleted_files: usize,
-    pub deleted_index: bool,
+    pub deleted_manifest: bool,
     pub removed_output_dir: bool,
     pub output_dir_left_in_place: bool,
     pub deleted_config: bool,
@@ -87,7 +87,7 @@ pub fn raze_with_auth(
                 result: RazeResult {
                     cancelled: true,
                     deleted_files: 0,
-                    deleted_index: false,
+                    deleted_manifest: false,
                     removed_output_dir: false,
                     output_dir_left_in_place: false,
                     deleted_config: false,
@@ -151,7 +151,7 @@ pub fn raze_with_auth(
 
     pending::apply_deletes(output_dir, &deletes).map_err(map_pending_error)?;
     pending::clear(&pending_path).map_err(map_pending_error)?;
-    let deleted_index = true;
+    let deleted_manifest = true;
 
     let (removed_output_dir, output_dir_left_in_place) = match std::fs::remove_dir(output_dir) {
         Ok(()) => (true, false),
@@ -182,7 +182,7 @@ pub fn raze_with_auth(
         result: RazeResult {
             cancelled: false,
             deleted_files,
-            deleted_index,
+            deleted_manifest,
             removed_output_dir,
             output_dir_left_in_place,
             deleted_config,
@@ -206,7 +206,7 @@ pub fn raze_auth_only(auth_path: &Path) -> Result<Option<RazeOutput>, RazeError>
         result: RazeResult {
             cancelled: false,
             deleted_files: 0,
-            deleted_index: false,
+            deleted_manifest: false,
             removed_output_dir: false,
             output_dir_left_in_place: false,
             deleted_config: false,
@@ -354,8 +354,8 @@ pub fn render_human(result: &RazeResult) -> String {
         ));
     }
 
-    if result.deleted_index {
-        out.push_str("deleted index\n");
+    if result.deleted_manifest {
+        out.push_str("deleted manifest\n");
     }
 
     if result.removed_output_dir {

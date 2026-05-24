@@ -86,7 +86,26 @@ fn truncate_body(body: &str, max_words: usize) -> String {
 
 #[derive(Deserialize)]
 struct SummaryResponse {
+    #[serde(default)]
     summary: String,
+}
+
+/// Generate a summary via a single structured-output LLM call,
+/// falling back to deterministic summary if the LLM fails for any reason.
+pub async fn generate_llm_or_fallback(
+    body: &str,
+    title: Option<&str>,
+    provider: &dyn LlmProvider,
+    model: &str,
+    policy: LlmCallPolicy,
+) -> String {
+    match generate_llm(body, title, provider, model, policy).await {
+        Ok(summary) => summary,
+        Err(e) => {
+            eprintln!("LLM summary failed (using deterministic fallback): {}", e);
+            generate_fallback(body)
+        }
+    }
 }
 
 /// Generate a summary via a single structured-output LLM call.
@@ -117,7 +136,7 @@ pub async fn generate_llm(
         "properties": {
             "summary": { "type": "string" }
         },
-        "required": ["summary"],
+
         "additionalProperties": false
     });
 

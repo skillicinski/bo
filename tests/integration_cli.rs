@@ -115,7 +115,6 @@ fn set_manifest_branches_for_leaf(tree: &Path, file: &str, branches: &[&str], ti
                 title: Title::new(*branch_slug),
                 created_at: Timestamp::parse(timestamp).unwrap(),
                 updated_at: Timestamp::parse(timestamp).unwrap(),
-                stale: false,
                 leaves: vec![Slug::parse(&leaf_slug).unwrap()],
             });
         }

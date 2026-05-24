@@ -57,15 +57,8 @@ fn setup_fixture_collection() -> tempfile::TempDir {
         let title = Title::new(doc.title);
         let url = bo::domain::Url::parse(doc.url).unwrap();
         let ts = Timestamp::parse("2025-06-01T10:00:00Z").unwrap();
-        bo::domain::leaf::write(
-            &dir.path().join(doc.file),
-            Some(&title),
-            &url,
-            &ts,
-            doc.body,
-            None,
-        )
-        .unwrap();
+        let content = bo::domain::leaf::format_content(Some(&title), &url, &ts, doc.body, None);
+        fs::write(dir.path().join(doc.file), content).unwrap();
 
         leaves.push(LeafRecord {
             slug: bo::domain::Slug::parse(doc.file.trim_end_matches(".md")).unwrap(),
@@ -118,7 +111,7 @@ fn compile_creates_branches_directory() {
     let dir = setup_fixture_collection();
     let cfg = make_config(dir.path());
 
-    let result = compile::cmd_compile(&cfg);
+    let result = compile::run_compile_with_options(&cfg, Default::default());
     assert!(result.is_ok(), "compile failed: {:?}", result.err());
 
     assert!(
@@ -133,7 +126,7 @@ fn compile_produces_at_least_one_branch_file() {
     let dir = setup_fixture_collection();
     let cfg = make_config(dir.path());
 
-    compile::cmd_compile(&cfg).unwrap();
+    compile::run_compile_with_options(&cfg, Default::default()).unwrap();
 
     let branches_dir = dir.path().join("branches");
     let branch_files: Vec<_> = fs::read_dir(&branches_dir)
@@ -176,7 +169,7 @@ fn compile_gives_every_leaf_a_branches_field() {
     let dir = setup_fixture_collection();
     let cfg = make_config(dir.path());
 
-    compile::cmd_compile(&cfg).unwrap();
+    compile::run_compile_with_options(&cfg, Default::default()).unwrap();
 
     for doc in FIXTURE_DOCS {
         let leaf_path = dir.path().join(doc.file);
@@ -196,7 +189,7 @@ fn compile_does_not_create_index_jsonl() {
     let dir = setup_fixture_collection();
     let cfg = make_config(dir.path());
 
-    compile::cmd_compile(&cfg).unwrap();
+    compile::run_compile_with_options(&cfg, Default::default()).unwrap();
 
     assert!(!dir.path().join(".bo/index.jsonl").exists());
 }
@@ -208,7 +201,7 @@ fn compile_rerun_preserves_created_at() {
     let cfg = make_config(dir.path());
 
     // First compile
-    compile::cmd_compile(&cfg).unwrap();
+    compile::run_compile_with_options(&cfg, Default::default()).unwrap();
 
     let branches_dir = dir.path().join("branches");
     let first_branch = fs::read_dir(&branches_dir)
@@ -230,7 +223,7 @@ fn compile_rerun_preserves_created_at() {
     std::thread::sleep(std::time::Duration::from_secs(1));
 
     // Second compile
-    compile::cmd_compile(&cfg).unwrap();
+    compile::run_compile_with_options(&cfg, Default::default()).unwrap();
 
     // Find the same branch (by slug/filename)
     let content2 = fs::read_to_string(&first_branch).unwrap();
@@ -292,7 +285,7 @@ fn crash_mid_compile_rollback_cleans_staged_files() {
 
     // Now run compile — should detect stale pending, rollback, then proceed normally
     let cfg = make_config(tree_dir);
-    let result = compile::cmd_compile(&cfg);
+    let result = compile::run_compile_with_options(&cfg, Default::default());
 
     // The staged file should be gone (rolled back)
     assert!(
@@ -356,7 +349,7 @@ fn crash_mid_compile_roll_forward_applies_staged_writes() {
 
     // Run compile — should roll forward
     let cfg = make_config(tree_dir);
-    let result = compile::cmd_compile(&cfg);
+    let result = compile::run_compile_with_options(&cfg, Default::default());
 
     // The staged file should be renamed to final
     assert!(
@@ -418,7 +411,7 @@ fn crash_mid_collect_rollback_leaves_tree_unchanged() {
 
     // Run compile — should recover (rollback) first, then proceed
     let cfg = make_config(tree_dir);
-    let _result = compile::cmd_compile(&cfg);
+    let _result = compile::run_compile_with_options(&cfg, Default::default());
 
     // Staged file rolled back
     assert!(

@@ -126,12 +126,6 @@ impl LlmProvider for DeepSeekProvider {
             LlmError::Parse(format!("{}; body: {}", e, sanitized))
         })?;
 
-        // Validate structured output against schema when present.
-        if let Some(schema) = response_schema {
-            let content_val = &response_json["choices"][0]["message"]["content"];
-            validate_structured_output(content_val, schema)?;
-        }
-
         // 6. Extract content and finish_reason.
         let content = response_json["choices"][0]["message"]["content"]
             .as_str()
@@ -178,27 +172,6 @@ fn map_http_error(status: reqwest::StatusCode, body: &str) -> LlmError {
     } else {
         LlmError::Server(message)
     }
-}
-
-fn validate_structured_output(content_val: &Value, schema: &Value) -> Result<(), LlmError> {
-    if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
-        // Content may be a JSON string (parse it) or already an object.
-        let parsed: Value = if content_val.is_string() {
-            serde_json::from_str(content_val.as_str().unwrap_or_default()).unwrap_or(Value::Null)
-        } else {
-            content_val.clone()
-        };
-        for key in required {
-            let key_str = key.as_str().unwrap_or_default();
-            if parsed.get(key_str).is_none() {
-                return Err(LlmError::Api(format!(
-                    "DeepSeek response missing required field '{}' in structured output",
-                    key_str
-                )));
-            }
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

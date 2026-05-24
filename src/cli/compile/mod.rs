@@ -219,18 +219,6 @@ pub struct BranchResult {
     pub leaf_count: usize,
 }
 
-// ── cmd_compile ───────────────────────────────────────────────────────────────
-
-pub fn cmd_compile(cfg: &SeededConfig) -> Result<(), String> {
-    let result = run_compile(cfg).map_err(|e| e.to_string())?;
-    print_result(&result);
-    Ok(())
-}
-
-pub fn run_compile(cfg: &SeededConfig) -> Result<CompileResult, CompileError> {
-    run_compile_with_options(cfg, CompileOptions::default())
-}
-
 fn preflight_noop(
     cfg: &SeededConfig,
     options: CompileOptions,
@@ -288,23 +276,6 @@ pub fn run_compile_with_options(
         &compile_model,
         &compile_started_at,
     )
-}
-
-pub fn run_compile_with_provider(
-    cfg: &SeededConfig,
-    options: CompileOptions,
-    provider: &dyn LlmProvider,
-    model: &Model,
-) -> Result<CompileResult, CompileError> {
-    let compile_started_at = execute::compile_timestamp_now();
-    // Stale repair (mirrors the repair in run_compile_with_options).
-    let tree = Tree::from_config(&cfg.tree_cfg);
-    let _stale_repair = plan::repair_stale_branches(
-        cfg,
-        &manifest::read(&tree.manifest_path())
-            .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?,
-    )?;
-    run_compile_with_provider_started_at(cfg, options, provider, model, &compile_started_at)
 }
 
 fn run_compile_with_provider_started_at(

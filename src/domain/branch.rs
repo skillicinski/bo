@@ -5,54 +5,7 @@
 // followed by a markdown body beginning with a heading matching the title.
 
 use crate::domain::frontmatter;
-use crate::domain::{Slug, Timestamp, Title};
 use serde_yaml_ng::{Mapping, Value};
-use std::fs;
-use std::io;
-use std::path::Path;
-
-/// Read the `created_at` value from an existing branch file.
-///
-/// Returns `None` in all failure cases: file absent, I/O error, unparseable
-/// frontmatter, or missing `created_at` field.  The caller treats all of
-/// these identically (first-write semantics).
-pub fn read_created_at(path: &Path) -> Option<Timestamp> {
-    let content = fs::read_to_string(path).ok()?;
-    let (mapping, _) = frontmatter::parse(&content).ok()?;
-    mapping
-        .get("created_at")
-        .and_then(|v| v.as_str())
-        .and_then(|s| Timestamp::parse(s).ok())
-}
-
-/// Write a complete branch markdown file.
-///
-/// If `body` does not already begin with `# {title}`, the heading is
-/// prepended automatically so the file always starts with the correct heading.
-///
-/// Parent directories are created as needed.
-pub fn write(
-    path: &Path,
-    title: &Title,
-    body: &str,
-    leaves: &[Slug],
-    created_at: &Timestamp,
-    updated_at: &Timestamp,
-) -> io::Result<()> {
-    let leaf_strs: Vec<String> = leaves.iter().map(|s| s.to_string()).collect();
-    let content = format_content(
-        title.as_str(),
-        body,
-        &leaf_strs,
-        &created_at.to_rfc3339_millis(),
-        &updated_at.to_rfc3339_millis(),
-    );
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, content)
-}
 
 pub(crate) fn format_content(
     title: &str,

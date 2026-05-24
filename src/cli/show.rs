@@ -458,15 +458,6 @@ pub fn render_human(result: &ShowResult) -> String {
     output
 }
 
-#[derive(Serialize)]
-struct ShowJsonPayload<'a> {
-    leaf: &'a ShowResult,
-}
-
-pub fn render_json(result: &ShowResult) -> Result<String, ShowError> {
-    serde_json::to_string_pretty(&ShowJsonPayload { leaf: result }).map_err(ShowError::from)
-}
-
 // ── internal types ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]

@@ -39,19 +39,11 @@ pub(super) struct RemovedBranchResult {
     pub(super) reason: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum BranchChangeKind {
-    Create,
-    Update,
-    Rebuild,
-}
-
 #[derive(Debug)]
 pub(super) struct PlannedBranchWrite {
     pub(super) record: BranchRecord,
     pub(super) file_leaves: Vec<String>,
     pub(super) body: String,
-    pub(super) kind: BranchChangeKind,
 }
 
 #[derive(Debug)]
@@ -59,11 +51,9 @@ pub(super) struct ManifestDelta {
     pub(super) new_manifest: Manifest,
     pub(super) branch_writes: Vec<PlannedBranchWrite>,
     pub(super) branch_deletes: Vec<String>,
-    pub(super) deleted_leaf_slugs: Vec<String>,
     pub(super) branches_created: Vec<BranchResult>,
     pub(super) branches_updated: Vec<BranchResult>,
     pub(super) branches_rebuilt: Vec<BranchResult>,
-    pub(super) branches_removed: Vec<RemovedBranchResult>,
 }
 
 // ── functions ─────────────────────────────────────────────────────────────────
@@ -160,7 +150,6 @@ pub(super) fn repair_stale_branches(
             }
             let mut repaired = branch.clone();
             repaired.leaves = remaining;
-            repaired.stale = false;
             repaired_branches.push(repaired);
         }
     }
@@ -410,7 +399,6 @@ pub(super) fn build_manifest_delta(
                     title: Title::new(&planned.title),
                     created_at,
                     updated_at: run_timestamp.clone(),
-                    stale: false,
                     leaves: validated_branch_leaf_slugs(planned),
                 };
                 if current.branch_by_slug_str(&planned.slug).is_some() {
@@ -423,7 +411,6 @@ pub(super) fn build_manifest_delta(
                         record: record.clone(),
                         file_leaves: planned.leaves.clone(),
                         body: planned.body.clone(),
-                        kind: BranchChangeKind::Update,
                     });
                 } else {
                     branches_created.push(branch_result(
@@ -435,7 +422,6 @@ pub(super) fn build_manifest_delta(
                         record: record.clone(),
                         file_leaves: planned.leaves.clone(),
                         body: planned.body.clone(),
-                        kind: BranchChangeKind::Create,
                     });
                 }
                 new_branches.push(record);
@@ -476,7 +462,6 @@ pub(super) fn build_manifest_delta(
                         title: Title::new(&planned.title),
                         created_at: current_branch.created_at.clone(),
                         updated_at: run_timestamp.clone(),
-                        stale: false,
                         leaves: validated_branch_leaf_slugs(planned),
                     };
                     let result = branch_result(
@@ -490,7 +475,6 @@ pub(super) fn build_manifest_delta(
                             record: record.clone(),
                             file_leaves: planned.leaves.clone(),
                             body: planned.body.clone(),
-                            kind: BranchChangeKind::Rebuild,
                         });
                     } else {
                         branches_updated.push(result.clone());
@@ -498,7 +482,6 @@ pub(super) fn build_manifest_delta(
                             record: record.clone(),
                             file_leaves: planned.leaves.clone(),
                             body: planned.body.clone(),
-                            kind: BranchChangeKind::Update,
                         });
                     }
                     new_branches.push(record);
@@ -523,7 +506,6 @@ pub(super) fn build_manifest_delta(
                     title: Title::new(&planned.title),
                     created_at: run_timestamp.clone(),
                     updated_at: run_timestamp.clone(),
-                    stale: false,
                     leaves: validated_branch_leaf_slugs(planned),
                 };
                 branches_created.push(branch_result(
@@ -535,7 +517,6 @@ pub(super) fn build_manifest_delta(
                     record: record.clone(),
                     file_leaves: planned.leaves.clone(),
                     body: planned.body.clone(),
-                    kind: BranchChangeKind::Create,
                 });
                 new_branches.push(record);
             }
@@ -561,10 +542,8 @@ pub(super) fn build_manifest_delta(
         new_manifest,
         branch_writes,
         branch_deletes,
-        deleted_leaf_slugs: deleted_leaf_slugs.to_vec(),
         branches_created,
         branches_updated,
         branches_rebuilt,
-        branches_removed,
     })
 }

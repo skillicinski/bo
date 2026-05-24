@@ -77,10 +77,3 @@ fn roundtrip_serde() {
     let deserialized: Timestamp = serde_json::from_str(&json).unwrap();
     assert_eq!(original, deserialized);
 }
-
-#[test]
-fn as_datetime_returns_inner() {
-    let ts = Timestamp::parse("2024-01-01T00:00:00Z").unwrap();
-    let dt = ts.as_datetime();
-    assert_eq!(dt.timestamp(), 1704067200);
-}

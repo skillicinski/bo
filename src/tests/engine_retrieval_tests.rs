@@ -36,61 +36,6 @@ fn write_leaf(dir: &Path, filename: &str, title: &str, body: &str) {
 }
 
 #[test]
-fn all_terms_required_filters_partial_matches() {
-    let tmp = TempDir::new().unwrap();
-    let dir = tmp.path();
-
-    write_leaf(
-        dir,
-        "rust-async.md",
-        "Rust Async",
-        "async await tokio runtime futures executor",
-    );
-    write_leaf(
-        dir,
-        "rust-types.md",
-        "Rust Types",
-        "rust type system generics traits bounds",
-    );
-    write_leaf(
-        dir,
-        "python-async.md",
-        "Python Async",
-        "python asyncio coroutines event loop",
-    );
-
-    let leaves = vec![
-        make_leaf(
-            "rust-async",
-            "Rust Async",
-            "http://example.com/1",
-            Some("async in rust"),
-        ),
-        make_leaf(
-            "rust-types",
-            "Rust Types",
-            "http://example.com/2",
-            Some("rust type system"),
-        ),
-        make_leaf(
-            "python-async",
-            "Python Async",
-            "http://example.com/3",
-            Some("async in python"),
-        ),
-    ];
-    let manifest = make_manifest(leaves);
-
-    let terms = vec!["rust".to_string(), "async".to_string()];
-    let results = score_corpus(dir, &manifest, &terms, ScoringPolicy::AllTermsRequired);
-
-    // Only "rust-async" contains both "rust" AND "async"
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].slug, "rust-async");
-    assert!(results[0].score > 0.0);
-}
-
-#[test]
 fn any_term_counts_returns_partial_matches() {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path();
@@ -132,7 +77,7 @@ fn any_term_counts_returns_partial_matches() {
     let manifest = make_manifest(leaves);
 
     let terms = vec!["rust".to_string(), "async".to_string()];
-    let results = score_corpus(dir, &manifest, &terms, ScoringPolicy::AnyTermCounts);
+    let results = score_corpus(dir, &manifest, &terms);
 
     // Both rust leaves match (OR semantics); cooking does not
     assert_eq!(results.len(), 2);
@@ -180,16 +125,8 @@ fn missing_and_malformed_files_are_skipped() {
 
     let terms = vec!["rust".to_string()];
 
-    // AnyTermCounts: skips malformed and missing
-    let results = score_corpus(dir, &manifest, &terms, ScoringPolicy::AnyTermCounts);
+    let results = score_corpus(dir, &manifest, &terms);
+    // malformed and missing are skipped; only valid matches
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].slug, "valid");
-
-    // AllTermsRequired: malformed falls back to full content, missing is skipped
-    let results = score_corpus(dir, &manifest, &terms, ScoringPolicy::AllTermsRequired);
-    // valid matches, malformed matches (fallback to full content contains "rust"), missing skipped
-    assert_eq!(results.len(), 2);
-    let slugs: Vec<&str> = results.iter().map(|r| r.slug.as_str()).collect();
-    assert!(slugs.contains(&"valid"));
-    assert!(slugs.contains(&"malformed"));
 }

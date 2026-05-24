@@ -26,8 +26,7 @@ use crate::cli::json::JsonError;
 use crate::domain::manifest::{self, LeafRecord, Manifest, TreeMeta};
 use crate::domain::slug::Slug;
 use crate::domain::{leaf, slug, Timestamp, Title, Url};
-use crate::engine::auth::{self, AuthError};
-use crate::engine::llm::models::DEFAULT_MODEL;
+use crate::engine::auth;
 use crate::engine::pending::{self, OpKind, PendingWrite};
 use crate::engine::quality::RejectReason;
 use crate::engine::{extract, fetch, quality, summary};
@@ -251,20 +250,6 @@ impl ExpandedCollectInput {
 
 // ── pipeline ─────────────────────────────────────────────────────────────────
 
-/// Full pipeline: validate URL, fetch HTML, then run the extract-write-ledger pipeline.
-///
-/// The `url` passed to the underlying `collect_html` call is the normalised form
-/// returned by `fetch_url`, preserving the canonicalisation that was previously
-/// done in `main.rs`.
-pub fn collect_url(url: &str, output_dir: &Path) -> Result<Document, CollectError> {
-    collect_url_with_model(
-        url,
-        output_dir,
-        DEFAULT_MODEL,
-        crate::engine::llm::Provider::OpenAI,
-    )
-}
-
 pub fn collect_url_with_model(
     url: &str,
     output_dir: &Path,
@@ -308,23 +293,6 @@ pub fn collect_url_with_model(
     collect_html_with_model(&fetched.url, &fetched.html, output_dir, model, provider)
 }
 
-/// Extract-write-ledger pipeline without network access. Accepts pre-fetched HTML.
-///
-/// `url` is used for duplicate detection, slug generation, and the ledger entry.
-/// It must be a valid, normalised URL string (e.g. as returned by `fetch_url`).
-///
-/// This is the testable core of the pipeline: integration tests call it directly
-/// with fixture HTML to avoid network dependencies.
-pub fn collect_html(url: &str, html: &str, output_dir: &Path) -> Result<Document, CollectError> {
-    collect_html_with_model(
-        url,
-        html,
-        output_dir,
-        DEFAULT_MODEL,
-        crate::engine::llm::Provider::OpenAI,
-    )
-}
-
 pub fn collect_html_with_model(
     url: &str,
     html: &str,
@@ -335,21 +303,20 @@ pub fn collect_html_with_model(
     collect_html_with_summarizer(url, html, output_dir, |body, title| {
         let api_key = match auth::resolve_api_key(provider) {
             Ok(key) => key,
-            Err(AuthError::Missing { .. }) => return Ok(summary::generate_fallback(body)),
-            Err(e) => return Err(summary::SummaryError::Runtime(e.to_string())),
+            Err(_) => return Ok(summary::generate_fallback(body)),
         };
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|e| summary::SummaryError::Runtime(format!("runtime: {}", e)))?;
         let provider = crate::engine::llm::create_provider(provider, &api_key);
-        rt.block_on(summary::generate_llm(
+        Ok(rt.block_on(summary::generate_llm_or_fallback(
             body,
             title,
             provider.as_ref(),
             model,
             summary::SUMMARY_LLM_POLICY,
-        ))
+        )))
     })
 }
 
@@ -697,40 +664,33 @@ fn write_new_document_with_model(
     model: &str,
     provider: crate::engine::llm::Provider,
 ) -> Result<Document, CollectError> {
-    let summary_result = {
-        let api_key = match auth::resolve_api_key(provider) {
-            Ok(key) => key,
-            Err(AuthError::Missing { .. }) => {
-                return write_new_document_with_summary_result(
-                    url,
-                    title,
-                    body_markdown,
-                    output_dir,
-                    Ok(summary::generate_fallback(body_markdown)),
-                );
-            }
-            Err(e) => {
-                return Err(CollectError::Summary(summary::SummaryError::Runtime(
-                    e.to_string(),
-                )))
-            }
-        };
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| {
-                CollectError::Summary(summary::SummaryError::Runtime(format!("runtime: {}", e)))
-            })?;
-        let provider = crate::engine::llm::create_provider(provider, &api_key);
-        rt.block_on(summary::generate_llm(
-            body_markdown,
-            title,
-            provider.as_ref(),
-            model,
-            summary::SUMMARY_LLM_POLICY,
-        ))
+    let api_key = match auth::resolve_api_key(provider) {
+        Ok(key) => key,
+        Err(_) => {
+            return write_new_document_with_summary_result(
+                url,
+                title,
+                body_markdown,
+                output_dir,
+                Ok(summary::generate_fallback(body_markdown)),
+            );
+        }
     };
-    write_new_document_with_summary_result(url, title, body_markdown, output_dir, summary_result)
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| {
+            CollectError::Summary(summary::SummaryError::Runtime(format!("runtime: {}", e)))
+        })?;
+    let provider = crate::engine::llm::create_provider(provider, &api_key);
+    let summary_text = rt.block_on(summary::generate_llm_or_fallback(
+        body_markdown,
+        title,
+        provider.as_ref(),
+        model,
+        summary::SUMMARY_LLM_POLICY,
+    ));
+    write_new_document_with_summary_result(url, title, body_markdown, output_dir, Ok(summary_text))
 }
 
 fn write_new_document_with_summary_result(

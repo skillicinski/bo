@@ -217,7 +217,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
             match seed::seed(output_dir, name, &config::config_path()) {
                 Ok(result) if json => emit_json_success("seed", &result, Vec::new(), stdout),
                 Ok(result) => {
-                    write_human_or_error(write!(stdout, "{}", seed::render_human(&result)), stderr)
+                    write_human_or_error(write!(stdout, "{}", seed::render_human(&result)))
                 }
                 Err(error) => emit_cli_error("seed", json, CliError::Seed(error), stdout, stderr),
             }
@@ -256,10 +256,9 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 &config::config_path(),
             ) {
                 Ok(result) if json => emit_json_success("config", &result, Vec::new(), stdout),
-                Ok(result) => write_human_or_error(
-                    write!(stdout, "{}", cli_config::render_human(&result)),
-                    stderr,
-                ),
+                Ok(result) => {
+                    write_human_or_error(write!(stdout, "{}", cli_config::render_human(&result)))
+                }
                 Err(error) => {
                     emit_cli_error("config", json, CliError::ConfigWrite(error), stdout, stderr)
                 }
@@ -270,7 +269,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 emit_json_success("collect", &result, Vec::new(), stdout)
             }
             Ok(CollectOutput::Single(result)) => {
-                write_human_or_error(collect::render_human(&result, stdout), stderr)
+                write_human_or_error(collect::render_human(&result, stdout))
             }
             Ok(CollectOutput::Batch(result)) if json => emit_batch_collect_json(&result, stdout),
             Ok(CollectOutput::Batch(result)) => {
@@ -290,7 +289,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 let warnings = compile_warnings(&result);
                 emit_json_success("compile", &result, warnings, stdout)
             }
-            Ok(result) => write_human_or_error(compile::render_human(&result, stdout), stderr),
+            Ok(result) => write_human_or_error(compile::render_human(&result, stdout)),
             Err(error) => emit_cli_error("compile", json, error, stdout, stderr),
         },
         Commands::List {
@@ -305,16 +304,12 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 let warnings = list_warnings(&result);
                 emit_json_success("list", &result, warnings, stdout)
             }
-            Ok(result) => {
-                write_human_or_error(write!(stdout, "{}", list::render_human(&result)), stderr)
-            }
+            Ok(result) => write_human_or_error(write!(stdout, "{}", list::render_human(&result))),
             Err(error) => emit_cli_error("list", json, error, stdout, stderr),
         },
         Commands::Show { title, full } => match execute_show(title, full) {
             Ok(result) if json => emit_json_success("show", &result, Vec::new(), stdout),
-            Ok(result) => {
-                write_human_or_error(write!(stdout, "{}", show::render_human(&result)), stderr)
-            }
+            Ok(result) => write_human_or_error(write!(stdout, "{}", show::render_human(&result))),
             Err(error) => emit_cli_error("show", json, error, stdout, stderr),
         },
         Commands::Raze { include_auth } => match execute_raze(include_auth) {
@@ -325,10 +320,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 for warning in &output.warnings {
                     let _ = writeln!(stderr, "warning: {}", warning.message);
                 }
-                write_human_or_error(
-                    write!(stdout, "{}", raze::render_human(&output.result)),
-                    stderr,
-                )
+                write_human_or_error(write!(stdout, "{}", raze::render_human(&output.result)))
             }
             Err(error) => emit_cli_error("raze", json, error, stdout, stderr),
         },
@@ -337,7 +329,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
             match execute_query(&question_str) {
                 Ok(result) if json => emit_json_success("query", &result, Vec::new(), stdout),
                 Ok(result) => {
-                    write_human_or_error(write!(stdout, "{}", query::render_human(&result)), stderr)
+                    write_human_or_error(write!(stdout, "{}", query::render_human(&result)))
                 }
                 Err(error) => {
                     let exit_code = error.exit_code();
@@ -352,9 +344,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
         }
         Commands::Status => match execute_status() {
             Ok(result) if json => emit_json_success("status", &result, Vec::new(), stdout),
-            Ok(result) => {
-                write_human_or_error(write!(stdout, "{}", status::render_human(&result)), stderr)
-            }
+            Ok(result) => write_human_or_error(write!(stdout, "{}", status::render_human(&result))),
             Err(error) => emit_cli_error("status", json, error, stdout, stderr),
         },
     }
@@ -505,7 +495,7 @@ fn emit_cli_error<W: Write, E: Write>(
     }
 }
 
-fn write_human_or_error<E: Write>(result: io::Result<()>, _stderr: &mut E) -> i32 {
+fn write_human_or_error(result: io::Result<()>) -> i32 {
     match result {
         Ok(()) => 0,
         Err(_) => 1,

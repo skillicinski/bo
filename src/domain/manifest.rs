@@ -3,12 +3,10 @@
 // `{tree}/.bo/manifest.json` holds tree metadata, the leaf roster, and the
 // branch roster. Cross-references are unidirectional: branches list their
 // leaf slugs; the inverse (which branches contain a given leaf) is computed
-// in-memory at call time.
-//
-// As of 3b, `manifest.json` is the only tree-state store. Missing or corrupt
-// manifests are surfaced as errors; there is no secondary reconstruction path.
+// in-memory at call time. The manifest is the only tree-state store. Missing
+// or corrupt manifests are surfaced as errors; there is no secondary
+// reconstruction path.
 
-use crate::domain::tree::Tree;
 use crate::domain::{Slug, Timestamp, Title, Url};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -56,11 +54,6 @@ pub struct BranchRecord {
     pub created_at: Timestamp,
     /// Most recent compile run that touched this branch. Updated every recompile.
     pub updated_at: Timestamp,
-    /// True when one or more leaves referenced by this branch no longer exist
-    /// in `manifest.leaves`. Always `false` in 3a; reserved for incremental
-    /// compile (item 4).
-    #[serde(default)]
-    pub stale: bool,
     /// Slugs of leaves assigned to this branch. Canonical direction of the
     /// cross-reference.
     pub leaves: Vec<Slug>,
@@ -103,19 +96,9 @@ impl From<serde_json::Error> for ManifestError {
 // ── resolution helpers ────────────────────────────────────────────────────────
 
 impl Manifest {
-    /// Look up a leaf by slug. `None` if no such leaf exists.
-    pub fn leaf_by_slug(&self, slug: &Slug) -> Option<&LeafRecord> {
-        self.leaves.iter().find(|l| &l.slug == slug)
-    }
-
     /// Look up a leaf by slug string (convenience for contexts that have a raw &str).
     pub fn leaf_by_slug_str(&self, slug: &str) -> Option<&LeafRecord> {
         self.leaves.iter().find(|l| l.slug.as_str() == slug)
-    }
-
-    /// Look up a branch by slug. `None` if no such branch exists.
-    pub fn branch_by_slug(&self, slug: &Slug) -> Option<&BranchRecord> {
-        self.branches.iter().find(|b| &b.slug == slug)
     }
 
     /// Look up a branch by slug string (convenience).
@@ -138,52 +121,13 @@ impl Manifest {
         }
     }
 
-    /// Branches whose `stale` flag is set. Always empty in 3a; populated by
-    /// incremental compile (item 4) when a referenced leaf has been removed.
-    pub fn stale_branches(&self) -> Vec<&BranchRecord> {
-        self.branches.iter().filter(|b| b.stale).collect()
-    }
-
-    /// Resolve a branch's leaf-slug list to full `LeafRecord`s. Empty when
-    /// the branch is unknown or owns no leaves.
-    pub fn leaves_for_branch(&self, branch_slug: &Slug) -> Vec<&LeafRecord> {
-        let Some(branch) = self.branch_by_slug(branch_slug) else {
-            return Vec::new();
-        };
-        branch
-            .leaves
-            .iter()
-            .filter_map(|s| self.leaf_by_slug(s))
-            .collect()
-    }
-
-    /// Convenience: leaves_for_branch by slug string.
-    pub fn leaves_for_branch_str(&self, branch_slug: &str) -> Vec<&LeafRecord> {
-        let Some(branch) = self.branch_by_slug_str(branch_slug) else {
-            return Vec::new();
-        };
-        branch
-            .leaves
-            .iter()
-            .filter_map(|s| self.leaf_by_slug(s))
-            .collect()
-    }
-
-    /// Inverse of `leaves_for_branch`: which branches contain a given leaf.
+    /// Inverse of cross-reference: which branches contain a given leaf.
     /// Computed in-memory at call time; the manifest does not persist this
-    /// direction of the cross-reference.
+    /// direction.
     pub fn branches_for_leaf(&self, leaf_slug: &Slug) -> Vec<&BranchRecord> {
         self.branches
             .iter()
             .filter(|b| b.leaves.iter().any(|s| s == leaf_slug))
-            .collect()
-    }
-
-    /// Convenience: branches_for_leaf by slug string.
-    pub fn branches_for_leaf_str(&self, leaf_slug: &str) -> Vec<&BranchRecord> {
-        self.branches
-            .iter()
-            .filter(|b| b.leaves.iter().any(|s| s.as_str() == leaf_slug))
             .collect()
     }
 }
@@ -215,11 +159,6 @@ pub fn write(path: &Path, manifest: &Manifest) -> Result<(), ManifestError> {
     let json = serde_json::to_string_pretty(manifest)?;
     atomic_write(path, json.as_bytes())?;
     Ok(())
-}
-
-/// Convenience: read from a `Tree`'s manifest path.
-pub fn read_or_reconstruct(tree: &Tree) -> Result<Manifest, ManifestError> {
-    read(&tree.manifest_path())
 }
 
 // ── internals ─────────────────────────────────────────────────────────────────

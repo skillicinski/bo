@@ -238,7 +238,6 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
 
     let mut staged: Vec<StagedWrite> = Vec::new();
     for planned_write in &delta.branch_writes {
-        let _change_kind = planned_write.kind;
         let content = branch::format_content(
             planned_write.record.title.as_str(),
             &planned_write.body,
@@ -273,8 +272,6 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
     pending::apply_deletes(&tree.output_dir, &delta.branch_deletes)?;
     pending::clear(&pending_path)?;
 
-    let _deleted_leaf_slugs = &delta.deleted_leaf_slugs;
-    let _removed_branches = &delta.branches_removed;
     let branch_results: Vec<BranchResult> = delta
         .branches_created
         .iter()

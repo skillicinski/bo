@@ -8,14 +8,6 @@ use std::path::Path;
 
 // ── public types ─────────────────────────────────────────────────────────────
 
-/// How to score term matches against leaves.
-pub enum ScoringPolicy {
-    /// AND semantics: leaf must contain ALL terms. Score = sum of occurrences * 1000 / word_count.
-    AllTermsRequired,
-    /// OR semantics: any term hit counts. Score = sum of occurrences * 1000 / word_count.
-    AnyTermCounts,
-}
-
 /// A leaf scored against a set of query terms.
 pub struct ScoredLeaf {
     pub slug: String,
@@ -34,13 +26,9 @@ pub struct ScoredLeaf {
 /// Score all leaves in a manifest against the given terms.
 ///
 /// Reads leaf files from `tree_dir`. Skips missing/unreadable/malformed files.
+/// Uses OR semantics: any term hit counts. Score = sum of occurrences * 1000 / word_count.
 /// Returns only leaves with score > 0, unsorted (caller sorts).
-pub fn score_corpus(
-    tree_dir: &Path,
-    manifest: &Manifest,
-    terms: &[String],
-    policy: ScoringPolicy,
-) -> Vec<ScoredLeaf> {
+pub fn score_corpus(tree_dir: &Path, manifest: &Manifest, terms: &[String]) -> Vec<ScoredLeaf> {
     let mut results = Vec::new();
 
     for (index_position, leaf) in manifest.leaves.iter().enumerate() {
@@ -52,12 +40,7 @@ pub fn score_corpus(
 
         let body = match frontmatter::parse(&content) {
             Ok((_, body)) => body,
-            Err(_) => match policy {
-                // search: fall back to full content for malformed files
-                ScoringPolicy::AllTermsRequired => content.clone(),
-                // query: skip malformed leaves entirely
-                ScoringPolicy::AnyTermCounts => continue,
-            },
+            Err(_) => continue,
         };
 
         let title = if leaf.title.as_str().trim().is_empty() {
@@ -82,13 +65,7 @@ pub fn score_corpus(
             .map(|term| searchable.matches(term.as_str()).count())
             .sum();
 
-        let dominated = match policy {
-            ScoringPolicy::AllTermsRequired => {
-                // All terms must appear in the searchable text
-                !terms.iter().all(|term| searchable.contains(term.as_str()))
-            }
-            ScoringPolicy::AnyTermCounts => total_hits == 0,
-        };
+        let dominated = total_hits == 0;
 
         if dominated {
             continue;

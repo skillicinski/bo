@@ -1,6 +1,5 @@
 use super::*;
 use crate::domain::{Slug, Timestamp, Title, Url};
-use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::time::SystemTime;
 use tempfile::TempDir;
@@ -258,39 +257,6 @@ fn render_human_full_includes_body() {
 
     assert!(output.contains("complete body"), "output: {output}");
     assert!(!output.contains("preview truncated"), "output: {output}");
-}
-
-#[test]
-fn render_json_card_view_omits_body() {
-    let result = fixture_result(None, None, false);
-
-    let payload: JsonValue = serde_json::from_str(&render_json(&result).unwrap()).unwrap();
-    let leaf = payload.get("leaf").expect("missing leaf object");
-
-    assert_eq!(leaf["title"], "Rendered");
-    assert_eq!(leaf["file"], "rendered.md");
-    assert_eq!(leaf["full"], false);
-    assert!(
-        leaf.get("body").is_none(),
-        "card view JSON should omit body"
-    );
-    assert!(
-        leaf.get("truncated").is_none(),
-        "card view JSON should omit truncated"
-    );
-}
-
-#[test]
-fn render_json_full_includes_body() {
-    let result = fixture_result(Some("json body"), None, true);
-
-    let payload: JsonValue = serde_json::from_str(&render_json(&result).unwrap()).unwrap();
-    let leaf = payload.get("leaf").expect("missing leaf object");
-
-    assert_eq!(leaf["title"], "Rendered");
-    assert_eq!(leaf["body"], "json body");
-    assert!(leaf.get("truncated").is_none());
-    assert_eq!(leaf["full"], true);
 }
 
 fn fixture_result(body: Option<&str>, truncated: Option<bool>, full: bool) -> ShowResult {

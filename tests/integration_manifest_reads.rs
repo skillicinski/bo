@@ -87,7 +87,6 @@ fn stage_tree(home: &Path) -> std::path::PathBuf {
             title: Title::new("topic-x"),
             created_at: Timestamp::parse("2026-01-02T10:00:00Z").unwrap(),
             updated_at: Timestamp::parse("2026-01-02T10:00:00Z").unwrap(),
-            stale: false,
             leaves: vec![Slug::parse("alpha").unwrap(), Slug::parse("beta").unwrap()],
         }],
     };

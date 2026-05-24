@@ -11,56 +11,13 @@
 // canonical on-disk format for leaf files and is preserved by patch_fields
 // when bo compile updates the frontmatter later.
 
-use crate::domain::frontmatter::{self, FrontmatterError};
 use crate::domain::{Timestamp, Title, Url};
-use serde_yaml_ng::Mapping;
-use std::{fmt, fs, io, path::Path};
-
-// ── errors ────────────────────────────────────────────────────────────────────
-
-#[derive(Debug)]
-pub enum LeafError {
-    Io(io::Error),
-    Frontmatter(FrontmatterError),
-}
-
-impl fmt::Display for LeafError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LeafError::Io(e) => write!(f, "I/O error: {}", e),
-            LeafError::Frontmatter(e) => write!(f, "frontmatter error: {}", e),
-        }
-    }
-}
-
-// ── write ─────────────────────────────────────────────────────────────────────
-
-/// Write a leaf document to `path` (full path, including `.md` extension).
-///
-/// `collected_at` is used for both `collected_at` and `updated_at` on initial
-/// write; they diverge only when `bo compile` later patches the frontmatter.
-///
-/// Creates parent directories if needed.
-pub fn write(
-    path: &Path,
-    title: Option<&Title>,
-    url: &Url,
-    collected_at: &Timestamp,
-    body: &str,
-    summary: Option<&str>,
-) -> io::Result<()> {
-    let content = format_content(title, url, collected_at, body, summary);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, content)
-}
 
 /// Format leaf document content — frontmatter block followed by body.
 ///
 /// Kept private; callers should use `write`. Separated only so that the
 /// formatting logic can be exercised in tests without touching the filesystem.
-pub(crate) fn format_content(
+pub fn format_content(
     title: Option<&Title>,
     url: &Url,
     collected_at: &Timestamp,
@@ -118,23 +75,6 @@ pub(crate) fn format_content(
     }
 
     doc
-}
-
-// ── read ──────────────────────────────────────────────────────────────────────
-
-/// Read and parse the frontmatter of an existing leaf file.
-///
-/// Returns the parsed YAML mapping so callers can inspect any field.
-/// Returns `LeafError` if the file cannot be read or its frontmatter is
-/// absent or malformed.
-///
-/// Used by `bo compile` to validate leaves before the agent run — both I/O
-/// failures (missing file) and parse failures (bad YAML) are surfaced through
-/// the same error type so the caller can treat them uniformly as "skip".
-pub fn read_frontmatter(path: &Path) -> Result<Mapping, LeafError> {
-    let content = fs::read_to_string(path).map_err(LeafError::Io)?;
-    let (mapping, _) = frontmatter::parse(&content).map_err(LeafError::Frontmatter)?;
-    Ok(mapping)
 }
 
 #[cfg(test)]
