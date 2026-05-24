@@ -394,3 +394,99 @@ fn collect_snapshots(root: &Path, dir: &Path, snapshot: &mut BTreeMap<String, Fi
         }
     }
 }
+
+// ── parse_leaf_document tests (P4.1) ─────────────────────────────────────
+
+#[test]
+fn no_frontmatter_at_all_returns_all_body() {
+    let doc = parse_leaf_document("just body text").unwrap();
+    assert!(doc.frontmatter.is_empty());
+    assert_eq!(doc.frontmatter_raw, "");
+    assert_eq!(doc.body, "just body text");
+}
+
+#[test]
+fn normal_frontmatter_parsed_correctly() {
+    let doc = parse_leaf_document("---\ntitle: foo\n---\nbody").unwrap();
+    assert_eq!(
+        doc.frontmatter.get("title").and_then(Value::as_str),
+        Some("foo")
+    );
+    assert_eq!(doc.frontmatter_raw, "---\ntitle: foo\n---\n");
+    assert_eq!(doc.body, "body");
+}
+
+#[test]
+fn empty_frontmatter() {
+    let doc = parse_leaf_document("---\n---\nbody").unwrap();
+    assert!(doc.frontmatter.is_empty());
+    assert_eq!(doc.frontmatter_raw, "---\n---\n");
+    assert_eq!(doc.body, "body");
+}
+
+#[test]
+fn empty_frontmatter_at_eof() {
+    let doc = parse_leaf_document("---\n---").unwrap();
+    assert!(doc.frontmatter.is_empty());
+    assert_eq!(doc.frontmatter_raw, "---\n---");
+    assert_eq!(doc.body, "");
+}
+
+#[test]
+fn only_opening_delimiter_no_closing_is_error() {
+    let err = parse_leaf_document("---\nsome: content\nbut no closing").unwrap_err();
+    assert!(err.contains("no frontmatter delimiters found"));
+}
+
+#[test]
+fn yaml_value_containing_delimiter_not_treated_as_delimiter() {
+    let doc = parse_leaf_document("---\ntitle: \"foo --- bar\"\n---\nbody").unwrap();
+    assert_eq!(
+        doc.frontmatter.get("title").and_then(Value::as_str),
+        Some("foo --- bar")
+    );
+    assert_eq!(doc.body, "body");
+}
+
+#[test]
+fn delimiter_in_body_not_treated_as_frontmatter_delimiter() {
+    let doc = parse_leaf_document("---\ntitle: x\n---\nbody with \n--- in it").unwrap();
+    assert_eq!(
+        doc.frontmatter.get("title").and_then(Value::as_str),
+        Some("x")
+    );
+    assert_eq!(doc.body, "body with \n--- in it");
+}
+
+#[test]
+fn multiline_frontmatter_with_various_yaml_types() {
+    let input =
+        "---\ntitle: test\ncount: 42\ntags:\n  - rust\n  - cli\ndraft: true\n---\nbody text";
+    let doc = parse_leaf_document(input).unwrap();
+    assert_eq!(
+        doc.frontmatter.get("title").and_then(Value::as_str),
+        Some("test")
+    );
+    assert_eq!(
+        doc.frontmatter.get("count").and_then(Value::as_i64),
+        Some(42)
+    );
+    assert_eq!(doc.body, "body text");
+}
+
+#[test]
+fn closing_delimiter_at_eof_no_trailing_newline() {
+    let doc = parse_leaf_document("---\ntitle: foo\n---").unwrap();
+    assert_eq!(
+        doc.frontmatter.get("title").and_then(Value::as_str),
+        Some("foo")
+    );
+    assert_eq!(doc.frontmatter_raw, "---\ntitle: foo\n---");
+    assert_eq!(doc.body, "");
+}
+
+#[test]
+fn body_with_blank_line_separator_is_stripped() {
+    let doc = parse_leaf_document("---\ntitle: x\n---\n\nbody after blank line").unwrap();
+    assert_eq!(doc.body, "body after blank line");
+}
