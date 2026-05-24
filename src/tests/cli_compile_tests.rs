@@ -602,3 +602,46 @@ fn stale_branch_below_threshold_removed() {
     assert!(!dir.path().join("branches/doomed.md").exists());
     assert!(m.leaf_by_slug_str("leaf-b").is_none());
 }
+
+#[test]
+fn unbranched_missing_leaf_pruned_during_repair() {
+    // An unbranched leaf whose file is missing on disk should be pruned
+    // from the manifest during the pre-LLM repair pass.
+    let dir = TempDir::new().unwrap();
+    seed_manifest(
+        dir.path(),
+        &[
+            ("leaf-a", "A", "https://example.com/a"),
+            ("leaf-b", "B", "https://example.com/b"),
+            ("orphan", "Orphan", "https://example.com/orphan"),
+        ],
+    );
+    write_leaf(dir.path(), "leaf-a", "A", "https://example.com/a");
+    write_leaf(dir.path(), "leaf-b", "B", "https://example.com/b");
+    // orphan.md is deliberately NOT written — only the manifest record exists.
+
+    let manifest_path = dir.path().join(".bo/manifest.json");
+    let mut m = manifest::read(&manifest_path).unwrap();
+    m.tree.last_compiled_at = Some(Timestamp::parse("2026-06-01T12:00:00Z").unwrap());
+    // No branches — the orphan leaf is completely unbranched.
+    manifest::write(&manifest_path, &m).unwrap();
+
+    let cfg = make_test_config(dir.path());
+    let provider = StaticProvider::new(empty_incremental_response());
+
+    let _result = run_compile_with_provider(
+        &cfg,
+        CompileOptions::default(),
+        &provider,
+        &cfg.effective_compile_model().unwrap(),
+    )
+    .unwrap();
+
+    // Repair prunes orphan; two valid leaves remain → single_leaf after repair is 2,
+    // so compile proceeds (or noops if no new leaves).
+    // The orphan should be gone from the manifest.
+    let m = manifest::read(&manifest_path).unwrap();
+    assert!(m.leaf_by_slug_str("orphan").is_none());
+    assert!(m.leaf_by_slug_str("leaf-a").is_some());
+    assert!(m.leaf_by_slug_str("leaf-b").is_some());
+}

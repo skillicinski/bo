@@ -78,6 +78,8 @@ pub(super) struct StaleRepairResult {
     pub(super) branch_deletes: Vec<String>,
     /// Leaf slugs that were deleted (file missing).
     pub(super) deleted_leaf_slugs: Vec<String>,
+    /// Leaf slugs pruned because files are missing and not referenced by any branch.
+    pub(super) orphan_leaf_slugs: Vec<String>,
     /// Whether any mutation was made to the manifest.
     pub(super) manifest_changed: bool,
 }
@@ -97,6 +99,7 @@ pub(super) fn repair_stale_branches(
             branches_removed: Vec::new(),
             branch_deletes: Vec::new(),
             deleted_leaf_slugs: Vec::new(),
+            orphan_leaf_slugs: Vec::new(),
             manifest_changed: false,
         });
     }
@@ -107,9 +110,32 @@ pub(super) fn repair_stale_branches(
         .map(String::as_str)
         .collect();
 
+    let branch_referenced_slugs: HashSet<&str> = manifest
+        .branches
+        .iter()
+        .flat_map(|b| b.leaves.iter().map(|s| s.as_str()))
+        .collect();
+    let orphan_slugs: Vec<String> = classification
+        .deleted_leaf_slugs
+        .iter()
+        .filter(|s| !branch_referenced_slugs.contains(s.as_str()))
+        .cloned()
+        .collect();
+
+    if !orphan_slugs.is_empty() {
+        let n = orphan_slugs.len();
+        eprintln!(
+            "pruning {} orphan leaf record{} (file{} missing, not in any branch)",
+            n,
+            if n == 1 { "" } else { "s" },
+            if n == 1 { "" } else { "s" }
+        );
+    }
+
     let mut branches_removed = Vec::new();
     let mut branch_deletes = Vec::new();
     let mut repaired_branches = Vec::new();
+    let mut repaired_branch_slugs = Vec::new();
 
     for branch in &manifest.branches {
         let remaining: Vec<Slug> = branch
@@ -128,11 +154,43 @@ pub(super) fn repair_stale_branches(
                 reason: "stale_branch_below_minimum_leaves".to_string(),
             });
         } else {
+            let removed_count = branch.leaves.len() - remaining.len();
+            if removed_count > 0 {
+                repaired_branch_slugs.push(branch.slug.as_str().to_string());
+            }
             let mut repaired = branch.clone();
             repaired.leaves = remaining;
             repaired.stale = false;
             repaired_branches.push(repaired);
         }
+    }
+
+    // Emit messages for branch-level repairs (separate from orphan leaf pruning above).
+    if !repaired_branch_slugs.is_empty() {
+        let names = repaired_branch_slugs.join(", ");
+        eprintln!(
+            "repaired {} branch{} with deleted leaves: {}",
+            repaired_branch_slugs.len(),
+            if repaired_branch_slugs.len() == 1 {
+                ""
+            } else {
+                "es"
+            },
+            names,
+        );
+    }
+    if !branches_removed.is_empty() {
+        let names: Vec<&str> = branches_removed.iter().map(|b| b.slug.as_str()).collect();
+        eprintln!(
+            "removed {} stale branch{} below threshold: {}",
+            branches_removed.len(),
+            if branches_removed.len() == 1 {
+                ""
+            } else {
+                "es"
+            },
+            names.join(", "),
+        );
     }
 
     let repaired_leaves: Vec<LeafRecord> = manifest
@@ -165,6 +223,7 @@ pub(super) fn repair_stale_branches(
         branches_removed,
         branch_deletes,
         deleted_leaf_slugs: classification.deleted_leaf_slugs,
+        orphan_leaf_slugs: orphan_slugs,
         manifest_changed: true,
     })
 }
@@ -227,6 +286,9 @@ pub(super) fn classify_leaf_files(
                         "newly selected leaf '{}' is missing; no files were changed",
                         leaf.file
                     )));
+                } else {
+                    // Unbranched leaf with missing file — prune from manifest.
+                    deleted_leaf_slugs.push(leaf.slug.as_str().to_string());
                 }
             }
             Err(error) => {
