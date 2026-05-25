@@ -1,15 +1,31 @@
 # bo
 
-Collect web content that you don't have time to read as a local markdown knowledge tree. Compile the content into common themes and topics using an LLM. Then, query your collection with natural language and get answers with citations back to source material.
+Collect web content that you don't have time to read as a local markdown knowledge tree. Compile the content into common themes and topics using an LLM. Your collection can now be queried for the information you need and answer questions that span every raw document.
 
-Your collection stays legible and can be viewed with any markdown reader. The idea is to skip RAG and vector databases altogether and just rely on local files and let LLMs do what they're best at. The CLI is intended to be machine-friendly for use via any coding assistant.
+Your collection stays legible and can be viewed with any markdown reader. The idea is to skip RAG and vector databases altogether and just rely on local files and let LLMs do what they're best at. The CLI is intended to be machine-friendly for use via any coding assistant/harness.
 
 All you need is to bring your own API key!
+
+## Who is this for?
+
+**Habitual tab and link hoarders. People who "save it for later". Folks that already forgot the takeaways.**
+
+If you ever used [Pocket](https://getpocket.com/home) or similar products then then the idea is similarly straightforward; capture links to stuff that looks interesting and useful for you to catch up on when you have time. The added value in this tool is that you can easily derive the core claims and insights from the knowledge housed in all that stuff. Taking inspiration from other OSS that tries to "do good" with consumer-grade AI, the intent is for bo to stay model-agnostic, local and free to use.
+
+The goal is not to replace journaling tools like Obsidian, automated cloud research tools like NotebookLM or vector-based RAG technologies. It is a pretty niche package but hopefully specialised at doing a few things very well. If anything, bo is meant to be valuable as a companion to way more advanced tools.
 
 ## Install
 
 ```bash
-cargo install --git https://github.com/skillicinski/bo --tag v0.0.1
+npm install -g @skillicinski/bo
+```
+
+No Rust toolchain required. Pre-built binaries for macOS (Intel + Apple Silicon) and Linux x86_64.
+
+Alternatively, build from source:
+
+```bash
+cargo install --git https://github.com/skillicinski/bo --tag v0.0.2
 ```
 
 ## Quickstart
@@ -122,7 +138,8 @@ export DEEPSEEK_API_KEY=sk-...
 └── auth.json            # Provider credentials (chmod 600)
 
 ~/bo-tree/               # Your tree (location chosen at seed)
-├── index.jsonl          # Ledger of collected leaves
+├── .bo/
+│   └── manifest.json      # Tree topology and metadata
 ├── intro-to-knowledge-graphs.md   # Leaf
 ├── linked-data-fundamentals.md    # Leaf
 └── branches/

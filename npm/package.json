@@ -1,0 +1,24 @@
+{
+  "name": "@skillicinski/bo",
+  "version": "0.0.2",
+  "description": "Collect web pages into a local markdown knowledge tree",
+  "bin": {
+    "bo": "run.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "files": [
+    "install.js",
+    "run.js",
+    "package.json"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/skillicinski/bo.git"
+  },
+  "license": "MIT"
+}

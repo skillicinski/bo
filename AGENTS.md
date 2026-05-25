@@ -65,10 +65,11 @@ Link related issues and stacked PRs at the bottom of the PR body, separated from
 
 1. Update `CHANGELOG.md` with the new version section.
 2. Bump `version` in `Cargo.toml`.
-3. Commit, merge to main.
-4. `git tag v<version> && git push --tags`
+3. Bump `version` in `npm/package.json` to match.
+4. Commit, merge to main.
+5. `git tag v<version> && git push --tags`
 
-The `release.yml` workflow runs CI and creates a GitHub Release with notes extracted from CHANGELOG.md.
+The `release.yml` workflow runs CI (format, clippy, deny, test), builds platform binaries for macOS Intel/Apple Silicon and Linux x86_64, creates a GitHub Release with the tarballs attached, and publishes `@skillicinski/bo` to npm.
 
 ## Current state (v0.0.1)
 
