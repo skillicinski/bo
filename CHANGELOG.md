@@ -4,10 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.0.2] - 2026-05-25
 
 ### Added
 
+- npm distribution — install with `npm install -g @skillicinski/bo`. No Rust toolchain needed. Pre-built binaries for macOS (Intel + Apple Silicon) and Linux x86_64.
 - DeepSeek provider support (`deepseek-v4-flash`, `deepseek-v4-pro`). Select with `bo config --provider deepseek`.
 - `bo status` command — shows tree health and compile readiness.
 - `bo compile --all` flag — recompile the full corpus and allow complete branch graph rewrite.
