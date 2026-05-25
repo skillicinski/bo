@@ -101,6 +101,7 @@ jobs:
   npm-publish:
     needs: create-release
     runs-on: ubuntu-latest
+    environment: npm-publish
     permissions:
       id-token: write
     steps:
@@ -115,4 +116,4 @@ jobs:
         run: npm install -g npm@latest
 
       - name: Stage publish to npm (requires maintainer approval)
-        run: cd npm && npm stage publish --provenance --access public
+        run: cd npm && npm stage publish --access public
