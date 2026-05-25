@@ -23,15 +23,11 @@ Before performing broad `read` and `bash` tool calls, use the below information 
 
 Project planning, ADRs, specs, and session notes live in `internal/` (gitignored).
 
-## Conventions
+## Development
 
-- **Testing:** one test file per module in `src/tests/`. Run `cargo test`.
-- **Linting:** `cargo clippy --all-targets --all-features -- -D warnings`
-- **Formatting:** `cargo fmt`
-- **No agent loops in bo itself** — LLM calls are single-shot structured output. Orchestration belongs to the calling agent, not bo.
-- **`--json` flag** on all commands for machine consumption.
-- **Config:** `~/.bo/config.json` — created by `bo seed` or `bo config --provider/--model/--compile-model`.
-- **Auth:** `~/.bo/auth.json` — flat keys `openai_api_key` / `deepseek_api_key`. Hand-edited or set via env var. Separate from config.
+- Always add a `--json` flag to new user-facing commands.
+- No agent loops in bo — LLM calls are single-shot structured output. Orchestration belongs to the calling agent.
+- One test file per module in `src/tests/`; integration tests in `tests/`.
 
 ## Changelog
 
@@ -46,7 +42,7 @@ Project planning, ADRs, specs, and session notes live in `internal/` (gitignored
 
 PRs don't need "Verification", "Tests", or "How to test" sections. CI gates every merge and PRs go through human review. A brief summary of what changed and why is sufficient.
 
-When creating new PRs, the body should begin with a itemised list that describe the core functional changes to the project. Each item should begin with a null-subject verb, eg. "added", "removed", "updated", "refactored", "bumped" to describe the type of operation on the code, followed by a one-line summary of the change itself.
+When creating new PRs, the body should begin with a itemised list that describes the core functional changes to the project. Items are formatted use the unordered list markdown syntax. Each item should begin with a null-subject verb, eg. "added", "removed", "updated", "refactored", "bumped" to describe the type of operation on the code, followed by a one-line summary of the change itself.
 
 Link related issues and stacked PRs at the bottom of the PR body, separated from the summary by `---` on its own line:
 - `Closes #<number>` for issues this PR resolves
