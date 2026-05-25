@@ -47,14 +47,14 @@ pub enum SummaryError {
 impl fmt::Display for SummaryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SummaryError::Llm(error) => write!(f, "LLM summary failed: {}", error),
-            SummaryError::Parse(message) => write!(f, "summary response parse error: {}", message),
+            SummaryError::Llm(error) => write!(f, "LLM summary failed: {error}"),
+            SummaryError::Parse(message) => write!(f, "summary response parse error: {message}"),
             SummaryError::Truncated => write!(
                 f,
                 "summary output was truncated — try a model with larger output capacity"
             ),
             SummaryError::ContentFilter => write!(f, "summary was blocked by content filter"),
-            SummaryError::Runtime(message) => write!(f, "summary runtime error: {}", message),
+            SummaryError::Runtime(message) => write!(f, "summary runtime error: {message}"),
         }
     }
 }
@@ -82,6 +82,17 @@ fn truncate_body(body: &str, max_words: usize) -> String {
     }
 }
 
+fn summary_response_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "summary": { "type": "string" }
+        },
+        "required": ["summary"],
+        "additionalProperties": false
+    })
+}
+
 // ── LLM-powered summary ─────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -102,7 +113,7 @@ pub async fn generate_llm_or_fallback(
     match generate_llm(body, title, provider, model, policy).await {
         Ok(summary) => summary,
         Err(e) => {
-            eprintln!("LLM summary failed (using deterministic fallback): {}", e);
+            eprintln!("LLM summary failed (using deterministic fallback): {e}");
             generate_fallback(body)
         }
     }
@@ -119,11 +130,8 @@ pub async fn generate_llm(
     let truncated_body = truncate_body(body, SUMMARY_INPUT_MAX_WORDS);
 
     let user_message = match title {
-        Some(t) => format!(
-            "<title>{}</title>\n<document>\n{}\n</document>",
-            t, truncated_body
-        ),
-        None => format!("<document>\n{}\n</document>", truncated_body),
+        Some(t) => format!("<title>{t}</title>\n<document>\n{truncated_body}\n</document>"),
+        None => format!("<document>\n{truncated_body}\n</document>"),
     };
 
     let messages = vec![
@@ -131,14 +139,7 @@ pub async fn generate_llm(
         Message::user(user_message),
     ];
 
-    let schema = serde_json::json!({
-        "type": "object",
-        "properties": {
-            "summary": { "type": "string" }
-        },
-
-        "additionalProperties": false
-    });
+    let schema = summary_response_schema();
 
     let response =
         complete_with_policy(provider, &messages, model, 512, Some(&schema), true, policy)
@@ -151,8 +152,7 @@ pub async fn generate_llm(
         FinishReason::ContentFilter => return Err(SummaryError::ContentFilter),
         FinishReason::Other(reason) => {
             return Err(SummaryError::Llm(LlmError::Api(format!(
-                "unexpected finish reason: {}",
-                reason
+                "unexpected finish reason: {reason}"
             ))));
         }
     }
