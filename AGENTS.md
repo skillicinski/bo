@@ -57,8 +57,26 @@ This project follows [Semantic Versioning](https://semver.org/).
 3. Bump `version` in `npm/package.json` to match.
 4. Commit, merge to main.
 5. `git tag v<version> && git push --tags`
+6. **Approve the `npm-publish` GitHub Environment** — Actions tab → tag run → click *Review deployments* → approve. The job will not run until you do.
+7. **Approve the staged tarball on npmjs.com** — `npm stage publish` uploads to a staging queue, not to public. Open the package page on npmjs.com from a 2FA-trusted device and approve the pending stage.
 
-The `release.yml` workflow runs CI (format, clippy, deny, test), builds platform binaries for macOS Intel/Apple Silicon and Linux x86_64, creates a GitHub Release with the tarballs attached, and publishes `@skillicinski/bo` to npm.
+The `release.yml` workflow runs CI (format, clippy, deny, test), builds platform binaries for macOS Intel/Apple Silicon and Linux x86_64, creates a GitHub Release with the tarballs attached, and stages `@skillicinski/bo` to npm via OIDC trusted publishing.
+
+### Why two human gates?
+
+The environment approval (step 6) blocks token issuance: the OIDC token GitHub mints carries the `environment: npm-publish` claim, which npm's trusted-publisher config requires. The staged-publish approval (step 7) blocks public availability: the tarball is uploaded but invisible until a maintainer signs off from a trusted device. Either gate alone would not stop a compromised CI from publishing.
+
+### Recovering from a failed release
+
+- If `npm-publish` failed (e.g. before this hardening), delete the partial release and re-tag at a fixed commit:
+  ```bash
+  gh release delete v<version> --yes --cleanup-tag
+  git tag -d v<version>
+  git tag v<version> <fixed-commit>
+  git push origin v<version>
+  ```
+- Versions that successfully publish to npm are **permanently burned** even after `npm unpublish`. Bump to the next patch instead of reusing.
+- Re-running a tag-triggered workflow replays the workflow YAML from the tag's commit, not from `main`. If the fix is on `main`, you must re-tag, not just re-run.
 
 ## LLM providers
 
