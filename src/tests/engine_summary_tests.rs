@@ -21,7 +21,7 @@ fn fallback_short_body_returned_as_is() {
 
 #[test]
 fn fallback_truncates_at_200_words() {
-    let words: Vec<String> = (0..300).map(|i| format!("word{}", i)).collect();
+    let words: Vec<String> = (0..300).map(|i| format!("word{i}")).collect();
     let body = words.join(" ");
     let result = generate_fallback(&body);
     assert_eq!(result.split_whitespace().count(), 200);
@@ -38,7 +38,7 @@ fn fallback_normalizes_whitespace() {
 
 #[test]
 fn fallback_exactly_200_words() {
-    let words: Vec<String> = (0..200).map(|i| format!("w{}", i)).collect();
+    let words: Vec<String> = (0..200).map(|i| format!("w{i}")).collect();
     let body = words.join(" ");
     let result = generate_fallback(&body);
     assert_eq!(result.split_whitespace().count(), 200);
@@ -52,10 +52,18 @@ fn truncate_body_short_input_unchanged() {
 
 #[test]
 fn truncate_body_long_input_cut() {
-    let words: Vec<String> = (0..5000).map(|i| format!("w{}", i)).collect();
+    let words: Vec<String> = (0..5000).map(|i| format!("w{i}")).collect();
     let body = words.join(" ");
     let result = truncate_body(&body, 4000);
     assert_eq!(result.split_whitespace().count(), 4000);
+}
+
+#[test]
+fn summary_response_schema_requires_summary_field() {
+    let schema = summary_response_schema();
+
+    assert_eq!(schema["required"], serde_json::json!(["summary"]));
+    assert_eq!(schema["additionalProperties"], false);
 }
 
 struct SummaryFakeProvider {
