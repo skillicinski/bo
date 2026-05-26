@@ -3,8 +3,7 @@
 
 # dev
 .env
-/tmp-tree/
+/tmp*/
 
-# internal planning (not shipped)
-docs/scratchpad/
-docs/specs/
+# internal
+internal/

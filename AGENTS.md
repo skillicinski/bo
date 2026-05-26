@@ -2,45 +2,32 @@
 
 ## What is bo?
 
-Rust CLI tool. Collects web pages into a local markdown knowledge tree, compiles topic branches via LLM, and answers questions with citations over collected content.
-
-## Architecture
-
-Deterministic pipeline tool, not an autonomous agent. LLM commands (compile, query, summary) follow: code gathers context → one structured-output LLM call → code writes results. See `docs/adrs/001.md`.
-
-Architectural decisions are recorded in `docs/adrs/`. Consult them when making implementation decisions — especially ADR-001 (pipeline boundaries), ADR-002 (structured output schemas), ADR-004 (manifest design), and ADR-005 (deterministic processing at LLM boundaries).
+Rust CLI tool. Collects web pages into a local markdown knowledge tree, compiles topic branches via LLMs, and answers questions with citations over collected content.
 
 ## Project layout
 
-```
-src/
-├── cli/          # CLI command implementations (collect, compile, config, list, search, show, query, raze, seed)
-├── domain/       # Core types: leaf, branch, tree, index, slug, frontmatter
-├── engine/       # Infrastructure: fetch, extract, config, auth, quality, summary, llm/
-├── adapters/     # Source-specific adapters (youtube/)
-├── tests/        # Unit/integration tests (one file per module)
-├── lib.rs        # Library root (re-exports)
-└── main.rs       # CLI entry point, argument parsing, output formatting
-```
+Before performing broad `read` and `bash` tool calls, use the below information to get a sense of where to find what you are looking for.
 
-## Key paths
+- `src/cli/` — CLI command implementations (collect, compile, config, list, show, query, raze, seed)
+- `src/domain/` — Core types: leaf, branch, tree, manifest, slug, frontmatter
+- `src/engine/` — Infrastructure: fetch, extract, config, auth, quality, summary, llm/
+- `src/adapters/` — Source-specific adapters (youtube/)
+- `src/tests/` — Unit tests (one file per module)
+- `tests/` — Integration tests (architecture, CLI end-to-end, cross-module scenarios)
+- `src/lib.rs` — Library root (re-exports)
+- `src/main.rs` — CLI entry point, argument parsing, output formatting
+- `npm/` — npm wrapper package (install.js, run.js, package.json)
+- `.github/workflows/release.yml` — CI pipeline: gate → build matrix → GitHub Release → npm stage publish
+- `CHANGELOG.md` — User-facing changelog (Keep a Changelog format)
+- `docs/usage.md` — Usage guide with command walkthrough and examples
 
-- `docs/adrs/` — architectural decision records (tracked)
-- `docs/milestones/` — release roadmap and backlog (tracked)
-- `docs/scratchpad/` — session notes, idea capture (gitignored)
-- `docs/specs/` — feature implementation specs (gitignored)
-- `CHANGELOG.md` — user-facing changelog (Keep a Changelog format)
-- `deny.toml` — cargo-deny config
+Project planning, ADRs, specs, and session notes live in `internal/` (gitignored).
 
-## Conventions
+## Development
 
-- **Testing:** one test file per module in `src/tests/`. Run `cargo test`.
-- **Linting:** `cargo clippy --all-targets --all-features -- -D warnings`
-- **Formatting:** `cargo fmt`
-- **No agent loops in bo itself** — LLM calls are single-shot structured output. Orchestration belongs to the calling agent, not bo.
-- **`--json` flag** on all commands for machine consumption.
-- **Config:** `~/.bo/config.json` — created by `bo seed` or `bo config --provider/--model/--compile-model`.
-- **Auth:** `~/.bo/auth.json` — flat keys `openai_api_key` / `deepseek_api_key`. Hand-edited or set via env var. Separate from config.
+- Always add a `--json` flag to new user-facing commands.
+- No agent loops in bo — LLM calls are single-shot structured output. Orchestration belongs to the calling agent.
+- One test file per module in `src/tests/`; integration tests in `tests/`.
 
 ## Changelog
 
@@ -55,13 +42,15 @@ src/
 
 PRs don't need "Verification", "Tests", or "How to test" sections. CI gates every merge and PRs go through human review. A brief summary of what changed and why is sufficient.
 
-When creating new PRs, the body should begin with a itemised list that describe the core functional changes to the project. Each item should begin with a null-subject verb, eg. "added", "removed", "updated", "refactored", "bumped" to describe the type of operation on the code, followed by a one-line summary of the change itself.
+When creating new PRs, the body should begin with a itemised list that describes the core functional changes to the project. Items are formatted use the unordered list markdown syntax. Each item should begin with a null-subject verb, eg. "added", "removed", "updated", "refactored", "bumped" to describe the type of operation on the code, followed by a one-line summary of the change itself.
 
 Link related issues and stacked PRs at the bottom of the PR body, separated from the summary by `---` on its own line:
 - `Closes #<number>` for issues this PR resolves
 - `Stacked on #<number>` for an open PR this builds on top of
 
 ## Releasing
+
+This project follows [Semantic Versioning](https://semver.org/).
 
 1. Update `CHANGELOG.md` with the new version section.
 2. Bump `version` in `Cargo.toml`.
@@ -71,10 +60,6 @@ Link related issues and stacked PRs at the bottom of the PR body, separated from
 
 The `release.yml` workflow runs CI (format, clippy, deny, test), builds platform binaries for macOS Intel/Apple Silicon and Linux x86_64, creates a GitHub Release with the tarballs attached, and publishes `@skillicinski/bo` to npm.
 
-## Current state (v0.0.1)
+## LLM providers
 
-Commands shipping: `seed`, `collect`, `list`, `show`, `query`, `compile`, `config`, `status`, `raze`.
-
-## LLM provider
-
-OpenAI-compatible only (for now). Two providers: `openai` (default) and `deepseek`. Auth resolved via provider-specific env var (`OPENAI_API_KEY` / `DEEPSEEK_API_KEY`) → `~/.bo/auth.json` → error. Models configured via `bo config --model <id>` (and optional `--compile-model <id>`). Default model: `gpt-4.1-mini`.
+See [docs/providers.md](docs/providers.md) for per-provider model tables and API-specific behaviour.
