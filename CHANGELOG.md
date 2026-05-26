@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.0.4] - 2026-05-26
+
+### Fixed
+
+- `bo collect` — LLM summary generation no longer falls back to the deterministic summary on OpenAI providers. The structured-output schema was being rejected by OpenAI's strict-mode validator because `summary` was missing from the schema's `required` list. DeepSeek users were unaffected.
+
 ## [0.0.3] - 2026-05-26
 
 ### Fixed
