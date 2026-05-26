@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.0.3] - 2026-05-26
+
+### Fixed
+
+- npm install — `bo` no longer fails with `use strict: command not found` / `syntax error near unexpected token '('` after `npm install -g @skillicinski/bo`. The wrapper script was missing its `#!/usr/bin/env node` shebang, causing the OS to execute it as a shell script.
+
 ## [0.0.2] - 2026-05-25
 
 ### Added
