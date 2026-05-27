@@ -130,6 +130,14 @@ pub async fn complete_with_policy(
         ));
     }
 
+    // Normalize the schema into the provider's native dialect once,
+    // before the retry loop. A schema the provider cannot satisfy
+    // fails fast here rather than after N retries.
+    let normalized_schema = match response_schema {
+        Some(schema) => Some(provider.map_response_schema(schema)?),
+        None => None,
+    };
+
     let mut last_error: Option<LlmError> = None;
 
     for attempt in 1..=policy.max_attempts {
@@ -139,7 +147,7 @@ pub async fn complete_with_policy(
                 messages,
                 model,
                 max_tokens,
-                response_schema,
+                normalized_schema.as_ref(),
                 reasoning_disabled,
             ),
         )
@@ -249,6 +257,19 @@ pub struct LlmResponse {
 /// An LLM backend that can produce structured responses.
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
+    /// Transform a response schema into the provider's native dialect.
+    ///
+    /// Default: identity (pass-through). Override if the provider's schema
+    /// vocabulary differs from the canonical JSON Schema dialect (e.g. Gemini
+    /// does not accept `additionalProperties`).
+    ///
+    /// Return `Err` if the schema uses constructs the provider cannot satisfy —
+    /// the caller must not silently degrade. This is called once per request
+    /// by `complete_with_policy`, before the retry loop.
+    fn map_response_schema(&self, schema: &Value) -> Result<Value, LlmError> {
+        Ok(schema.clone())
+    }
+
     async fn complete(
         &self,
         messages: &[Message],

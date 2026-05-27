@@ -1,5 +1,111 @@
 use super::*;
 
+// ── schema dialect tests ────────────────────────────────────────────────────
+
+#[test]
+fn to_gemini_schema_strips_additional_properties_false() {
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string" }
+        },
+        "additionalProperties": false
+    });
+
+    let result = to_gemini_schema(&schema).unwrap();
+
+    assert_eq!(result["type"], "object");
+    assert_eq!(result["properties"]["name"]["type"], "string");
+    assert!(result.get("additionalProperties").is_none());
+}
+
+#[test]
+fn to_gemini_schema_strips_nested_additional_properties() {
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "additionalProperties": false
+                }
+            }
+        },
+        "additionalProperties": false
+    });
+
+    let result = to_gemini_schema(&schema).unwrap();
+
+    let inner = &result["properties"]["items"]["items"];
+    assert!(inner.get("additionalProperties").is_none());
+    assert_eq!(inner["type"], "string");
+}
+
+#[test]
+fn to_gemini_schema_pass_through_clean_schema() {
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "answer": { "type": "string" }
+        },
+        "required": ["answer"]
+    });
+
+    let result = to_gemini_schema(&schema).unwrap();
+
+    assert_eq!(result, schema);
+}
+
+#[test]
+fn to_gemini_schema_rejects_additional_properties_object() {
+    let schema = serde_json::json!({
+        "type": "object",
+        "additionalProperties": { "type": "string" }
+    });
+
+    let err = to_gemini_schema(&schema).unwrap_err();
+
+    assert!(
+        err.to_string().contains("additionalProperties"),
+        "expected error about additionalProperties, got: {err}"
+    );
+}
+
+#[test]
+fn to_gemini_schema_rejects_additional_properties_true() {
+    let schema = serde_json::json!({
+        "type": "object",
+        "additionalProperties": true
+    });
+
+    let err = to_gemini_schema(&schema).unwrap_err();
+
+    assert!(
+        err.to_string().contains("additionalProperties"),
+        "expected error about additionalProperties, got: {err}"
+    );
+}
+
+#[test]
+fn to_gemini_schema_handles_arrays() {
+    let schema = serde_json::json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": { "x": { "type": "number" } },
+            "additionalProperties": false
+        }
+    });
+
+    let result = to_gemini_schema(&schema).unwrap();
+
+    assert_eq!(result["type"], "array");
+    assert!(result["items"].get("additionalProperties").is_none());
+}
+
+// ── error sanitizer tests ──────────────────────────────────────────────────
+
 #[test]
 fn sanitizer_redacts_gemini_key_fragments() {
     let message = "API key not valid: AIzaSyD-test-key-12345.";

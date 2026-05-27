@@ -22,6 +22,13 @@ impl GoogleProvider {
 
 #[async_trait]
 impl LlmProvider for GoogleProvider {
+    /// Gemini's `responseSchema` accepts a subset of OpenAPI 3.0 Schema.
+    /// `additionalProperties: false` is not part of that subset — strip it.
+    /// Reject anything else (e.g. `additionalProperties: { … }`) as unsupported.
+    fn map_response_schema(&self, schema: &Value) -> Result<Value, LlmError> {
+        to_gemini_schema(schema)
+    }
+
     async fn complete(
         &self,
         messages: &[Message],
@@ -64,7 +71,7 @@ impl LlmProvider for GoogleProvider {
 
         if let Some(schema) = response_schema {
             generation_config["responseMimeType"] = serde_json::json!("application/json");
-            generation_config["responseSchema"] = strip_additional_properties(schema);
+            generation_config["responseSchema"] = schema.clone();
         }
 
         if reasoning_disabled {
@@ -168,22 +175,38 @@ fn map_http_error(status: reqwest::StatusCode, body: &str) -> LlmError {
     }
 }
 
-fn strip_additional_properties(value: &Value) -> Value {
+/// Recursively strip `additionalProperties: false` from a JSON Schema value.
+///
+/// Gemini's `responseSchema` uses a subset of OpenAPI 3.0 Schema that does
+/// not accept `additionalProperties`. A value of `false` ("no extra props")
+/// is safe to strip — the schema's meaning is unchanged in Gemini's dialect.
+///
+/// Any other value (e.g. `additionalProperties: { "type": "string" }`)
+/// signals a schema constraint Gemini cannot express — reject it explicitly.
+fn to_gemini_schema(value: &Value) -> Result<Value, LlmError> {
     match value {
         Value::Object(map) => {
             let mut cleaned = serde_json::Map::new();
             for (k, v) in map {
                 if k == "additionalProperties" {
-                    continue;
+                    match v {
+                        Value::Bool(false) => continue, // safe to strip
+                        other => {
+                            return Err(LlmError::Api(format!(
+                                "Gemini does not support additionalProperties: {other}"
+                            )));
+                        }
+                    }
                 }
-                cleaned.insert(k.clone(), strip_additional_properties(v));
+                cleaned.insert(k.clone(), to_gemini_schema(v)?);
             }
-            Value::Object(cleaned)
+            Ok(Value::Object(cleaned))
         }
         Value::Array(items) => {
-            Value::Array(items.iter().map(strip_additional_properties).collect())
+            let mapped: Result<Vec<_>, _> = items.iter().map(to_gemini_schema).collect();
+            Ok(Value::Array(mapped?))
         }
-        other => other.clone(),
+        other => Ok(other.clone()),
     }
 }
 
