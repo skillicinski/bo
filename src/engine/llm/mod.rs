@@ -9,14 +9,14 @@ pub mod providers;
 
 pub use model::{Model, UnsupportedModel};
 pub use models::context_window_tokens;
-pub use providers::{DeepSeekProvider, OpenAiProvider};
+pub use providers::{DeepSeekProvider, GoogleProvider, OpenAiProvider};
 
-/// Sanitize a provider error message by redacting API key fragments (sk-…).
+/// Sanitize a provider error message by redacting API key fragments.
 pub(crate) fn sanitize_provider_error_message(message: &str) -> String {
     message
         .split_whitespace()
         .map(|token| {
-            if token.contains("sk-") {
+            if token.contains("sk-") || token.contains("AIzaSy") {
                 "<redacted>".to_string()
             } else {
                 token.to_string()
@@ -31,6 +31,7 @@ pub fn create_provider(provider: Provider, api_key: &str) -> Box<dyn LlmProvider
     match provider {
         Provider::OpenAI => Box::new(OpenAiProvider::new(api_key)),
         Provider::Deepseek => Box::new(DeepSeekProvider::new(api_key)),
+        Provider::Google => Box::new(GoogleProvider::new(api_key)),
     }
 }
 
@@ -48,6 +49,8 @@ pub enum Provider {
     OpenAI,
     #[serde(rename = "deepseek")]
     Deepseek,
+    #[serde(rename = "google")]
+    Google,
 }
 
 impl fmt::Display for Provider {
@@ -55,11 +58,12 @@ impl fmt::Display for Provider {
         match self {
             Provider::OpenAI => write!(f, "openai"),
             Provider::Deepseek => write!(f, "deepseek"),
+            Provider::Google => write!(f, "google"),
         }
     }
 }
 
-pub const ALL_PROVIDERS: &[&str] = &["openai", "deepseek"];
+pub const ALL_PROVIDERS: &[&str] = &["openai", "deepseek", "google"];
 
 // ── public types ──────────────────────────────────────────────────────────────
 
