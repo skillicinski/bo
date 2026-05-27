@@ -64,7 +64,7 @@ impl LlmProvider for GoogleProvider {
 
         if let Some(schema) = response_schema {
             generation_config["responseMimeType"] = serde_json::json!("application/json");
-            generation_config["responseSchema"] = schema.clone();
+            generation_config["responseSchema"] = strip_additional_properties(schema);
         }
 
         if reasoning_disabled {
@@ -165,6 +165,25 @@ fn map_http_error(status: reqwest::StatusCode, body: &str) -> LlmError {
         LlmError::Api(message)
     } else {
         LlmError::Server(message)
+    }
+}
+
+fn strip_additional_properties(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut cleaned = serde_json::Map::new();
+            for (k, v) in map {
+                if k == "additionalProperties" {
+                    continue;
+                }
+                cleaned.insert(k.clone(), strip_additional_properties(v));
+            }
+            Value::Object(cleaned)
+        }
+        Value::Array(items) => {
+            Value::Array(items.iter().map(strip_additional_properties).collect())
+        }
+        other => other.clone(),
     }
 }
 
