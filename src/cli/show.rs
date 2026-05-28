@@ -95,7 +95,10 @@ impl fmt::Display for ShowError {
             ShowError::SuspiciousPath { file } => {
                 write!(f, "cannot show '{file}': suspicious path")
             }
-            ShowError::MissingFile { file } => write!(f, "cannot show '{file}': missing file"),
+            ShowError::MissingFile { file } => write!(
+                f,
+                "cannot show '{file}': file is missing \u{2014} the file was deleted or moved.\nrun `bo compile` to clean up the stale manifest record."
+            ),
             ShowError::UnreadableFile { file, source } => {
                 write!(f, "cannot show '{file}': unreadable file: {source}")
             }
