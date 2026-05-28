@@ -166,3 +166,38 @@ fn test_display_missing_deepseek() {
         "DEEPSEEK_API_KEY environment variable not set"
     );
 }
+
+#[test]
+#[serial]
+fn test_display_missing_google() {
+    let error = AuthError::Missing {
+        provider: Provider::Google,
+    };
+    assert_eq!(
+        error.to_string(),
+        "GEMINI_API_KEY environment variable not set"
+    );
+}
+
+#[test]
+#[serial]
+fn test_env_var_google() {
+    let dir = TempDir::new().unwrap();
+    let _guard = EnvGuard::set("GEMINI_API_KEY", "gemini-env-key");
+    let _home_guard = EnvGuard::set("HOME", dir.path().to_str().unwrap());
+
+    let result = resolve_api_key(Provider::Google).unwrap();
+    assert_eq!(result, "gemini-env-key");
+}
+
+#[test]
+#[serial]
+fn test_auth_json_fallback_google() {
+    let dir = TempDir::new().unwrap();
+    let _guard = EnvGuard::unset("GEMINI_API_KEY");
+    let _home_guard = EnvGuard::set("HOME", dir.path().to_str().unwrap());
+    write_auth_json(&dir, "google_api_key", "gemini-json-key");
+
+    let result = resolve_api_key(Provider::Google).unwrap();
+    assert_eq!(result, "gemini-json-key");
+}

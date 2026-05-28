@@ -17,6 +17,7 @@ impl fmt::Display for AuthError {
                 let env_var = match provider {
                     Provider::OpenAI => "OPENAI_API_KEY",
                     Provider::Deepseek => "DEEPSEEK_API_KEY",
+                    Provider::Google => "GEMINI_API_KEY",
                 };
                 write!(f, "{} environment variable not set", env_var)
             }
@@ -40,6 +41,7 @@ pub fn resolve_api_key(provider: Provider) -> Result<String, AuthError> {
     let env_var = match provider {
         Provider::OpenAI => "OPENAI_API_KEY",
         Provider::Deepseek => "DEEPSEEK_API_KEY",
+        Provider::Google => "GEMINI_API_KEY",
     };
 
     // 1. Check env var
@@ -57,6 +59,7 @@ pub fn resolve_api_key(provider: Provider) -> Result<String, AuthError> {
         let key_name = match provider {
             Provider::OpenAI => "openai_api_key",
             Provider::Deepseek => "deepseek_api_key",
+            Provider::Google => "google_api_key",
         };
         if let Some(key) = parsed.get(key_name).and_then(|v| v.as_str()) {
             if !key.trim().is_empty() {

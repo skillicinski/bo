@@ -9,14 +9,14 @@ pub mod providers;
 
 pub use model::{Model, UnsupportedModel};
 pub use models::context_window_tokens;
-pub use providers::{DeepSeekProvider, OpenAiProvider};
+pub use providers::{DeepSeekProvider, GoogleProvider, OpenAiProvider};
 
-/// Sanitize a provider error message by redacting API key fragments (sk-…).
+/// Sanitize a provider error message by redacting API key fragments.
 pub(crate) fn sanitize_provider_error_message(message: &str) -> String {
     message
         .split_whitespace()
         .map(|token| {
-            if token.contains("sk-") {
+            if token.contains("sk-") || token.contains("AIzaSy") {
                 "<redacted>".to_string()
             } else {
                 token.to_string()
@@ -31,6 +31,7 @@ pub fn create_provider(provider: Provider, api_key: &str) -> Box<dyn LlmProvider
     match provider {
         Provider::OpenAI => Box::new(OpenAiProvider::new(api_key)),
         Provider::Deepseek => Box::new(DeepSeekProvider::new(api_key)),
+        Provider::Google => Box::new(GoogleProvider::new(api_key)),
     }
 }
 
@@ -48,6 +49,8 @@ pub enum Provider {
     OpenAI,
     #[serde(rename = "deepseek")]
     Deepseek,
+    #[serde(rename = "google")]
+    Google,
 }
 
 impl fmt::Display for Provider {
@@ -55,11 +58,12 @@ impl fmt::Display for Provider {
         match self {
             Provider::OpenAI => write!(f, "openai"),
             Provider::Deepseek => write!(f, "deepseek"),
+            Provider::Google => write!(f, "google"),
         }
     }
 }
 
-pub const ALL_PROVIDERS: &[&str] = &["openai", "deepseek"];
+pub const ALL_PROVIDERS: &[&str] = &["openai", "deepseek", "google"];
 
 // ── public types ──────────────────────────────────────────────────────────────
 
@@ -126,6 +130,14 @@ pub async fn complete_with_policy(
         ));
     }
 
+    // Normalize the schema into the provider's native dialect once,
+    // before the retry loop. A schema the provider cannot satisfy
+    // fails fast here rather than after N retries.
+    let normalized_schema = match response_schema {
+        Some(schema) => Some(provider.map_response_schema(schema)?),
+        None => None,
+    };
+
     let mut last_error: Option<LlmError> = None;
 
     for attempt in 1..=policy.max_attempts {
@@ -135,7 +147,7 @@ pub async fn complete_with_policy(
                 messages,
                 model,
                 max_tokens,
-                response_schema,
+                normalized_schema.as_ref(),
                 reasoning_disabled,
             ),
         )
@@ -245,6 +257,19 @@ pub struct LlmResponse {
 /// An LLM backend that can produce structured responses.
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
+    /// Transform a response schema into the provider's native dialect.
+    ///
+    /// Default: identity (pass-through). Override if the provider's schema
+    /// vocabulary differs from the canonical JSON Schema dialect (e.g. Gemini
+    /// does not accept `additionalProperties`).
+    ///
+    /// Return `Err` if the schema uses constructs the provider cannot satisfy —
+    /// the caller must not silently degrade. This is called once per request
+    /// by `complete_with_policy`, before the retry loop.
+    fn map_response_schema(&self, schema: &Value) -> Result<Value, LlmError> {
+        Ok(schema.clone())
+    }
+
     async fn complete(
         &self,
         messages: &[Message],
