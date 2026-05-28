@@ -181,7 +181,7 @@ fn selected_leaf_failures_are_clear() {
 
     let missing = show_leaf(dir.path(), "Missing", &ShowOptions::default()).unwrap_err();
     assert!(matches!(missing, ShowError::MissingFile { .. }));
-    assert!(missing.to_string().contains("missing file"));
+    assert!(missing.to_string().contains("file is missing"));
 
     let unreadable = show_leaf(dir.path(), "Unreadable", &ShowOptions::default()).unwrap_err();
     assert!(matches!(unreadable, ShowError::UnreadableFile { .. }));

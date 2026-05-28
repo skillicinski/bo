@@ -58,10 +58,11 @@ fn compile_noop_human_output_is_exact_message() {
         branches: Vec::new(),
         leaves_processed: 0,
         leaves_skipped: Vec::new(),
+        notifications: Vec::new(),
     };
     let mut stdout = Vec::new();
 
-    compile::render_human(&result, &mut stdout).unwrap();
+    compile::render_human(&result, &mut stdout, "test-tree").unwrap();
 
     assert_eq!(
         String::from_utf8(stdout).unwrap(),
@@ -80,6 +81,7 @@ fn compile_noop_json_data_contains_reason() {
         branches: Vec::new(),
         leaves_processed: 0,
         leaves_skipped: Vec::new(),
+        notifications: Vec::new(),
     };
     let encoded = json_output::success_string("compile", &result, Vec::new()).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&encoded).unwrap();
