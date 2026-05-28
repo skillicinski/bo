@@ -171,6 +171,8 @@ pub struct CompileResult {
     pub branches: Vec<BranchResult>,
     pub leaves_processed: usize,
     pub leaves_skipped: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notifications: Vec<String>,
 }
 
 impl CompileResult {
@@ -179,6 +181,7 @@ impl CompileResult {
         mode: CompileRunMode,
         context_mode: CompileContextMode,
         model: &Model,
+        notifications: Vec<String>,
     ) -> Self {
         Self {
             status: "compiled".to_string(),
@@ -189,10 +192,11 @@ impl CompileResult {
             branches: summary.branches,
             leaves_processed: summary.leaves_processed,
             leaves_skipped: summary.leaves_skipped,
+            notifications,
         }
     }
 
-    fn noop(reason: &str) -> Self {
+    fn noop(reason: &str, notifications: Vec<String>) -> Self {
         Self {
             status: "noop".to_string(),
             reason: Some(reason.to_string()),
@@ -202,6 +206,7 @@ impl CompileResult {
             branches: Vec::new(),
             leaves_processed: 0,
             leaves_skipped: Vec::new(),
+            notifications,
         }
     }
 }
@@ -222,19 +227,27 @@ pub struct BranchResult {
 fn preflight_noop(
     cfg: &SeededConfig,
     options: CompileOptions,
+    notifications: &[String],
 ) -> Result<Option<CompileResult>, CompileError> {
     let tree = Tree::from_config(&cfg.tree_cfg);
-    execute::recover_pending_if_needed(&tree.output_dir)?;
     let manifest = manifest::read(&tree.manifest_path())
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
     match manifest.leaves.len() {
-        0 => return Ok(Some(CompileResult::noop("empty_tree"))),
-        1 => return Ok(Some(CompileResult::noop("single_leaf"))),
+        0 => {
+            return Ok(Some(CompileResult::noop(
+                "empty_tree",
+                notifications.to_vec(),
+            )))
+        }
+        1 => {
+            return Ok(Some(CompileResult::noop(
+                "single_leaf",
+                notifications.to_vec(),
+            )))
+        }
         _ => {}
     }
 
-    // Stale repair + new-leaf detection happen in the main function.
-    // Preflight only catches trivial noops (empty/single-leaf).
     let _ = options;
     Ok(None)
 }
@@ -244,23 +257,26 @@ pub fn run_compile_with_options(
     options: CompileOptions,
 ) -> Result<CompileResult, CompileError> {
     let compile_started_at = execute::compile_timestamp_now();
-    if let Some(noop) = preflight_noop(cfg, options)? {
-        return Ok(noop);
-    }
 
-    // Stale repair + noop check run before auth (no LLM needed)
+    // Stale repair runs before preflight so preflight sees repaired state.
     let tree = Tree::from_config(&cfg.tree_cfg);
     execute::recover_pending_if_needed(&tree.output_dir)?;
-    let _stale_repair = plan::repair_stale_branches(
+    let stale_repair = plan::repair_stale_branches(
         cfg,
         &manifest::read(&tree.manifest_path())
             .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?,
     )?;
+    let notifications = stale_repair.notifications;
+
+    if let Some(noop) = preflight_noop(cfg, options, &notifications)? {
+        return Ok(noop);
+    }
+
     let manifest = manifest::read(&tree.manifest_path())
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
     let new_leaf_slugs = plan::select_new_leaf_slugs(&manifest)?;
     if !options.all && new_leaf_slugs.is_empty() {
-        return Ok(CompileResult::noop(NO_NEW_LEAVES_REASON));
+        return Ok(CompileResult::noop(NO_NEW_LEAVES_REASON, notifications));
     }
 
     let api_key =
@@ -275,6 +291,7 @@ pub fn run_compile_with_options(
         provider.as_ref(),
         &compile_model,
         &compile_started_at,
+        notifications,
     )
 }
 
@@ -284,11 +301,11 @@ fn run_compile_with_provider_started_at(
     provider: &dyn LlmProvider,
     model: &Model,
     compile_started_at: &crate::domain::Timestamp,
+    notifications: Vec<String>,
 ) -> Result<CompileResult, CompileError> {
     let tree = Tree::from_config(&cfg.tree_cfg);
     execute::recover_pending_if_needed(&tree.output_dir)?;
 
-    // ── read manifest and check for work ────────────────────────────────────
     let manifest = manifest::read(&tree.manifest_path())
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
     let expected_manifest_hash = pending::manifest_hash(&tree.output_dir)?;
@@ -296,20 +313,16 @@ fn run_compile_with_provider_started_at(
     let new_leaf_slugs = plan::select_new_leaf_slugs(&manifest)?;
 
     if !options.all && new_leaf_slugs.is_empty() {
-        return Ok(CompileResult::noop(NO_NEW_LEAVES_REASON));
+        return Ok(CompileResult::noop(NO_NEW_LEAVES_REASON, notifications));
     }
 
-    // ── load valid leaves ────────────────────────────────────────────────────
     let (loaded_leaves, skipped_leaves) = plan::read_valid_leaves(cfg, &manifest.leaves);
 
     if loaded_leaves.len() < 2 {
         if loaded_leaves.is_empty() {
-            return Err(CompileError::Io(format!(
-                "all {} leaves have unparseable frontmatter or are missing — nothing to compile",
-                skipped_leaves.len()
-            )));
+            return Ok(CompileResult::noop("empty_tree", notifications));
         }
-        return Ok(CompileResult::noop("single_leaf"));
+        return Ok(CompileResult::noop("single_leaf", notifications));
     }
 
     // ── build prompt and schema ──────────────────────────────────────────────
@@ -387,20 +400,22 @@ fn run_compile_with_provider_started_at(
         run_mode,
         context_mode,
         model,
+        notifications,
     ))
 }
 
 // ── print_result (pub re-export) ──────────────────────────────────────────────
 
-pub fn print_result(result: &CompileResult) {
-    render::print_result(result);
+pub fn print_result(result: &CompileResult, tree_name: &str) {
+    render::print_result(result, tree_name);
 }
 
 pub fn render_human<W: std::io::Write>(
     result: &CompileResult,
     stdout: &mut W,
+    tree_name: &str,
 ) -> std::io::Result<()> {
-    render::render_human(result, stdout)
+    render::render_human(result, stdout, tree_name)
 }
 
 #[cfg(test)]

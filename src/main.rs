@@ -282,15 +282,21 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
             }
             Err(error) => emit_cli_error("collect", json, error, stdout, stderr),
         },
-        Commands::Compile { all } => match require_seeded_config().and_then(|cfg| {
-            compile::run_compile_with_options(&cfg, CompileOptions { all })
+        Commands::Compile { all } => match require_seeded_config().and_then(|config| {
+            compile::run_compile_with_options(&config, CompileOptions { all })
                 .map_err(CliError::Compile)
         }) {
             Ok(result) if json => {
                 let warnings = compile_warnings(&result);
                 emit_json_success("compile", &result, warnings, stdout)
             }
-            Ok(result) => write_human_or_error(compile::render_human(&result, stdout)),
+            Ok(result) => {
+                let tree_name = require_seeded_config()
+                    .ok()
+                    .and_then(|c| c.tree_cfg.name)
+                    .unwrap_or_else(|| "bo".to_string());
+                write_human_or_error(compile::render_human(&result, stdout, &tree_name))
+            }
             Err(error) => emit_cli_error("compile", json, error, stdout, stderr),
         },
         Commands::List {
