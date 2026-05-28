@@ -72,6 +72,8 @@ pub(super) struct StaleRepairResult {
     pub(super) orphan_leaf_slugs: Vec<String>,
     /// Whether any mutation was made to the manifest.
     pub(super) manifest_changed: bool,
+    /// Notification messages for stderr/JSON (e.g. prune summary).
+    pub(super) notifications: Vec<String>,
 }
 
 /// Deterministic pre-pass: detect deleted leaves, remove them from branches,
@@ -91,6 +93,7 @@ pub(super) fn repair_stale_branches(
             deleted_leaf_slugs: Vec::new(),
             orphan_leaf_slugs: Vec::new(),
             manifest_changed: false,
+            notifications: Vec::new(),
         });
     }
 
@@ -112,15 +115,19 @@ pub(super) fn repair_stale_branches(
         .cloned()
         .collect();
 
-    if !orphan_slugs.is_empty() {
+    let prune_notification = if !orphan_slugs.is_empty() {
         let n = orphan_slugs.len();
-        eprintln!(
-            "pruning {} orphan leaf record{} (file{} missing, not in any branch)",
+        let msg = format!(
+            "pruned {} orphan leaf record{} (file{} missing, not in any branch)",
             n,
             if n == 1 { "" } else { "s" },
             if n == 1 { "" } else { "s" }
         );
-    }
+        eprintln!("{}", msg);
+        vec![msg]
+    } else {
+        Vec::new()
+    };
 
     let mut branches_removed = Vec::new();
     let mut branch_deletes = Vec::new();
@@ -214,6 +221,7 @@ pub(super) fn repair_stale_branches(
         deleted_leaf_slugs: classification.deleted_leaf_slugs,
         orphan_leaf_slugs: orphan_slugs,
         manifest_changed: true,
+        notifications: prune_notification,
     })
 }
 pub(super) fn select_new_leaf_slugs(manifest: &Manifest) -> Result<Vec<String>, CompileError> {
@@ -240,11 +248,6 @@ pub(super) fn classify_leaf_files(
     manifest: &Manifest,
     new_leaf_slugs: &[String],
 ) -> Result<LeafFileClassification, CompileError> {
-    let branch_referenced_slugs: HashSet<&str> = manifest
-        .branches
-        .iter()
-        .flat_map(|branch| branch.leaves.iter().map(|s| s.as_str()))
-        .collect();
     let new_leaf_slugs: HashSet<&str> = new_leaf_slugs.iter().map(String::as_str).collect();
 
     let mut deleted_leaf_slugs = Vec::new();
@@ -253,7 +256,6 @@ pub(super) fn classify_leaf_files(
     for leaf in &manifest.leaves {
         let leaf_path = cfg.tree_cfg.output_dir.join(&leaf.file);
         let is_new = new_leaf_slugs.contains(leaf.slug.as_str());
-        let is_branch_referenced = branch_referenced_slugs.contains(leaf.slug.as_str());
 
         match fs::read_to_string(&leaf_path) {
             Ok(content) => {
@@ -268,17 +270,10 @@ pub(super) fn classify_leaf_files(
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                if is_branch_referenced {
-                    deleted_leaf_slugs.push(leaf.slug.as_str().to_string());
-                } else if is_new {
-                    return Err(CompileError::Io(format!(
-                        "newly selected leaf '{}' is missing; no files were changed",
-                        leaf.file
-                    )));
-                } else {
-                    // Unbranched leaf with missing file — prune from manifest.
-                    deleted_leaf_slugs.push(leaf.slug.as_str().to_string());
-                }
+                // Missing file: always add to deleted_leaf_slugs.
+                // Unbranched leaves are pruned; branch-referenced leaves are
+                // repaired (removed from branch, branch dropped if below minimum).
+                deleted_leaf_slugs.push(leaf.slug.as_str().to_string());
             }
             Err(error) => {
                 if is_new {
