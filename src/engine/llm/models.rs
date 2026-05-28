@@ -47,10 +47,26 @@ pub const DEEPSEEK_MODELS: &[ModelInfo] = &[
     },
 ];
 
+pub const GOOGLE_MODELS: &[ModelInfo] = &[
+    ModelInfo {
+        id: "gemini-2.5-flash-lite",
+        context_tokens: 1_048_576,
+    },
+    ModelInfo {
+        id: "gemini-2.5-flash",
+        context_tokens: 1_048_576,
+    },
+    ModelInfo {
+        id: "gemini-2.5-pro",
+        context_tokens: 1_048_576,
+    },
+];
+
 pub fn models_for(provider: Provider) -> &'static [ModelInfo] {
     match provider {
         Provider::OpenAI => OPENAI_MODELS,
         Provider::Deepseek => DEEPSEEK_MODELS,
+        Provider::Google => GOOGLE_MODELS,
     }
 }
 

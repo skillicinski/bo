@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- `google` provider — Gemini API support via `bo config --provider google --model gemini-2.5-flash`. Includes `gemini-2.5-flash-lite`, `gemini-2.5-flash`, and `gemini-2.5-pro` models with 1M token context windows. Auth via `GEMINI_API_KEY` env var or `google_api_key` in `~/.bo/auth.json`.
+
 ## [0.0.4] - 2026-05-26
 
 ### Fixed

@@ -15,6 +15,13 @@ fn parse_valid_deepseek_model() {
 }
 
 #[test]
+fn parse_valid_google_model() {
+    let m = Model::parse("gemini-2.5-flash", Provider::Google).unwrap();
+    assert_eq!(m.as_str(), "gemini-2.5-flash");
+    assert_eq!(m.context_tokens(), 1_048_576);
+}
+
+#[test]
 fn parse_trims_whitespace() {
     let m = Model::parse("  gpt-4.1-mini  ", Provider::OpenAI).unwrap();
     assert_eq!(m.as_str(), "gpt-4.1-mini");
@@ -35,6 +42,15 @@ fn parse_openai_model_with_deepseek_provider_fails() {
     assert_eq!(err.provider, Provider::Deepseek);
     assert!(err.to_string().contains("unsupported model"));
     assert!(err.to_string().contains("deepseek"));
+}
+
+#[test]
+fn parse_google_model_with_openai_provider_fails() {
+    let err = Model::parse("gemini-2.5-flash", Provider::OpenAI).unwrap_err();
+    assert_eq!(err.id, "gemini-2.5-flash");
+    assert_eq!(err.provider, Provider::OpenAI);
+    assert!(err.to_string().contains("unsupported model"));
+    assert!(err.to_string().contains("openai"));
 }
 
 #[test]

@@ -231,6 +231,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 Some(ref p) => Some(match p.as_str() {
                     "openai" => Provider::OpenAI,
                     "deepseek" => Provider::Deepseek,
+                    "google" => Provider::Google,
                     other => {
                         let err = cli_config::ConfigWriteError::UnknownProvider {
                             raw: other.to_string(),
