@@ -7,3 +7,7 @@
 
 # internal
 internal/
+
+# agents
+.agents/
+.pi/
