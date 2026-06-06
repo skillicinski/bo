@@ -10,3 +10,4 @@ internal/
 
 # agents
 .agents/
+.pi/
