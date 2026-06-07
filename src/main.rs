@@ -20,7 +20,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
 
-const NOT_SEEDED_MSG: &str = "bo hasn't been seeded yet — run: bo seed <output-dir>";
+const NOT_SEEDED_MSG: &str = "bo hasn't been seeded yet — run: bo seed --path <path>";
 const KNOWN_COMMANDS: &[&str] = &[
     "seed", "config", "collect", "compile", "list", "show", "query", "status", "raze",
 ];
@@ -42,13 +42,20 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Initialise a tree at <output-dir> and save config
+    /// Initialise a tree and save config
     Seed {
         /// Directory to store collected content
-        output_dir: PathBuf,
-        /// Human-readable name for the tree (defaults to the output directory basename)
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Human-readable name for the tree
         #[arg(long)]
         name: Option<String>,
+        /// LLM provider (openai, deepseek, or google)
+        #[arg(long)]
+        provider: Option<String>,
+        /// Model for LLM operations
+        #[arg(long)]
+        model: Option<String>,
     },
     /// Fetch one or more URLs and collect them
     #[command(
@@ -146,6 +153,7 @@ enum CliError {
 impl CliError {
     fn exit_code(&self) -> i32 {
         match self {
+            CliError::Seed(error) => error.exit_code(),
             CliError::ConfigWrite(error) => error.exit_code(),
             CliError::Collect(CollectError::Pending(bo::engine::pending::PendingError::Busy {
                 ..
@@ -213,13 +221,37 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
     let json = cli.json;
 
     match cli.command {
-        Commands::Seed { output_dir, name } => {
-            match seed::seed(output_dir, name, &config::config_path()) {
-                Ok(result) if json => emit_json_success("seed", &result, Vec::new(), stdout),
+        Commands::Seed {
+            path,
+            name,
+            provider,
+            model,
+        } => {
+            if json {
+                return emit_cli_error(
+                    "seed",
+                    false,
+                    CliError::Seed(seed::SeedError::UnsupportedFlag { flag: "--json" }),
+                    stdout,
+                    stderr,
+                );
+            }
+
+            let mut prompt = seed::StdioSeedPrompt;
+            match seed::seed(
+                seed::SeedOptions {
+                    path,
+                    name,
+                    provider,
+                    model,
+                },
+                &config::config_path(),
+                &mut prompt,
+            ) {
                 Ok(result) => {
                     write_human_or_error(write!(stdout, "{}", seed::render_human(&result)))
                 }
-                Err(error) => emit_cli_error("seed", json, CliError::Seed(error), stdout, stderr),
+                Err(error) => emit_cli_error("seed", false, CliError::Seed(error), stdout, stderr),
             }
         }
         Commands::Config {
@@ -228,14 +260,10 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
             compile_model,
         } => {
             let provider_opt = match provider {
-                Some(ref p) => Some(match p.as_str() {
-                    "openai" => Provider::OpenAI,
-                    "deepseek" => Provider::Deepseek,
-                    "google" => Provider::Google,
-                    other => {
-                        let err = cli_config::ConfigWriteError::UnknownProvider {
-                            raw: other.to_string(),
-                        };
+                Some(ref p) => Some(match Provider::parse(p) {
+                    Some(provider) => provider,
+                    None => {
+                        let err = cli_config::ConfigWriteError::UnknownProvider { raw: p.clone() };
                         return emit_cli_error(
                             "config",
                             json,
@@ -293,7 +321,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
             Ok(result) => {
                 let tree_name = require_seeded_config()
                     .ok()
-                    .and_then(|c| c.tree_cfg.name)
+                    .map(|c| c.tree_cfg.name)
                     .unwrap_or_else(|| "bo".to_string());
                 write_human_or_error(compile::render_human(&result, stdout, &tree_name))
             }
@@ -373,8 +401,12 @@ fn render_parse_error<W: Write, E: Write>(
         return write_rendered(stdout, &error.render().to_string(), exit_code);
     }
 
+    let command = infer_command(args);
+    if raw_json_mode && command == "seed" {
+        return write_rendered(stderr, &error.render().to_string(), exit_code);
+    }
+
     if raw_json_mode {
-        let command = infer_command(args);
         let rendered = error.render().to_string();
         let json_error = JsonError::with_details(
             "usage_error",
@@ -539,7 +571,7 @@ fn execute_status() -> Result<status::StatusResult, CliError> {
         Some(tree_cfg) => {
             let tree = bo::domain::tree::Tree::from_config(tree_cfg);
             let name = tree.name.clone();
-            (tree_cfg.output_dir.clone(), name)
+            (tree_cfg.path.clone(), name)
         }
         None => {
             // Not seeded — return config-only status
@@ -562,13 +594,8 @@ fn execute_raze(include_auth: bool) -> Result<raze::RazeOutput, CliError> {
             } else {
                 raze::AuthCleanup::Preserve
             };
-            raze::raze_with_auth(
-                &tree.tree_cfg.output_dir,
-                &config_path,
-                &auth_path,
-                auth_cleanup,
-            )
-            .map_err(CliError::Raze)
+            raze::raze_with_auth(&tree.tree_cfg.path, &config_path, &auth_path, auth_cleanup)
+                .map_err(CliError::Raze)
         }
         Err(ConfigError::NotFound) => {
             if !include_auth {
@@ -589,7 +616,7 @@ fn execute_raze(include_auth: bool) -> Result<raze::RazeOutput, CliError> {
 
 fn execute_collect(inputs: Vec<String>) -> Result<CollectOutput, CliError> {
     let cfg = require_seeded_config()?;
-    let output_dir = cfg.tree_cfg.output_dir.clone();
+    let output_dir = cfg.tree_cfg.path.clone();
     let collect_dir = output_dir.clone();
     let model = cfg
         .effective_model()
@@ -619,7 +646,7 @@ fn execute_list(
     };
     let cfg = require_seeded_config()?;
     list::list_tree(
-        &cfg.tree_cfg.output_dir,
+        &cfg.tree_cfg.path,
         &list::ListOptions {
             view,
             terms: terms.iter().map(|t| t.to_lowercase()).collect(),
@@ -633,7 +660,7 @@ fn execute_list(
 
 fn execute_show(title: String, full: bool) -> Result<show::ShowResult, CliError> {
     let cfg = require_seeded_config()?;
-    show::show_leaf(&cfg.tree_cfg.output_dir, &title, &ShowOptions { full }).map_err(CliError::Show)
+    show::show_leaf(&cfg.tree_cfg.path, &title, &ShowOptions { full }).map_err(CliError::Show)
 }
 
 fn execute_query(question: &str) -> Result<query::QueryResult, query::QueryError> {
@@ -659,7 +686,7 @@ where
     let model = cfg
         .effective_model()
         .map_err(|e| query::QueryError::NoProvider(e.to_string()))?;
-    let prepared = query::prepare(&cfg.tree_cfg.output_dir, question, &model)?;
+    let prepared = query::prepare(&cfg.tree_cfg.path, question, &model)?;
     let provider = resolve_provider()?;
     query::run_prepared_with_provider(prepared, provider.as_ref())
 }

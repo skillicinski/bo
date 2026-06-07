@@ -8,12 +8,13 @@
 // Shape of config.json after `bo seed`:
 //
 //   {
-//     "model": "gpt-4.1-mini",     // operator-level: spans all trees
-//     "compile_model": "gpt-4.1",  // optional model used by compile
-//     "tree": {                     // active tree metadata
-//       "output_dir": "/path/to/tree",
+//     "provider": "openai",          // operator-level: spans all trees
+//     "model": "gpt-4.1-mini",      // operator-level: spans all trees
+//     "compile_model": "gpt-4.1",   // optional model used by compile
+//     "tree": {                      // active tree metadata
+//       "path": "/path/to/tree",
 //       "name": "my-research",
-//       "created_at": "2026-04-14T09:00:00Z"
+//       "created_at": "2026-04-14T09:00:00.000Z"
 //     }
 //   }
 //
