@@ -1,5 +1,6 @@
 use super::*;
 use crate::domain::tree::TreeConfig;
+use crate::domain::Timestamp;
 use crate::engine::config::{self as engine_config, Config};
 use crate::engine::llm::Provider;
 use std::path::PathBuf;
@@ -11,13 +12,17 @@ fn temp_config_path(dir: &TempDir) -> PathBuf {
     dir.path().join(".bo").join("config.json")
 }
 
+fn test_timestamp() -> Timestamp {
+    Timestamp::parse("2026-05-12T00:00:00Z").unwrap()
+}
+
 fn seeded_config() -> Config {
     Config {
         provider: Provider::OpenAI,
         tree: Some(TreeConfig {
-            output_dir: PathBuf::from("/tmp/tree"),
-            name: Some("tree".to_string()),
-            created_at: Some("2026-05-12T00:00:00Z".to_string()),
+            path: PathBuf::from("/tmp/tree"),
+            name: "tree".to_string(),
+            created_at: test_timestamp(),
         }),
         model: None,
         compile_model: None,
@@ -28,9 +33,9 @@ fn seeded_config_with_models() -> Config {
     Config {
         provider: Provider::OpenAI,
         tree: Some(TreeConfig {
-            output_dir: PathBuf::from("/tmp/tree"),
-            name: Some("tree".to_string()),
-            created_at: Some("2026-05-12T00:00:00Z".to_string()),
+            path: PathBuf::from("/tmp/tree"),
+            name: "tree".to_string(),
+            created_at: test_timestamp(),
         }),
         model: Some("gpt-4o-mini".to_string()),
         compile_model: Some("gpt-4.1-mini".to_string()),
@@ -172,8 +177,8 @@ fn write_preserves_tree_metadata() {
     let loaded = engine_config::read_config(&path).unwrap();
     assert_eq!(loaded.model.as_deref(), Some("gpt-4.1-mini"));
     let tree = loaded.tree.unwrap();
-    assert_eq!(tree.output_dir, PathBuf::from("/tmp/tree"));
-    assert_eq!(tree.name.as_deref(), Some("tree"));
+    assert_eq!(tree.path, PathBuf::from("/tmp/tree"));
+    assert_eq!(tree.name, "tree");
 }
 
 #[test]
@@ -196,8 +201,8 @@ fn write_model_preserves_compile_model_and_tree_metadata() {
     assert_eq!(loaded.model.as_deref(), Some("gpt-4.1"));
     assert_eq!(loaded.compile_model.as_deref(), Some("gpt-4.1-mini"));
     let tree = loaded.tree.unwrap();
-    assert_eq!(tree.output_dir, PathBuf::from("/tmp/tree"));
-    assert_eq!(tree.name.as_deref(), Some("tree"));
+    assert_eq!(tree.path, PathBuf::from("/tmp/tree"));
+    assert_eq!(tree.name, "tree");
 }
 
 #[test]

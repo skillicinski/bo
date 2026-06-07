@@ -1,216 +1,248 @@
 use super::*;
-use crate::domain::manifest;
-use crate::domain::tree::Tree;
 use crate::engine::config;
+use crate::engine::llm::Provider;
+use std::path::PathBuf;
 use tempfile::TempDir;
 
+#[derive(Default)]
+struct PromptAnswers {
+    path: Option<PathBuf>,
+    name: Option<String>,
+    provider: Option<Provider>,
+    model: Option<String>,
+}
+
+impl SeedPrompt for PromptAnswers {
+    fn prompt_path(&mut self) -> Result<PathBuf, SeedError> {
+        self.path.take().ok_or(SeedError::MissingInput {
+            field: "path",
+            flag: "--path <path>",
+        })
+    }
+
+    fn prompt_name(&mut self, default: &str) -> Result<String, SeedError> {
+        Ok(self.name.take().unwrap_or_else(|| default.to_string()))
+    }
+
+    fn prompt_provider(&mut self) -> Result<Provider, SeedError> {
+        self.provider.take().ok_or(SeedError::MissingInput {
+            field: "provider",
+            flag: "--provider <provider>",
+        })
+    }
+
+    fn prompt_model(&mut self, _provider: Provider) -> Result<String, SeedError> {
+        self.model.take().ok_or(SeedError::MissingInput {
+            field: "model",
+            flag: "--model <model>",
+        })
+    }
+}
+
+fn options(path: PathBuf) -> SeedOptions {
+    SeedOptions {
+        path: Some(path),
+        name: Some("tree".to_string()),
+        provider: Some("openai".to_string()),
+        model: Some("gpt-4.1-mini".to_string()),
+    }
+}
+
 #[test]
-fn creates_output_directory_and_config() {
+fn fresh_seed_writes_config_without_manifest() {
     let tmp = TempDir::new().unwrap();
-    let output_dir = tmp.path().join("tree");
+    let tree_dir = tmp.path().join("tree");
     let config_path = tmp.path().join("config.json");
+    let mut prompt = PromptAnswers::default();
 
-    let result = seed(output_dir.clone(), None, &config_path).unwrap();
+    let result = seed(options(tree_dir.clone()), &config_path, &mut prompt).unwrap();
 
-    assert_eq!(result.status, "created");
-    assert!(output_dir.exists());
+    assert_eq!(result.status, SeedStatus::Created);
+    assert_eq!(result.path, std::fs::canonicalize(&tree_dir).unwrap());
+    assert_eq!(result.name, "tree");
+    assert_eq!(result.provider, Provider::OpenAI);
+    assert_eq!(result.model, "gpt-4.1-mini");
+    assert!(!tree_dir.join(".bo/manifest.json").exists());
+
     let cfg = config::read_config(&config_path).unwrap();
     let tree = cfg.tree.unwrap();
-    assert_eq!(tree.output_dir, output_dir);
+    assert_eq!(tree.path, result.path);
+    assert_eq!(tree.name, "tree");
+    assert_eq!(tree.created_at, result.created_at);
+    assert_eq!(cfg.provider, Provider::OpenAI);
+    assert_eq!(cfg.model.as_deref(), Some("gpt-4.1-mini"));
 }
 
 #[test]
-fn derives_name_from_directory_basename() {
+fn prompt_mode_supplies_missing_seed_fields() {
     let tmp = TempDir::new().unwrap();
-    let output_dir = tmp.path().join("my-tree");
+    let tree_dir = tmp.path().join("prompt-tree");
     let config_path = tmp.path().join("config.json");
+    let mut prompt = PromptAnswers {
+        path: Some(tree_dir.clone()),
+        name: Some("prompted".to_string()),
+        provider: Some(Provider::Deepseek),
+        model: Some("deepseek-v4-flash".to_string()),
+    };
 
-    let result = seed(output_dir, None, &config_path).unwrap();
-
-    assert_eq!(result.tree_name.as_deref(), Some("my-tree"));
-    let cfg = config::read_config(&config_path).unwrap();
-    let tree = cfg.tree.unwrap();
-    assert_eq!(tree.name.as_deref(), Some("my-tree"));
-}
-
-#[test]
-fn explicit_name_overrides_basename() {
-    let tmp = TempDir::new().unwrap();
-    let output_dir = tmp.path().join("some-dir");
-    let config_path = tmp.path().join("config.json");
-
-    let result = seed(output_dir, Some("custom".to_string()), &config_path).unwrap();
-
-    assert_eq!(result.tree_name.as_deref(), Some("custom"));
-    let cfg = config::read_config(&config_path).unwrap();
-    let tree = cfg.tree.unwrap();
-    assert_eq!(tree.name.as_deref(), Some("custom"));
-}
-
-#[test]
-fn sets_created_at_timestamp() {
-    let tmp = TempDir::new().unwrap();
-    let output_dir = tmp.path().join("tree");
-    let config_path = tmp.path().join("config.json");
-
-    seed(output_dir, None, &config_path).unwrap();
-
-    let cfg = config::read_config(&config_path).unwrap();
-    let tree = cfg.tree.unwrap();
-    assert!(tree.created_at.is_some());
-}
-
-#[test]
-fn already_seeded_returns_existing_config() {
-    let tmp = TempDir::new().unwrap();
-    let output_dir = tmp.path().join("tree");
-    let config_path = tmp.path().join("config.json");
-
-    let first = seed(output_dir.clone(), None, &config_path).unwrap();
-    assert_eq!(first.status, "created");
-
-    let second = seed(output_dir, None, &config_path).unwrap();
-    assert_eq!(second.status, "already_seeded");
-}
-
-#[test]
-fn seeds_config_without_tree_and_preserves_model() {
-    let tmp = TempDir::new().unwrap();
-    let output_dir = tmp.path().join("tree");
-    let config_path = tmp.path().join("config.json");
-
-    config::write_config(
-        &config::Config {
-            provider: crate::engine::llm::Provider::OpenAI,
-            tree: None,
-            model: Some("gpt-4.1-mini".to_string()),
-            compile_model: None,
+    let result = seed(
+        SeedOptions {
+            path: None,
+            name: None,
+            provider: None,
+            model: None,
         },
         &config_path,
+        &mut prompt,
     )
     .unwrap();
 
-    let result = seed(output_dir.clone(), None, &config_path).unwrap();
-
-    assert_eq!(result.status, "created");
-    let cfg = config::read_config(&config_path).unwrap();
-    assert_eq!(cfg.model.as_deref(), Some("gpt-4.1-mini"));
-    assert_eq!(cfg.tree.unwrap().output_dir, output_dir);
+    assert_eq!(result.status, SeedStatus::Created);
+    assert_eq!(result.path, std::fs::canonicalize(&tree_dir).unwrap());
+    assert_eq!(result.name, "prompted");
+    assert_eq!(result.provider, Provider::Deepseek);
+    assert_eq!(result.model, "deepseek-v4-flash");
 }
 
 #[test]
-fn idempotent_does_not_update_created_at() {
+fn missing_name_uses_default_without_blocking_noninteractive_seed() {
     let tmp = TempDir::new().unwrap();
-    let output_dir = tmp.path().join("tree");
+    let tree_dir = tmp.path().join("tree");
     let config_path = tmp.path().join("config.json");
+    let mut prompt = PromptAnswers::default();
 
-    seed(output_dir.clone(), None, &config_path).unwrap();
-    let first_ts = config::read_config(&config_path)
-        .unwrap()
-        .tree
-        .unwrap()
-        .created_at;
-
-    seed(output_dir, None, &config_path).unwrap();
-    let second_ts = config::read_config(&config_path)
-        .unwrap()
-        .tree
-        .unwrap()
-        .created_at;
-
-    assert_eq!(first_ts, second_ts);
-}
-
-#[test]
-fn resolves_relative_path_to_absolute() {
-    let tmp = TempDir::new().unwrap();
-    let output_dir = tmp.path().join("relative-tree");
-    let config_path = tmp.path().join("config.json");
-
-    let result = seed(output_dir, None, &config_path).unwrap();
-
-    assert!(result.output_dir.starts_with('/'));
-    assert!(result.output_dir.contains("relative-tree"));
-}
-
-#[test]
-fn render_human_created() {
-    let result = SeedResult {
-        status: "created".to_string(),
-        output_dir: "/tmp/tree".to_string(),
-        tree_name: Some("tree".to_string()),
-    };
-    assert_eq!(render_human(&result), "seeded bo at /tmp/tree");
-}
-
-#[test]
-fn render_human_already_seeded() {
-    let result = SeedResult {
-        status: "already_seeded".to_string(),
-        output_dir: "/tmp/tree".to_string(),
-        tree_name: Some("tree".to_string()),
-    };
-    assert_eq!(
-        render_human(&result),
-        "bo has already been seeded at /tmp/tree!"
-    );
-}
-
-// ── manifest dual-write (T4.1) ────────────────────────────────────────────────────
-
-#[test]
-fn writes_empty_manifest_to_infra_dir() {
-    let tmp = TempDir::new().unwrap();
-    let output_dir = tmp.path().join("tree");
-    let config_path = tmp.path().join("config.json");
-
-    seed(output_dir.clone(), None, &config_path).unwrap();
-
-    let manifest_path = output_dir.join(".bo/manifest.json");
-    assert!(
-        manifest_path.exists(),
-        "manifest.json should exist after seed"
-    );
-}
-
-#[test]
-fn manifest_metadata_matches_config() {
-    let tmp = TempDir::new().unwrap();
-    let output_dir = tmp.path().join("tree");
-    let config_path = tmp.path().join("config.json");
-
-    seed(
-        output_dir.clone(),
-        Some("my-tree".to_string()),
+    let result = seed(
+        SeedOptions {
+            path: Some(tree_dir),
+            name: None,
+            provider: Some("openai".to_string()),
+            model: Some("gpt-4.1-mini".to_string()),
+        },
         &config_path,
+        &mut prompt,
     )
     .unwrap();
 
-    let cfg = config::read_config(&config_path).unwrap();
-    let tree_cfg = cfg.tree.unwrap();
-    let tree = Tree::from_config(&tree_cfg);
-    let m = manifest::read(&tree.manifest_path()).unwrap();
-
-    assert_eq!(m.tree.name, "my-tree");
-    assert_eq!(m.tree.created_at.to_string(), tree_cfg.created_at.unwrap());
-    assert!(m.tree.last_compiled_at.is_none());
-    assert!(m.leaves.is_empty());
-    assert!(m.branches.is_empty());
+    assert_eq!(result.name, "bo");
 }
 
 #[test]
-fn manifest_not_overwritten_on_already_seeded() {
+fn existing_same_path_returns_already_exists_and_keeps_config_read_only() {
     let tmp = TempDir::new().unwrap();
-    let output_dir = tmp.path().join("tree");
+    let tree_dir = tmp.path().join("tree");
     let config_path = tmp.path().join("config.json");
+    let mut prompt = PromptAnswers::default();
 
-    seed(output_dir.clone(), None, &config_path).unwrap();
-    let manifest_path = output_dir.join(".bo/manifest.json");
-    let first = std::fs::read_to_string(&manifest_path).unwrap();
+    let created = seed(options(tree_dir.clone()), &config_path, &mut prompt).unwrap();
+    let mut changed_options = options(tree_dir);
+    changed_options.name = Some("ignored".to_string());
+    changed_options.model = Some("gpt-4o".to_string());
 
-    // Re-running seed should be a no-op for the manifest.
-    seed(output_dir.clone(), None, &config_path).unwrap();
-    let second = std::fs::read_to_string(&manifest_path).unwrap();
+    let existing = seed(changed_options, &config_path, &mut prompt).unwrap();
 
-    assert_eq!(first, second);
+    assert_eq!(existing.status, SeedStatus::AlreadyExists);
+    assert_eq!(existing.path, created.path);
+    assert_eq!(existing.name, "tree");
+    assert_eq!(existing.model, "gpt-4.1-mini");
+
+    let cfg = config::read_config(&config_path).unwrap();
+    assert_eq!(cfg.tree.unwrap().name, "tree");
+    assert_eq!(cfg.model.as_deref(), Some("gpt-4.1-mini"));
+}
+
+#[test]
+fn existing_different_path_is_rejected() {
+    let tmp = TempDir::new().unwrap();
+    let first_tree = tmp.path().join("first");
+    let second_tree = tmp.path().join("second");
+    let config_path = tmp.path().join("config.json");
+    let mut prompt = PromptAnswers::default();
+
+    seed(options(first_tree), &config_path, &mut prompt).unwrap();
+    let err = seed(options(second_tree), &config_path, &mut prompt).unwrap_err();
+
+    assert!(matches!(err, SeedError::TreeAlreadySeeded { .. }));
+    assert_eq!(err.exit_code(), 2);
+}
+
+#[test]
+fn invalid_config_is_overwritten_by_fresh_seed() {
+    let tmp = TempDir::new().unwrap();
+    let tree_dir = tmp.path().join("tree");
+    let config_path = tmp.path().join("config.json");
+    std::fs::write(&config_path, "not json").unwrap();
+    let mut prompt = PromptAnswers::default();
+
+    let result = seed(options(tree_dir), &config_path, &mut prompt).unwrap();
+
+    assert_eq!(result.status, SeedStatus::Created);
+    assert_eq!(
+        config::read_config(&config_path)
+            .unwrap()
+            .tree
+            .unwrap()
+            .name,
+        "tree"
+    );
+}
+
+#[test]
+fn unsupported_provider_and_model_are_usage_errors() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = tmp.path().join("config.json");
+    let mut prompt = PromptAnswers::default();
+
+    let unknown_provider = seed(
+        SeedOptions {
+            path: Some(tmp.path().join("tree-a")),
+            name: Some("tree".to_string()),
+            provider: Some("unknown".to_string()),
+            model: Some("gpt-4.1-mini".to_string()),
+        },
+        &config_path,
+        &mut prompt,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        unknown_provider,
+        SeedError::UnknownProvider { .. }
+    ));
+    assert_eq!(unknown_provider.exit_code(), 2);
+
+    let unsupported_model = seed(
+        SeedOptions {
+            path: Some(tmp.path().join("tree-b")),
+            name: Some("tree".to_string()),
+            provider: Some("deepseek".to_string()),
+            model: Some("gpt-4.1-mini".to_string()),
+        },
+        &config_path,
+        &mut prompt,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        unsupported_model,
+        SeedError::UnsupportedModel { .. }
+    ));
+    assert_eq!(unsupported_model.exit_code(), 2);
+}
+
+#[test]
+fn render_human_is_readable_for_new_and_existing_seed() {
+    let result = SeedResult {
+        status: SeedStatus::AlreadyExists,
+        path: PathBuf::from("/tmp/tree"),
+        name: "tree".to_string(),
+        created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+        provider: Provider::OpenAI,
+        model: "gpt-4.1-mini".to_string(),
+        compile_model: None,
+    };
+
+    let rendered = render_human(&result);
+
+    assert!(rendered.ends_with('\n'));
+    assert!(rendered.contains("bo is already seeded"));
+    assert!(rendered.contains("path: /tmp/tree"));
+    assert!(rendered.contains("use `bo config` to change provider or model"));
 }

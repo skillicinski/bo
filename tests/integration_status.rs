@@ -18,7 +18,17 @@ fn bo(home: &Path) -> Command {
 
 fn seed(home: &Path, output_dir: &Path) -> Output {
     bo(home)
-        .args(["seed", output_dir.to_str().unwrap()])
+        .args([
+            "seed",
+            "--path",
+            output_dir.to_str().unwrap(),
+            "--name",
+            "tree",
+            "--provider",
+            "openai",
+            "--model",
+            "gpt-4.1-mini",
+        ])
         .output()
         .expect("failed to run bo seed")
 }
@@ -47,6 +57,7 @@ fn write_leaf(tree_dir: &Path, slug: &str, url: &str) {
 
     // Append to manifest so reads see the leaf.
     let manifest_path = tree_dir.join(".bo/manifest.json");
+    ensure_manifest(tree_dir);
     let mut m = bo::domain::manifest::read(&manifest_path).unwrap();
     m.leaves.push(bo::domain::manifest::LeafRecord {
         slug: Slug::parse(slug).unwrap(),
@@ -59,6 +70,26 @@ fn write_leaf(tree_dir: &Path, slug: &str, url: &str) {
     bo::domain::manifest::write(&manifest_path, &m).unwrap();
 }
 
+fn ensure_manifest(tree_dir: &Path) {
+    let manifest_path = tree_dir.join(".bo/manifest.json");
+    if manifest_path.exists() {
+        return;
+    }
+    bo::domain::manifest::write(
+        &manifest_path,
+        &bo::domain::manifest::Manifest {
+            tree: bo::domain::manifest::TreeMeta {
+                name: "tree".to_string(),
+                created_at: Timestamp::parse("2026-05-14T10:00:00Z").unwrap(),
+                last_compiled_at: None,
+            },
+            leaves: Vec::new(),
+            branches: Vec::new(),
+        },
+    )
+    .unwrap();
+}
+
 fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
     let branches_dir = tree_dir.join("branches");
     fs::create_dir_all(&branches_dir).unwrap();
@@ -69,6 +100,7 @@ fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
 
     // Append to manifest.
     let manifest_path = tree_dir.join(".bo/manifest.json");
+    ensure_manifest(tree_dir);
     let mut m = bo::domain::manifest::read(&manifest_path).unwrap();
     m.branches.push(bo::domain::manifest::BranchRecord {
         slug: Slug::parse(slug).unwrap(),

@@ -9,9 +9,9 @@ use tempfile::TempDir;
 
 fn seeded_config(dir: &Path) -> SeededConfig {
     let tree_cfg = crate::domain::tree::TreeConfig {
-        output_dir: dir.to_path_buf(),
-        name: Some("test-tree".to_string()),
-        created_at: Some("2026-01-01T00:00:00Z".to_string()),
+        path: dir.to_path_buf(),
+        name: "test-tree".to_string(),
+        created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
     };
     let config = crate::engine::config::Config {
         tree: Some(tree_cfg.clone()),
@@ -24,9 +24,9 @@ fn seeded_config(dir: &Path) -> SeededConfig {
 
 fn write_manifest(dir: &Path, manifest: &Manifest) {
     let tree = crate::domain::tree::Tree::from_config(&crate::domain::tree::TreeConfig {
-        output_dir: dir.to_path_buf(),
-        name: Some("test-tree".to_string()),
-        created_at: Some("2026-01-01T00:00:00Z".to_string()),
+        path: dir.to_path_buf(),
+        name: "test-tree".to_string(),
+        created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
     });
     crate::domain::manifest::write(&tree.manifest_path(), manifest).unwrap();
 }

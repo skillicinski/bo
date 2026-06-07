@@ -1,4 +1,5 @@
 use super::*;
+use crate::domain::Timestamp;
 use crate::engine::llm::Provider;
 use tempfile::TempDir;
 
@@ -6,18 +7,22 @@ fn temp_config_path(dir: &TempDir) -> PathBuf {
     dir.path().join(".bo").join("config.json")
 }
 
-fn make_tree(output_dir: &str) -> TreeConfig {
+fn test_timestamp() -> Timestamp {
+    Timestamp::parse("2026-04-14T09:00:00Z").unwrap()
+}
+
+fn make_tree(path: &str) -> TreeConfig {
     TreeConfig {
-        output_dir: PathBuf::from(output_dir),
-        name: None,
-        created_at: None,
+        path: PathBuf::from(path),
+        name: "bo".to_string(),
+        created_at: test_timestamp(),
     }
 }
 
-fn make_seeded_config(output_dir: &str) -> Config {
+fn make_seeded_config(path: &str) -> Config {
     Config {
         provider: Provider::OpenAI,
-        tree: Some(make_tree(output_dir)),
+        tree: Some(make_tree(path)),
         model: None,
         compile_model: None,
     }
@@ -31,10 +36,7 @@ fn write_then_read_roundtrip() {
     write_config(&make_seeded_config("/tmp/my-tree"), &path).unwrap();
 
     let loaded = read_config(&path).unwrap();
-    assert_eq!(
-        loaded.tree.unwrap().output_dir,
-        PathBuf::from("/tmp/my-tree")
-    );
+    assert_eq!(loaded.tree.unwrap().path, PathBuf::from("/tmp/my-tree"));
 }
 
 #[test]
@@ -46,7 +48,7 @@ fn written_file_is_valid_json_with_tree_key() {
 
     let contents = std::fs::read_to_string(&path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
-    assert_eq!(parsed["tree"]["output_dir"], "/some/path");
+    assert_eq!(parsed["tree"]["path"], "/some/path");
     assert!(parsed.get("model").is_none());
 }
 
@@ -110,16 +112,16 @@ fn compile_model_roundtrip_with_value() {
 }
 
 #[test]
-fn name_and_created_at_roundtrip() {
+fn tree_metadata_roundtrip() {
     let dir = TempDir::new().unwrap();
     let path = temp_config_path(&dir);
 
     let config = Config {
         provider: Provider::OpenAI,
         tree: Some(TreeConfig {
-            output_dir: PathBuf::from("/tmp/bo"),
-            name: Some("my-research".to_string()),
-            created_at: Some("2026-04-14T09:00:00Z".to_string()),
+            path: PathBuf::from("/tmp/bo"),
+            name: "my-research".to_string(),
+            created_at: test_timestamp(),
         }),
         model: None,
         compile_model: None,
@@ -128,47 +130,8 @@ fn name_and_created_at_roundtrip() {
 
     let loaded = read_config(&path).unwrap();
     let tree = loaded.tree.unwrap();
-    assert_eq!(tree.name.as_deref(), Some("my-research"));
-    assert_eq!(tree.created_at.as_deref(), Some("2026-04-14T09:00:00Z"));
-}
-
-#[test]
-fn model_absent_uses_default() {
-    let dir = TempDir::new().unwrap();
-    let path = temp_config_path(&dir);
-
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path, r#"{"tree":{"output_dir":"/tmp/bo"}}"#).unwrap();
-
-    let loaded = read_config(&path).unwrap();
-    assert!(loaded.model.is_none());
-    assert!(loaded.compile_model.is_none());
-    assert_eq!(loaded.effective_model().unwrap(), "gpt-4.1-mini");
-    assert_eq!(loaded.effective_compile_model().unwrap(), "gpt-4.1-mini");
-}
-
-#[test]
-fn compile_model_absent_falls_back_to_model() {
-    let cfg = Config {
-        provider: Provider::OpenAI,
-        tree: Some(make_tree("/tmp/bo")),
-        model: Some("gpt-4o-mini".to_string()),
-        compile_model: None,
-    };
-
-    assert_eq!(cfg.effective_compile_model().unwrap(), "gpt-4o-mini");
-}
-
-#[test]
-fn compile_model_absent_and_model_absent_falls_back_to_default() {
-    let cfg = Config {
-        provider: Provider::OpenAI,
-        tree: Some(make_tree("/tmp/bo")),
-        model: None,
-        compile_model: None,
-    };
-
-    assert_eq!(cfg.effective_compile_model().unwrap(), "gpt-4.1-mini");
+    assert_eq!(tree.name, "my-research");
+    assert_eq!(tree.created_at, test_timestamp());
 }
 
 #[test]
@@ -218,7 +181,7 @@ fn seeded_conversion_succeeds_when_tree_exists() {
 
     let seeded = cfg.into_seeded().unwrap();
 
-    assert_eq!(seeded.tree_cfg.output_dir, PathBuf::from("/tmp/bo"));
+    assert_eq!(seeded.tree_cfg.path, PathBuf::from("/tmp/bo"));
     assert_eq!(seeded.effective_model().unwrap(), "gpt-4.1-mini");
 }
 

@@ -19,7 +19,17 @@ fn bo(home: &Path) -> Command {
 
 fn seed(home: &Path, output_dir: &Path) -> Output {
     bo(home)
-        .args(["seed", output_dir.to_str().unwrap()])
+        .args([
+            "seed",
+            "--path",
+            output_dir.to_str().unwrap(),
+            "--name",
+            "tree",
+            "--provider",
+            "openai",
+            "--model",
+            "gpt-4.1-mini",
+        ])
         .output()
         .expect("failed to run bo seed")
 }
@@ -61,12 +71,33 @@ fn auth_path(home: &TempDir) -> std::path::PathBuf {
     home.path().join(".bo").join("auth.json")
 }
 
+fn ensure_manifest(tree: &Path) {
+    let manifest_path = tree.join(".bo/manifest.json");
+    if manifest_path.exists() {
+        return;
+    }
+    bo::domain::manifest::write(
+        &manifest_path,
+        &bo::domain::manifest::Manifest {
+            tree: bo::domain::manifest::TreeMeta {
+                name: "tree".to_string(),
+                created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+                last_compiled_at: None,
+            },
+            leaves: Vec::new(),
+            branches: Vec::new(),
+        },
+    )
+    .unwrap();
+}
+
 fn append_index_entry(tree: &Path, file: &str, title: &str) {
     upsert_manifest_leaf(tree, file, title, "2025-01-01T00:00:00Z");
 }
 
 fn upsert_manifest_leaf(tree: &Path, file: &str, title: &str, collected_at: &str) {
     let manifest_path = tree.join(".bo/manifest.json");
+    ensure_manifest(tree);
     let mut manifest = bo::domain::manifest::read(&manifest_path).unwrap();
     let slug = file.trim_end_matches(".md").to_string();
     let url = format!("https://example.com/{}", file.trim_end_matches(".md"));
@@ -89,6 +120,7 @@ fn upsert_manifest_leaf(tree: &Path, file: &str, title: &str, collected_at: &str
 
 fn set_manifest_branches_for_leaf(tree: &Path, file: &str, branches: &[&str], timestamp: &str) {
     let manifest_path = tree.join(".bo/manifest.json");
+    ensure_manifest(tree);
     let mut manifest = bo::domain::manifest::read(&manifest_path).unwrap();
     let leaf_slug = file.trim_end_matches(".md").to_string();
 
@@ -303,7 +335,25 @@ fn seed_creates_output_dir_and_config() {
     assert!(cfg_path.exists());
     let contents = fs::read_to_string(&cfg_path).unwrap();
     let parsed: Value = serde_json::from_str(&contents).unwrap();
-    assert_eq!(parsed["tree"]["output_dir"], tree.to_str().unwrap());
+    assert_eq!(
+        parsed["tree"]["path"],
+        fs::canonicalize(&tree).unwrap().to_str().unwrap()
+    );
+}
+
+#[test]
+fn seed_rejects_positional_path() {
+    let home = TempDir::new().unwrap();
+    let tree = home.path().join("my-tree");
+
+    let out = bo(home.path())
+        .args(["seed", tree.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("unexpected argument"), "stderr: {stderr}");
 }
 
 #[test]
@@ -319,7 +369,7 @@ fn seed_already_seeded_is_idempotent() {
     assert!(out2.status.success());
     let stdout = String::from_utf8_lossy(&out2.stdout);
     assert!(
-        stdout.contains("already been seeded"),
+        stdout.contains("bo is already seeded"),
         "expected already-seeded message, got: {stdout}"
     );
 
@@ -327,7 +377,10 @@ fn seed_already_seeded_is_idempotent() {
     let cfg_path = config_path(&home);
     let contents = fs::read_to_string(&cfg_path).unwrap();
     let parsed: Value = serde_json::from_str(&contents).unwrap();
-    assert_eq!(parsed["tree"]["output_dir"], tree.to_str().unwrap());
+    assert_eq!(
+        parsed["tree"]["path"],
+        fs::canonicalize(&tree).unwrap().to_str().unwrap()
+    );
 }
 
 #[test]
@@ -419,12 +472,12 @@ fn config_set_before_seed_creates_config_only_file() {
 }
 
 #[test]
-fn seed_after_config_set_preserves_model() {
+fn seed_after_config_only_writes_seed_config() {
     let home = TempDir::new().unwrap();
     let tree = home.path().join("tree");
 
     let set = bo(home.path())
-        .args(["config", "--model", "gpt-4.1-mini"])
+        .args(["config", "--model", "gpt-4o-mini"])
         .output()
         .unwrap();
     assert!(set.status.success());
@@ -439,7 +492,10 @@ fn seed_after_config_set_preserves_model() {
     let contents = fs::read_to_string(config_path(&home)).unwrap();
     let parsed: Value = serde_json::from_str(&contents).unwrap();
     assert_eq!(parsed["model"], "gpt-4.1-mini");
-    assert_eq!(parsed["tree"]["output_dir"], tree.to_str().unwrap());
+    assert_eq!(
+        parsed["tree"]["path"],
+        fs::canonicalize(&tree).unwrap().to_str().unwrap()
+    );
 }
 
 #[test]

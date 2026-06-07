@@ -54,7 +54,17 @@ fn bo(home: &Path) -> Command {
 
 fn seed(home: &Path, output_dir: &Path) {
     let out = bo(home)
-        .args(["seed", output_dir.to_str().unwrap()])
+        .args([
+            "seed",
+            "--path",
+            output_dir.to_str().unwrap(),
+            "--name",
+            "tree",
+            "--provider",
+            "openai",
+            "--model",
+            "gpt-4.1-mini",
+        ])
         .output()
         .expect("failed to run bo seed");
     assert!(
