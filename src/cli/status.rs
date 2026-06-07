@@ -109,15 +109,17 @@ pub fn compute_status(
 
     let manifest = match manifest::read(&tree.manifest_path()) {
         Ok(manifest) => manifest,
-        Err(manifest::ManifestError::TreeNotInitialized) => manifest::Manifest {
-            tree: manifest::TreeMeta {
-                name: tree_name.to_string(),
-                created_at: Timestamp::now(),
-                last_compiled_at: None,
-            },
-            leaves: Vec::new(),
-            branches: Vec::new(),
-        },
+        Err(manifest::ManifestError::TreeNotInitialized) if !tree.infra_dir().exists() => {
+            manifest::Manifest {
+                tree: manifest::TreeMeta {
+                    name: tree_name.to_string(),
+                    created_at: Timestamp::now(),
+                    last_compiled_at: None,
+                },
+                leaves: Vec::new(),
+                branches: Vec::new(),
+            }
+        }
         Err(error) => return Err(StatusError::Manifest(error)),
     };
 

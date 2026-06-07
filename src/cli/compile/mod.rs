@@ -263,7 +263,7 @@ pub fn run_compile_with_options(
     execute::recover_pending_if_needed(&tree.path)?;
     let manifest = match manifest::read(&tree.manifest_path()) {
         Ok(manifest) => manifest,
-        Err(manifest::ManifestError::TreeNotInitialized) => {
+        Err(manifest::ManifestError::TreeNotInitialized) if !tree.infra_dir().exists() => {
             return Ok(CompileResult::noop("empty_tree", Vec::new()));
         }
         Err(error) => {
