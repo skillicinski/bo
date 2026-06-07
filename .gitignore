@@ -4,6 +4,7 @@
 # dev
 .env
 /tmp*/
+tmp/
 
 # internal
 internal/
