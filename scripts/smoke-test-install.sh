@@ -52,8 +52,12 @@ echo "OK"
 
 # 3. seed into a tree
 TREE_DIR="$FAKE_HOME/test-tree"
-echo -n "  bo seed $TREE_DIR ... "
-HOME="$FAKE_HOME" "$BO" seed "$TREE_DIR" > /dev/null 2>&1
+echo -n "  bo seed --path $TREE_DIR --name test-tree --provider openai --model gpt-4.1-mini ... "
+HOME="$FAKE_HOME" "$BO" seed \
+    --path "$TREE_DIR" \
+    --name test-tree \
+    --provider openai \
+    --model gpt-4.1-mini > /dev/null 2>&1
 echo "OK"
 
 # 4. list (empty tree)
