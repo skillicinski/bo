@@ -261,11 +261,19 @@ pub fn run_compile_with_options(
     // Stale repair runs before preflight so preflight sees repaired state.
     let tree = Tree::from_config(&cfg.tree_cfg);
     execute::recover_pending_if_needed(&tree.path)?;
-    let stale_repair = plan::repair_stale_branches(
-        cfg,
-        &manifest::read(&tree.manifest_path())
-            .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?,
-    )?;
+    let manifest = match manifest::read(&tree.manifest_path()) {
+        Ok(manifest) => manifest,
+        Err(manifest::ManifestError::TreeNotInitialized) => {
+            return Ok(CompileResult::noop("empty_tree", Vec::new()));
+        }
+        Err(error) => {
+            return Err(CompileError::Io(format!(
+                "failed to read manifest: {}",
+                error
+            )));
+        }
+    };
+    let stale_repair = plan::repair_stale_branches(cfg, &manifest)?;
     let notifications = stale_repair.notifications;
 
     if let Some(noop) = preflight_noop(cfg, options, &notifications)? {

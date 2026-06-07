@@ -362,13 +362,14 @@ fn show_json_ambiguous_title_includes_candidates() {
 fn raze_json_summary() {
     let home = TempDir::new().unwrap();
     let tree = seed_tree(&home, "tree");
+    let tree_path = fs::canonicalize(&tree).unwrap().display().to_string();
 
     let out = run(home.path(), &["raze", "--json"]);
     assert!(out.status.success());
     let parsed = parse_json(&out);
     assert_eq!(parsed["ok"], true);
     assert_eq!(parsed["command"], "raze");
-    assert_eq!(parsed["data"]["output_dir"], tree.display().to_string());
+    assert_eq!(parsed["data"]["output_dir"], tree_path);
     assert_eq!(parsed["data"]["removed_output_dir"], true);
     assert_eq!(parsed["data"]["deleted_config"], true);
     assert_eq!(parsed["data"]["deleted_auth"], false);
