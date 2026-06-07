@@ -475,7 +475,7 @@ fn retrieve_leaves(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedLea
     let tree = crate::domain::tree::Tree {
         name: "unnamed".to_string(),
         created_at: None,
-        output_dir: tree_dir.to_path_buf(),
+        path: tree_dir.to_path_buf(),
     };
     let manifest = match crate::domain::manifest::read(&tree.manifest_path()) {
         Ok(m) => m,

@@ -173,7 +173,7 @@ pub fn show_leaf(
     let tree = Tree {
         name: "unnamed".to_string(),
         created_at: None,
-        output_dir: tree_dir.to_path_buf(),
+        path: tree_dir.to_path_buf(),
     };
     let manifest = match manifest::read(&tree.manifest_path()) {
         Ok(m) => m,

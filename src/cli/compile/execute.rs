@@ -182,8 +182,8 @@ pub(super) fn map_compile_llm_error(error: LlmError) -> CompileError {
 
 // ── pending/recovery ──────────────────────────────────────────────────────────
 
-pub(super) fn recover_pending_if_needed(output_dir: &std::path::Path) -> Result<(), CompileError> {
-    if let Some(report) = pending::recover_or_refuse(output_dir)? {
+pub(super) fn recover_pending_if_needed(path: &std::path::Path) -> Result<(), CompileError> {
+    if let Some(report) = pending::recover_or_refuse(path)? {
         eprintln!(
             "recovered {} changes from interrupted {}",
             report.changes, report.op
@@ -204,7 +204,7 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
     expected_manifest_hash: &str,
 ) -> Result<CompileSummary, CompileError> {
     let tree = Tree::from_config(&cfg.tree_cfg);
-    recover_pending_if_needed(&tree.output_dir)?;
+    recover_pending_if_needed(&tree.path)?;
 
     // Load current manifest. Used to preserve branch `created_at` and carry
     // leaf records / tree metadata forward into the new manifest.
@@ -215,8 +215,7 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
                 name: tree.name.clone(),
                 created_at: tree
                     .created_at
-                    .as_deref()
-                    .and_then(|s| Timestamp::parse(s).ok())
+                    .clone()
                     .unwrap_or_else(|| run_timestamp.clone()),
                 last_compiled_at: None,
             },
@@ -226,7 +225,7 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
         Err(e) => return Err(CompileError::Io(format!("failed to read manifest: {}", e))),
     };
 
-    let current_manifest_hash = pending::manifest_hash(&tree.output_dir)?;
+    let current_manifest_hash = pending::manifest_hash(&tree.path)?;
     if current_manifest_hash != expected_manifest_hash {
         return Err(CompileError::Io(
             "manifest changed during compile planning; rerun `bo compile`".to_string(),
@@ -256,20 +255,20 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
         CompileRunMode::Full => CompileMode::Full,
     };
     let operation = pending::new_operation(
-        &tree.output_dir,
+        &tree.path,
         OpKind::Compile { mode: compile_mode },
         writes.clone(),
         delta.branch_deletes.clone(),
     )?;
-    let pending_path = pending::pending_path(&tree.output_dir);
+    let pending_path = pending::pending_path(&tree.path);
     pending::write(&pending_path, &operation)?;
     for write in &staged {
-        pending::write_staged(&tree.output_dir, &write.pending, &write.bytes)?;
+        pending::write_staged(&tree.path, &write.pending, &write.bytes)?;
     }
     manifest::write(&tree.manifest_path(), &delta.new_manifest)
         .map_err(|e| CompileError::Io(format!("failed to write manifest: {}", e)))?;
-    pending::apply_writes(&tree.output_dir, &writes)?;
-    pending::apply_deletes(&tree.output_dir, &delta.branch_deletes)?;
+    pending::apply_writes(&tree.path, &writes)?;
+    pending::apply_deletes(&tree.path, &delta.branch_deletes)?;
     pending::clear(&pending_path)?;
 
     let branch_results: Vec<BranchResult> = delta

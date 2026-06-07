@@ -161,7 +161,7 @@ pub fn list_tree(tree_dir: &Path, options: &ListOptions) -> Result<ListResult, L
     let tree = Tree {
         name: "unnamed".to_string(),
         created_at: None,
-        output_dir: tree_dir.to_path_buf(),
+        path: tree_dir.to_path_buf(),
     };
     let m = match manifest::read(&tree.manifest_path()) {
         Ok(m) => m,
