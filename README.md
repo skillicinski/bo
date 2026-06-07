@@ -31,14 +31,11 @@ cargo install --git https://github.com/skillicinski/bo --tag v0.0.2
 ## Quickstart
 
 ```bash
-# Pick a provider and model (writes to ~/.bo/config.json)
-bo config --provider openai --model gpt-4.1-mini
+# Seed a tree and choose the provider/model
+bo seed --path ~/bo-tree --name bo-tree --provider openai --model gpt-4.1-mini
 
 # Make your API key available (either env var or ~/.bo/auth.json — see below)
 export OPENAI_API_KEY=sk-...
-
-# Seed a tree
-bo seed ~/bo-tree
 
 # Collect some pages — single URL, many URLs, or a .txt file with one URL per line
 bo collect https://example.com/blog/intro-to-knowledge-graphs
@@ -63,11 +60,11 @@ bo query "Can a Knowledge Graph be explained in three sentences?"
 
 See [docs/usage.md](docs/usage.md) for a detailed walkthrough with examples and workflow loops.
 
-All commands support `--json` for machine-readable output, intended for use by coding assistants and scripts.
+Commands other than `seed` support `--json` for machine-readable output, intended for use by coding assistants and scripts. `bo seed` stays human-readable and rejects `--json`.
 
 ## Provider setup
 
-bo currently supports two OpenAI-compatible providers: **OpenAI** and **DeepSeek**.
+bo currently supports **OpenAI**, **DeepSeek**, and **Google**.
 
 ### 1. Choose provider and model
 
@@ -75,6 +72,8 @@ bo currently supports two OpenAI-compatible providers: **OpenAI** and **DeepSeek
 bo config --provider openai --model gpt-4.1-mini
 # or
 bo config --provider deepseek --model deepseek-v4-flash
+# or
+bo config --provider google --model gemini-2.5-flash
 ```
 
 You can also pin a heavier model just for the compile step:
@@ -92,6 +91,7 @@ Resolution order: environment variable → `~/.bo/auth.json` → error.
 ```bash
 export OPENAI_API_KEY=sk-...
 export DEEPSEEK_API_KEY=sk-...
+export GEMINI_API_KEY=...
 ```
 
 **Option B — `~/.bo/auth.json`** (chmod 600):
@@ -99,7 +99,8 @@ export DEEPSEEK_API_KEY=sk-...
 ```json
 {
   "openai_api_key": "sk-...",
-  "deepseek_api_key": "sk-..."
+  "deepseek_api_key": "sk-...",
+  "google_api_key": "..."
 }
 ```
 
