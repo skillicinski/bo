@@ -21,7 +21,7 @@
 // Config may also exist before `bo seed` with only operator-level keys, e.g.
 // `{ "model": "gpt-4.1-mini" }`.
 
-use crate::domain::tree::TreeConfig;
+use crate::domain::tree::{Tree, TreeConfig};
 use crate::engine::llm::model::Model;
 use crate::engine::llm::models;
 use crate::engine::llm::Provider;
@@ -83,17 +83,26 @@ impl Config {
     }
 
     pub fn into_seeded(self) -> Option<SeededConfig> {
-        self.tree.map(|tree_cfg| SeededConfig {
-            tree_cfg,
-            config: Config { tree: None, ..self },
-        })
+        self.tree
+            .map(|tree_cfg| SeededConfig::new(Config { tree: None, ..self }, tree_cfg))
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct SeededConfig {
     pub config: Config,
-    pub tree_cfg: TreeConfig,
+    tree_cfg: TreeConfig,
+}
+
+impl SeededConfig {
+    pub fn new(mut config: Config, tree_cfg: TreeConfig) -> Self {
+        config.tree = None;
+        Self { config, tree_cfg }
+    }
+
+    pub fn tree(&self) -> Tree {
+        Tree::from_config(&self.tree_cfg)
+    }
 }
 
 impl std::ops::Deref for SeededConfig {

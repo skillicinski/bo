@@ -88,19 +88,19 @@ fn setup_fixture_collection() -> tempfile::TempDir {
 }
 
 fn make_config(output_dir: &std::path::Path) -> SeededConfig {
-    SeededConfig {
-        config: bo::engine::config::Config {
+    SeededConfig::new(
+        bo::engine::config::Config {
             provider: bo::engine::llm::Provider::OpenAI,
             model: Some("gpt-4o-mini".to_string()), // cheaper model for tests
             compile_model: None,
             tree: None,
         },
-        tree_cfg: bo::domain::tree::TreeConfig {
+        bo::domain::tree::TreeConfig {
             path: output_dir.to_path_buf(),
             name: "test-tree".to_string(),
             created_at: bo::domain::Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         },
-    }
+    )
 }
 
 // ── live API tests (require OPENAI_API_KEY) ───────────────────────────────────

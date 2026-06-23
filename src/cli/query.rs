@@ -6,6 +6,7 @@
 // validation, context assembly, and LLM synthesis.
 
 use crate::cli::json::JsonError;
+use crate::domain::tree::{self, TreeRuntimeState};
 use crate::engine::llm::{
     complete_with_policy, FinishReason, LlmCallPolicy, LlmError, LlmProvider, Message, Model,
 };
@@ -472,15 +473,14 @@ fn compute_retrieval_diagnostics(
 
 /// Retrieve top-k leaves scored by term density (OR semantics).
 fn retrieve_leaves(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedLeaf>, QueryError> {
-    let tree = crate::domain::tree::Tree {
-        name: "unnamed".to_string(),
-        created_at: crate::domain::Timestamp::now(),
-        path: tree_dir.to_path_buf(),
-    };
-    let manifest = match crate::domain::manifest::read(&tree.manifest_path()) {
-        Ok(m) => m,
-        Err(crate::domain::manifest::ManifestError::TreeNotInitialized) => {
-            return Err(QueryError::EmptyTree);
+    let manifest = match tree::runtime_state(tree_dir) {
+        Ok(TreeRuntimeState::Initialized(manifest)) => manifest,
+        Ok(TreeRuntimeState::FreshSeeded) => return Err(QueryError::EmptyTree),
+        Ok(TreeRuntimeState::MissingManifest) => {
+            return Err(QueryError::Io(format!(
+                "manifest: {}",
+                crate::domain::manifest::ManifestError::TreeNotInitialized
+            )));
         }
         Err(e) => return Err(QueryError::Io(format!("manifest: {}", e))),
     };
