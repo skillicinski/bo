@@ -1,4 +1,5 @@
 use crate::cli::json::JsonWarning;
+use crate::domain::tree::TreeRuntimeState;
 use crate::domain::{manifest, tree};
 use crate::engine::pending::{self, OpKind};
 
@@ -71,9 +72,9 @@ pub fn raze_with_auth(
     recover_pending_if_needed(output_dir)?;
 
     let manifest_path = tree::manifest_path(output_dir);
-    let manifest = match manifest::read(&manifest_path) {
-        Ok(manifest) => Some(manifest),
-        Err(manifest::ManifestError::TreeNotInitialized) => None,
+    let manifest = match tree::runtime_state(output_dir) {
+        Ok(TreeRuntimeState::Initialized(manifest)) => Some(manifest),
+        Ok(TreeRuntimeState::FreshSeeded | TreeRuntimeState::MissingManifest) => None,
         Err(error) => return Err(RazeError::Io(format!("failed to read manifest: {error}"))),
     };
 

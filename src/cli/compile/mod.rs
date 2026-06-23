@@ -14,7 +14,7 @@ use serde_json::json;
 
 use crate::cli::json::JsonError;
 use crate::domain::manifest;
-use crate::domain::tree::Tree;
+use crate::domain::tree::TreeRuntimeState;
 use crate::engine::auth;
 use crate::engine::config::SeededConfig;
 use crate::engine::llm::{LlmCallPolicy, LlmProvider, Model};
@@ -229,8 +229,9 @@ fn preflight_noop(
     options: CompileOptions,
     notifications: &[String],
 ) -> Result<Option<CompileResult>, CompileError> {
-    let tree = Tree::from_config(&cfg.tree_cfg);
-    let manifest = manifest::read(&tree.manifest_path())
+    let tree = cfg.tree();
+    let manifest = tree
+        .manifest_or_empty_if_fresh()
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
     match manifest.leaves.len() {
         0 => {
@@ -259,12 +260,18 @@ pub fn run_compile_with_options(
     let compile_started_at = execute::compile_timestamp_now();
 
     // Stale repair runs before preflight so preflight sees repaired state.
-    let tree = Tree::from_config(&cfg.tree_cfg);
-    execute::recover_pending_if_needed(&tree.path)?;
-    let manifest = match manifest::read(&tree.manifest_path()) {
-        Ok(manifest) => manifest,
-        Err(manifest::ManifestError::TreeNotInitialized) if !tree.infra_dir().exists() => {
+    let tree = cfg.tree();
+    execute::recover_pending_if_needed(tree.path())?;
+    let manifest = match tree.runtime_state() {
+        Ok(TreeRuntimeState::Initialized(manifest)) => manifest,
+        Ok(TreeRuntimeState::FreshSeeded) => {
             return Ok(CompileResult::noop("empty_tree", Vec::new()));
+        }
+        Ok(TreeRuntimeState::MissingManifest) => {
+            return Err(CompileError::Io(format!(
+                "failed to read manifest: {}",
+                manifest::ManifestError::TreeNotInitialized
+            )));
         }
         Err(error) => {
             return Err(CompileError::Io(format!(
@@ -311,12 +318,12 @@ fn run_compile_with_provider_started_at(
     compile_started_at: &crate::domain::Timestamp,
     notifications: Vec<String>,
 ) -> Result<CompileResult, CompileError> {
-    let tree = Tree::from_config(&cfg.tree_cfg);
-    execute::recover_pending_if_needed(&tree.path)?;
+    let tree = cfg.tree();
+    execute::recover_pending_if_needed(tree.path())?;
 
     let manifest = manifest::read(&tree.manifest_path())
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
-    let expected_manifest_hash = pending::manifest_hash(&tree.path)?;
+    let expected_manifest_hash = pending::manifest_hash(tree.path())?;
 
     let new_leaf_slugs = plan::select_new_leaf_slugs(&manifest)?;
 

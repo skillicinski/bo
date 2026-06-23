@@ -321,7 +321,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
             Ok(result) => {
                 let tree_name = require_seeded_config()
                     .ok()
-                    .map(|c| c.tree_cfg.name)
+                    .map(|c| c.tree().name)
                     .unwrap_or_else(|| "bo".to_string());
                 write_human_or_error(compile::render_human(&result, stdout, &tree_name))
             }
@@ -567,19 +567,15 @@ fn execute_status() -> Result<status::StatusResult, CliError> {
         }
     };
 
-    let (tree_dir, tree_name) = match config.as_ref().and_then(|c| c.tree.as_ref()) {
-        Some(tree_cfg) => {
-            let tree = bo::domain::tree::Tree::from_config(tree_cfg);
-            let name = tree.name.clone();
-            (tree_cfg.path.clone(), name)
-        }
-        None => {
-            // Not seeded — return config-only status
-            return Ok(status::config_only_status(config.as_ref()));
-        }
+    let Some(tree) = config
+        .clone()
+        .and_then(config::Config::into_seeded)
+        .map(|c| c.tree())
+    else {
+        return Ok(status::config_only_status(config.as_ref()));
     };
 
-    status::compute_status(&tree_dir, &tree_name, config.as_ref()).map_err(CliError::Status)
+    status::compute_status(tree.path(), &tree.name, config.as_ref()).map_err(CliError::Status)
 }
 
 fn execute_raze(include_auth: bool) -> Result<raze::RazeOutput, CliError> {
@@ -588,13 +584,14 @@ fn execute_raze(include_auth: bool) -> Result<raze::RazeOutput, CliError> {
 
     match config::read_config(&config_path) {
         Ok(cfg) => {
-            let tree = cfg.into_seeded().ok_or(CliError::NotSeeded)?;
+            let seeded = cfg.into_seeded().ok_or(CliError::NotSeeded)?;
             let auth_cleanup = if include_auth {
                 raze::AuthCleanup::Delete
             } else {
                 raze::AuthCleanup::Preserve
             };
-            raze::raze_with_auth(&tree.tree_cfg.path, &config_path, &auth_path, auth_cleanup)
+            let tree = seeded.tree();
+            raze::raze_with_auth(tree.path(), &config_path, &auth_path, auth_cleanup)
                 .map_err(CliError::Raze)
         }
         Err(ConfigError::NotFound) => {
@@ -616,7 +613,8 @@ fn execute_raze(include_auth: bool) -> Result<raze::RazeOutput, CliError> {
 
 fn execute_collect(inputs: Vec<String>) -> Result<CollectOutput, CliError> {
     let cfg = require_seeded_config()?;
-    let output_dir = cfg.tree_cfg.path.clone();
+    let tree = cfg.tree();
+    let output_dir = tree.path().to_path_buf();
     let collect_dir = output_dir.clone();
     let model = cfg
         .effective_model()
@@ -645,8 +643,9 @@ fn execute_list(
         list::ListViewMode::BranchCentric
     };
     let cfg = require_seeded_config()?;
+    let tree = cfg.tree();
     list::list_tree(
-        &cfg.tree_cfg.path,
+        tree.path(),
         &list::ListOptions {
             view,
             terms: terms.iter().map(|t| t.to_lowercase()).collect(),
@@ -660,7 +659,8 @@ fn execute_list(
 
 fn execute_show(title: String, full: bool) -> Result<show::ShowResult, CliError> {
     let cfg = require_seeded_config()?;
-    show::show_leaf(&cfg.tree_cfg.path, &title, &ShowOptions { full }).map_err(CliError::Show)
+    let tree = cfg.tree();
+    show::show_leaf(tree.path(), &title, &ShowOptions { full }).map_err(CliError::Show)
 }
 
 fn execute_query(question: &str) -> Result<query::QueryResult, query::QueryError> {
@@ -686,7 +686,8 @@ where
     let model = cfg
         .effective_model()
         .map_err(|e| query::QueryError::NoProvider(e.to_string()))?;
-    let prepared = query::prepare(&cfg.tree_cfg.path, question, &model)?;
+    let tree = cfg.tree();
+    let prepared = query::prepare(tree.path(), question, &model)?;
     let provider = resolve_provider()?;
     query::run_prepared_with_provider(prepared, provider.as_ref())
 }

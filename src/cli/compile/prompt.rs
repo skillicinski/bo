@@ -54,6 +54,7 @@ pub(super) fn build_incremental_user_message(
     leaves: &[LoadedLeaf],
     new_leaf_slugs: &[String],
 ) -> String {
+    let tree = cfg.tree();
     let leaves_by_slug: HashMap<&str, &LoadedLeaf> = leaves
         .iter()
         .map(|leaf| (leaf.slug.as_str(), leaf))
@@ -81,7 +82,7 @@ pub(super) fn build_incremental_user_message(
             branch_record.title,
             leaves_str.join(",")
         ));
-        let branch_path = cfg.tree_cfg.path.join(&branch_record.file);
+        let branch_path = tree.join(&branch_record.file);
         if let Ok(content) = fs::read_to_string(branch_path) {
             if let Ok((_, body)) = frontmatter::parse(&content) {
                 msg.push_str("<branch_body>\n");

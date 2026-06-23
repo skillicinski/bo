@@ -13,13 +13,7 @@ fn seeded_config(dir: &Path) -> SeededConfig {
         name: "test-tree".to_string(),
         created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
     };
-    let config = crate::engine::config::Config {
-        tree: Some(tree_cfg.clone()),
-        ..crate::engine::config::Config::default()
-    };
-    let mut seeded = config.into_seeded().expect("seeded config");
-    seeded.tree_cfg = tree_cfg;
-    seeded
+    SeededConfig::new(crate::engine::config::Config::default(), tree_cfg)
 }
 
 fn write_manifest(dir: &Path, manifest: &Manifest) {

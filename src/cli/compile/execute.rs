@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
-use crate::domain::{branch, manifest, tree::Tree, Timestamp};
+use crate::domain::{branch, manifest, Timestamp};
 
 use crate::engine::config::SeededConfig;
 use crate::engine::llm::{
@@ -203,26 +203,16 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
     run_mode: CompileRunMode,
     expected_manifest_hash: &str,
 ) -> Result<CompileSummary, CompileError> {
-    let tree = Tree::from_config(&cfg.tree_cfg);
-    recover_pending_if_needed(&tree.path)?;
+    let tree = cfg.tree();
+    recover_pending_if_needed(tree.path())?;
 
     // Load current manifest. Used to preserve branch `created_at` and carry
     // leaf records / tree metadata forward into the new manifest.
-    let current = match manifest::read(&tree.manifest_path()) {
-        Ok(m) => m,
-        Err(manifest::ManifestError::TreeNotInitialized) => manifest::Manifest {
-            tree: manifest::TreeMeta {
-                name: tree.name.clone(),
-                created_at: tree.created_at.clone(),
-                last_compiled_at: None,
-            },
-            leaves: Vec::new(),
-            branches: Vec::new(),
-        },
-        Err(e) => return Err(CompileError::Io(format!("failed to read manifest: {}", e))),
-    };
+    let current = tree
+        .manifest_or_empty_if_fresh()
+        .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
 
-    let current_manifest_hash = pending::manifest_hash(&tree.path)?;
+    let current_manifest_hash = pending::manifest_hash(tree.path())?;
     if current_manifest_hash != expected_manifest_hash {
         return Err(CompileError::Io(
             "manifest changed during compile planning; rerun `bo compile`".to_string(),
@@ -252,20 +242,20 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
         CompileRunMode::Full => CompileMode::Full,
     };
     let operation = pending::new_operation(
-        &tree.path,
+        tree.path(),
         OpKind::Compile { mode: compile_mode },
         writes.clone(),
         delta.branch_deletes.clone(),
     )?;
-    let pending_path = pending::pending_path(&tree.path);
+    let pending_path = pending::pending_path(tree.path());
     pending::write(&pending_path, &operation)?;
     for write in &staged {
-        pending::write_staged(&tree.path, &write.pending, &write.bytes)?;
+        pending::write_staged(tree.path(), &write.pending, &write.bytes)?;
     }
     manifest::write(&tree.manifest_path(), &delta.new_manifest)
         .map_err(|e| CompileError::Io(format!("failed to write manifest: {}", e)))?;
-    pending::apply_writes(&tree.path, &writes)?;
-    pending::apply_deletes(&tree.path, &delta.branch_deletes)?;
+    pending::apply_writes(tree.path(), &writes)?;
+    pending::apply_deletes(tree.path(), &delta.branch_deletes)?;
     pending::clear(&pending_path)?;
 
     let branch_results: Vec<BranchResult> = delta

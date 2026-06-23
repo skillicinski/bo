@@ -7,7 +7,7 @@
 
 use crate::domain::frontmatter;
 use crate::domain::manifest;
-use crate::domain::tree::Tree;
+use crate::domain::tree::{self, TreeRuntimeState};
 use crate::domain::Timestamp;
 use crate::engine::config::Config;
 use crate::engine::llm::models;
@@ -100,25 +100,23 @@ pub fn compute_status(
     tree_name: &str,
     config: Option<&Config>,
 ) -> Result<StatusResult, StatusError> {
-    let tree = Tree {
-        name: "unnamed".to_string(),
-        created_at: Timestamp::now(),
-        path: tree_dir.to_path_buf(),
-    };
-    let branches_dir = tree_dir.join("branches");
+    let branches_dir = tree::branches_dir(tree_dir);
 
-    let manifest = match manifest::read(&tree.manifest_path()) {
-        Ok(manifest) => manifest,
-        Err(manifest::ManifestError::TreeNotInitialized) if !tree.infra_dir().exists() => {
-            manifest::Manifest {
-                tree: manifest::TreeMeta {
-                    name: tree_name.to_string(),
-                    created_at: Timestamp::now(),
-                    last_compiled_at: None,
-                },
-                leaves: Vec::new(),
-                branches: Vec::new(),
-            }
+    let manifest = match tree::runtime_state(tree_dir) {
+        Ok(TreeRuntimeState::Initialized(manifest)) => manifest,
+        Ok(TreeRuntimeState::FreshSeeded) => manifest::Manifest {
+            tree: manifest::TreeMeta {
+                name: tree_name.to_string(),
+                created_at: Timestamp::now(),
+                last_compiled_at: None,
+            },
+            leaves: Vec::new(),
+            branches: Vec::new(),
+        },
+        Ok(TreeRuntimeState::MissingManifest) => {
+            return Err(StatusError::Manifest(
+                manifest::ManifestError::TreeNotInitialized,
+            ));
         }
         Err(error) => return Err(StatusError::Manifest(error)),
     };

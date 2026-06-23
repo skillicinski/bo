@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Deserialize;
 
-use crate::domain::{slug, tree::Tree};
+use crate::domain::slug;
 use crate::engine::config::SeededConfig;
 
 use super::plan::select_new_leaf_slugs;
@@ -179,7 +179,7 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
     let parsed: IncrementalCompileResponse = serde_json::from_str(response).map_err(|e| {
         validation_error(format!("invalid incremental compile response shape: {}", e))
     })?;
-    let tree = Tree::from_config(&cfg.tree_cfg);
+    let tree = cfg.tree();
     let manifest = crate::domain::manifest::read(&tree.manifest_path())
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
     let new_leaf_slugs_vec = select_new_leaf_slugs(&manifest)?;
