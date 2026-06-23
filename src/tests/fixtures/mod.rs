@@ -35,9 +35,9 @@ pub fn setup_tree(tmp: &TempDir) -> (PathBuf, PathBuf) {
         &config::Config {
             provider: crate::engine::llm::Provider::OpenAI,
             tree: Some(crate::domain::tree::TreeConfig {
-                output_dir: tree_dir.clone(),
-                name: Some("tree".to_string()),
-                created_at: Some("2025-01-01T00:00:00Z".to_string()),
+                path: tree_dir.clone(),
+                name: "tree".to_string(),
+                created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             }),
             model: None,
             compile_model: None,

@@ -9,10 +9,10 @@ The tree grows with you. New leaves feed existing branches; new questions surfac
 ## Seeding a tree
 
 ```bash
-bo seed ~/my-knowledge-tree
+bo seed --path ~/my-knowledge-tree --name my-knowledge-tree --provider openai --model gpt-4.1-mini
 ```
 
-Creates a directory with a `.bo/` subdirectory containing `manifest.json` (the canonical record of your tree's topology). You can seed as many trees as you like — they're independent directories.
+Creates a single active local tree and writes `~/.bo/config.json`. `bo seed` does not create `manifest.json`; collection creates the manifest when tree runtime state first exists. Run bare `bo seed` in a terminal for guided prompts.
 
 ---
 
@@ -34,7 +34,7 @@ bo config --compile-model gpt-4.1
 export OPENAI_API_KEY=sk-...
 ```
 
-DeepSeek works the same way with `--provider deepseek` and `DEEPSEEK_API_KEY`.
+DeepSeek works the same way with `--provider deepseek` and `DEEPSEEK_API_KEY`; Google uses `--provider google` and `GEMINI_API_KEY`.
 
 ---
 
@@ -147,7 +147,7 @@ bo raze --include-auth
 
 ## JSON output
 
-Every command supports `--json` for machine consumption:
+Commands other than `seed` support `--json` for machine consumption:
 
 ```bash
 bo status --json

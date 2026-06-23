@@ -3,7 +3,7 @@
 // Serializes as RFC 3339 string (milliseconds, Z suffix). Implements Ord for
 // typed comparisons that replace lexicographic string tricks.
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Timelike, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
@@ -31,7 +31,9 @@ impl Timestamp {
     }
 
     pub fn now() -> Self {
-        Self(Utc::now())
+        let now = Utc::now();
+        let millis = now.nanosecond() / 1_000_000 * 1_000_000;
+        Self(now.with_nanosecond(millis).expect("nanos in range"))
     }
 
     pub fn to_rfc3339_millis(&self) -> String {

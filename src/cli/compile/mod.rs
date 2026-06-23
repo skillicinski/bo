@@ -260,12 +260,20 @@ pub fn run_compile_with_options(
 
     // Stale repair runs before preflight so preflight sees repaired state.
     let tree = Tree::from_config(&cfg.tree_cfg);
-    execute::recover_pending_if_needed(&tree.output_dir)?;
-    let stale_repair = plan::repair_stale_branches(
-        cfg,
-        &manifest::read(&tree.manifest_path())
-            .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?,
-    )?;
+    execute::recover_pending_if_needed(&tree.path)?;
+    let manifest = match manifest::read(&tree.manifest_path()) {
+        Ok(manifest) => manifest,
+        Err(manifest::ManifestError::TreeNotInitialized) if !tree.infra_dir().exists() => {
+            return Ok(CompileResult::noop("empty_tree", Vec::new()));
+        }
+        Err(error) => {
+            return Err(CompileError::Io(format!(
+                "failed to read manifest: {}",
+                error
+            )));
+        }
+    };
+    let stale_repair = plan::repair_stale_branches(cfg, &manifest)?;
     let notifications = stale_repair.notifications;
 
     if let Some(noop) = preflight_noop(cfg, options, &notifications)? {
@@ -304,11 +312,11 @@ fn run_compile_with_provider_started_at(
     notifications: Vec<String>,
 ) -> Result<CompileResult, CompileError> {
     let tree = Tree::from_config(&cfg.tree_cfg);
-    execute::recover_pending_if_needed(&tree.output_dir)?;
+    execute::recover_pending_if_needed(&tree.path)?;
 
     let manifest = manifest::read(&tree.manifest_path())
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
-    let expected_manifest_hash = pending::manifest_hash(&tree.output_dir)?;
+    let expected_manifest_hash = pending::manifest_hash(&tree.path)?;
 
     let new_leaf_slugs = plan::select_new_leaf_slugs(&manifest)?;
 

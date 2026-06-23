@@ -8,6 +8,7 @@
 use crate::domain::frontmatter;
 use crate::domain::manifest;
 use crate::domain::tree::Tree;
+use crate::domain::Timestamp;
 use crate::engine::config::Config;
 use crate::engine::llm::models;
 
@@ -101,12 +102,26 @@ pub fn compute_status(
 ) -> Result<StatusResult, StatusError> {
     let tree = Tree {
         name: "unnamed".to_string(),
-        created_at: None,
-        output_dir: tree_dir.to_path_buf(),
+        created_at: Timestamp::now(),
+        path: tree_dir.to_path_buf(),
     };
     let branches_dir = tree_dir.join("branches");
 
-    let manifest = manifest::read(&tree.manifest_path()).map_err(StatusError::Manifest)?;
+    let manifest = match manifest::read(&tree.manifest_path()) {
+        Ok(manifest) => manifest,
+        Err(manifest::ManifestError::TreeNotInitialized) if !tree.infra_dir().exists() => {
+            manifest::Manifest {
+                tree: manifest::TreeMeta {
+                    name: tree_name.to_string(),
+                    created_at: Timestamp::now(),
+                    last_compiled_at: None,
+                },
+                leaves: Vec::new(),
+                branches: Vec::new(),
+            }
+        }
+        Err(error) => return Err(StatusError::Manifest(error)),
+    };
 
     // Leaf metrics straight from the manifest.
     let uncompiled_slugs: Vec<String> = manifest
@@ -208,7 +223,7 @@ pub fn config_only_status(config: Option<&Config>) -> StatusResult {
             orphan_index_entries: Vec::new(),
             missing_from_index: Vec::new(),
         },
-        hints: vec!["run 'bo seed <output-dir>' to create a tree".to_string()],
+        hints: vec!["run 'bo seed --path <path>' to create a tree".to_string()],
         provider,
         model,
         compile_model,

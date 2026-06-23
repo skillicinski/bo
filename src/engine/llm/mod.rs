@@ -53,6 +53,17 @@ pub enum Provider {
     Google,
 }
 
+impl Provider {
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim() {
+            "openai" => Some(Provider::OpenAI),
+            "deepseek" => Some(Provider::Deepseek),
+            "google" => Some(Provider::Google),
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for Provider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

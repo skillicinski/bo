@@ -209,7 +209,7 @@ pub(super) fn repair_stale_branches(
 
     // Delete branch files
     for file in &branch_deletes {
-        let path = cfg.tree_cfg.output_dir.join(file);
+        let path = cfg.tree_cfg.path.join(file);
         if path.exists() {
             std::fs::remove_file(&path).ok();
         }
@@ -254,7 +254,7 @@ pub(super) fn classify_leaf_files(
     let mut skipped_leaf_slugs = Vec::new();
 
     for leaf in &manifest.leaves {
-        let leaf_path = cfg.tree_cfg.output_dir.join(&leaf.file);
+        let leaf_path = cfg.tree_cfg.path.join(&leaf.file);
         let is_new = new_leaf_slugs.contains(leaf.slug.as_str());
 
         match fs::read_to_string(&leaf_path) {
@@ -301,7 +301,7 @@ pub(super) fn read_valid_leaves(
     let mut skipped = Vec::new();
 
     for entry in entries {
-        let leaf_path = cfg.tree_cfg.output_dir.join(&entry.file);
+        let leaf_path = cfg.tree_cfg.path.join(&entry.file);
         match fs::read_to_string(&leaf_path) {
             Ok(content) => match frontmatter::parse(&content) {
                 Ok((mapping, body)) => {

@@ -18,7 +18,17 @@ fn bo(home: &Path) -> Command {
 
 fn seed(home: &Path, output_dir: &Path) -> Output {
     bo(home)
-        .args(["seed", output_dir.to_str().unwrap()])
+        .args([
+            "seed",
+            "--path",
+            output_dir.to_str().unwrap(),
+            "--name",
+            "tree",
+            "--provider",
+            "openai",
+            "--model",
+            "gpt-4.1-mini",
+        ])
         .output()
         .expect("failed to run bo seed")
 }
@@ -47,6 +57,7 @@ fn write_leaf(tree_dir: &Path, slug: &str, url: &str) {
 
     // Append to manifest so reads see the leaf.
     let manifest_path = tree_dir.join(".bo/manifest.json");
+    bo::domain::manifest::ensure_empty_manifest(tree_dir, "tree");
     let mut m = bo::domain::manifest::read(&manifest_path).unwrap();
     m.leaves.push(bo::domain::manifest::LeafRecord {
         slug: Slug::parse(slug).unwrap(),
@@ -69,6 +80,7 @@ fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
 
     // Append to manifest.
     let manifest_path = tree_dir.join(".bo/manifest.json");
+    bo::domain::manifest::ensure_empty_manifest(tree_dir, "tree");
     let mut m = bo::domain::manifest::read(&manifest_path).unwrap();
     m.branches.push(bo::domain::manifest::BranchRecord {
         slug: Slug::parse(slug).unwrap(),

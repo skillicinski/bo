@@ -1,6 +1,6 @@
 // JSON envelope integration tests.
 //
-// Tests that all commands produce valid structured JSON output via --json flag.
+// Tests command JSON envelopes. `bo seed` intentionally rejects --json.
 
 use bo::domain::{Slug, Timestamp, Title, Url};
 use serde_json::Value;
@@ -40,7 +40,20 @@ fn parse_json(output: &Output) -> Value {
 
 fn seed_tree(home: &TempDir, name: &str) -> std::path::PathBuf {
     let output_dir = home.path().join(name);
-    let out = run(home.path(), &["seed", output_dir.to_str().unwrap()]);
+    let out = run(
+        home.path(),
+        &[
+            "seed",
+            "--path",
+            output_dir.to_str().unwrap(),
+            "--name",
+            name,
+            "--provider",
+            "openai",
+            "--model",
+            "gpt-4.1-mini",
+        ],
+    );
     assert!(out.status.success());
     output_dir
 }
@@ -65,6 +78,7 @@ fn write_compile_leaf(tree: &Path, file: &str, title: &str) {
 fn add_manifest_leaf(tree: &Path, file: &str, title: &str, url: &str) {
     static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let manifest_path = tree.join(".bo/manifest.json");
+    bo::domain::manifest::ensure_empty_manifest(tree, "tree");
     let mut manifest = bo::domain::manifest::read(&manifest_path).unwrap();
     let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let slug = Slug::parse(&format!("leaf-{}", idx)).unwrap_or_else(|_| Slug::generate(title, url));
@@ -117,48 +131,36 @@ fn global_json_flag_is_accepted() {
 // ── seed ─────────────────────────────────────────────────────────────────────
 
 #[test]
-fn seed_json_created_payload() {
+fn seed_rejects_json_flag_with_human_error() {
     let home = TempDir::new().unwrap();
     let output_dir = home.path().join("my-tree");
     let out = run(
         home.path(),
-        &["seed", "--json", output_dir.to_str().unwrap()],
+        &[
+            "seed",
+            "--json",
+            "--path",
+            output_dir.to_str().unwrap(),
+            "--name",
+            "my-tree",
+            "--provider",
+            "openai",
+            "--model",
+            "gpt-4.1-mini",
+        ],
     );
-    assert!(out.status.success());
-    assert!(out.stderr.is_empty());
-    let parsed = parse_json(&out);
-    assert_eq!(parsed["ok"], true);
-    assert_eq!(parsed["command"], "seed");
-    assert_eq!(parsed["data"]["status"], "created");
-    assert_eq!(parsed["data"]["tree_name"], "my-tree");
-}
 
-#[test]
-fn seed_json_already_seeded_payload() {
-    let home = TempDir::new().unwrap();
-    let output_dir = home.path().join("my-tree");
-    let first = run(home.path(), &["seed", output_dir.to_str().unwrap()]);
-    assert!(first.status.success());
-
-    let out = run(
-        home.path(),
-        &["seed", "--json", output_dir.to_str().unwrap()],
-    );
-    assert!(out.status.success());
-    let parsed = parse_json(&out);
-    assert_eq!(parsed["data"]["status"], "already_seeded");
-    assert_eq!(parsed["data"]["tree_name"], "my-tree");
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("the `--json` flag is not supported for seed"));
+    assert!(serde_json::from_slice::<Value>(&out.stderr).is_err());
 }
 
 // ── every command ────────────────────────────────────────────────────────────
 
 #[test]
 fn every_output_command_accepts_json_flag() {
-    let home = TempDir::new().unwrap();
-    let output_dir = home.path().join("tree");
-
     let cases: Vec<(Vec<&str>, &str)> = vec![
-        (vec!["seed", "--json", output_dir.to_str().unwrap()], "seed"),
         (
             vec!["--json", "config", "--model", "gpt-4.1-mini"],
             "config",
@@ -346,13 +348,14 @@ fn show_json_ambiguous_title_includes_candidates() {
 fn raze_json_summary() {
     let home = TempDir::new().unwrap();
     let tree = seed_tree(&home, "tree");
+    let tree_path = fs::canonicalize(&tree).unwrap().display().to_string();
 
     let out = run(home.path(), &["raze", "--json"]);
     assert!(out.status.success());
     let parsed = parse_json(&out);
     assert_eq!(parsed["ok"], true);
     assert_eq!(parsed["command"], "raze");
-    assert_eq!(parsed["data"]["output_dir"], tree.display().to_string());
+    assert_eq!(parsed["data"]["output_dir"], tree_path);
     assert_eq!(parsed["data"]["removed_output_dir"], true);
     assert_eq!(parsed["data"]["deleted_config"], true);
     assert_eq!(parsed["data"]["deleted_auth"], false);

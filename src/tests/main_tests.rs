@@ -276,9 +276,9 @@ fn query_uses_model_not_compile_model() {
             tree: None,
         },
         tree_cfg: TreeConfig {
-            output_dir: dir.path().to_path_buf(),
-            name: Some("test-tree".to_string()),
-            created_at: Some("2026-05-17T00:00:00Z".to_string()),
+            path: dir.path().to_path_buf(),
+            name: "test-tree".to_string(),
+            created_at: Timestamp::parse("2026-05-17T00:00:00Z").unwrap(),
         },
     };
 
@@ -361,9 +361,9 @@ fn seeded_config(tree: &Path) -> SeededConfig {
             tree: None,
         },
         tree_cfg: TreeConfig {
-            output_dir: tree.to_path_buf(),
-            name: Some("test-tree".to_string()),
-            created_at: Some("2026-05-17T00:00:00Z".to_string()),
+            path: tree.to_path_buf(),
+            name: "test-tree".to_string(),
+            created_at: Timestamp::parse("2026-05-17T00:00:00Z").unwrap(),
         },
     }
 }

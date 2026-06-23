@@ -96,9 +96,9 @@ fn make_config(output_dir: &std::path::Path) -> SeededConfig {
             tree: None,
         },
         tree_cfg: bo::domain::tree::TreeConfig {
-            output_dir: output_dir.to_path_buf(),
-            name: None,
-            created_at: None,
+            path: output_dir.to_path_buf(),
+            name: "test-tree".to_string(),
+            created_at: bo::domain::Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         },
     }
 }

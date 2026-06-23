@@ -122,9 +122,7 @@ pub fn raze_with_auth(
     if output_dir.join("branches").exists() {
         deletes.push("branches".to_string());
     }
-    if tree::infra_dir(output_dir).exists() {
-        deletes.push(".bo".to_string());
-    }
+    deletes.push(".bo".to_string());
 
     let operation = pending::new_operation(
         output_dir,
