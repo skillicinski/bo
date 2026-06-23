@@ -161,6 +161,28 @@ pub fn write(path: &Path, manifest: &Manifest) -> Result<(), ManifestError> {
     Ok(())
 }
 
+/// Write an empty manifest at `{tree_dir}/.bo/manifest.json` if none exists.
+/// Used by tests that stage manifest entries directly without running collect.
+pub fn ensure_empty_manifest(tree_dir: &Path, name: &str) {
+    let manifest_path = tree_dir.join(".bo").join("manifest.json");
+    if manifest_path.exists() {
+        return;
+    }
+    write(
+        &manifest_path,
+        &Manifest {
+            tree: TreeMeta {
+                name: name.to_string(),
+                created_at: Timestamp::now(),
+                last_compiled_at: None,
+            },
+            leaves: Vec::new(),
+            branches: Vec::new(),
+        },
+    )
+    .expect("failed to write empty manifest");
+}
+
 // ── internals ─────────────────────────────────────────────────────────────────
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {

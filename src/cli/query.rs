@@ -474,7 +474,7 @@ fn compute_retrieval_diagnostics(
 fn retrieve_leaves(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedLeaf>, QueryError> {
     let tree = crate::domain::tree::Tree {
         name: "unnamed".to_string(),
-        created_at: None,
+        created_at: crate::domain::Timestamp::now(),
         path: tree_dir.to_path_buf(),
     };
     let manifest = match crate::domain::manifest::read(&tree.manifest_path()) {

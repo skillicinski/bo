@@ -19,7 +19,7 @@ fn tree_uses_config_metadata_directly() {
     let tree = Tree::from_config(&full_config());
 
     assert_eq!(tree.name, "my-research");
-    assert_eq!(tree.created_at.unwrap(), timestamp());
+    assert_eq!(tree.created_at, timestamp());
     assert_eq!(tree.path, PathBuf::from("/tmp/my-research"));
 }
 

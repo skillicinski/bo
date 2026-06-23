@@ -198,8 +198,7 @@ pub fn seed(
     let name = resolve_name(options.name, prompt)?;
     let provider = resolve_provider(options.provider, prompt)?;
     let model = resolve_model(options.model, provider, prompt)?;
-    let created_at = Timestamp::parse(&Timestamp::now().to_rfc3339_millis())
-        .expect("timestamp formatted by Timestamp must parse");
+    let created_at = Timestamp::now();
 
     config::write_config(
         &Config {

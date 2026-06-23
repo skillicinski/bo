@@ -31,7 +31,7 @@ pub struct TreeConfig {
 #[derive(Debug, Clone)]
 pub struct Tree {
     pub name: String,
-    pub created_at: Option<Timestamp>,
+    pub created_at: Timestamp,
     pub path: PathBuf,
 }
 
@@ -39,7 +39,7 @@ impl Tree {
     pub fn from_config(config: &TreeConfig) -> Self {
         Tree {
             name: config.name.clone(),
-            created_at: Some(config.created_at.clone()),
+            created_at: config.created_at.clone(),
             path: config.path.clone(),
         }
     }

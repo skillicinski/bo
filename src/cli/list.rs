@@ -3,6 +3,7 @@
 use crate::cli::json::JsonError;
 use crate::domain::manifest::{self, LeafRecord, Manifest};
 use crate::domain::tree::Tree;
+use crate::domain::Timestamp;
 use chrono::{DateTime, FixedOffset};
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -160,7 +161,7 @@ impl ListError {
 pub fn list_tree(tree_dir: &Path, options: &ListOptions) -> Result<ListResult, ListError> {
     let tree = Tree {
         name: "unnamed".to_string(),
-        created_at: None,
+        created_at: Timestamp::now(),
         path: tree_dir.to_path_buf(),
     };
     let m = match manifest::read(&tree.manifest_path()) {

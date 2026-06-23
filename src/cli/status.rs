@@ -102,7 +102,7 @@ pub fn compute_status(
 ) -> Result<StatusResult, StatusError> {
     let tree = Tree {
         name: "unnamed".to_string(),
-        created_at: None,
+        created_at: Timestamp::now(),
         path: tree_dir.to_path_buf(),
     };
     let branches_dir = tree_dir.join("branches");

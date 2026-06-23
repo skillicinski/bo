@@ -213,10 +213,7 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
         Err(manifest::ManifestError::TreeNotInitialized) => manifest::Manifest {
             tree: manifest::TreeMeta {
                 name: tree.name.clone(),
-                created_at: tree
-                    .created_at
-                    .clone()
-                    .unwrap_or_else(|| run_timestamp.clone()),
+                created_at: tree.created_at.clone(),
                 last_compiled_at: None,
             },
             leaves: Vec::new(),

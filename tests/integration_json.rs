@@ -78,21 +78,7 @@ fn write_compile_leaf(tree: &Path, file: &str, title: &str) {
 fn add_manifest_leaf(tree: &Path, file: &str, title: &str, url: &str) {
     static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let manifest_path = tree.join(".bo/manifest.json");
-    if !manifest_path.exists() {
-        bo::domain::manifest::write(
-            &manifest_path,
-            &bo::domain::manifest::Manifest {
-                tree: bo::domain::manifest::TreeMeta {
-                    name: "tree".to_string(),
-                    created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
-                    last_compiled_at: None,
-                },
-                leaves: Vec::new(),
-                branches: Vec::new(),
-            },
-        )
-        .unwrap();
-    }
+    bo::domain::manifest::ensure_empty_manifest(tree, "tree");
     let mut manifest = bo::domain::manifest::read(&manifest_path).unwrap();
     let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let slug = Slug::parse(&format!("leaf-{}", idx)).unwrap_or_else(|_| Slug::generate(title, url));

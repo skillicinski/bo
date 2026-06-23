@@ -3,6 +3,7 @@
 use crate::cli::json::JsonError;
 use crate::domain::manifest::{self, LeafRecord};
 use crate::domain::tree::Tree;
+use crate::domain::Timestamp;
 use serde::Serialize;
 use serde_json::json;
 use serde_yaml_ng::{Mapping, Value};
@@ -172,7 +173,7 @@ pub fn show_leaf(
 
     let tree = Tree {
         name: "unnamed".to_string(),
-        created_at: None,
+        created_at: Timestamp::now(),
         path: tree_dir.to_path_buf(),
     };
     let manifest = match manifest::read(&tree.manifest_path()) {

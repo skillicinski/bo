@@ -71,33 +71,13 @@ fn auth_path(home: &TempDir) -> std::path::PathBuf {
     home.path().join(".bo").join("auth.json")
 }
 
-fn ensure_manifest(tree: &Path) {
-    let manifest_path = tree.join(".bo/manifest.json");
-    if manifest_path.exists() {
-        return;
-    }
-    bo::domain::manifest::write(
-        &manifest_path,
-        &bo::domain::manifest::Manifest {
-            tree: bo::domain::manifest::TreeMeta {
-                name: "tree".to_string(),
-                created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
-                last_compiled_at: None,
-            },
-            leaves: Vec::new(),
-            branches: Vec::new(),
-        },
-    )
-    .unwrap();
-}
-
 fn append_index_entry(tree: &Path, file: &str, title: &str) {
     upsert_manifest_leaf(tree, file, title, "2025-01-01T00:00:00Z");
 }
 
 fn upsert_manifest_leaf(tree: &Path, file: &str, title: &str, collected_at: &str) {
     let manifest_path = tree.join(".bo/manifest.json");
-    ensure_manifest(tree);
+    bo::domain::manifest::ensure_empty_manifest(tree, "tree");
     let mut manifest = bo::domain::manifest::read(&manifest_path).unwrap();
     let slug = file.trim_end_matches(".md").to_string();
     let url = format!("https://example.com/{}", file.trim_end_matches(".md"));
@@ -120,7 +100,7 @@ fn upsert_manifest_leaf(tree: &Path, file: &str, title: &str, collected_at: &str
 
 fn set_manifest_branches_for_leaf(tree: &Path, file: &str, branches: &[&str], timestamp: &str) {
     let manifest_path = tree.join(".bo/manifest.json");
-    ensure_manifest(tree);
+    bo::domain::manifest::ensure_empty_manifest(tree, "tree");
     let mut manifest = bo::domain::manifest::read(&manifest_path).unwrap();
     let leaf_slug = file.trim_end_matches(".md").to_string();
 
