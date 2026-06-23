@@ -1,6 +1,7 @@
 // bo show — deterministic inspection for a single collected leaf.
 
 use crate::cli::json::JsonError;
+use crate::cli::resolve_leaf_path;
 use crate::domain::manifest::{self, LeafRecord};
 use crate::domain::tree::{self, TreeRuntimeState};
 use serde::Serialize;
@@ -9,7 +10,7 @@ use serde_yaml_ng::{Mapping, Value};
 use std::fmt;
 use std::fs;
 use std::io::{self, ErrorKind};
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 
 // ── public types ─────────────────────────────────────────────────────────────
 
@@ -36,15 +37,12 @@ pub struct ShowResult {
     pub frontmatter_raw: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub truncated: Option<bool>,
     pub full: bool,
 }
 
 #[derive(Debug)]
 pub enum ShowError {
     Io(io::Error),
-    Json(serde_json::Error),
     Manifest(manifest::ManifestError),
     NotFound {
         title: String,
@@ -73,7 +71,6 @@ impl fmt::Display for ShowError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ShowError::Io(e) => write!(f, "I/O error: {}", e),
-            ShowError::Json(e) => write!(f, "JSON error: {}", e),
             ShowError::Manifest(e) => write!(f, "{}", e),
             ShowError::NotFound { title } => write!(
                 f,
@@ -115,12 +112,6 @@ impl From<io::Error> for ShowError {
     }
 }
 
-impl From<serde_json::Error> for ShowError {
-    fn from(e: serde_json::Error) -> Self {
-        ShowError::Json(e)
-    }
-}
-
 impl ShowError {
     fn code(&self) -> &'static str {
         match self {
@@ -142,7 +133,6 @@ impl ShowError {
                 json!({ "title": title, "candidates": candidates }),
             ),
             ShowError::Io(_) => JsonError::new("io_error", self.to_string()),
-            ShowError::Json(_) => JsonError::new("json_error", self.to_string()),
             ShowError::Manifest(_) => JsonError::new("manifest_error", self.to_string()),
             ShowError::SuspiciousPath { file }
             | ShowError::MissingFile { file }
@@ -302,8 +292,6 @@ fn load_candidate(
 }
 
 fn build_result(leaf: LoadedLeaf, options: &ShowOptions) -> ShowResult {
-    let (body, truncated) = body_for_options(&leaf.body, options.full);
-
     ShowResult {
         title: leaf.summary.title,
         file: leaf.summary.file,
@@ -311,57 +299,9 @@ fn build_result(leaf: LoadedLeaf, options: &ShowOptions) -> ShowResult {
         url: leaf.summary.url,
         frontmatter: leaf.frontmatter,
         frontmatter_raw: leaf.frontmatter_raw,
-        body,
-        truncated,
+        body: options.full.then_some(leaf.body),
         full: options.full,
     }
-}
-
-fn resolve_leaf_path(
-    tree_dir: &Path,
-    canonical_tree_dir: Option<&Path>,
-    file: &str,
-) -> Result<PathBuf, &'static str> {
-    let relative = Path::new(file);
-
-    if relative.as_os_str().is_empty()
-        || relative.is_absolute()
-        || has_disallowed_components(relative)
-    {
-        return Err("suspicious path");
-    }
-
-    let resolved = tree_dir.join(relative);
-
-    if let Some(canonical_root) = canonical_tree_dir {
-        if resolved.exists() {
-            let canonical_resolved = fs::canonicalize(&resolved).map_err(|_| "suspicious path")?;
-            if !canonical_resolved.starts_with(canonical_root) {
-                return Err("suspicious path");
-            }
-        } else if let Some(parent) = resolved.parent() {
-            if parent.exists() {
-                let canonical_parent = fs::canonicalize(parent).map_err(|_| "suspicious path")?;
-                if !canonical_parent.starts_with(canonical_root) {
-                    return Err("suspicious path");
-                }
-            }
-        }
-    }
-
-    Ok(resolved)
-}
-
-#[cfg(windows)]
-fn has_disallowed_components(path: &Path) -> bool {
-    path.components()
-        .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
-}
-
-#[cfg(not(windows))]
-fn has_disallowed_components(path: &Path) -> bool {
-    path.components()
-        .any(|component| matches!(component, Component::ParentDir))
 }
 
 fn parse_leaf_document(content: &str) -> Result<LeafDocument, String> {
@@ -429,14 +369,6 @@ fn normalize_title(title: &str) -> String {
     title.to_lowercase()
 }
 
-fn body_for_options(body: &str, full: bool) -> (Option<String>, Option<bool>) {
-    if full {
-        return (Some(body.to_string()), None);
-    }
-    // Card view: frontmatter only, no body.
-    (None, None)
-}
-
 // ── render ───────────────────────────────────────────────────────────────────
 
 pub fn render_human(result: &ShowResult) -> String {
@@ -451,10 +383,6 @@ pub fn render_human(result: &ShowResult) -> String {
         output.push_str(body);
         if !body.ends_with('\n') {
             output.push('\n');
-        }
-
-        if result.truncated == Some(true) {
-            output.push_str("\n[preview truncated; rerun with --full to show the complete leaf]\n");
         }
     }
 

@@ -64,33 +64,12 @@ impl fmt::Display for SummaryError {
 /// Generate a summary by extracting the first ~200 words of body content.
 /// Truncates at a word boundary. Returns empty string for empty body.
 pub(crate) fn generate_fallback(body: &str) -> String {
-    let words: Vec<&str> = body.split_whitespace().collect();
-    if words.len() <= SUMMARY_TARGET_WORDS {
-        words.join(" ")
-    } else {
-        words[..SUMMARY_TARGET_WORDS].join(" ")
-    }
+    truncate_words(body, SUMMARY_TARGET_WORDS)
 }
 
-/// Truncate body to the first `max_words` words for LLM input.
-fn truncate_body(body: &str, max_words: usize) -> String {
+fn truncate_words(body: &str, max_words: usize) -> String {
     let words: Vec<&str> = body.split_whitespace().collect();
-    if words.len() <= max_words {
-        words.join(" ")
-    } else {
-        words[..max_words].join(" ")
-    }
-}
-
-fn summary_response_schema() -> serde_json::Value {
-    serde_json::json!({
-        "type": "object",
-        "properties": {
-            "summary": { "type": "string" }
-        },
-        "required": ["summary"],
-        "additionalProperties": false
-    })
+    words[..words.len().min(max_words)].join(" ")
 }
 
 // ── LLM-powered summary ─────────────────────────────────────────────────────
@@ -127,7 +106,7 @@ pub async fn generate_llm(
     model: &str,
     policy: LlmCallPolicy,
 ) -> Result<String, SummaryError> {
-    let truncated_body = truncate_body(body, SUMMARY_INPUT_MAX_WORDS);
+    let truncated_body = truncate_words(body, SUMMARY_INPUT_MAX_WORDS);
 
     let user_message = match title {
         Some(t) => format!("<title>{t}</title>\n<document>\n{truncated_body}\n</document>"),
@@ -139,7 +118,14 @@ pub async fn generate_llm(
         Message::user(user_message),
     ];
 
-    let schema = summary_response_schema();
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "summary": { "type": "string" }
+        },
+        "required": ["summary"],
+        "additionalProperties": false
+    });
 
     let response =
         complete_with_policy(provider, &messages, model, 512, Some(&schema), true, policy)

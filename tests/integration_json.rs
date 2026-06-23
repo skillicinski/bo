@@ -2,7 +2,7 @@
 //
 // Tests command JSON envelopes. `bo seed` intentionally rejects --json.
 
-use bo::domain::{Slug, Timestamp, Title, Url};
+use bo::domain::{Slug, Timestamp};
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
@@ -36,6 +36,26 @@ fn parse_json(output: &Output) -> Value {
         .unwrap_or_else(|| panic!("no JSON object found in stderr:\n{stderr}"));
     serde_json::from_str(&stderr[json_start..])
         .unwrap_or_else(|e| panic!("stderr is not valid JSON: {e}\nstderr:\n{stderr}"))
+}
+
+fn ensure_manifest(tree: &Path) {
+    let manifest_path = tree.join(".bo/manifest.json");
+    if manifest_path.exists() {
+        return;
+    }
+    bo::domain::manifest::write(
+        &manifest_path,
+        &bo::domain::manifest::Manifest {
+            tree: bo::domain::manifest::TreeMeta {
+                name: "tree".to_string(),
+                created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+                last_compiled_at: None,
+            },
+            leaves: Vec::new(),
+            branches: Vec::new(),
+        },
+    )
+    .unwrap();
 }
 
 fn seed_tree(home: &TempDir, name: &str) -> std::path::PathBuf {
@@ -78,15 +98,15 @@ fn write_compile_leaf(tree: &Path, file: &str, title: &str) {
 fn add_manifest_leaf(tree: &Path, file: &str, title: &str, url: &str) {
     static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let manifest_path = tree.join(".bo/manifest.json");
-    bo::domain::manifest::ensure_empty_manifest(tree, "tree");
+    ensure_manifest(tree);
     let mut manifest = bo::domain::manifest::read(&manifest_path).unwrap();
     let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let slug = Slug::parse(&format!("leaf-{}", idx)).unwrap_or_else(|_| Slug::generate(title, url));
     manifest.leaves.push(bo::domain::manifest::LeafRecord {
         slug,
         file: file.to_string(),
-        title: Title::new(title),
-        url: Url::parse(url).unwrap(),
+        title: title.to_string(),
+        url: url.to_string(),
         collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
         summary: None,
     });

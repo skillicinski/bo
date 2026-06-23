@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
+use super::{map_http_error, map_reqwest_error};
 use crate::engine::llm::{
     sanitize_provider_error_message, FinishReason, LlmError, LlmProvider, LlmResponse, Message,
     Role,
@@ -49,15 +50,6 @@ impl LlmProvider for GoogleProvider {
                 Role::User => {
                     contents.push(serde_json::json!({
                         "role": "user",
-                        "parts": [{"text": m.content}]
-                    }));
-                }
-                Role::Assistant => {
-                    // The Gemini API natively uses "model" for assistant turns.
-                    // This arm exists for forward-compatibility; bo does not
-                    // currently emit assistant messages.
-                    contents.push(serde_json::json!({
-                        "role": "model",
                         "parts": [{"text": m.content}]
                     }));
                 }
@@ -148,30 +140,6 @@ impl LlmProvider for GoogleProvider {
             content,
             finish_reason,
         })
-    }
-}
-
-// ── error mapping ─────────────────────────────────────────────────────────────
-
-fn map_reqwest_error(error: &reqwest::Error) -> LlmError {
-    let message = sanitize_provider_error_message(&error.to_string());
-    LlmError::Network(message)
-}
-
-fn map_http_error(status: reqwest::StatusCode, body: &str) -> LlmError {
-    let sanitized = sanitize_provider_error_message(body);
-    let message = if sanitized.is_empty() {
-        format!("HTTP {}", status.as_u16())
-    } else {
-        format!("HTTP {}: {}", status.as_u16(), sanitized)
-    };
-
-    if status.as_u16() == 429 {
-        LlmError::RateLimited(message)
-    } else if status.is_client_error() {
-        LlmError::Api(message)
-    } else {
-        LlmError::Server(message)
     }
 }
 

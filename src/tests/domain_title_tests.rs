@@ -2,32 +2,32 @@ use super::*;
 
 #[test]
 fn new_accepts_any_string() {
-    let t = Title::new("Hello World");
+    let t = ("Hello World").to_string();
     assert_eq!(t.as_str(), "Hello World");
 }
 
 #[test]
 fn new_accepts_empty_string() {
-    let t = Title::new("");
+    let t = ("").to_string();
     assert_eq!(t.as_str(), "");
 }
 
 #[test]
 fn display_renders_inner() {
-    let t = Title::new("Test Title");
+    let t = ("Test Title").to_string();
     assert_eq!(format!("{}", t), "Test Title");
 }
 
 #[test]
 fn as_ref_str() {
-    let t = Title::new("ref test");
+    let t = ("ref test").to_string();
     let s: &str = t.as_ref();
     assert_eq!(s, "ref test");
 }
 
 #[test]
 fn serialize_as_string() {
-    let t = Title::new("serde test");
+    let t = ("serde test").to_string();
     let json = serde_json::to_string(&t).unwrap();
     assert_eq!(json, "\"serde test\"");
 }
@@ -40,7 +40,7 @@ fn deserialize_from_string() {
 
 #[test]
 fn roundtrip_serde() {
-    let original = Title::new("round trip");
+    let original = ("round trip").to_string();
     let json = serde_json::to_string(&original).unwrap();
     let deserialized: Title = serde_json::from_str(&json).unwrap();
     assert_eq!(original, deserialized);
@@ -48,7 +48,7 @@ fn roundtrip_serde() {
 
 #[test]
 fn clone_and_eq() {
-    let a = Title::new("clone");
+    let a = ("clone").to_string();
     let b = a.clone();
     assert_eq!(a, b);
 }

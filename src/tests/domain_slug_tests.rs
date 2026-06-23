@@ -7,43 +7,49 @@ use tempfile::TempDir;
 #[test]
 fn basic_ascii_title() {
     assert_eq!(
-        slugify("Rust Ownership Explained", ""),
+        Slug::generate("Rust Ownership Explained", "").to_string(),
         "rust-ownership-explained"
     );
 }
 
 #[test]
 fn special_characters() {
-    assert_eq!(slugify("Hello, World! (2024)", ""), "hello-world-2024");
+    assert_eq!(
+        Slug::generate("Hello, World! (2024)", "").to_string(),
+        "hello-world-2024"
+    );
 }
 
 #[test]
 fn collapses_hyphens() {
-    assert_eq!(slugify("foo---bar   baz", ""), "foo-bar-baz");
+    assert_eq!(
+        Slug::generate("foo---bar   baz", "").to_string(),
+        "foo-bar-baz"
+    );
 }
 
 #[test]
 fn strips_leading_trailing() {
-    assert_eq!(slugify("  --hello-- ", ""), "hello");
+    assert_eq!(Slug::generate("  --hello-- ", "").to_string(), "hello");
 }
 
 #[test]
 fn truncates_at_80_chars() {
     let long_title = "this-is-a-very-long-title-that-exceeds-eighty-characters-and-should-be-truncated-at-a-hyphen-boundary";
-    let slug = slugify(long_title, "");
+    let slug = Slug::generate(long_title, "").to_string();
     assert!(slug.len() <= 80, "slug too long: {} chars", slug.len());
     assert!(!slug.ends_with('-'), "slug ends with hyphen");
 }
 
 #[test]
 fn empty_title_falls_back_to_url() {
-    let slug = slugify("", "https://example.com/some/great-article");
+    let slug = Slug::generate("", "https://example.com/some/great-article").to_string();
     assert_eq!(slug, "example-com-some-great-article");
 }
 
 #[test]
 fn non_ascii_title_falls_back_to_url() {
-    let slug = slugify("日本語のタイトル", "https://example.com/jp/article");
+    let slug = Slug::generate("日本語のタイトル", "https://example.com/jp/article").to_string();
     assert_eq!(slug, "example-com-jp-article");
 }
 
@@ -82,7 +88,7 @@ fn different_urls_get_different_hashes() {
 #[test]
 fn url_only_hash_fallback() {
     // Totally degenerate case: no title, URL is just a domain
-    let slug = slugify("", "https://例え.jp/");
+    let slug = Slug::generate("", "https://例え.jp/").to_string();
     assert!(!slug.is_empty(), "slug should not be empty");
 }
 

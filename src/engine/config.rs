@@ -105,13 +105,6 @@ impl SeededConfig {
     }
 }
 
-impl std::ops::Deref for SeededConfig {
-    type Target = Config;
-    fn deref(&self) -> &Self::Target {
-        &self.config
-    }
-}
-
 #[derive(Debug)]
 pub enum ConfigError {
     NotFound,

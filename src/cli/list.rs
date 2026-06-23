@@ -1,6 +1,7 @@
 // bo list — deterministic tree inspection for collected leaves and compiled branches.
 
 use crate::cli::json::JsonError;
+use crate::cli::resolve_leaf_path;
 use crate::domain::manifest::{self, LeafRecord, Manifest};
 use crate::domain::tree::{self, TreeRuntimeState};
 use chrono::{DateTime, FixedOffset};
@@ -8,7 +9,7 @@ use serde::Serialize;
 use std::cmp::Ordering;
 use std::fmt;
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 
 // ── public types ─────────────────────────────────────────────────────────────
 
@@ -109,7 +110,6 @@ impl ListResult {
 #[derive(Debug)]
 pub enum ListError {
     Io(std::io::Error),
-    Json(serde_json::Error),
     Manifest(manifest::ManifestError),
 }
 
@@ -117,7 +117,6 @@ impl fmt::Display for ListError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ListError::Io(e) => write!(f, "I/O error: {}", e),
-            ListError::Json(e) => write!(f, "JSON error: {}", e),
             ListError::Manifest(e) => write!(f, "{}", e),
         }
     }
@@ -126,12 +125,6 @@ impl fmt::Display for ListError {
 impl From<std::io::Error> for ListError {
     fn from(e: std::io::Error) -> Self {
         ListError::Io(e)
-    }
-}
-
-impl From<serde_json::Error> for ListError {
-    fn from(e: serde_json::Error) -> Self {
-        ListError::Json(e)
     }
 }
 
@@ -145,7 +138,6 @@ impl ListError {
     pub fn code(&self) -> &'static str {
         match self {
             ListError::Io(_) => "io_error",
-            ListError::Json(_) => "json_error",
             ListError::Manifest(_) => "manifest_error",
         }
     }
@@ -422,53 +414,6 @@ fn build_row(
     }
 
     row
-}
-
-fn resolve_leaf_path(
-    tree_dir: &Path,
-    canonical_tree_dir: Option<&Path>,
-    file: &str,
-) -> Result<PathBuf, &'static str> {
-    let relative = Path::new(file);
-
-    if relative.as_os_str().is_empty()
-        || relative.is_absolute()
-        || has_disallowed_components(relative)
-    {
-        return Err("suspicious path");
-    }
-
-    let resolved = tree_dir.join(relative);
-
-    if let Some(canonical_root) = canonical_tree_dir {
-        if resolved.exists() {
-            let canonical_resolved = fs::canonicalize(&resolved).map_err(|_| "suspicious path")?;
-            if !canonical_resolved.starts_with(canonical_root) {
-                return Err("suspicious path");
-            }
-        } else if let Some(parent) = resolved.parent() {
-            if parent.exists() {
-                let canonical_parent = fs::canonicalize(parent).map_err(|_| "suspicious path")?;
-                if !canonical_parent.starts_with(canonical_root) {
-                    return Err("suspicious path");
-                }
-            }
-        }
-    }
-
-    Ok(resolved)
-}
-
-#[cfg(windows)]
-fn has_disallowed_components(path: &Path) -> bool {
-    path.components()
-        .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
-}
-
-#[cfg(not(windows))]
-fn has_disallowed_components(path: &Path) -> bool {
-    path.components()
-        .any(|component| matches!(component, Component::ParentDir))
 }
 
 fn filename_fallback(file: &str) -> String {

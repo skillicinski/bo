@@ -617,12 +617,13 @@ fn execute_collect(inputs: Vec<String>) -> Result<CollectOutput, CliError> {
     let output_dir = tree.path().to_path_buf();
     let collect_dir = output_dir.clone();
     let model = cfg
+        .config
         .effective_model()
         .map_err(|e| CliError::ConfigRead(e.to_string()))?;
 
     collect::collect_inputs_with_collector(inputs, &output_dir, |url| {
         eprintln!("fetching {}...", url);
-        collect::collect_url_with_model(url, &collect_dir, model.as_str(), cfg.provider)
+        collect::collect_url_with_model(url, &collect_dir, model.as_str(), cfg.config.provider)
     })
     .map_err(CliError::Collect)
 }
@@ -669,9 +670,9 @@ fn execute_query(question: &str) -> Result<query::QueryResult, query::QueryError
     })?;
 
     execute_query_with_provider_resolver(&cfg, question, || {
-        let api_key = auth::resolve_api_key(cfg.provider)
+        let api_key = auth::resolve_api_key(cfg.config.provider)
             .map_err(|e| query::QueryError::NoProvider(e.to_string()))?;
-        Ok(llm::create_provider(cfg.provider, &api_key))
+        Ok(llm::create_provider(cfg.config.provider, &api_key))
     })
 }
 
@@ -684,6 +685,7 @@ where
     F: FnOnce() -> Result<Box<dyn LlmProvider>, query::QueryError>,
 {
     let model = cfg
+        .config
         .effective_model()
         .map_err(|e| query::QueryError::NoProvider(e.to_string()))?;
     let tree = cfg.tree();

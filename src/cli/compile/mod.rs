@@ -13,8 +13,8 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::cli::json::JsonError;
-use crate::domain::manifest;
-use crate::domain::tree::TreeRuntimeState;
+use crate::domain::tree::{self, TreeRuntimeState};
+use crate::domain::{manifest, Timestamp};
 use crate::engine::auth;
 use crate::engine::config::SeededConfig;
 use crate::engine::llm::{LlmCallPolicy, LlmProvider, Model};
@@ -225,39 +225,25 @@ pub struct BranchResult {
 }
 
 fn preflight_noop(
-    cfg: &SeededConfig,
+    manifest: &manifest::Manifest,
     options: CompileOptions,
     notifications: &[String],
-) -> Result<Option<CompileResult>, CompileError> {
-    let tree = cfg.tree();
-    let manifest = tree
-        .manifest_or_empty_if_fresh()
-        .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
+) -> Option<CompileResult> {
     match manifest.leaves.len() {
-        0 => {
-            return Ok(Some(CompileResult::noop(
-                "empty_tree",
-                notifications.to_vec(),
-            )))
-        }
-        1 => {
-            return Ok(Some(CompileResult::noop(
-                "single_leaf",
-                notifications.to_vec(),
-            )))
-        }
+        0 => return Some(CompileResult::noop("empty_tree", notifications.to_vec())),
+        1 => return Some(CompileResult::noop("single_leaf", notifications.to_vec())),
         _ => {}
     }
 
     let _ = options;
-    Ok(None)
+    None
 }
 
 pub fn run_compile_with_options(
     cfg: &SeededConfig,
     options: CompileOptions,
 ) -> Result<CompileResult, CompileError> {
-    let compile_started_at = execute::compile_timestamp_now();
+    let compile_started_at = Timestamp::now();
 
     // Stale repair runs before preflight so preflight sees repaired state.
     let tree = cfg.tree();
@@ -280,24 +266,23 @@ pub fn run_compile_with_options(
             )));
         }
     };
-    let stale_repair = plan::repair_stale_branches(cfg, &manifest)?;
-    let notifications = stale_repair.notifications;
+    let notifications = plan::repair_stale_branches(cfg, &manifest)?;
+    let manifest = manifest::read(&tree::manifest_path(tree.path()))
+        .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
 
-    if let Some(noop) = preflight_noop(cfg, options, &notifications)? {
+    if let Some(noop) = preflight_noop(&manifest, options, &notifications) {
         return Ok(noop);
     }
-
-    let manifest = manifest::read(&tree.manifest_path())
-        .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
     let new_leaf_slugs = plan::select_new_leaf_slugs(&manifest)?;
     if !options.all && new_leaf_slugs.is_empty() {
         return Ok(CompileResult::noop(NO_NEW_LEAVES_REASON, notifications));
     }
 
     let api_key =
-        auth::resolve_api_key(cfg.provider).map_err(|e| CompileError::Llm(e.to_string()))?;
-    let provider = crate::engine::llm::create_provider(cfg.provider, &api_key);
+        auth::resolve_api_key(cfg.config.provider).map_err(|e| CompileError::Llm(e.to_string()))?;
+    let provider = crate::engine::llm::create_provider(cfg.config.provider, &api_key);
     let compile_model = cfg
+        .config
         .effective_compile_model()
         .map_err(|e| CompileError::Llm(e.to_string()))?;
     run_compile_with_provider_started_at(
@@ -321,7 +306,7 @@ fn run_compile_with_provider_started_at(
     let tree = cfg.tree();
     execute::recover_pending_if_needed(tree.path())?;
 
-    let manifest = manifest::read(&tree.manifest_path())
+    let manifest = manifest::read(&tree::manifest_path(tree.path()))
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
     let expected_manifest_hash = pending::manifest_hash(tree.path())?;
 
@@ -417,12 +402,6 @@ fn run_compile_with_provider_started_at(
         model,
         notifications,
     ))
-}
-
-// ── print_result (pub re-export) ──────────────────────────────────────────────
-
-pub fn print_result(result: &CompileResult, tree_name: &str) {
-    render::print_result(result, tree_name);
 }
 
 pub fn render_human<W: std::io::Write>(

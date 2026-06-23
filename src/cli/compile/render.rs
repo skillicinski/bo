@@ -2,13 +2,7 @@
 
 use std::io::{self, Write};
 
-use super::{BranchResult, CompileResult, NO_NEW_LEAVES_REASON};
-
-fn print_notifications(notifications: &[String]) {
-    for note in notifications {
-        println!("\u{2192} {}", note);
-    }
-}
+use super::{CompileResult, NO_NEW_LEAVES_REASON};
 
 fn write_notifications<W: Write>(notifications: &[String], stdout: &mut W) -> io::Result<()> {
     for note in notifications {
@@ -97,69 +91,4 @@ fn render_summary_human<W: Write>(result: &CompileResult, stdout: &mut W) -> io:
     }
 
     Ok(())
-}
-
-pub(super) fn print_result(result: &CompileResult, tree_name: &str) {
-    if result.status == "noop" {
-        match result.reason.as_deref() {
-            Some("empty_tree") => println!("{} is empty", tree_name),
-            Some("single_leaf") => println!("{} only has 1 leaf", tree_name),
-            Some(NO_NEW_LEAVES_REASON) => println!("nothing new to compile"),
-            _ => println!("compiled: no work to do"),
-        }
-        print_notifications(&result.notifications);
-        return;
-    }
-
-    print_summary_parts(
-        &result.branches,
-        result.leaves_processed,
-        &result.leaves_skipped,
-    );
-    print_notifications(&result.notifications);
-}
-
-fn print_summary_parts(
-    branches: &[BranchResult],
-    leaves_processed: usize,
-    leaves_skipped: &[String],
-) {
-    if branches.is_empty() {
-        println!("compiled: no branches found");
-    } else {
-        println!(
-            "compiled: {} {} from {} processed leaves",
-            branches.len(),
-            if branches.len() == 1 {
-                "branch"
-            } else {
-                "branches"
-            },
-            leaves_processed
-        );
-        for b in branches {
-            println!(
-                "  \u{2713} {} ({} {})",
-                b.slug,
-                b.leaf_count,
-                if b.leaf_count == 1 { "leaf" } else { "leaves" }
-            );
-        }
-    }
-
-    if !leaves_skipped.is_empty() {
-        println!();
-        println!(
-            "  \u{26a0} skipped {} {} (unparseable frontmatter):",
-            leaves_skipped.len(),
-            if leaves_skipped.len() == 1 {
-                "leaf"
-            } else {
-                "leaves"
-            }
-        );
-        for f in leaves_skipped {
-            println!("    - {}", f);
-        }
-    }
 }

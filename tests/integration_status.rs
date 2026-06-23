@@ -3,7 +3,7 @@
 // Tests the full CLI binary with $HOME override. Simulates tree states
 // by directly constructing files (no network/LLM required).
 
-use bo::domain::{Slug, Timestamp, Title};
+use bo::domain::{Slug, Timestamp};
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
@@ -47,6 +47,26 @@ fn status_json(home: &Path) -> Output {
         .expect("failed to run bo status --json")
 }
 
+fn ensure_manifest(tree_dir: &Path) {
+    let manifest_path = tree_dir.join(".bo/manifest.json");
+    if manifest_path.exists() {
+        return;
+    }
+    bo::domain::manifest::write(
+        &manifest_path,
+        &bo::domain::manifest::Manifest {
+            tree: bo::domain::manifest::TreeMeta {
+                name: "tree".to_string(),
+                created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
+                last_compiled_at: None,
+            },
+            leaves: Vec::new(),
+            branches: Vec::new(),
+        },
+    )
+    .unwrap();
+}
+
 fn write_leaf(tree_dir: &Path, slug: &str, url: &str) {
     let filename = format!("{}.md", slug);
     let collected_at = "2026-05-14T10:00:00Z";
@@ -57,13 +77,13 @@ fn write_leaf(tree_dir: &Path, slug: &str, url: &str) {
 
     // Append to manifest so reads see the leaf.
     let manifest_path = tree_dir.join(".bo/manifest.json");
-    bo::domain::manifest::ensure_empty_manifest(tree_dir, "tree");
+    ensure_manifest(tree_dir);
     let mut m = bo::domain::manifest::read(&manifest_path).unwrap();
     m.leaves.push(bo::domain::manifest::LeafRecord {
         slug: Slug::parse(slug).unwrap(),
         file: filename,
-        title: Title::new(slug),
-        url: bo::domain::Url::parse(url).unwrap(),
+        title: slug.to_string(),
+        url: url.to_string(),
         collected_at: Timestamp::parse(collected_at).unwrap(),
         summary: None,
     });
@@ -80,12 +100,12 @@ fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
 
     // Append to manifest.
     let manifest_path = tree_dir.join(".bo/manifest.json");
-    bo::domain::manifest::ensure_empty_manifest(tree_dir, "tree");
+    ensure_manifest(tree_dir);
     let mut m = bo::domain::manifest::read(&manifest_path).unwrap();
     m.branches.push(bo::domain::manifest::BranchRecord {
         slug: Slug::parse(slug).unwrap(),
         file: format!("branches/{}.md", slug),
-        title: Title::new(slug),
+        title: slug.to_string(),
         created_at: Timestamp::parse(created_at).unwrap(),
         updated_at: Timestamp::parse(created_at).unwrap(),
         leaves: vec![Slug::parse("some-leaf").unwrap()],

@@ -154,10 +154,6 @@ fn to_api_message(m: &Message) -> Result<ChatCompletionRequestMessage, LlmError>
                 .build()
                 .map_err(|e| LlmError::Parse(e.to_string()))?,
         )),
-        Role::Assistant => Err(LlmError::Api(format!(
-            "Assistant messages are not supported in request payloads. Received: {:?}",
-            m.content
-        ))),
     }
 }
 

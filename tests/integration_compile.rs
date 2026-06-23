@@ -5,7 +5,7 @@
 //
 //   OPENAI_API_KEY=sk-... cargo test --test integration_compile -- --ignored
 
-use bo::domain::{Timestamp, Title};
+use bo::domain::Timestamp;
 use std::fs;
 
 use bo::cli::compile;
@@ -54,8 +54,8 @@ fn setup_fixture_collection() -> tempfile::TempDir {
     let mut leaves = Vec::new();
 
     for doc in FIXTURE_DOCS {
-        let title = Title::new(doc.title);
-        let url = bo::domain::Url::parse(doc.url).unwrap();
+        let title = doc.title.to_string();
+        let url = doc.url.to_string();
         let ts = Timestamp::parse("2025-06-01T10:00:00Z").unwrap();
         let content = bo::domain::leaf::format_content(Some(&title), &url, &ts, doc.body, None);
         fs::write(dir.path().join(doc.file), content).unwrap();
@@ -63,8 +63,8 @@ fn setup_fixture_collection() -> tempfile::TempDir {
         leaves.push(LeafRecord {
             slug: bo::domain::Slug::parse(doc.file.trim_end_matches(".md")).unwrap(),
             file: doc.file.to_string(),
-            title: Title::new(doc.title),
-            url: bo::domain::Url::parse(doc.url).unwrap(),
+            title: doc.title.to_string(),
+            url: doc.url.to_string(),
             collected_at: Timestamp::parse("2025-06-01T10:00:00Z").unwrap(),
             summary: None,
         });
@@ -426,6 +426,9 @@ fn crash_mid_collect_rollback_leaves_tree_unchanged() {
     let _manifest_after = fs::read_to_string(bo_dir.join("manifest.json")).unwrap();
     // Note: compile may update manifest (last_compiled_at), so just verify no interrupted leaf
     let m = manifest::read(&bo_dir.join("manifest.json")).unwrap();
-    assert!(m.leaf_by_slug_str("interrupted").is_none());
+    assert!(!m
+        .leaves
+        .iter()
+        .any(|leaf| leaf.slug.as_str() == "interrupted"));
     assert!(!bo_dir.join("pending.json").exists());
 }

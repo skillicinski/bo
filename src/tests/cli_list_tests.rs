@@ -1,5 +1,5 @@
 use super::*;
-use crate::domain::{Slug, Timestamp, Title, Url};
+use crate::domain::{Slug, Timestamp};
 use std::collections::BTreeMap;
 use std::time::SystemTime;
 use tempfile::TempDir;
@@ -60,8 +60,8 @@ fn suspicious_path_is_degraded_and_never_read() {
         &[LeafRecord {
             slug: Slug::parse("outside").unwrap(),
             file: "../outside.md".to_string(),
-            title: Title::new("Outside Title"),
-            url: Url::parse("https://example.com/outside").unwrap(),
+            title: ("Outside Title").to_string(),
+            url: ("https://example.com/outside").to_string(),
             collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             summary: None,
         }],
@@ -308,8 +308,8 @@ fn list_tree_is_read_only() {
             LeafRecord {
                 slug: Slug::parse("two").unwrap(),
                 file: "nested/two.md".to_string(),
-                title: Title::new("Two"),
-                url: Url::parse("https://example.com/two").unwrap(),
+                title: ("Two").to_string(),
+                url: ("https://example.com/two").to_string(),
                 collected_at: Timestamp::parse("2025-01-02T00:00:00Z").unwrap(),
                 summary: None,
             },
@@ -697,8 +697,8 @@ fn leaf(slug: &str, title: &str, collected_at: &str) -> LeafRecord {
     LeafRecord {
         slug: Slug::parse(slug).unwrap(),
         file: format!("{}.md", slug),
-        title: Title::new(title),
-        url: Url::parse(&format!("https://example.com/{slug}")).unwrap(),
+        title: title.to_string(),
+        url: format!("https://example.com/{slug}"),
         collected_at: Timestamp::parse(collected_at).unwrap(),
         summary: None,
     }
@@ -711,7 +711,7 @@ fn write_manifest(tree_dir: &Path, leaves: &[LeafRecord], branches: &[(&str, &[&
         .map(|(slug, leaf_slugs)| BranchRecord {
             slug: Slug::parse(slug).unwrap(),
             file: format!("branches/{}.md", slug),
-            title: Title::new(slug),
+            title: slug.to_string(),
             created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             updated_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             leaves: leaf_slugs.iter().map(|s| Slug::parse(s).unwrap()).collect(),

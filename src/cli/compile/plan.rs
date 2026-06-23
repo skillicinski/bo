@@ -6,7 +6,7 @@ use std::fs;
 use crate::domain::frontmatter;
 use crate::domain::manifest::{BranchRecord, LeafRecord, Manifest, TreeMeta};
 use crate::domain::slug::Slug;
-use crate::domain::{Timestamp, Title};
+use crate::domain::Timestamp;
 use crate::engine::config::SeededConfig;
 
 use super::parse::{CompilePlan, ValidatedBranch};
@@ -53,28 +53,9 @@ pub(super) struct ManifestDelta {
     pub(super) branch_deletes: Vec<String>,
     pub(super) branches_created: Vec<BranchResult>,
     pub(super) branches_updated: Vec<BranchResult>,
-    pub(super) branches_rebuilt: Vec<BranchResult>,
 }
 
 // ── functions ─────────────────────────────────────────────────────────────────
-
-/// Result of deterministic stale branch repair (pre-LLM pass).
-#[derive(Debug)]
-#[allow(dead_code)]
-pub(super) struct StaleRepairResult {
-    /// Branches that were deleted (dropped below 2-leaf minimum).
-    pub(super) branches_removed: Vec<RemovedBranchResult>,
-    /// Branch files to delete from disk.
-    pub(super) branch_deletes: Vec<String>,
-    /// Leaf slugs that were deleted (file missing).
-    pub(super) deleted_leaf_slugs: Vec<String>,
-    /// Leaf slugs pruned because files are missing and not referenced by any branch.
-    pub(super) orphan_leaf_slugs: Vec<String>,
-    /// Whether any mutation was made to the manifest.
-    pub(super) manifest_changed: bool,
-    /// Notification messages for stderr/JSON (e.g. prune summary).
-    pub(super) notifications: Vec<String>,
-}
 
 /// Deterministic pre-pass: detect deleted leaves, remove them from branches,
 /// drop branches below 2-leaf minimum, purge orphan leaf records.
@@ -82,19 +63,12 @@ pub(super) struct StaleRepairResult {
 pub(super) fn repair_stale_branches(
     cfg: &SeededConfig,
     manifest: &Manifest,
-) -> Result<StaleRepairResult, CompileError> {
+) -> Result<Vec<String>, CompileError> {
     let new_leaf_slugs = select_new_leaf_slugs(manifest)?;
     let classification = classify_leaf_files(cfg, manifest, &new_leaf_slugs)?;
 
     if classification.deleted_leaf_slugs.is_empty() {
-        return Ok(StaleRepairResult {
-            branches_removed: Vec::new(),
-            branch_deletes: Vec::new(),
-            deleted_leaf_slugs: Vec::new(),
-            orphan_leaf_slugs: Vec::new(),
-            manifest_changed: false,
-            notifications: Vec::new(),
-        });
+        return Ok(Vec::new());
     }
 
     let deleted_set: HashSet<&str> = classification
@@ -204,7 +178,8 @@ pub(super) fn repair_stale_branches(
 
     // Write repaired manifest
     let tree = cfg.tree();
-    crate::domain::manifest::write(&tree.manifest_path(), &repaired_manifest)
+    let manifest_path = crate::domain::tree::manifest_path(tree.path());
+    crate::domain::manifest::write(&manifest_path, &repaired_manifest)
         .map_err(|e| CompileError::Io(format!("failed to write repaired manifest: {}", e)))?;
 
     // Delete branch files
@@ -215,14 +190,7 @@ pub(super) fn repair_stale_branches(
         }
     }
 
-    Ok(StaleRepairResult {
-        branches_removed,
-        branch_deletes,
-        deleted_leaf_slugs: classification.deleted_leaf_slugs,
-        orphan_leaf_slugs: orphan_slugs,
-        manifest_changed: true,
-        notifications: prune_notification,
-    })
+    Ok(prune_notification)
 }
 pub(super) fn select_new_leaf_slugs(manifest: &Manifest) -> Result<Vec<String>, CompileError> {
     let Some(last_compiled_at) = &manifest.tree.last_compiled_at else {
@@ -236,9 +204,7 @@ pub(super) fn select_new_leaf_slugs(manifest: &Manifest) -> Result<Vec<String>, 
     Ok(manifest
         .leaves
         .iter()
-        .filter(|leaf| {
-            super::execute::collected_after_last_compile(&leaf.collected_at, last_compiled_at)
-        })
+        .filter(|leaf| &leaf.collected_at > last_compiled_at)
         .map(|leaf| leaf.slug.as_str().to_string())
         .collect())
 }
@@ -355,20 +321,11 @@ pub(super) fn build_manifest_delta(
     plan: &CompilePlan,
     run_mode: CompileRunMode,
     run_timestamp: &Timestamp,
-    deleted_leaf_slugs: &[String],
-    stale_branch_slugs: &[String],
 ) -> Result<ManifestDelta, CompileError> {
-    let deleted_leaf_slugs_set: HashSet<&str> =
-        deleted_leaf_slugs.iter().map(String::as_str).collect();
-    let stale_branch_slugs_set: HashSet<&str> =
-        stale_branch_slugs.iter().map(String::as_str).collect();
-
     let mut branch_writes = Vec::new();
     let mut branch_deletes = Vec::new();
     let mut branches_created = Vec::new();
     let mut branches_updated = Vec::new();
-    let mut branches_rebuilt = Vec::new();
-    let mut branches_removed = Vec::new();
     let mut new_branches = Vec::new();
 
     match run_mode {
@@ -393,7 +350,7 @@ pub(super) fn build_manifest_delta(
                 let record = BranchRecord {
                     slug: slug.clone(),
                     file: format!("branches/{}.md", planned.slug),
-                    title: Title::new(&planned.title),
+                    title: planned.title.clone(),
                     created_at,
                     updated_at: run_timestamp.clone(),
                     leaves: validated_branch_leaf_slugs(planned),
@@ -436,27 +393,11 @@ pub(super) fn build_manifest_delta(
                 .map(|branch| branch.slug.as_str())
                 .collect();
             for current_branch in &current.branches {
-                let is_stale = stale_branch_slugs_set.contains(current_branch.slug.as_str());
-                let remaining_leaf_slugs: Vec<&Slug> = current_branch
-                    .leaves
-                    .iter()
-                    .filter(|leaf| !deleted_leaf_slugs_set.contains(leaf.as_str()))
-                    .collect();
-                if is_stale && remaining_leaf_slugs.len() < 2 {
-                    branch_deletes.push(current_branch.file.clone());
-                    branches_removed.push(RemovedBranchResult {
-                        slug: current_branch.slug.as_str().to_string(),
-                        title: current_branch.title.as_str().to_string(),
-                        remaining_leaf_count: remaining_leaf_slugs.len(),
-                        reason: "stale_branch_below_minimum_leaves".to_string(),
-                    });
-                    continue;
-                }
                 if let Some(planned) = planned_by_slug.get(current_branch.slug.as_str()) {
                     let record = BranchRecord {
                         slug: current_branch.slug.clone(),
                         file: current_branch.file.clone(),
-                        title: Title::new(&planned.title),
+                        title: planned.title.clone(),
                         created_at: current_branch.created_at.clone(),
                         updated_at: run_timestamp.clone(),
                         leaves: validated_branch_leaf_slugs(planned),
@@ -466,27 +407,13 @@ pub(super) fn build_manifest_delta(
                         record.title.as_str(),
                         record.leaves.len(),
                     );
-                    if is_stale {
-                        branches_rebuilt.push(result.clone());
-                        branch_writes.push(PlannedBranchWrite {
-                            record: record.clone(),
-                            file_leaves: planned.leaves.clone(),
-                            body: planned.body.clone(),
-                        });
-                    } else {
-                        branches_updated.push(result.clone());
-                        branch_writes.push(PlannedBranchWrite {
-                            record: record.clone(),
-                            file_leaves: planned.leaves.clone(),
-                            body: planned.body.clone(),
-                        });
-                    }
+                    branches_updated.push(result.clone());
+                    branch_writes.push(PlannedBranchWrite {
+                        record: record.clone(),
+                        file_leaves: planned.leaves.clone(),
+                        body: planned.body.clone(),
+                    });
                     new_branches.push(record);
-                } else if is_stale {
-                    return Err(super::parse::validation_error(format!(
-                        "invalid incremental compile response: stale branch '{}' must be rebuilt or removed deterministically",
-                        current_branch.slug
-                    )));
                 } else {
                     new_branches.push(current_branch.clone());
                 }
@@ -500,7 +427,7 @@ pub(super) fn build_manifest_delta(
                 let record = BranchRecord {
                     slug: slug.clone(),
                     file: format!("branches/{}.md", planned.slug),
-                    title: Title::new(&planned.title),
+                    title: planned.title.clone(),
                     created_at: run_timestamp.clone(),
                     updated_at: run_timestamp.clone(),
                     leaves: validated_branch_leaf_slugs(planned),
@@ -526,12 +453,7 @@ pub(super) fn build_manifest_delta(
             created_at: current.tree.created_at.clone(),
             last_compiled_at: Some(run_timestamp.clone()),
         },
-        leaves: current
-            .leaves
-            .iter()
-            .filter(|leaf| !deleted_leaf_slugs_set.contains(leaf.slug.as_str()))
-            .cloned()
-            .collect(),
+        leaves: current.leaves.clone(),
         branches: new_branches,
     };
 
@@ -541,6 +463,5 @@ pub(super) fn build_manifest_delta(
         branch_deletes,
         branches_created,
         branches_updated,
-        branches_rebuilt,
     })
 }

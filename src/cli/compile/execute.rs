@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
-use crate::domain::{branch, manifest, Timestamp};
+use crate::domain::{branch, manifest, tree, Timestamp};
 
 use crate::engine::config::SeededConfig;
 use crate::engine::llm::{
@@ -39,19 +39,6 @@ impl StagedWrite {
             bytes,
         }
     }
-}
-
-// ── time helpers ──────────────────────────────────────────────────────────────
-
-pub(super) fn compile_timestamp_now() -> Timestamp {
-    Timestamp::now()
-}
-
-pub(super) fn collected_after_last_compile(
-    collected_at: &Timestamp,
-    last_compiled_at: &Timestamp,
-) -> bool {
-    collected_at > last_compiled_at
 }
 
 // ── token estimation ──────────────────────────────────────────────────────────
@@ -204,7 +191,9 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
     expected_manifest_hash: &str,
 ) -> Result<CompileSummary, CompileError> {
     let tree = cfg.tree();
-    recover_pending_if_needed(tree.path())?;
+    let tree_dir = tree.path();
+    let manifest_path = tree::manifest_path(tree_dir);
+    recover_pending_if_needed(tree_dir)?;
 
     // Load current manifest. Used to preserve branch `created_at` and carry
     // leaf records / tree metadata forward into the new manifest.
@@ -212,7 +201,7 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
         .manifest_or_empty_if_fresh()
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
 
-    let current_manifest_hash = pending::manifest_hash(tree.path())?;
+    let current_manifest_hash = pending::manifest_hash(tree_dir)?;
     if current_manifest_hash != expected_manifest_hash {
         return Err(CompileError::Io(
             "manifest changed during compile planning; rerun `bo compile`".to_string(),
@@ -220,7 +209,7 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
     }
 
     // Stale branches already repaired in pre-LLM pass; no deleted leaves remain.
-    let delta = build_manifest_delta(&current, plan, run_mode, run_timestamp, &[], &[])?;
+    let delta = build_manifest_delta(&current, plan, run_mode, run_timestamp)?;
 
     let mut staged: Vec<StagedWrite> = Vec::new();
     for planned_write in &delta.branch_writes {
@@ -242,27 +231,26 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
         CompileRunMode::Full => CompileMode::Full,
     };
     let operation = pending::new_operation(
-        tree.path(),
+        tree_dir,
         OpKind::Compile { mode: compile_mode },
         writes.clone(),
         delta.branch_deletes.clone(),
     )?;
-    let pending_path = pending::pending_path(tree.path());
+    let pending_path = pending::pending_path(tree_dir);
     pending::write(&pending_path, &operation)?;
     for write in &staged {
-        pending::write_staged(tree.path(), &write.pending, &write.bytes)?;
+        pending::write_staged(tree_dir, &write.pending, &write.bytes)?;
     }
-    manifest::write(&tree.manifest_path(), &delta.new_manifest)
+    manifest::write(&manifest_path, &delta.new_manifest)
         .map_err(|e| CompileError::Io(format!("failed to write manifest: {}", e)))?;
-    pending::apply_writes(tree.path(), &writes)?;
-    pending::apply_deletes(tree.path(), &delta.branch_deletes)?;
+    pending::apply_writes(tree_dir, &writes)?;
+    pending::apply_deletes(tree_dir, &delta.branch_deletes)?;
     pending::clear(&pending_path)?;
 
     let branch_results: Vec<BranchResult> = delta
         .branches_created
         .iter()
         .chain(delta.branches_updated.iter())
-        .chain(delta.branches_rebuilt.iter())
         .cloned()
         .collect();
 

@@ -1,6 +1,6 @@
 use super::*;
 use crate::domain::frontmatter;
-use crate::domain::{Timestamp, Title, Url};
+use crate::domain::{Timestamp, Url};
 
 // ── helpers ───────────────────────────────────────────────────────────────
 
@@ -9,14 +9,14 @@ fn ts(s: &str) -> Timestamp {
 }
 
 fn url(s: &str) -> Url {
-    Url::parse(s).unwrap()
+    (s).to_string()
 }
 
 // ── format_content title escaping tests ───────────────────────────────────
 
 #[test]
 fn format_content_title_with_newlines_is_valid_yaml() {
-    let title = Title::new("Line 1\nLine 2\nLine 3");
+    let title = ("Line 1\nLine 2\nLine 3").to_string();
     let content = format_content(
         Some(&title),
         &url("https://example.com"),
@@ -36,7 +36,7 @@ fn format_content_title_with_newlines_is_valid_yaml() {
 
 #[test]
 fn format_content_title_with_tabs_is_valid_yaml() {
-    let title = Title::new("Col1\tCol2");
+    let title = ("Col1\tCol2").to_string();
     let content = format_content(
         Some(&title),
         &url("https://example.com"),
@@ -54,7 +54,7 @@ fn format_content_title_with_tabs_is_valid_yaml() {
 
 #[test]
 fn format_content_title_with_cr_is_valid_yaml() {
-    let title = Title::new("With\rCarriage");
+    let title = ("With\rCarriage").to_string();
     let content = format_content(
         Some(&title),
         &url("https://example.com"),
@@ -72,7 +72,7 @@ fn format_content_title_with_cr_is_valid_yaml() {
 
 #[test]
 fn format_content_title_with_backslash_and_quote_is_valid_yaml() {
-    let title = Title::new(r#"Path \to\file and "quoted""#);
+    let title = (r#"Path \to\file and "quoted""#).to_string();
     let content = format_content(
         Some(&title),
         &url("https://example.com"),
@@ -92,7 +92,7 @@ fn format_content_title_with_backslash_and_quote_is_valid_yaml() {
 #[test]
 fn format_content_with_single_line_summary() {
     let content = format_content(
-        Some(&Title::new("Article")),
+        Some(&("Article").to_string()),
         &url("https://example.com"),
         &ts("2025-01-01T00:00:00Z"),
         "Body content.",
@@ -110,7 +110,7 @@ fn format_content_with_single_line_summary() {
 fn format_content_with_multi_line_summary() {
     let summary = "First line of the summary.\nSecond line continues.\nThird line ends.";
     let content = format_content(
-        Some(&Title::new("Article")),
+        Some(&("Article").to_string()),
         &url("https://example.com"),
         &ts("2025-01-01T00:00:00Z"),
         "Body.",
@@ -128,7 +128,7 @@ fn format_content_with_multi_line_summary() {
 fn format_content_with_summary_containing_special_chars() {
     let summary = "Rust's \"ownership\" model: memory safety without GC.";
     let content = format_content(
-        Some(&Title::new("Article")),
+        Some(&("Article").to_string()),
         &url("https://example.com"),
         &ts("2025-01-01T00:00:00Z"),
         "Body.",
@@ -143,7 +143,7 @@ fn format_content_with_summary_containing_special_chars() {
 #[test]
 fn format_content_with_none_summary_omits_field() {
     let content = format_content(
-        Some(&Title::new("Article")),
+        Some(&("Article").to_string()),
         &url("https://example.com"),
         &ts("2025-01-01T00:00:00Z"),
         "Body.",

@@ -1,5 +1,5 @@
 use super::*;
-use crate::domain::{Slug, Timestamp, Title, Url};
+use crate::domain::{Slug, Timestamp};
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -13,15 +13,15 @@ fn sample_manifest() -> Manifest {
         leaves: vec![LeafRecord {
             slug: Slug::parse("ownership-and-borrowing").unwrap(),
             file: "ownership-and-borrowing.md".to_string(),
-            title: Title::new("Ownership and Borrowing"),
-            url: Url::parse("https://example.com/ownership").unwrap(),
+            title: ("Ownership and Borrowing").to_string(),
+            url: ("https://example.com/ownership").to_string(),
             collected_at: Timestamp::parse("2026-05-19T14:05:32Z").unwrap(),
             summary: Some("Rust's ownership rules.".to_string()),
         }],
         branches: vec![BranchRecord {
             slug: Slug::parse("memory-safety").unwrap(),
             file: "branches/memory-safety.md".to_string(),
-            title: Title::new("Memory Safety"),
+            title: ("Memory Safety").to_string(),
             created_at: Timestamp::parse("2026-05-19T14:32:11.000Z").unwrap(),
             updated_at: Timestamp::parse("2026-05-19T14:32:11.000Z").unwrap(),
             leaves: vec![Slug::parse("ownership-and-borrowing").unwrap()],
@@ -52,24 +52,24 @@ fn resolution_fixture() -> Manifest {
             LeafRecord {
                 slug: Slug::parse("alpha").unwrap(),
                 file: "alpha.md".to_string(),
-                title: Title::new("Alpha"),
-                url: Url::parse("https://example.com/a").unwrap(),
+                title: ("Alpha").to_string(),
+                url: ("https://example.com/a").to_string(),
                 collected_at: Timestamp::parse("2026-05-19T14:00:00Z").unwrap(),
                 summary: None,
             },
             LeafRecord {
                 slug: Slug::parse("beta").unwrap(),
                 file: "beta.md".to_string(),
-                title: Title::new("Beta"),
-                url: Url::parse("https://example.com/b").unwrap(),
+                title: ("Beta").to_string(),
+                url: ("https://example.com/b").to_string(),
                 collected_at: Timestamp::parse("2026-05-19T14:30:00Z").unwrap(),
                 summary: None,
             },
             LeafRecord {
                 slug: Slug::parse("gamma").unwrap(),
                 file: "gamma.md".to_string(),
-                title: Title::new("Gamma"),
-                url: Url::parse("https://example.com/g").unwrap(),
+                title: ("Gamma").to_string(),
+                url: ("https://example.com/g").to_string(),
                 collected_at: Timestamp::parse("2026-05-19T16:00:00Z").unwrap(),
                 summary: None,
             },
@@ -78,7 +78,7 @@ fn resolution_fixture() -> Manifest {
             BranchRecord {
                 slug: Slug::parse("topic-x").unwrap(),
                 file: "branches/topic-x.md".to_string(),
-                title: Title::new("Topic X"),
+                title: ("Topic X").to_string(),
                 created_at: Timestamp::parse("2026-05-19T15:00:00Z").unwrap(),
                 updated_at: Timestamp::parse("2026-05-19T15:00:00Z").unwrap(),
                 leaves: vec![Slug::parse("alpha").unwrap(), Slug::parse("beta").unwrap()],
@@ -86,7 +86,7 @@ fn resolution_fixture() -> Manifest {
             BranchRecord {
                 slug: Slug::parse("topic-y").unwrap(),
                 file: "branches/topic-y.md".to_string(),
-                title: Title::new("Topic Y"),
+                title: ("Topic Y").to_string(),
                 created_at: Timestamp::parse("2026-05-19T15:00:00Z").unwrap(),
                 updated_at: Timestamp::parse("2026-05-19T15:00:00Z").unwrap(),
                 leaves: vec![Slug::parse("beta").unwrap()],
@@ -96,19 +96,6 @@ fn resolution_fixture() -> Manifest {
 }
 
 // ── resolution helpers ───────────────────────────────────────────────────────
-
-#[test]
-fn leaf_by_slug_returns_record_for_known_slug() {
-    let m = resolution_fixture();
-    let leaf = m.leaf_by_slug_str("beta").unwrap();
-    assert_eq!(leaf.title.as_str(), "Beta");
-}
-
-#[test]
-fn leaf_by_slug_returns_none_for_unknown_slug() {
-    let m = resolution_fixture();
-    assert!(m.leaf_by_slug_str("nope").is_none());
-}
 
 #[test]
 fn branch_by_slug_returns_record_for_known_slug() {

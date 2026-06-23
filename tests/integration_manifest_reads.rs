@@ -8,7 +8,7 @@
 // fixtures are staged on disk directly so we can invoke `bo status`, `bo list`,
 // `bo show`, etc. without going through `collect`/`compile`.
 
-use bo::domain::{Slug, Timestamp, Title};
+use bo::domain::{Slug, Timestamp};
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
@@ -85,8 +85,8 @@ fn stage_tree(home: &Path) -> std::path::PathBuf {
             .map(|(slug, title, url)| bo::domain::manifest::LeafRecord {
                 slug: Slug::parse(slug).unwrap(),
                 file: format!("{slug}.md"),
-                title: Title::new(*title),
-                url: bo::domain::Url::parse(url).unwrap(),
+                title: title.to_string(),
+                url: url.to_string(),
                 collected_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                 summary: None,
             })
@@ -94,7 +94,7 @@ fn stage_tree(home: &Path) -> std::path::PathBuf {
         branches: vec![bo::domain::manifest::BranchRecord {
             slug: Slug::parse("topic-x").unwrap(),
             file: "branches/topic-x.md".to_string(),
-            title: Title::new("topic-x"),
+            title: "topic-x".to_string(),
             created_at: Timestamp::parse("2026-01-02T10:00:00Z").unwrap(),
             updated_at: Timestamp::parse("2026-01-02T10:00:00Z").unwrap(),
             leaves: vec![Slug::parse("alpha").unwrap(), Slug::parse("beta").unwrap()],

@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Deserialize;
 
-use crate::domain::slug;
+use crate::domain::Slug;
 use crate::engine::config::SeededConfig;
 
 use super::plan::select_new_leaf_slugs;
@@ -107,7 +107,7 @@ pub(super) fn parse_and_validate_with_input_size(
         }
 
         // Generate slug and check uniqueness post-slugification.
-        let branch_slug = slug::slugify(&title, "");
+        let branch_slug = Slug::generate(&title, "").to_string();
         if branch_slug.is_empty() {
             return Err(validation_error(format!(
                 "invalid compile response: branch '{}' title produces empty file slug",
@@ -180,7 +180,8 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
         validation_error(format!("invalid incremental compile response shape: {}", e))
     })?;
     let tree = cfg.tree();
-    let manifest = crate::domain::manifest::read(&tree.manifest_path())
+    let manifest_path = crate::domain::tree::manifest_path(tree.path());
+    let manifest = crate::domain::manifest::read(&manifest_path)
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
     let new_leaf_slugs_vec = select_new_leaf_slugs(&manifest)?;
     let new_leaf_slugs: HashSet<String> = new_leaf_slugs_vec.into_iter().collect();
@@ -259,7 +260,7 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
                 title
             )));
         }
-        let branch_slug = slug::slugify(&title, "");
+        let branch_slug = Slug::generate(&title, "").to_string();
         if manifest.branch_by_slug_str(&branch_slug).is_some()
             || !seen_branch_slugs.insert(branch_slug.clone())
         {
