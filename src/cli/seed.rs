@@ -385,13 +385,25 @@ fn canonical_seed_path(path: &Path) -> Result<PathBuf, SeedError> {
 }
 
 fn comparable_path(path: &Path) -> Result<PathBuf, SeedError> {
-    let absolute = absolute_path(path)?;
+    let absolute = normalize_path(&absolute_path(path)?);
     if absolute.exists() {
         return std::fs::canonicalize(&absolute).map_err(|error| {
             SeedError::CreateTreeDir(format!("failed to resolve tree directory: {error}"))
         });
     }
-    Ok(normalize_path(&absolute))
+
+    for ancestor in absolute.ancestors() {
+        if ancestor.exists() {
+            let canonical_parent = std::fs::canonicalize(ancestor).map_err(|error| {
+                SeedError::CreateTreeDir(format!("failed to resolve tree directory: {error}"))
+            })?;
+            if let Ok(suffix) = absolute.strip_prefix(ancestor) {
+                return Ok(canonical_parent.join(suffix));
+            }
+        }
+    }
+
+    Ok(absolute)
 }
 
 fn absolute_path(path: &Path) -> Result<PathBuf, SeedError> {

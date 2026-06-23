@@ -165,6 +165,41 @@ fn existing_different_path_is_rejected() {
     assert_eq!(err.exit_code(), 2);
 }
 
+#[cfg(unix)]
+#[test]
+fn different_path_rejection_canonicalizes_missing_requested_path() {
+    let tmp = TempDir::new().unwrap();
+    let real_parent = tmp.path().join("real");
+    let linked_parent = tmp.path().join("linked");
+    std::fs::create_dir(&real_parent).unwrap();
+    std::os::unix::fs::symlink(&real_parent, &linked_parent).unwrap();
+    let config_path = tmp.path().join("config.json");
+    let mut prompt = PromptAnswers::default();
+
+    let first_tree = real_parent.join("first");
+    seed(options(first_tree.clone()), &config_path, &mut prompt).unwrap();
+    let err = seed(
+        options(linked_parent.join("second")),
+        &config_path,
+        &mut prompt,
+    )
+    .unwrap_err();
+
+    match err {
+        SeedError::TreeAlreadySeeded {
+            existing_path,
+            requested_path,
+        } => {
+            assert_eq!(existing_path, std::fs::canonicalize(first_tree).unwrap());
+            assert_eq!(
+                requested_path,
+                std::fs::canonicalize(real_parent).unwrap().join("second")
+            );
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
 #[test]
 fn invalid_config_is_overwritten_by_fresh_seed() {
     let tmp = TempDir::new().unwrap();
