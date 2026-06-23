@@ -81,16 +81,6 @@ impl Tree {
     pub fn branches_dir(&self) -> PathBuf {
         self.path.join("branches")
     }
-
-    /// Path to the tree-local infrastructure directory: `{path}/.bo/`.
-    pub fn infra_dir(&self) -> PathBuf {
-        self.path.join(".bo")
-    }
-
-    /// Path to the manifest file: `{path}/.bo/manifest.json`.
-    pub fn manifest_path(&self) -> PathBuf {
-        self.infra_dir().join("manifest.json")
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

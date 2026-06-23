@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 use bo::cli::query;
-use bo::domain::{Timestamp, Title, Url};
+use bo::domain::Timestamp;
 use bo::engine::llm::{LlmError, LlmProvider, LlmResponse, Message, Model};
 use serde_json::Value;
 use std::fs;
@@ -100,8 +100,8 @@ fn make_manifest(dir: &std::path::Path, entries: &[(&str, &str, &str)]) {
             bo::domain::manifest::LeafRecord {
                 slug,
                 file: file.to_string(),
-                title: Title::new(title),
-                url: Url::parse(url).unwrap(),
+                title: title.to_string(),
+                url: url.to_string(),
                 collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                 summary,
             }

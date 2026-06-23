@@ -1,6 +1,6 @@
 // YAML frontmatter parsing and rendering.
 
-use serde_yaml_ng::{Mapping, Value};
+use serde_yaml_ng::Mapping;
 use std::fmt;
 
 // ── errors ────────────────────────────────────────────────────────────────────
@@ -51,17 +51,6 @@ pub fn render(mapping: &Mapping, body: &str) -> Result<String, FrontmatterError>
     let yaml = serde_yaml_ng::to_string(mapping)
         .map_err(|e| FrontmatterError::Serialization(e.to_string()))?;
     Ok(format!("---\n{}---\n\n{}", yaml, body))
-}
-
-// ── set_field ─────────────────────────────────────────────────────────────────
-
-/// Upsert a field in a Mapping.
-///
-/// If the key already exists the value is replaced in-place (the `IndexMap`
-/// preserves the original position).  If the key is absent it is appended.
-pub fn set_field(mapping: &mut Mapping, key: &str, value: Value) {
-    let k = Value::String(key.to_string());
-    mapping.insert(k, value);
 }
 
 // ── internal helpers ──────────────────────────────────────────────────────────

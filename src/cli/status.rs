@@ -233,23 +233,14 @@ pub fn config_only_status(config: Option<&Config>) -> StatusResult {
 fn compute_size(tree_dir: &Path, branches_dir: &Path) -> SizeStatus {
     let mut total_bytes: u64 = 0;
 
-    if let Ok(entries) = fs::read_dir(tree_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md") {
-                if let Ok(meta) = fs::metadata(&path) {
-                    total_bytes += meta.len();
-                }
-            }
-        }
-    }
-
-    if let Ok(entries) = fs::read_dir(branches_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md") {
-                if let Ok(meta) = fs::metadata(&path) {
-                    total_bytes += meta.len();
+    for dir in [tree_dir, branches_dir] {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md") {
+                    if let Ok(meta) = fs::metadata(&path) {
+                        total_bytes += meta.len();
+                    }
                 }
             }
         }

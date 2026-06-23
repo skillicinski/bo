@@ -45,25 +45,17 @@ fn fallback_exactly_200_words() {
 }
 
 #[test]
-fn truncate_body_short_input_unchanged() {
+fn truncate_words_short_input_unchanged() {
     let body = "short text here";
-    assert_eq!(truncate_body(body, 4000), "short text here");
+    assert_eq!(truncate_words(body, 4000), "short text here");
 }
 
 #[test]
-fn truncate_body_long_input_cut() {
+fn truncate_words_long_input_cut() {
     let words: Vec<String> = (0..5000).map(|i| format!("w{i}")).collect();
     let body = words.join(" ");
-    let result = truncate_body(&body, 4000);
+    let result = truncate_words(&body, 4000);
     assert_eq!(result.split_whitespace().count(), 4000);
-}
-
-#[test]
-fn summary_response_schema_requires_summary_field() {
-    let schema = summary_response_schema();
-
-    assert_eq!(schema["required"], serde_json::json!(["summary"]));
-    assert_eq!(schema["additionalProperties"], false);
 }
 
 struct SummaryFakeProvider {

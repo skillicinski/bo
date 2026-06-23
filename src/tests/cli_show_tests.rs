@@ -1,5 +1,5 @@
 use super::*;
-use crate::domain::{Slug, Timestamp, Title, Url};
+use crate::domain::{Slug, Timestamp};
 use std::collections::BTreeMap;
 use std::time::SystemTime;
 use tempfile::TempDir;
@@ -56,7 +56,6 @@ fn show_leaf_card_view_returns_frontmatter_only() {
         "---\ntitle: \"Raw: Title\"\nurl: https://example.com\n---\n"
     );
     assert!(result.body.is_none(), "card view should have no body");
-    assert!(result.truncated.is_none());
     assert!(!result.full);
     assert_eq!(
         result.frontmatter.get("title").and_then(Value::as_str),
@@ -201,7 +200,6 @@ fn show_leaf_card_view_has_no_body() {
     let result = show_leaf(dir.path(), "Leaf", &ShowOptions::default()).unwrap();
 
     assert!(result.body.is_none());
-    assert!(result.truncated.is_none());
     assert!(!result.full);
 }
 
@@ -216,9 +214,7 @@ fn show_leaf_full_option_returns_full_body() {
     let full = show_leaf(dir.path(), "Long", &ShowOptions { full: true }).unwrap();
 
     assert!(card.body.is_none(), "card view should have no body");
-    assert!(card.truncated.is_none());
     assert_eq!(full.body.as_deref(), Some(long_body.as_str()));
-    assert!(full.truncated.is_none());
     assert!(full.full);
 }
 
@@ -237,7 +233,7 @@ fn show_leaf_is_read_only() {
 
 #[test]
 fn render_human_card_view_frontmatter_only() {
-    let result = fixture_result(None, None, false);
+    let result = fixture_result(None, false);
 
     let output = render_human(&result);
 
@@ -246,20 +242,18 @@ fn render_human_card_view_frontmatter_only() {
         "output: {output}"
     );
     assert!(!output.contains("body"), "card view should exclude body");
-    assert!(!output.contains("preview truncated"), "output: {output}");
 }
 
 #[test]
 fn render_human_full_includes_body() {
-    let result = fixture_result(Some("complete body"), None, true);
+    let result = fixture_result(Some("complete body"), true);
 
     let output = render_human(&result);
 
     assert!(output.contains("complete body"), "output: {output}");
-    assert!(!output.contains("preview truncated"), "output: {output}");
 }
 
-fn fixture_result(body: Option<&str>, truncated: Option<bool>, full: bool) -> ShowResult {
+fn fixture_result(body: Option<&str>, full: bool) -> ShowResult {
     let mut frontmatter = Mapping::new();
     frontmatter.insert(
         Value::String("title".to_string()),
@@ -278,7 +272,6 @@ fn fixture_result(body: Option<&str>, truncated: Option<bool>, full: bool) -> Sh
         frontmatter,
         frontmatter_raw: "---\ntitle: Rendered\n---\n".to_string(),
         body: body.map(|s| s.to_string()),
-        truncated,
         full,
     }
 }
@@ -293,8 +286,8 @@ fn write_index(tree: &Path, entries: &[(&str, &str)]) {
             crate::domain::manifest::LeafRecord {
                 slug,
                 file: (*file).to_string(),
-                title: Title::new(*title),
-                url: Url::parse("https://example.com/test").unwrap(),
+                title: (*title).to_string(),
+                url: ("https://example.com/test").to_string(),
                 collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                 summary: None,
             }

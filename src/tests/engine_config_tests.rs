@@ -88,7 +88,7 @@ fn model_roundtrip_with_value() {
 
     let loaded = read_config(&path).unwrap();
     assert_eq!(loaded.model.as_deref(), Some("gpt-4.1-mini"));
-    assert_eq!(loaded.effective_model().unwrap(), "gpt-4.1-mini");
+    assert_eq!(loaded.effective_model().unwrap().as_str(), "gpt-4.1-mini");
 }
 
 #[test]
@@ -107,8 +107,11 @@ fn compile_model_roundtrip_with_value() {
     let loaded = read_config(&path).unwrap();
     assert_eq!(loaded.model.as_deref(), Some("gpt-4o-mini"));
     assert_eq!(loaded.compile_model.as_deref(), Some("gpt-4.1-mini"));
-    assert_eq!(loaded.effective_model().unwrap(), "gpt-4o-mini");
-    assert_eq!(loaded.effective_compile_model().unwrap(), "gpt-4.1-mini");
+    assert_eq!(loaded.effective_model().unwrap().as_str(), "gpt-4o-mini");
+    assert_eq!(
+        loaded.effective_compile_model().unwrap().as_str(),
+        "gpt-4.1-mini"
+    );
 }
 
 #[test]
@@ -145,7 +148,7 @@ fn config_without_tree_deserializes() {
     let loaded = read_config(&path).unwrap();
     assert!(loaded.tree.is_none());
     assert_eq!(loaded.model.as_deref(), Some("gpt-4.1-mini"));
-    assert_eq!(loaded.effective_model().unwrap(), "gpt-4.1-mini");
+    assert_eq!(loaded.effective_model().unwrap().as_str(), "gpt-4.1-mini");
 }
 
 #[test]
@@ -182,7 +185,10 @@ fn seeded_conversion_succeeds_when_tree_exists() {
     let seeded = cfg.into_seeded().unwrap();
 
     assert_eq!(seeded.tree().path, PathBuf::from("/tmp/bo"));
-    assert_eq!(seeded.effective_model().unwrap(), "gpt-4.1-mini");
+    assert_eq!(
+        seeded.config.effective_model().unwrap().as_str(),
+        "gpt-4.1-mini"
+    );
 }
 
 #[test]
@@ -208,8 +214,14 @@ fn seeded_config_uses_default_model_when_absent() {
 
     let seeded = cfg.into_seeded().unwrap();
 
-    assert_eq!(seeded.effective_model().unwrap(), "gpt-4.1-mini");
-    assert_eq!(seeded.effective_compile_model().unwrap(), "gpt-4.1-mini");
+    assert_eq!(
+        seeded.config.effective_model().unwrap().as_str(),
+        "gpt-4.1-mini"
+    );
+    assert_eq!(
+        seeded.config.effective_compile_model().unwrap().as_str(),
+        "gpt-4.1-mini"
+    );
 }
 
 #[test]
@@ -223,8 +235,14 @@ fn seeded_config_effective_compile_model_prefers_compile_model() {
 
     let seeded = cfg.into_seeded().unwrap();
 
-    assert_eq!(seeded.effective_model().unwrap(), "gpt-4o-mini");
-    assert_eq!(seeded.effective_compile_model().unwrap(), "gpt-4.1-mini");
+    assert_eq!(
+        seeded.config.effective_model().unwrap().as_str(),
+        "gpt-4o-mini"
+    );
+    assert_eq!(
+        seeded.config.effective_compile_model().unwrap().as_str(),
+        "gpt-4.1-mini"
+    );
 }
 
 #[test]
@@ -238,5 +256,8 @@ fn seeded_config_effective_compile_model_falls_back_to_model() {
 
     let seeded = cfg.into_seeded().unwrap();
 
-    assert_eq!(seeded.effective_compile_model().unwrap(), "gpt-4o-mini");
+    assert_eq!(
+        seeded.config.effective_compile_model().unwrap().as_str(),
+        "gpt-4o-mini"
+    );
 }

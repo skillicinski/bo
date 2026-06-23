@@ -134,14 +134,6 @@ pub fn resolve_slug(slug: &Slug, url: &str, output_dir: &Path) -> Slug {
     Slug(resolved)
 }
 
-// ── backward compat: free function preserved for callers that don't need the struct ──
-
-/// Internal helper for callers that need a raw String slug without the newtype
-/// wrapper. Prefer [`Slug::generate`] for new code.
-pub(crate) fn slugify(title: &str, url: &str) -> String {
-    Slug::generate(title, url).0
-}
-
 // ── internals ─────────────────────────────────────────────────────────────────
 
 fn slugify_raw(input: &str) -> String {
@@ -180,26 +172,14 @@ fn slugify_raw(input: &str) -> String {
 }
 
 fn slugify_from_url(url: &str) -> String {
-    // Extract path from URL, strip extension, slugify
-    let path = url
-        .split("://")
-        .nth(1)
-        .unwrap_or(url)
-        .split('?')
-        .next()
-        .unwrap_or("")
-        .split('#')
-        .next()
-        .unwrap_or("")
-        .trim_matches('/');
+    let slug = url::Url::parse(url).ok().and_then(|parsed| {
+        let mut source = parsed.host_str().unwrap_or_default().to_string();
+        source.push_str(parsed.path());
+        let slug = slugify_raw(source.trim_matches('/'));
+        (!slug.is_empty()).then_some(slug)
+    });
 
-    let slug = slugify_raw(path);
-    if slug.is_empty() {
-        // Last resort: hash of the URL
-        url_hash(url)
-    } else {
-        slug
-    }
+    slug.unwrap_or_else(|| url_hash(url))
 }
 
 fn truncate_at_boundary(s: &str, max: usize) -> String {

@@ -37,13 +37,10 @@ impl Model {
     /// Parse and validate a model identifier against the provider's supported set.
     pub fn parse(id: &str, provider: Provider) -> Result<Self, UnsupportedModel> {
         let trimmed = id.trim();
-        let info = models::models_for(provider)
-            .iter()
-            .find(|entry| entry.id == trimmed)
-            .ok_or_else(|| UnsupportedModel {
-                id: trimmed.to_string(),
-                provider,
-            })?;
+        let info = models::find_model(provider, trimmed).ok_or_else(|| UnsupportedModel {
+            id: trimmed.to_string(),
+            provider,
+        })?;
         Ok(Self { info })
     }
 
@@ -61,12 +58,6 @@ impl Model {
 impl fmt::Display for Model {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.info.id)
-    }
-}
-
-impl PartialEq<&str> for Model {
-    fn eq(&self, other: &&str) -> bool {
-        self.info.id == *other
     }
 }
 

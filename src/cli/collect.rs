@@ -25,7 +25,7 @@ use crate::adapters::youtube::{self, YoutubeError, YoutubeUrlMatch};
 use crate::cli::json::JsonError;
 use crate::domain::manifest::{self, LeafRecord, Manifest, TreeMeta};
 use crate::domain::slug::Slug;
-use crate::domain::{leaf, slug, Timestamp, Title, Url};
+use crate::domain::{leaf, slug, Timestamp};
 use crate::engine::auth;
 use crate::engine::pending::{self, OpKind, PendingWrite};
 use crate::engine::quality::RejectReason;
@@ -239,15 +239,6 @@ enum ExpandedCollectInput {
     },
 }
 
-impl ExpandedCollectInput {
-    fn is_from_file(&self) -> bool {
-        match self {
-            ExpandedCollectInput::Url { from_file, .. }
-            | ExpandedCollectInput::Failure { from_file, .. } => *from_file,
-        }
-    }
-}
-
 // ── pipeline ─────────────────────────────────────────────────────────────────
 
 pub fn collect_url_with_model(
@@ -301,22 +292,7 @@ pub fn collect_html_with_model(
     provider: crate::engine::llm::Provider,
 ) -> Result<Document, CollectError> {
     collect_html_with_summarizer(url, html, output_dir, |body, title| {
-        let api_key = match auth::resolve_api_key(provider) {
-            Ok(key) => key,
-            Err(_) => return Ok(summary::generate_fallback(body)),
-        };
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| summary::SummaryError::Runtime(format!("runtime: {}", e)))?;
-        let provider = crate::engine::llm::create_provider(provider, &api_key);
-        Ok(rt.block_on(summary::generate_llm_or_fallback(
-            body,
-            title,
-            provider.as_ref(),
-            model,
-            summary::SUMMARY_LLM_POLICY,
-        )))
+        generate_summary_with_model(body, title, model, provider)
     })
 }
 
@@ -368,7 +344,19 @@ where
     F: FnMut(&str) -> Result<Document, CollectError>,
 {
     let expanded = expand_collect_inputs(&inputs);
-    let batch_mode = inputs.len() > 1 || expanded.iter().any(ExpandedCollectInput::is_from_file);
+    let batch_mode = inputs.len() > 1
+        || expanded.iter().any(|input| {
+            matches!(
+                input,
+                ExpandedCollectInput::Url {
+                    from_file: true,
+                    ..
+                } | ExpandedCollectInput::Failure {
+                    from_file: true,
+                    ..
+                }
+            )
+        });
 
     if !batch_mode {
         let Some(ExpandedCollectInput::Url { url, .. }) = expanded.first() else {
@@ -664,33 +652,32 @@ fn write_new_document_with_model(
     model: &str,
     provider: crate::engine::llm::Provider,
 ) -> Result<Document, CollectError> {
+    let summary_text = generate_summary_with_model(body_markdown, title, model, provider);
+    write_new_document_with_summary_result(url, title, body_markdown, output_dir, summary_text)
+}
+
+fn generate_summary_with_model(
+    body: &str,
+    title: Option<&str>,
+    model: &str,
+    provider: crate::engine::llm::Provider,
+) -> Result<String, summary::SummaryError> {
     let api_key = match auth::resolve_api_key(provider) {
         Ok(key) => key,
-        Err(_) => {
-            return write_new_document_with_summary_result(
-                url,
-                title,
-                body_markdown,
-                output_dir,
-                Ok(summary::generate_fallback(body_markdown)),
-            );
-        }
+        Err(_) => return Ok(summary::generate_fallback(body)),
     };
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|e| {
-            CollectError::Summary(summary::SummaryError::Runtime(format!("runtime: {}", e)))
-        })?;
+        .map_err(|e| summary::SummaryError::Runtime(format!("runtime: {}", e)))?;
     let provider = crate::engine::llm::create_provider(provider, &api_key);
-    let summary_text = rt.block_on(summary::generate_llm_or_fallback(
-        body_markdown,
+    Ok(rt.block_on(summary::generate_llm_or_fallback(
+        body,
         title,
         provider.as_ref(),
         model,
         summary::SUMMARY_LLM_POLICY,
-    ));
-    write_new_document_with_summary_result(url, title, body_markdown, output_dir, Ok(summary_text))
+    )))
 }
 
 fn write_new_document_with_summary_result(
@@ -707,9 +694,8 @@ fn write_new_document_with_summary_result(
     let base_slug = Slug::generate(title_ref, url);
     let filename = slug::resolve_slug(&base_slug, url, output_dir);
     let now = Timestamp::now();
-    let domain_url = Url::parse(url)
-        .unwrap_or_else(|_| Url::parse(&format!("http://{}", url)).expect("url fallback"));
-    let domain_title = title.map(Title::new);
+    let domain_url = url.to_string();
+    let domain_title = title.map(str::to_string);
     let leaf_file = format!("{}.md", filename);
     let summary_field = if summary_text.is_empty() {
         None
@@ -755,7 +741,7 @@ fn write_new_document_with_summary_result(
     let leaf_record = LeafRecord {
         slug: filename.clone(),
         file: leaf_file.clone(),
-        title: Title::new(title.unwrap_or_default()),
+        title: title.unwrap_or_default().to_string(),
         url: domain_url,
         collected_at: now,
         summary: if summary_text.is_empty() {

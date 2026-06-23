@@ -1,4 +1,5 @@
 use super::*;
+use serde_yaml_ng::Value;
 
 const SIMPLE_DOC: &str = "\
 ---
@@ -44,10 +45,12 @@ fn parse_invalid_yaml_returns_error() {
 #[test]
 fn render_produces_valid_document() {
     let mut m = Mapping::new();
-    set_field(&mut m, "title", Value::String("My Branch".into()));
-    set_field(
-        &mut m,
-        "compiled_at",
+    m.insert(
+        Value::String("title".into()),
+        Value::String("My Branch".into()),
+    );
+    m.insert(
+        Value::String("compiled_at".into()),
         Value::String("2025-01-01T00:00:00Z".into()),
     );
 
@@ -60,15 +63,13 @@ fn render_produces_valid_document() {
 #[test]
 fn render_round_trips_through_parse() {
     let mut m = Mapping::new();
-    set_field(&mut m, "title", Value::String("Test".into()));
-    set_field(
-        &mut m,
-        "compiled_at",
+    m.insert(Value::String("title".into()), Value::String("Test".into()));
+    m.insert(
+        Value::String("compiled_at".into()),
         Value::String("2025-01-01T00:00:00Z".into()),
     );
-    set_field(
-        &mut m,
-        "leaves",
+    m.insert(
+        Value::String("leaves".into()),
         Value::Sequence(vec![Value::String("a.md".into())]),
     );
 
@@ -83,9 +84,9 @@ fn render_returns_ok_for_standard_mapping() {
     // Standard Mapping values should always serialize successfully
     // and round-trip through parse — no silent empty YAML on failure.
     let mut m = Mapping::new();
-    set_field(&mut m, "count", Value::Number(42.into()));
-    set_field(&mut m, "flag", Value::Bool(true));
-    set_field(&mut m, "null_val", Value::Null);
+    m.insert(Value::String("count".into()), Value::Number(42.into()));
+    m.insert(Value::String("flag".into()), Value::Bool(true));
+    m.insert(Value::String("null_val".into()), Value::Null);
     let result = render(&m, "body");
     assert!(result.is_ok());
     let doc = result.unwrap();
@@ -97,28 +98,4 @@ fn render_returns_ok_for_standard_mapping() {
         .map(|v| v.is_null())
         .unwrap_or(false));
     assert!(body.contains("body"));
-}
-
-// ── set_field tests ───────────────────────────────────────────────────────
-
-#[test]
-fn set_field_appends_new_key() {
-    let mut m = Mapping::new();
-    set_field(&mut m, "a", Value::String("1".into()));
-    set_field(&mut m, "b", Value::String("2".into()));
-    assert_eq!(m.len(), 2);
-    let keys: Vec<&str> = m.keys().filter_map(|k| k.as_str()).collect();
-    assert_eq!(keys, vec!["a", "b"]);
-}
-
-#[test]
-fn set_field_replaces_existing_key_in_place() {
-    let mut m = Mapping::new();
-    set_field(&mut m, "a", Value::String("old".into()));
-    set_field(&mut m, "b", Value::String("keep".into()));
-    set_field(&mut m, "a", Value::String("new".into()));
-    // Position preserved: a is still first
-    let keys: Vec<&str> = m.keys().filter_map(|k| k.as_str()).collect();
-    assert_eq!(keys, vec!["a", "b"]);
-    assert_eq!(m.get("a").and_then(|v| v.as_str()), Some("new"));
 }

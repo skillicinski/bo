@@ -1,6 +1,6 @@
 use super::*;
 use crate::domain::manifest;
-use crate::domain::{Slug, Timestamp, Title, Url};
+use crate::domain::{Slug, Timestamp};
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
@@ -110,8 +110,8 @@ fn batch_collect_skips_existing_manifest_duplicates_without_fetching() {
             leaves: vec![manifest::LeafRecord {
                 slug: Slug::parse("already").unwrap(),
                 file: "already.md".to_string(),
-                title: Title::new("Already"),
-                url: Url::parse(url).unwrap(),
+                title: ("Already").to_string(),
+                url: (url).to_string(),
                 collected_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                 summary: None,
             }],
@@ -596,8 +596,8 @@ fn dedup_uses_manifest_not_index_jsonl() {
     m.leaves.push(crate::domain::manifest::LeafRecord {
         slug: Slug::parse("already-collected").unwrap(),
         file: "already-collected.md".to_string(),
-        title: Title::new("Already"),
-        url: Url::parse("https://example.com/article").unwrap(),
+        title: ("Already").to_string(),
+        url: ("https://example.com/article").to_string(),
         collected_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         summary: None,
     });

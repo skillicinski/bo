@@ -222,7 +222,6 @@ fn retry_delay(initial_backoff: Duration, completed_attempt: usize) -> Duration 
 pub enum Role {
     System,
     User,
-    Assistant,
 }
 
 #[derive(Debug, Clone)]

@@ -1,6 +1,6 @@
 use super::{plan, render_human, CompileResult};
 use crate::domain::manifest::{LeafRecord, Manifest, TreeMeta};
-use crate::domain::{Slug, Timestamp, Title, Url};
+use crate::domain::{Slug, Timestamp};
 use crate::engine::config::SeededConfig;
 use std::path::Path;
 use tempfile::TempDir;
@@ -22,7 +22,8 @@ fn write_manifest(dir: &Path, manifest: &Manifest) {
         name: "test-tree".to_string(),
         created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
     });
-    crate::domain::manifest::write(&tree.manifest_path(), manifest).unwrap();
+    crate::domain::manifest::write(&crate::domain::tree::manifest_path(&tree.path), manifest)
+        .unwrap();
 }
 
 fn read_manifest(dir: &Path) -> Manifest {
@@ -34,8 +35,8 @@ fn leaf_record(slug: &str, file: &str, title: &str, collected_at: &str) -> LeafR
     LeafRecord {
         slug: Slug::generate(slug, ""),
         file: file.to_string(),
-        title: Title::new(title),
-        url: Url::parse("https://example.com").unwrap(),
+        title: title.to_string(),
+        url: ("https://example.com").to_string(),
         collected_at: Timestamp::parse(collected_at).unwrap(),
         summary: Some("summary text".to_string()),
     }
@@ -83,13 +84,11 @@ fn missing_unbranched_new_leaf_is_pruned_not_error() {
     write_manifest(dir.path(), &manifest);
 
     let cfg = seeded_config(dir.path());
-    let result = plan::repair_stale_branches(&cfg, &manifest).expect("repair should succeed");
+    let notifications =
+        plan::repair_stale_branches(&cfg, &manifest).expect("repair should succeed");
 
-    assert!(result.manifest_changed);
-    assert_eq!(result.deleted_leaf_slugs.len(), 1);
-    assert!(result.orphan_leaf_slugs.contains(&"leaf-a".to_string()));
-    assert_eq!(result.notifications.len(), 1);
-    assert!(result.notifications[0].contains("pruned 1 orphan"));
+    assert_eq!(notifications.len(), 1);
+    assert!(notifications[0].contains("pruned 1 orphan"));
 
     let repaired = read_manifest(dir.path());
     assert_eq!(repaired.leaves.len(), 1);
@@ -116,11 +115,11 @@ fn missing_unbranched_leaf_never_compiled_is_pruned() {
     write_manifest(dir.path(), &manifest);
 
     let cfg = seeded_config(dir.path());
-    let result = plan::repair_stale_branches(&cfg, &manifest).expect("repair should succeed");
+    let notifications =
+        plan::repair_stale_branches(&cfg, &manifest).expect("repair should succeed");
 
-    assert!(result.manifest_changed);
-    assert_eq!(result.notifications.len(), 1);
-    assert!(result.notifications[0].contains("pruned 1 orphan"));
+    assert_eq!(notifications.len(), 1);
+    assert!(notifications[0].contains("pruned 1 orphan"));
     assert_eq!(read_manifest(dir.path()).leaves.len(), 1);
 }
 
@@ -138,11 +137,10 @@ fn repair_with_no_missing_files_has_empty_notifications() {
     write_manifest(dir.path(), &manifest);
 
     let cfg = seeded_config(dir.path());
-    let result = plan::repair_stale_branches(&cfg, &manifest).expect("repair should succeed");
+    let notifications =
+        plan::repair_stale_branches(&cfg, &manifest).expect("repair should succeed");
 
-    assert!(!result.manifest_changed);
-    assert!(result.notifications.is_empty());
-    assert!(result.orphan_leaf_slugs.is_empty());
+    assert!(notifications.is_empty());
 }
 
 #[test]
@@ -164,11 +162,11 @@ fn all_leaves_deleted_manifest_repaired_to_empty() {
     write_manifest(dir.path(), &manifest);
 
     let cfg = seeded_config(dir.path());
-    let result = plan::repair_stale_branches(&cfg, &manifest).expect("repair should succeed");
+    let notifications =
+        plan::repair_stale_branches(&cfg, &manifest).expect("repair should succeed");
 
-    assert!(result.manifest_changed);
-    assert_eq!(result.notifications.len(), 1);
-    assert!(result.notifications[0].contains("pruned 2 orphan"));
+    assert_eq!(notifications.len(), 1);
+    assert!(notifications[0].contains("pruned 2 orphan"));
     assert_eq!(read_manifest(dir.path()).leaves.len(), 0);
 }
 

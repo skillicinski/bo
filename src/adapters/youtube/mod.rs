@@ -46,15 +46,12 @@ impl fmt::Display for YoutubeError {
 }
 
 pub fn collect_transcript(
-    youtube_url: &SupportedYoutubeUrl,
-) -> Result<YoutubeTranscriptDocument, YoutubeError> {
-    fetch_supported_transcript(youtube_url)
-}
-
-pub fn fetch_supported_transcript(
     supported: &SupportedYoutubeUrl,
 ) -> Result<YoutubeTranscriptDocument, YoutubeError> {
-    let client = innertube::build_client()?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| YoutubeError::Network(e.to_string()))?;
     let player = innertube::fetch_player_response(&client, supported.video_id())?;
     innertube::ensure_playable(&player)?;
 
@@ -62,10 +59,12 @@ pub fn fetch_supported_transcript(
         .video_details
         .as_ref()
         .and_then(|details| details.title.as_deref())
-        .and_then(non_empty)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
         .unwrap_or_else(|| supported.video_id().to_string());
 
-    let track = innertube::select_english_caption_track(&player.caption_tracks())
+    let track = innertube::select_english_caption_track(player.caption_tracks())
         .ok_or(YoutubeError::NoEnglishCaptions)?;
     let xml = innertube::fetch_caption_xml(&client, &track.base_url)?;
     let body_markdown = transcript::parse_transcript_markdown(&xml)?;
@@ -75,15 +74,6 @@ pub fn fetch_supported_transcript(
         title,
         body_markdown,
     })
-}
-
-fn non_empty(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
 }
 
 #[cfg(test)]

@@ -96,11 +96,6 @@ impl From<serde_json::Error> for ManifestError {
 // ── resolution helpers ────────────────────────────────────────────────────────
 
 impl Manifest {
-    /// Look up a leaf by slug string (convenience for contexts that have a raw &str).
-    pub fn leaf_by_slug_str(&self, slug: &str) -> Option<&LeafRecord> {
-        self.leaves.iter().find(|l| l.slug.as_str() == slug)
-    }
-
     /// Look up a branch by slug string (convenience).
     pub fn branch_by_slug_str(&self, slug: &str) -> Option<&BranchRecord> {
         self.branches.iter().find(|b| b.slug.as_str() == slug)
@@ -159,28 +154,6 @@ pub fn write(path: &Path, manifest: &Manifest) -> Result<(), ManifestError> {
     let json = serde_json::to_string_pretty(manifest)?;
     atomic_write(path, json.as_bytes())?;
     Ok(())
-}
-
-/// Write an empty manifest at `{tree_dir}/.bo/manifest.json` if none exists.
-/// Used by tests that stage manifest entries directly without running collect.
-pub fn ensure_empty_manifest(tree_dir: &Path, name: &str) {
-    let manifest_path = tree_dir.join(".bo").join("manifest.json");
-    if manifest_path.exists() {
-        return;
-    }
-    write(
-        &manifest_path,
-        &Manifest {
-            tree: TreeMeta {
-                name: name.to_string(),
-                created_at: Timestamp::now(),
-                last_compiled_at: None,
-            },
-            leaves: Vec::new(),
-            branches: Vec::new(),
-        },
-    )
-    .expect("failed to write empty manifest");
 }
 
 // ── internals ─────────────────────────────────────────────────────────────────

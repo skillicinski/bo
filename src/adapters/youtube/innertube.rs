@@ -1,15 +1,11 @@
+use super::YoutubeError;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
-
-use super::YoutubeError;
 
 const PLAYER_ENDPOINT: &str = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
 const ANDROID_CLIENT_NAME: &str = "ANDROID";
 const ANDROID_CLIENT_VERSION: &str = "20.10.38";
 const ANDROID_USER_AGENT: &str = "com.google.android.youtube/20.10.38 (Linux; U; Android 14)";
-const TIMEOUT_SECONDS: u64 = 30;
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerResponse {
@@ -19,12 +15,12 @@ pub struct PlayerResponse {
 }
 
 impl PlayerResponse {
-    pub fn caption_tracks(&self) -> Vec<CaptionTrack> {
+    pub fn caption_tracks(&self) -> &[CaptionTrack] {
         self.captions
             .as_ref()
             .and_then(|captions| captions.player_captions_tracklist_renderer.as_ref())
-            .map(|renderer| renderer.caption_tracks.clone())
-            .unwrap_or_default()
+            .map(|renderer| renderer.caption_tracks.as_slice())
+            .unwrap_or(&[])
     }
 }
 
@@ -170,13 +166,6 @@ pub fn select_english_caption_track(tracks: &[CaptionTrack]) -> Option<CaptionTr
             })
         })
         .cloned()
-}
-
-pub(crate) fn build_client() -> Result<Client, YoutubeError> {
-    Client::builder()
-        .timeout(Duration::from_secs(TIMEOUT_SECONDS))
-        .build()
-        .map_err(|e| YoutubeError::Network(e.to_string()))
 }
 
 fn is_english(track: &CaptionTrack) -> bool {

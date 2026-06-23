@@ -65,22 +65,13 @@ pub fn score_corpus(tree_dir: &Path, manifest: &Manifest, terms: &[String]) -> V
             .map(|term| searchable.matches(term.as_str()).count())
             .sum();
 
-        let dominated = total_hits == 0;
-
-        if dominated {
+        if total_hits == 0 {
             continue;
         }
 
         let score = (total_hits as f64 * 1000.0) / word_count as f64;
 
-        let collected_at = {
-            let s = leaf.collected_at.to_rfc3339_millis();
-            if s.trim().is_empty() {
-                None
-            } else {
-                Some(s)
-            }
-        };
+        let collected_at = Some(leaf.collected_at.to_rfc3339_millis());
 
         results.push(ScoredLeaf {
             slug: leaf.slug.as_str().to_string(),

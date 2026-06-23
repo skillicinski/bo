@@ -1,7 +1,7 @@
 use super::*;
 use async_trait::async_trait;
 use bo::domain::tree::TreeConfig;
-use bo::domain::{Slug, Timestamp, Title, Url};
+use bo::domain::{Slug, Timestamp};
 use std::cell::Cell;
 use std::fs;
 use std::path::Path;
@@ -389,8 +389,8 @@ fn write_index(tree: &Path, entries: &[(&str, &str, &str)]) {
         .map(|(file, title, url)| bo::domain::manifest::LeafRecord {
             slug: Slug::generate(&Path::new(file).file_stem().unwrap().to_string_lossy(), ""),
             file: file.to_string(),
-            title: Title::new(title),
-            url: Url::parse(url).unwrap(),
+            title: title.to_string(),
+            url: (url).to_string(),
             collected_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             summary: Some(title.to_string()),
         })

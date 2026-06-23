@@ -1,5 +1,5 @@
 use super::*;
-use crate::domain::{Slug, Timestamp, Title, Url};
+use crate::domain::{Slug, Timestamp};
 use crate::engine::llm::{model::Model, FinishReason, LlmProvider, LlmResponse, Provider};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -148,8 +148,8 @@ fn make_manifest(dir: &Path, entries: &[(&str, &str, &str)]) {
             crate::domain::manifest::LeafRecord {
                 slug: Slug::generate(&Path::new(file).file_stem().unwrap().to_string_lossy(), ""),
                 file: file.to_string(),
-                title: Title::new(title),
-                url: Url::parse(url).unwrap(),
+                title: title.to_string(),
+                url: (url).to_string(),
                 collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                 summary,
             }
@@ -515,33 +515,25 @@ fn validate_preserves_all_valid_citations() {
 
 #[test]
 fn query_budget_known_128k_model() {
-    let budget = compute_query_context_budget(&test_model()).unwrap();
+    let source_words = compute_query_context_budget(&test_model()).unwrap();
+    let reserved_tokens = QUERY_PROMPT_OVERHEAD_TOKENS + QUERY_MAX_COMPLETION_TOKENS as usize;
 
-    assert_eq!(budget.model, "gpt-4o");
-    assert_eq!(budget.context_tokens, 128_000);
     assert_eq!(
-        budget.reserved_tokens,
-        QUERY_PROMPT_OVERHEAD_TOKENS + QUERY_MAX_COMPLETION_TOKENS as usize
-    );
-    assert_eq!(
-        budget.source_words,
-        ((128_000 - budget.reserved_tokens) * TOKENS_TO_WORDS_NUMERATOR)
-            / TOKENS_TO_WORDS_DENOMINATOR
+        source_words,
+        ((128_000 - reserved_tokens) * TOKENS_TO_WORDS_NUMERATOR) / TOKENS_TO_WORDS_DENOMINATOR
     );
 }
 
 #[test]
 fn query_budget_known_1m_model() {
-    let budget =
+    let source_words =
         compute_query_context_budget(&Model::parse("gpt-4.1-mini", Provider::OpenAI).unwrap())
             .unwrap();
+    let reserved_tokens = QUERY_PROMPT_OVERHEAD_TOKENS + QUERY_MAX_COMPLETION_TOKENS as usize;
 
-    assert_eq!(budget.model, "gpt-4.1-mini");
-    assert_eq!(budget.context_tokens, 1_000_000);
     assert_eq!(
-        budget.source_words,
-        ((1_000_000 - budget.reserved_tokens) * TOKENS_TO_WORDS_NUMERATOR)
-            / TOKENS_TO_WORDS_DENOMINATOR
+        source_words,
+        ((1_000_000 - reserved_tokens) * TOKENS_TO_WORDS_NUMERATOR) / TOKENS_TO_WORDS_DENOMINATOR
     );
 }
 

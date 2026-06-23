@@ -70,17 +70,17 @@ pub fn models_for(provider: Provider) -> &'static [ModelInfo] {
     }
 }
 
-pub fn is_supported_model(provider: Provider, model_id: &str) -> bool {
-    let model_id = model_id.trim();
-    models_for(provider)
-        .iter()
-        .any(|entry| entry.id == model_id)
-}
-
-pub fn context_window_tokens(provider: Provider, model_id: &str) -> Option<usize> {
+pub(crate) fn find_model(provider: Provider, model_id: &str) -> Option<&'static ModelInfo> {
     let model_id = model_id.trim();
     models_for(provider)
         .iter()
         .find(|entry| entry.id == model_id)
-        .map(|entry| entry.context_tokens)
+}
+
+pub fn is_supported_model(provider: Provider, model_id: &str) -> bool {
+    find_model(provider, model_id).is_some()
+}
+
+pub fn context_window_tokens(provider: Provider, model_id: &str) -> Option<usize> {
+    find_model(provider, model_id).map(|entry| entry.context_tokens)
 }

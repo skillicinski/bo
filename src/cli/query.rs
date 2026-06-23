@@ -237,15 +237,6 @@ impl QueryError {
 
 // ── internal types ───────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
-pub struct QueryContextBudget {
-    pub model: String,
-    pub context_tokens: usize,
-    pub reserved_tokens: usize,
-    pub source_tokens: usize,
-    pub source_words: usize,
-}
-
 #[derive(Debug, Clone, Default)]
 struct RetrievalDiagnostics {
     matched_terms: usize,
@@ -628,15 +619,14 @@ fn is_strong_relevance_match(leaf: &RetrievedLeaf, terms: &[String]) -> bool {
 
 // ── context assembly ─────────────────────────────────────────────────────────
 
-fn compute_query_context_budget(model: &Model) -> Result<QueryContextBudget, QueryError> {
-    let context_tokens = model.context_tokens();
-    compute_query_context_budget_from_tokens(model.as_str(), context_tokens)
+fn compute_query_context_budget(model: &Model) -> Result<usize, QueryError> {
+    compute_query_context_budget_from_tokens(model.as_str(), model.context_tokens())
 }
 
 fn compute_query_context_budget_from_tokens(
     model: &str,
     context_tokens: usize,
-) -> Result<QueryContextBudget, QueryError> {
+) -> Result<usize, QueryError> {
     let reserved_tokens = QUERY_PROMPT_OVERHEAD_TOKENS + QUERY_MAX_COMPLETION_TOKENS as usize;
     if context_tokens <= reserved_tokens {
         return Err(QueryError::ContextBudgetExhausted {
@@ -646,8 +636,8 @@ fn compute_query_context_budget_from_tokens(
         });
     }
 
-    let source_tokens = context_tokens - reserved_tokens;
-    let source_words = (source_tokens * TOKENS_TO_WORDS_NUMERATOR) / TOKENS_TO_WORDS_DENOMINATOR;
+    let source_words = ((context_tokens - reserved_tokens) * TOKENS_TO_WORDS_NUMERATOR)
+        / TOKENS_TO_WORDS_DENOMINATOR;
 
     if source_words < MIN_QUERY_SOURCE_WORDS {
         return Err(QueryError::ContextBudgetExhausted {
@@ -657,13 +647,7 @@ fn compute_query_context_budget_from_tokens(
         });
     }
 
-    Ok(QueryContextBudget {
-        model: model.to_string(),
-        context_tokens,
-        reserved_tokens,
-        source_tokens,
-        source_words,
-    })
+    Ok(source_words)
 }
 
 /// Assemble LLM context from retrieved leaves.
@@ -906,13 +890,13 @@ pub fn prepare(
     model: &Model,
 ) -> Result<PreparedQuery, QueryError> {
     let terms = extract_terms(question)?;
-    let budget = compute_query_context_budget(model)?;
+    let source_words = compute_query_context_budget(model)?;
 
     eprintln!("searching...");
     let retrieved = retrieve_leaves(tree_dir, &terms)?;
     validate_relevance(&terms, &retrieved)?;
 
-    let (context, consulted) = assemble_context(&retrieved, budget.source_words);
+    let (context, consulted) = assemble_context(&retrieved, source_words);
 
     Ok(PreparedQuery {
         question: question.to_string(),

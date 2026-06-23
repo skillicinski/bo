@@ -1,7 +1,7 @@
 //! Shared test fixtures — tree setup, leaf/branch construction helpers.
 
 use crate::domain::manifest::{self, LeafRecord, Manifest, TreeMeta};
-use crate::domain::{Slug, Timestamp, Title, Url};
+use crate::domain::{Slug, Timestamp};
 use crate::engine::config;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -72,8 +72,8 @@ pub fn add_manifest_leaf(tree_dir: &Path, file: &str) {
     manifest.leaves.push(LeafRecord {
         slug,
         file: file.to_string(),
-        title: Title::new(file.trim_end_matches(".md")),
-        url: Url::parse("https://example.com/test").unwrap(),
+        title: file.trim_end_matches(".md").to_string(),
+        url: ("https://example.com/test").to_string(),
         collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
         summary: None,
     });
@@ -87,8 +87,8 @@ pub fn make_leaf_record(slug: &str, file: &str) -> LeafRecord {
     LeafRecord {
         slug: Slug::parse(slug).expect("invalid test slug"),
         file: file.to_string(),
-        title: Title::new(file.trim_end_matches(".md")),
-        url: Url::parse(&format!("https://example.com/{slug}")).expect("invalid test URL"),
+        title: file.trim_end_matches(".md").to_string(),
+        url: format!("https://example.com/{slug}"),
         collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
         summary: None,
     }

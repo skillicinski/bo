@@ -2,8 +2,6 @@ use super::*;
 use crate::domain::manifest::{LeafRecord, Manifest, TreeMeta};
 use crate::domain::slug::Slug;
 use crate::domain::timestamp::Timestamp;
-use crate::domain::title::Title;
-use crate::domain::url::Url;
 use std::fs;
 use tempfile::TempDir;
 
@@ -11,8 +9,8 @@ fn make_leaf(slug: &str, title: &str, url: &str, summary: Option<&str>) -> LeafR
     LeafRecord {
         slug: Slug::parse(slug).unwrap(),
         file: format!("{}.md", slug),
-        title: Title::new(title),
-        url: Url::parse(url).unwrap(),
+        title: title.to_string(),
+        url: (url).to_string(),
         collected_at: Timestamp::now(),
         summary: summary.map(|s| s.to_string()),
     }

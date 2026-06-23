@@ -45,7 +45,10 @@ fn branches_dir_is_path_slash_branches() {
 fn infra_dir_is_path_slash_bo() {
     let tree = Tree::from_config(&full_config());
 
-    assert_eq!(tree.infra_dir(), PathBuf::from("/tmp/my-research/.bo"));
+    assert_eq!(
+        crate::domain::tree::infra_dir(&tree.path),
+        PathBuf::from("/tmp/my-research/.bo")
+    );
 }
 
 #[test]
@@ -53,7 +56,7 @@ fn manifest_path_is_path_slash_bo_manifest_json() {
     let tree = Tree::from_config(&full_config());
 
     assert_eq!(
-        tree.manifest_path(),
+        crate::domain::tree::manifest_path(&tree.path),
         PathBuf::from("/tmp/my-research/.bo/manifest.json")
     );
 }
@@ -62,7 +65,10 @@ fn manifest_path_is_path_slash_bo_manifest_json() {
 fn free_manifest_path_matches_tree_method() {
     let tree = Tree::from_config(&full_config());
 
-    assert_eq!(tree.manifest_path(), super::manifest_path(&tree.path));
+    assert_eq!(
+        crate::domain::tree::manifest_path(&tree.path),
+        super::manifest_path(&tree.path)
+    );
 }
 
 #[test]
@@ -81,7 +87,11 @@ fn runtime_state_distinguishes_fresh_missing_and_initialized() {
     ));
 
     let tree = Tree::from_config(&temp_config(&dir));
-    crate::domain::manifest::write(&tree.manifest_path(), &tree.empty_manifest()).unwrap();
+    crate::domain::manifest::write(
+        &crate::domain::tree::manifest_path(dir.path()),
+        &tree.empty_manifest(),
+    )
+    .unwrap();
     assert!(matches!(
         runtime_state(dir.path()).unwrap(),
         TreeRuntimeState::Initialized(_)

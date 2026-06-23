@@ -4,7 +4,6 @@
 // It lives at {output_dir}/branches/{slug}.md and has YAML frontmatter
 // followed by a markdown body beginning with a heading matching the title.
 
-use crate::domain::frontmatter;
 use serde_yaml_ng::{Mapping, Value};
 
 pub(crate) fn format_content(
@@ -16,20 +15,21 @@ pub(crate) fn format_content(
 ) -> String {
     // Build frontmatter mapping
     let mut mapping = Mapping::new();
-    frontmatter::set_field(&mut mapping, "title", Value::String(title.to_string()));
-    frontmatter::set_field(
-        &mut mapping,
-        "created_at",
+    mapping.insert(
+        Value::String("title".to_string()),
+        Value::String(title.to_string()),
+    );
+    mapping.insert(
+        Value::String("created_at".to_string()),
         Value::String(created_at.to_string()),
     );
-    frontmatter::set_field(
-        &mut mapping,
-        "updated_at",
+    mapping.insert(
+        Value::String("updated_at".to_string()),
         Value::String(updated_at.to_string()),
     );
 
     let leaves_seq = Value::Sequence(leaves.iter().map(|l| Value::String(l.clone())).collect());
-    frontmatter::set_field(&mut mapping, "leaves", leaves_seq);
+    mapping.insert(Value::String("leaves".to_string()), leaves_seq);
 
     // Ensure body starts with the correct heading
     let expected_heading = format!("# {}", title);
@@ -39,7 +39,7 @@ pub(crate) fn format_content(
         format!("{}\n\n{}", expected_heading, body)
     };
 
-    frontmatter::render(&mapping, &full_body)
+    crate::domain::frontmatter::render(&mapping, &full_body)
         .expect("yaml serialization failure in branch frontmatter")
 }
 
