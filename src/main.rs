@@ -615,15 +615,32 @@ fn execute_collect(inputs: Vec<String>) -> Result<CollectOutput, CliError> {
     let cfg = require_seeded_config()?;
     let tree = cfg.tree();
     let output_dir = tree.path().to_path_buf();
-    let collect_dir = output_dir.clone();
     let model = cfg
         .config
         .effective_model()
         .map_err(|e| CliError::ConfigRead(e.to_string()))?;
 
+    // Use parallel path for multiple URLs or file-based input.
+    let use_parallel = inputs.len() > 1
+        || inputs
+            .iter()
+            .any(|i| i.ends_with(".txt") && !i.contains("://"));
+
+    if use_parallel {
+        let result = collect::collect_batch_parallel(
+            inputs,
+            &output_dir,
+            model.as_str(),
+            cfg.config.provider,
+        )
+        .map_err(CliError::Collect)?;
+        return Ok(CollectOutput::Batch(result));
+    }
+
+    // Single URL: use the existing sequential pipeline.
     collect::collect_inputs_with_collector(inputs, &output_dir, |url| {
         eprintln!("fetching {}...", url);
-        collect::collect_url_with_model(url, &collect_dir, model.as_str(), cfg.config.provider)
+        collect::collect_url_with_model(url, &output_dir, model.as_str(), cfg.config.provider)
     })
     .map_err(CliError::Collect)
 }
