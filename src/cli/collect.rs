@@ -525,8 +525,21 @@ fn is_url_list_file(input: &str) -> bool {
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("txt"));
-
-    has_txt_extension && (path.is_file() || !input.contains("://"))
+    if !has_txt_extension {
+        return false;
+    }
+    // A URL containing :// is never a local URL list file.
+    if input.contains("://") {
+        return false;
+    }
+    // Bare domains ending in .txt (e.g. example.com/urls.txt) should not be
+    // mistaken for local .txt files. If the part before the first '/' looks
+    // like a hostname (contains a dot), treat the input as a URL.
+    let before_slash = input.split('/').next().unwrap_or(input);
+    if before_slash.contains('.') {
+        return false;
+    }
+    true
 }
 
 fn collect_batch<F>(
@@ -951,31 +964,51 @@ pub fn collect_batch_parallel(
     }
 
     // ── phase 2: parallel compute ────────────────────────────────────────
-    let compute_results: Vec<(String, String, Result<ComputedLeaf, CollectError>)> =
-        if to_compute.is_empty() {
-            Vec::new()
-        } else {
-            // Chunk to limit concurrent threads — each thread is I/O-bound.
-            const CHUNK_SIZE: usize = 20;
-            let mut results = Vec::with_capacity(to_compute.len());
-            for chunk in to_compute.chunks(CHUNK_SIZE) {
-                let handles: Vec<_> = chunk
-                    .iter()
-                    .map(|(input, url)| {
-                        let input = input.clone();
-                        let url = url.clone();
-                        let model = model.to_string();
-                        thread::spawn(move || {
-                            (input, url.clone(), compute_leaf_url(&url, &model, provider))
-                        })
-                    })
-                    .collect();
-                for handle in handles {
-                    results.push(handle.join().expect("compute thread panicked"));
+    let compute_results: Vec<(String, String, Result<ComputedLeaf, CollectError>)> = if to_compute
+        .is_empty()
+    {
+        Vec::new()
+    } else {
+        // Chunk to limit concurrent threads — each thread is I/O-bound.
+        const CHUNK_SIZE: usize = 20;
+        let mut results = Vec::with_capacity(to_compute.len());
+        for chunk in to_compute.chunks(CHUNK_SIZE) {
+            let handles: Vec<(String, String, thread::JoinHandle<_>)> = chunk
+                .iter()
+                .map(|(input, url)| {
+                    let input = input.clone();
+                    let url = url.clone();
+                    let model = model.to_string();
+                    let url_for_thread = url.clone();
+                    let handle =
+                        thread::spawn(move || compute_leaf_url(&url_for_thread, &model, provider));
+                    (input, url, handle)
+                })
+                .collect();
+            for (input, url, handle) in handles {
+                match handle.join() {
+                    Ok(compute_result) => results.push((input, url, compute_result)),
+                    Err(panic) => {
+                        let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                            s.to_string()
+                        } else if let Some(s) = panic.downcast_ref::<String>() {
+                            s.clone()
+                        } else {
+                            format!("{panic:?}")
+                        };
+                        results.push((
+                            input,
+                            url.clone(),
+                            Err(CollectError::Fetch(fetch::FetchError::Network(format!(
+                                "compute thread panicked for {url}: {msg}"
+                            )))),
+                        ));
+                    }
                 }
             }
-            results
-        };
+        }
+        results
+    };
 
     // ── phase 3: sequential commit ───────────────────────────────────────
     let now = Timestamp::now();
