@@ -251,7 +251,6 @@ pub fn collect_url_with_model(
 
     match youtube::classify_url(url) {
         YoutubeUrlMatch::Supported(supported) => {
-            ensure_not_duplicate(supported.normalized_url(), output_dir)?;
             let transcript = youtube::collect_transcript(&supported)?;
             return write_new_document_with_model(
                 &transcript.url,
@@ -305,8 +304,6 @@ pub fn collect_html_with_summarizer<F>(
 where
     F: FnOnce(&str, Option<&str>) -> Result<String, summary::SummaryError>,
 {
-    ensure_not_duplicate(url, output_dir)?;
-
     if let Some(reason) = quality::classify_html(html) {
         return Err(CollectError::Rejected {
             url: url.to_string(),
@@ -366,6 +363,7 @@ where
                 &mut collector,
             )));
         };
+        ensure_not_duplicate(url, output_dir)?;
         let page = collector(url)?;
         return Ok(CollectOutput::Single(collect_result_from_document(
             output_dir, page,
