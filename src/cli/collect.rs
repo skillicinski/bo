@@ -20,6 +20,7 @@ use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use crate::adapters::youtube::{self, YoutubeError, YoutubeUrlMatch};
 use crate::cli::json::JsonError;
@@ -656,6 +657,17 @@ fn write_new_document_with_model(
     write_new_document_with_summary_result(url, title, body_markdown, output_dir, summary_text)
 }
 
+// ponytail: one runtime per process, separate runtimes if we ever need concurrent batches
+fn summary_runtime() -> &'static tokio::runtime::Runtime {
+    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build tokio runtime")
+    })
+}
+
 fn generate_summary_with_model(
     body: &str,
     title: Option<&str>,
@@ -666,18 +678,16 @@ fn generate_summary_with_model(
         Ok(key) => key,
         Err(_) => return Ok(summary::generate_fallback(body)),
     };
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| summary::SummaryError::Runtime(format!("runtime: {}", e)))?;
     let provider = crate::engine::llm::create_provider(provider, &api_key);
-    Ok(rt.block_on(summary::generate_llm_or_fallback(
-        body,
-        title,
-        provider.as_ref(),
-        model,
-        summary::SUMMARY_LLM_POLICY,
-    )))
+    Ok(
+        summary_runtime().block_on(summary::generate_llm_or_fallback(
+            body,
+            title,
+            provider.as_ref(),
+            model,
+            summary::SUMMARY_LLM_POLICY,
+        )),
+    )
 }
 
 fn write_new_document_with_summary_result(

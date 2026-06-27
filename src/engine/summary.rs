@@ -41,7 +41,6 @@ pub enum SummaryError {
     Parse(String),
     Truncated,
     ContentFilter,
-    Runtime(String),
 }
 
 impl fmt::Display for SummaryError {
@@ -54,7 +53,6 @@ impl fmt::Display for SummaryError {
                 "summary output was truncated — try a model with larger output capacity"
             ),
             SummaryError::ContentFilter => write!(f, "summary was blocked by content filter"),
-            SummaryError::Runtime(message) => write!(f, "summary runtime error: {message}"),
         }
     }
 }
