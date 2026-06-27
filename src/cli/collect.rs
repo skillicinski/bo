@@ -21,6 +21,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::sync::OnceLock;
+use std::thread;
 
 use crate::adapters::youtube::{self, YoutubeError, YoutubeUrlMatch};
 use crate::cli::json::JsonError;
@@ -231,7 +232,97 @@ enum ExpandedCollectInput {
     },
 }
 
+// ── data for parallel batch compute ──────────────────────────────────────────
+
+/// Output of the compute phase: everything needed to write a leaf, but no
+/// disk I/O performed yet. Safe to produce from multiple threads concurrently.
+struct ComputedLeaf {
+    url: String,
+    title: Option<String>,
+    body_markdown: String,
+    summary_text: String,
+}
+
 // ── pipeline ─────────────────────────────────────────────────────────────────
+
+/// Compute-only: fetch, extract, quality-check, and summarize a URL.
+/// Returns the data needed to write a leaf without touching the manifest or
+/// output directory. Safe to call from multiple threads.
+fn compute_leaf_url(
+    url: &str,
+    model: &str,
+    provider: crate::engine::llm::Provider,
+) -> Result<ComputedLeaf, CollectError> {
+    // YouTube path — fetch transcript, summarize, return.
+    match youtube::classify_url(url) {
+        YoutubeUrlMatch::Supported(supported) => {
+            let transcript = youtube::collect_transcript(&supported)?;
+            let summary_text = generate_summary_with_model(
+                &transcript.body_markdown,
+                Some(&transcript.title),
+                model,
+                provider,
+            );
+            return Ok(ComputedLeaf {
+                url: transcript.url,
+                title: Some(transcript.title),
+                body_markdown: transcript.body_markdown,
+                summary_text,
+            });
+        }
+        YoutubeUrlMatch::Unsupported { url, reason } => {
+            return Err(YoutubeError::UnsupportedUrl { url, reason }.into());
+        }
+        YoutubeUrlMatch::NotYoutube => {}
+    }
+
+    // Fetch, classify HTTP errors, extract, quality-check, summarize.
+    let fetched = match fetch::fetch_url(url) {
+        Ok(fetched) => fetched,
+        Err(fetch::FetchError::HttpStatus(status, message)) => {
+            if let Some(reason) = quality::classify_http_status(status) {
+                return Err(CollectError::Rejected {
+                    url: url.to_string(),
+                    reason,
+                });
+            }
+            return Err(fetch::FetchError::HttpStatus(status, message).into());
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    if let Some(reason) = quality::classify_html(&fetched.html) {
+        return Err(CollectError::Rejected {
+            url: fetched.url.clone(),
+            reason,
+        });
+    }
+
+    let content = extract::extract_content(&fetched.html)?;
+
+    if let Some(reason) =
+        quality::classify_extracted(content.title.as_deref(), &content.body_markdown)
+    {
+        return Err(CollectError::Rejected {
+            url: fetched.url.clone(),
+            reason,
+        });
+    }
+
+    let summary_text = generate_summary_with_model(
+        &content.body_markdown,
+        content.title.as_deref(),
+        model,
+        provider,
+    );
+
+    Ok(ComputedLeaf {
+        url: fetched.url,
+        title: content.title,
+        body_markdown: content.body_markdown,
+        summary_text,
+    })
+}
 
 pub fn collect_url_with_model(
     url: &str,
@@ -794,6 +885,188 @@ fn commit_manifest_and_writes(
     pending::apply_deletes(output_dir, deletes)?;
     pending::clear(&pending_path)?;
     Ok(())
+}
+
+// ── parallel batch collect ───────────────────────────────────────────────────
+
+/// Collect a batch of URLs using parallel fetch+extract+summarize, then
+/// commit all writes in a single manifest operation.
+///
+/// Falls back to sequential `collect_batch` behavior when there is only one
+/// URL to collect (single thread overhead isn't worth it).
+pub fn collect_batch_parallel(
+    inputs: Vec<String>,
+    output_dir: &Path,
+    model: &str,
+    provider: crate::engine::llm::Provider,
+) -> Result<BatchCollectResult, CollectError> {
+    recover_pending_if_needed(output_dir)?;
+    let expanded = expand_collect_inputs(&inputs);
+
+    // ── phase 1: dedup (sequential) ─────────────────────────────────────
+    let mut seen: HashMap<String, String> = HashMap::new();
+    let mut items: Vec<CollectItemResult> = Vec::new();
+    let mut to_compute: Vec<(String, String)> = Vec::new();
+
+    for input in expanded {
+        let (input_label, url) = match input {
+            ExpandedCollectInput::Url { input, url, .. } => (input, url),
+            ExpandedCollectInput::Failure { item, .. } => {
+                items.push(item);
+                continue;
+            }
+        };
+
+        if let Some(first_input) = seen.get(&url) {
+            items.push(collect_skipped_item(
+                &input_label,
+                &url,
+                "duplicate_input",
+                format!("duplicate input URL first listed at {first_input}"),
+                None,
+            ));
+            continue;
+        }
+        seen.insert(url.clone(), input_label.clone());
+
+        match duplicate_file(&url, output_dir) {
+            Ok(Some(existing_file)) => {
+                items.push(collect_skipped_item(
+                    &input_label,
+                    &url,
+                    "duplicate_url",
+                    format!("already collected → {existing_file}"),
+                    Some(existing_file),
+                ));
+                continue;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                items.push(collect_item_from_error(&input_label, &url, error));
+                continue;
+            }
+        }
+
+        to_compute.push((input_label, url));
+    }
+
+    // ── phase 2: parallel compute ────────────────────────────────────────
+    let compute_results: Vec<(String, String, Result<ComputedLeaf, CollectError>)> =
+        if to_compute.is_empty() {
+            Vec::new()
+        } else {
+            // Chunk to limit concurrent threads — each thread is I/O-bound.
+            const CHUNK_SIZE: usize = 20;
+            let mut results = Vec::with_capacity(to_compute.len());
+            for chunk in to_compute.chunks(CHUNK_SIZE) {
+                let handles: Vec<_> = chunk
+                    .iter()
+                    .map(|(input, url)| {
+                        let input = input.clone();
+                        let url = url.clone();
+                        let model = model.to_string();
+                        thread::spawn(move || {
+                            (input, url.clone(), compute_leaf_url(&url, &model, provider))
+                        })
+                    })
+                    .collect();
+                for handle in handles {
+                    results.push(handle.join().expect("compute thread panicked"));
+                }
+            }
+            results
+        };
+
+    // ── phase 3: sequential commit ───────────────────────────────────────
+    let now = Timestamp::now();
+    let mut manifest = load_or_bootstrap_manifest(output_dir, &now)?;
+    let mut staged: Vec<(PendingWrite, Vec<u8>)> = Vec::new();
+
+    for (input_label, url, result) in compute_results {
+        match result {
+            Ok(computed) => {
+                let base_slug =
+                    Slug::generate(computed.title.as_deref().unwrap_or(""), &computed.url);
+                let filename = slug::resolve_slug(&base_slug, &computed.url, output_dir);
+                let leaf_file = format!("{}.md", filename);
+                let summary_field = if computed.summary_text.is_empty() {
+                    None
+                } else {
+                    Some(computed.summary_text.as_str())
+                };
+                let leaf_content = leaf::format_content(
+                    computed.title.as_ref(),
+                    &computed.url,
+                    &now,
+                    &computed.body_markdown,
+                    summary_field,
+                );
+                let leaf_bytes = leaf_content.into_bytes();
+                let leaf_write = PendingWrite {
+                    path: leaf_file.clone(),
+                    content_hash: pending::content_hash(&leaf_bytes),
+                };
+
+                // Check duplicate against in-memory manifest (catches same-batch duplicates).
+                if manifest
+                    .leaves
+                    .iter()
+                    .any(|l| l.url.as_str() == computed.url)
+                {
+                    items.push(collect_skipped_item(
+                        &input_label,
+                        &computed.url,
+                        "duplicate_url",
+                        format!("already collected → {leaf_file}"),
+                        Some(leaf_file),
+                    ));
+                    continue;
+                }
+
+                manifest.leaves.push(LeafRecord {
+                    slug: filename.clone(),
+                    file: leaf_file.clone(),
+                    title: computed.title.unwrap_or_default(),
+                    url: computed.url.clone(),
+                    collected_at: now.clone(),
+                    summary: if computed.summary_text.is_empty() {
+                        None
+                    } else {
+                        Some(computed.summary_text)
+                    },
+                });
+
+                let result = CollectResult {
+                    url: computed.url,
+                    file: leaf_file,
+                    path: output_dir.join(&leaf_write.path).display().to_string(),
+                };
+                items.push(collect_success_item(&input_label, result));
+                staged.push((leaf_write, leaf_bytes));
+            }
+            Err(e) => {
+                items.push(collect_item_from_error(&input_label, &url, e));
+            }
+        }
+    }
+
+    // Single commit for all writes.
+    if !staged.is_empty() {
+        let staged_refs: Vec<(&PendingWrite, &[u8])> =
+            staged.iter().map(|(pw, b)| (pw, b.as_slice())).collect();
+        commit_manifest_and_writes(
+            output_dir,
+            OpKind::Collect {
+                url: format!("batch of {} urls", staged_refs.len()),
+            },
+            &manifest,
+            &staged_refs,
+            &[],
+        )?;
+    }
+
+    let summary = summarize_collect_items(&items);
+    Ok(BatchCollectResult { summary, items })
 }
 
 #[cfg(test)]
