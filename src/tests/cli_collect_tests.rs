@@ -6,7 +6,7 @@ use std::path::Path;
 use tempfile::TempDir;
 
 fn collect_html_test(url: &str, html: &str, output_dir: &Path) -> Result<Document, CollectError> {
-    collect_html_with_summarizer(url, html, output_dir, |_, _| Ok("test summary".to_string()))
+    collect_html_with_summarizer(url, html, output_dir, |_, _| "test summary".to_string())
 }
 
 #[test]
@@ -154,23 +154,6 @@ fn ordinary_html_collection_writes_leaf_and_manifest() {
     assert_eq!(m.leaves.len(), 1);
     assert_eq!(m.leaves[0].url.as_str(), "https://example.com/article");
     assert!(!dir.path().join(".bo/index.jsonl").exists());
-}
-
-#[test]
-fn summary_failure_writes_no_leaf_or_index_entry() {
-    let dir = TempDir::new().unwrap();
-    fs::create_dir_all(dir.path().join(".bo")).unwrap();
-
-    let result = write_new_document_with_summary_result(
-        "https://example.com/article",
-        Some("Article"),
-        "Substantial article body that would otherwise be written.",
-        dir.path(),
-        Err(summary::SummaryError::Parse("boom".to_string())),
-    );
-
-    assert!(matches!(result, Err(CollectError::Summary(_))));
-    assert_no_collection_artifacts(&dir);
 }
 
 #[test]
@@ -514,7 +497,7 @@ fn collect_appends_leaf_record_to_manifest_with_full_metadata() {
         Some("Test Article"),
         "Substantial body about a topic.",
         dir.path(),
-        Ok("A summary of the article.".to_string()),
+        "A summary of the article.".to_string(),
     )
     .unwrap();
 
@@ -549,7 +532,7 @@ fn collect_writes_only_manifest_records() {
             Some(&format!("Page {n}")),
             &format!("Body for page {n}."),
             dir.path(),
-            Ok(format!("Summary {n}")),
+            format!("Summary {n}"),
         )
         .unwrap();
     }
@@ -576,7 +559,7 @@ fn collect_omits_summary_field_when_empty_string() {
         Some("Article"),
         "Body.",
         dir.path(),
-        Ok(String::new()),
+        String::new(),
     )
     .unwrap();
 
@@ -622,7 +605,7 @@ fn fresh_collect_after_3b_does_not_write_index_secondary() {
         Some("Page"),
         "Body.",
         dir.path(),
-        Ok("Summary".to_string()),
+        "Summary".to_string(),
     )
     .unwrap();
 

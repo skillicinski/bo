@@ -54,7 +54,6 @@ pub enum CollectError {
     Fetch(fetch::FetchError),
     Extract(extract::ExtractError),
     Youtube(YoutubeError),
-    Summary(summary::SummaryError),
     Rejected {
         url: String,
         reason: RejectReason,
@@ -73,7 +72,6 @@ impl fmt::Display for CollectError {
             CollectError::Fetch(e) => write!(f, "{}", e),
             CollectError::Extract(e) => write!(f, "{}", e),
             CollectError::Youtube(e) => write!(f, "{}", e),
-            CollectError::Summary(e) => write!(f, "{}", e),
             CollectError::Rejected { url, reason } => {
                 write!(f, "{} was not collected: {}", url, reason)
             }
@@ -102,12 +100,6 @@ impl From<YoutubeError> for CollectError {
     }
 }
 
-impl From<summary::SummaryError> for CollectError {
-    fn from(e: summary::SummaryError) -> Self {
-        CollectError::Summary(e)
-    }
-}
-
 impl From<std::io::Error> for CollectError {
     fn from(e: std::io::Error) -> Self {
         CollectError::Io(e)
@@ -133,7 +125,6 @@ pub fn error_code(error: &CollectError) -> &'static str {
         CollectError::Fetch(_) => "fetch_error",
         CollectError::Extract(_) => "extract_error",
         CollectError::Youtube(_) => "youtube_error",
-        CollectError::Summary(_) => "llm_error",
         CollectError::Io(_) => "io_error",
         CollectError::Manifest(_) => "manifest_error",
         CollectError::Pending(pending::PendingError::Busy { .. }) => "tree_busy",
@@ -303,7 +294,7 @@ pub fn collect_html_with_summarizer<F>(
     summarize: F,
 ) -> Result<Document, CollectError>
 where
-    F: FnOnce(&str, Option<&str>) -> Result<String, summary::SummaryError>,
+    F: FnOnce(&str, Option<&str>) -> String,
 {
     if let Some(reason) = quality::classify_html(html) {
         return Err(CollectError::Rejected {
@@ -323,13 +314,13 @@ where
         });
     }
 
-    let summary_result = summarize(&content.body_markdown, content.title.as_deref());
+    let summary_text = summarize(&content.body_markdown, content.title.as_deref());
     write_new_document_with_summary_result(
         url,
         content.title.as_deref(),
         &content.body_markdown,
         output_dir,
-        summary_result,
+        summary_text,
     )
 }
 
@@ -671,21 +662,19 @@ fn generate_summary_with_model(
     title: Option<&str>,
     model: &str,
     provider: crate::engine::llm::Provider,
-) -> Result<String, summary::SummaryError> {
+) -> String {
     let api_key = match auth::resolve_api_key(provider) {
         Ok(key) => key,
-        Err(_) => return Ok(summary::generate_fallback(body)),
+        Err(_) => return summary::generate_fallback(body),
     };
     let provider = crate::engine::llm::create_provider(provider, &api_key);
-    Ok(
-        summary_runtime().block_on(summary::generate_llm_or_fallback(
-            body,
-            title,
-            provider.as_ref(),
-            model,
-            summary::SUMMARY_LLM_POLICY,
-        )),
-    )
+    summary_runtime().block_on(summary::generate_llm_or_fallback(
+        body,
+        title,
+        provider.as_ref(),
+        model,
+        summary::SUMMARY_LLM_POLICY,
+    ))
 }
 
 fn write_new_document_with_summary_result(
@@ -693,9 +682,8 @@ fn write_new_document_with_summary_result(
     title: Option<&str>,
     body_markdown: &str,
     output_dir: &Path,
-    summary_text: Result<String, summary::SummaryError>,
+    summary_text: String,
 ) -> Result<Document, CollectError> {
-    let summary_text = summary_text?;
     recover_pending_if_needed(output_dir)?;
 
     let title_ref = title.unwrap_or("");
