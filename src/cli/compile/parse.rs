@@ -7,7 +7,7 @@ use serde::Deserialize;
 use crate::domain::Slug;
 use crate::engine::config::SeededConfig;
 
-use super::plan::select_new_leaf_slugs;
+use super::plan::{self, select_new_leaf_slugs};
 use super::{CompileError, MAX_COMPILED_BODY_BYTES_MIN, MAX_COMPILED_BODY_BYTES_PER_INPUT_BYTE};
 
 // ── types ─────────────────────────────────────────────────────────────────────
@@ -60,12 +60,24 @@ pub(super) struct ValidatedBranch {
 
 // ── functions ─────────────────────────────────────────────────────────────────
 
-pub(super) fn valid_leaf_reference_map(valid_filenames: &HashSet<String>) -> HashMap<&str, String> {
+pub(super) fn valid_leaf_reference_map(
+    loaded_leaves: &[plan::LoadedLeaf],
+) -> HashMap<String, String> {
     let mut refs = HashMap::new();
-    for filename in valid_filenames {
-        refs.insert(filename.as_str(), filename.clone());
+    for leaf in loaded_leaves {
+        let filename = &leaf.filename;
+        refs.insert(filename.clone(), filename.clone());
         if let Some(stem) = filename.strip_suffix(".md") {
-            refs.insert(stem, filename.clone());
+            refs.insert(stem.to_string(), filename.clone());
+        }
+        // ponytail: title-based keys so LLM can reference leaves by title
+        let title_lower = leaf.title.to_lowercase();
+        if !title_lower.is_empty() {
+            refs.insert(title_lower, filename.clone());
+        }
+        let slugified = Slug::generate(&leaf.title, "").to_string();
+        if !slugified.is_empty() {
+            refs.insert(slugified, filename.clone());
         }
     }
     refs
@@ -73,7 +85,7 @@ pub(super) fn valid_leaf_reference_map(valid_filenames: &HashSet<String>) -> Has
 
 pub(super) fn parse_and_validate_with_input_size(
     response: &str,
-    valid_filenames: &HashSet<String>,
+    loaded_leaves: &[plan::LoadedLeaf],
     input_body_bytes: usize,
 ) -> Result<CompilePlan, CompileError> {
     let parsed: CompileResponse = serde_json::from_str(response)
@@ -88,7 +100,7 @@ pub(super) fn parse_and_validate_with_input_size(
 
     let mut validated_branches: Vec<ValidatedBranch> = Vec::new();
     let mut seen_slugs: HashSet<String> = HashSet::new();
-    let valid_leaf_refs = valid_leaf_reference_map(valid_filenames);
+    let valid_leaf_refs = valid_leaf_reference_map(loaded_leaves);
 
     for (index, raw) in parsed.branches.into_iter().enumerate() {
         let branch_number = index + 1;
@@ -173,7 +185,7 @@ pub(super) fn parse_and_validate_with_input_size(
 pub(super) fn parse_and_validate_incremental_with_input_size(
     response: &str,
     cfg: &SeededConfig,
-    valid_filenames: &HashSet<String>,
+    loaded_leaves: &[plan::LoadedLeaf],
     input_body_bytes: usize,
 ) -> Result<CompilePlan, CompileError> {
     let parsed: IncrementalCompileResponse = serde_json::from_str(response).map_err(|e| {
@@ -185,7 +197,7 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
     let new_leaf_slugs_vec = select_new_leaf_slugs(&manifest)?;
     let new_leaf_slugs: HashSet<String> = new_leaf_slugs_vec.into_iter().collect();
-    let valid_leaf_refs = valid_leaf_reference_map(valid_filenames);
+    let valid_leaf_refs = valid_leaf_reference_map(loaded_leaves);
     let mut seen_branch_slugs = HashSet::new();
     let mut seen_updated_branch_slugs = HashSet::new();
     let mut validated_branches = Vec::new();
@@ -307,7 +319,7 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
 pub(super) fn normalize_incremental_leaf_refs(
     branch_title: &str,
     raw_leaves: &[String],
-    valid_leaf_refs: &HashMap<&str, String>,
+    valid_leaf_refs: &HashMap<String, String>,
 ) -> Result<Vec<String>, CompileError> {
     let mut leaves = Vec::new();
     let mut seen = HashSet::new();
