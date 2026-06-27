@@ -144,7 +144,7 @@ pub(super) fn parse_and_validate_with_input_size(
                     title
                 )));
             }
-            let Some(normalized_leaf_file) = valid_leaf_refs.get(leaf_file.as_str()) else {
+            let Some(normalized_leaf_file) = valid_leaf_refs.get(&leaf_file.to_lowercase()) else {
                 return Err(validation_error(format!(
                     "invalid compile response: branch '{}' references unknown leaf '{}'",
                     title, leaf_file
@@ -324,7 +324,7 @@ pub(super) fn normalize_incremental_leaf_refs(
     let mut leaves = Vec::new();
     let mut seen = HashSet::new();
     for raw_leaf in raw_leaves {
-        let Some(normalized) = valid_leaf_refs.get(raw_leaf.as_str()) else {
+        let Some(normalized) = valid_leaf_refs.get(&raw_leaf.to_lowercase()) else {
             return Err(validation_error(format!(
                 "invalid incremental compile response: branch '{}' references unknown leaf '{}'",
                 branch_title, raw_leaf
