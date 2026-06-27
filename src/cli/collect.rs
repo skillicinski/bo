@@ -722,31 +722,13 @@ fn write_new_document_with_summary_result(
         content_hash: pending::content_hash(leaf_content.as_bytes()),
     };
 
-    let manifest_path = output_dir.join(".bo").join("manifest.json");
-    let mut current = match manifest::read(&manifest_path) {
-        Ok(m) => m,
-        Err(manifest::ManifestError::TreeNotInitialized) => Manifest {
-            tree: TreeMeta {
-                name: output_dir
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "unnamed".to_string()),
-                created_at: now.clone(),
-                last_compiled_at: None,
-            },
-            leaves: Vec::new(),
-            branches: Vec::new(),
-        },
-        Err(e) => return Err(CollectError::Manifest(e)),
-    };
-
-    if let Some(existing) = current.leaves.iter().find(|leaf| leaf.url.as_str() == url) {
+    let mut manifest = load_or_bootstrap_manifest(output_dir, &now)?;
+    if let Some(existing) = manifest.leaves.iter().find(|leaf| leaf.url.as_str() == url) {
         return Err(CollectError::DuplicateUrl {
             existing_file: existing.file.clone(),
         });
     }
-
-    let leaf_record = LeafRecord {
+    manifest.leaves.push(LeafRecord {
         slug: filename.clone(),
         file: leaf_file.clone(),
         title: title.unwrap_or_default().to_string(),
@@ -757,28 +739,73 @@ fn write_new_document_with_summary_result(
         } else {
             Some(summary_text.clone())
         },
-    };
-    current.leaves.push(leaf_record);
+    });
 
-    let operation = pending::new_operation(
+    commit_manifest_and_writes(
         output_dir,
         OpKind::Collect {
             url: url.to_string(),
         },
-        vec![leaf_write.clone()],
-        Vec::new(),
+        &manifest,
+        &[(&leaf_write, leaf_content.as_bytes())],
+        &[],
     )?;
-    let pending_path = pending::pending_path(output_dir);
-    pending::write(&pending_path, &operation)?;
-    pending::write_staged(output_dir, &leaf_write, leaf_content.as_bytes())?;
-    manifest::write(&manifest_path, &current)?;
-    pending::apply_writes(output_dir, &[leaf_write])?;
-    pending::clear(&pending_path)?;
 
     Ok(Document {
         url: url.to_string(),
         filename: leaf_file,
     })
+}
+
+/// Load the manifest from disk, or return an empty one if the tree is freshly seeded.
+fn load_or_bootstrap_manifest(
+    output_dir: &Path,
+    now: &Timestamp,
+) -> Result<Manifest, CollectError> {
+    let manifest_path = output_dir.join(".bo").join("manifest.json");
+    match manifest::read(&manifest_path) {
+        Ok(m) => Ok(m),
+        Err(manifest::ManifestError::TreeNotInitialized) => Ok(Manifest {
+            tree: TreeMeta {
+                name: output_dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "unnamed".to_string()),
+                created_at: now.clone(),
+                last_compiled_at: None,
+            },
+            leaves: Vec::new(),
+            branches: Vec::new(),
+        }),
+        Err(e) => Err(CollectError::Manifest(e)),
+    }
+}
+
+/// Atomically commit a manifest update with staged writes and deletes.
+///
+/// Writes the pending operation, stages content, writes the manifest, then
+/// applies writes/deletes and clears the pending file. The entire sequence
+/// is guarded by the pending lock so a crash mid-commit is recoverable.
+fn commit_manifest_and_writes(
+    output_dir: &Path,
+    op: OpKind,
+    manifest: &Manifest,
+    staged: &[(&PendingWrite, &[u8])],
+    deletes: &[String],
+) -> Result<(), CollectError> {
+    let writes: Vec<PendingWrite> = staged.iter().map(|(pw, _)| (*pw).clone()).collect();
+    let operation = pending::new_operation(output_dir, op, writes.clone(), deletes.to_vec())?;
+    let pending_path = pending::pending_path(output_dir);
+    pending::write(&pending_path, &operation)?;
+    for (pw, bytes) in staged {
+        pending::write_staged(output_dir, pw, bytes)?;
+    }
+    let manifest_path = output_dir.join(".bo").join("manifest.json");
+    manifest::write(&manifest_path, manifest)?;
+    pending::apply_writes(output_dir, &writes)?;
+    pending::apply_deletes(output_dir, deletes)?;
+    pending::clear(&pending_path)?;
+    Ok(())
 }
 
 #[cfg(test)]
