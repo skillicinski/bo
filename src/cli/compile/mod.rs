@@ -372,15 +372,13 @@ fn run_compile_with_provider_started_at(
     // ── execute validated plan ───────────────────────────────────────────────
     let run_timestamp = compile_started_at;
     let compiled_plan = match run_mode {
-        CompileRunMode::Full => parse::parse_and_validate_with_input_size(
-            &response,
-            &valid_filenames,
-            input_body_bytes,
-        )?,
+        CompileRunMode::Full => {
+            parse::parse_and_validate_with_input_size(&response, &loaded_leaves, input_body_bytes)?
+        }
         CompileRunMode::Incremental => parse::parse_and_validate_incremental_with_input_size(
             &response,
             cfg,
-            &valid_filenames,
+            &loaded_leaves,
             input_body_bytes,
         )?,
     };
