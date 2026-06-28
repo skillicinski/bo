@@ -575,6 +575,24 @@ fn parse_rejects_ambiguous_title_reference() {
 // ── leaf multi-membership ────────────────────────────────────────────────────
 
 #[test]
+fn derived_compile_schema_has_no_ref_or_defs_or_schema_key() {
+    let schema = super::schema::compile_response_schema();
+    let json_str = schema.to_string();
+    assert!(!json_str.contains("\"$schema\""));
+    assert!(!json_str.contains("\"definitions\""));
+    assert!(!json_str.contains("\"$ref\""));
+}
+
+#[test]
+fn derived_incremental_compile_schema_has_no_ref_or_defs_or_schema_key() {
+    let schema = super::schema::incremental_compile_response_schema();
+    let json_str = schema.to_string();
+    assert!(!json_str.contains("\"$schema\""));
+    assert!(!json_str.contains("\"definitions\""));
+    assert!(!json_str.contains("\"$ref\""));
+}
+
+#[test]
 fn build_manifest_delta_allows_one_leaf_in_multiple_branches() {
     use super::parse::{CompilePlan, ValidatedBranch};
     use super::plan::build_manifest_delta;

@@ -741,7 +741,9 @@ fn synthesize_with_provider(
         Message::user(user_message),
     ];
 
-    let schema = serde_json::to_value(schemars::schema_for!(SynthesisResponse)).unwrap();
+    let schema =
+        serde_json::to_value(crate::engine::schema::inline_schema_for::<SynthesisResponse>())
+            .unwrap();
 
     let response = rt
         .block_on(complete_with_policy(
