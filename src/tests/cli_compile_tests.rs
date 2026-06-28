@@ -571,3 +571,56 @@ fn parse_rejects_ambiguous_title_reference() {
         err
     );
 }
+
+// ── leaf multi-membership ────────────────────────────────────────────────────
+
+#[test]
+fn build_manifest_delta_allows_one_leaf_in_multiple_branches() {
+    use super::parse::{CompilePlan, ValidatedBranch};
+    use super::plan::build_manifest_delta;
+    use super::CompileRunMode;
+
+    // One leaf participates in two cross-cutting concepts. The manifest model
+    // stores branch→leaf as independent lists, so the same slug may appear in
+    // several branches; the inverse is computed by branches_for_leaf.
+    let plan = CompilePlan {
+        branches: vec![
+            ValidatedBranch {
+                slug: "concept-a".to_string(),
+                title: "Concept A".to_string(),
+                body: "body a".to_string(),
+                leaves: vec!["shared-leaf.md".to_string(), "alpha.md".to_string()],
+            },
+            ValidatedBranch {
+                slug: "concept-b".to_string(),
+                title: "Concept B".to_string(),
+                body: "body b".to_string(),
+                leaves: vec!["shared-leaf.md".to_string(), "beta.md".to_string()],
+            },
+        ],
+    };
+
+    let current = fresh_manifest("t", "2026-01-01T00:00:00Z", None);
+    let ts = Timestamp::parse("2026-06-28T00:00:00Z").unwrap();
+    let delta = build_manifest_delta(&current, &plan, CompileRunMode::Full, &ts).unwrap();
+
+    assert_eq!(delta.new_manifest.branches.len(), 2);
+    assert_eq!(
+        delta.branches_created.len(),
+        2,
+        "both branches are new in Full mode"
+    );
+
+    let shared_slug = Slug::parse("shared-leaf").unwrap();
+    let containing: Vec<&str> = delta
+        .new_manifest
+        .branches_for_leaf(&shared_slug)
+        .iter()
+        .map(|b| b.slug.as_str())
+        .collect();
+    assert_eq!(
+        containing,
+        vec!["concept-a", "concept-b"],
+        "a leaf must be allowed in multiple branches"
+    );
+}
