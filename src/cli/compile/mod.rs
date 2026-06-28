@@ -325,41 +325,38 @@ fn run_compile_with_provider_started_at(
         return Ok(CompileResult::noop("single_leaf", notifications));
     }
 
-    // ── build prompt and schema ──────────────────────────────────────────────
-    let full_user_message = prompt::build_user_message(&loaded_leaves);
-    let full_prompt_tokens = execute::estimate_compile_prompt_tokens(
-        prompt::COMPILE_SYSTEM_PROMPT
-            .len()
-            .saturating_add(full_user_message.len()),
-    );
-    let run_mode = if options.all {
-        CompileRunMode::Full
-    } else {
-        CompileRunMode::Incremental
+    // ── build prompt and schema ─────────────────────────────────────────────
+    // Each run mode has exactly one coherent prompt and schema. Incremental
+    // mode is only chosen when branches exist (see select_run_mode) and always
+    // sends the existing branch graph; Full mode sends all leaf bodies.
+    let run_mode = plan::select_run_mode(options, &manifest);
+
+    let (user_message, prompt_tokens, response_schema) = match run_mode {
+        CompileRunMode::Full => {
+            let msg = prompt::build_user_message(&loaded_leaves);
+            let tokens = execute::estimate_compile_prompt_tokens(
+                prompt::COMPILE_SYSTEM_PROMPT
+                    .len()
+                    .saturating_add(msg.len()),
+            );
+            (msg, tokens, schema::compile_response_schema())
+        }
+        CompileRunMode::Incremental => {
+            let msg = prompt::build_incremental_user_message(
+                cfg,
+                &manifest,
+                &loaded_leaves,
+                &new_leaf_slugs,
+            );
+            let tokens = execute::estimate_compile_prompt_tokens(
+                prompt::COMPILE_SYSTEM_PROMPT
+                    .len()
+                    .saturating_add(msg.len()),
+            );
+            (msg, tokens, schema::incremental_compile_response_schema())
+        }
     };
-    let incremental_user_message =
-        prompt::build_incremental_user_message(cfg, &manifest, &loaded_leaves, &new_leaf_slugs);
-    let incremental_prompt_tokens = execute::estimate_compile_prompt_tokens(
-        prompt::COMPILE_SYSTEM_PROMPT
-            .len()
-            .saturating_add(incremental_user_message.len()),
-    );
-    let context_mode = execute::choose_context_mode(
-        model,
-        run_mode,
-        full_prompt_tokens,
-        incremental_prompt_tokens,
-    )?;
-    let user_message = if context_mode == CompileContextMode::IncrementalContext {
-        incremental_user_message
-    } else {
-        full_user_message
-    };
-    let response_schema = if run_mode == CompileRunMode::Incremental {
-        schema::incremental_compile_response_schema()
-    } else {
-        schema::compile_response_schema()
-    };
+    let context_mode = execute::choose_context_mode(model, run_mode, prompt_tokens)?;
 
     // ── LLM call ─────────────────────────────────────────────────────────────
     let response = execute::call_llm_blocking(provider, model, &user_message, &response_schema)?;

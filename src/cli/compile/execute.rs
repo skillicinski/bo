@@ -73,22 +73,13 @@ pub(super) fn ensure_compile_context_fits(
 pub(super) fn choose_context_mode(
     model: &Model,
     run_mode: CompileRunMode,
-    full_prompt_tokens: usize,
-    incremental_prompt_tokens: usize,
+    prompt_tokens: usize,
 ) -> Result<CompileContextMode, CompileError> {
-    match run_mode {
-        CompileRunMode::Full => {
-            ensure_compile_context_fits(model, full_prompt_tokens)?;
-            Ok(CompileContextMode::FullCorpus)
-        }
-        CompileRunMode::Incremental => {
-            if ensure_compile_context_fits(model, full_prompt_tokens).is_ok() {
-                return Ok(CompileContextMode::FullCorpus);
-            }
-            ensure_compile_context_fits(model, incremental_prompt_tokens)?;
-            Ok(CompileContextMode::IncrementalContext)
-        }
-    }
+    ensure_compile_context_fits(model, prompt_tokens)?;
+    Ok(match run_mode {
+        CompileRunMode::Full => CompileContextMode::FullCorpus,
+        CompileRunMode::Incremental => CompileContextMode::IncrementalContext,
+    })
 }
 
 // ── LLM call ──────────────────────────────────────────────────────────────────
