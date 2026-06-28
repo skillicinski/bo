@@ -915,3 +915,89 @@ fn parse_incremental_insufficient_leaves_errors() {
     .unwrap_err();
     assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("at least 2 leaves")));
 }
+
+// ── repair: branch frontmatter consistency ───────────────────────────────
+
+#[test]
+fn repair_stale_branches_fixes_branch_frontmatter() {
+    let dir = TempDir::new().unwrap();
+    let mut manifest = fresh_manifest("test", "2026-01-01T00:00:00Z", Some("2026-01-10T00:00:00Z"));
+
+    // 3 leaves, all new (collected after last_compile)
+    manifest.leaves.push(leaf_record(
+        "leaf-a",
+        "leaf-a.md",
+        "Leaf A",
+        "2026-02-01T00:00:00Z",
+    ));
+    manifest.leaves.push(leaf_record(
+        "leaf-b",
+        "leaf-b.md",
+        "Leaf B",
+        "2026-02-01T00:00:00Z",
+    ));
+    manifest.leaves.push(leaf_record(
+        "leaf-c",
+        "leaf-c.md",
+        "Leaf C",
+        "2026-02-01T00:00:00Z",
+    ));
+
+    // One branch covering all 3 leaves
+    manifest.branches.push(branch_record(
+        "test-branch",
+        "Test Branch",
+        &["leaf-a", "leaf-b", "leaf-c"],
+    ));
+
+    // Write leaf files (leaf-a intentionally absent/deleted)
+    write_leaf(
+        dir.path(),
+        "leaf-b.md",
+        "---\ntitle: Leaf B\n---\n\nbody b\n",
+    );
+    write_leaf(
+        dir.path(),
+        "leaf-c.md",
+        "---\ntitle: Leaf C\n---\n\nbody c\n",
+    );
+
+    // Write branch file with 3 leaves in frontmatter
+    std::fs::create_dir_all(dir.path().join("branches")).unwrap();
+    let branch_content = "---\ntitle: Test Branch\ncreated_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\nleaves:\n- leaf-a.md\n- leaf-b.md\n- leaf-c.md\n---\n\n# Test Branch\n\nBody text with reference to Leaf A\n";
+    std::fs::write(dir.path().join("branches/test-branch.md"), branch_content).unwrap();
+
+    write_manifest(dir.path(), &manifest);
+
+    let cfg = seeded_config(dir.path());
+    let notifications =
+        plan::repair_stale_branches(&cfg, &manifest).expect("repair should succeed");
+
+    // Notification should mention frontmatter repair
+    assert!(
+        notifications
+            .iter()
+            .any(|n| n.contains("frontmatter repaired")),
+        "expected frontmatter repair notification in: {:?}",
+        notifications
+    );
+
+    // Branch file frontmatter leaves: should have 2 entries (leaf-b, leaf-c),
+    // not 3.
+    let repaired = std::fs::read_to_string(dir.path().join("branches/test-branch.md")).unwrap();
+    assert!(repaired.contains("- leaf-b.md"));
+    assert!(repaired.contains("- leaf-c.md"));
+    assert!(!repaired.contains("- leaf-a.md"));
+
+    // Body is preserved (stale reference to leaf-a stays)
+    assert!(repaired.contains("reference to Leaf A"));
+
+    // Manifest branch leaves should match: 2 entries
+    let repaired_manifest = read_manifest(dir.path());
+    let branch = repaired_manifest
+        .branches
+        .iter()
+        .find(|b| b.slug.as_str() == "test-branch")
+        .unwrap();
+    assert_eq!(branch.leaves.len(), 2);
+}
