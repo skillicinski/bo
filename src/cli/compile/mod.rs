@@ -171,7 +171,7 @@ pub struct CompileResult {
     pub branches: Vec<BranchResult>,
     pub leaves_processed: usize,
     pub leaves_skipped: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip)]
     pub notifications: Vec<String>,
 }
 

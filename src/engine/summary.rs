@@ -10,6 +10,7 @@
 use crate::engine::llm::{
     complete_with_policy, FinishReason, LlmCallPolicy, LlmError, LlmProvider, Message,
 };
+use schemars::JsonSchema;
 use serde::Deserialize;
 use std::fmt;
 use std::time::Duration;
@@ -72,9 +73,9 @@ fn truncate_words(body: &str, max_words: usize) -> String {
 
 // ── LLM-powered summary ─────────────────────────────────────────────────────
 
-#[derive(Deserialize)]
-struct SummaryResponse {
-    #[serde(default)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SummaryResponse {
     summary: String,
 }
 
@@ -116,14 +117,7 @@ pub async fn generate_llm(
         Message::user(user_message),
     ];
 
-    let schema = serde_json::json!({
-        "type": "object",
-        "properties": {
-            "summary": { "type": "string" }
-        },
-        "required": ["summary"],
-        "additionalProperties": false
-    });
+    let schema = serde_json::to_value(schemars::schema_for!(SummaryResponse)).unwrap();
 
     let response =
         complete_with_policy(provider, &messages, model, 512, Some(&schema), true, policy)

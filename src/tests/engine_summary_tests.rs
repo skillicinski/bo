@@ -1,5 +1,6 @@
 use super::*;
 use async_trait::async_trait;
+use schemars::schema_for;
 use serde_json::Value;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -213,4 +214,16 @@ async fn attempted_summary_content_filter_finish_reason_fails() {
     .unwrap_err();
 
     assert!(matches!(err, SummaryError::ContentFilter));
+}
+
+#[test]
+fn derived_summary_schema_requires_summary_field() {
+    let schema = serde_json::to_value(schema_for!(SummaryResponse)).unwrap();
+    let obj = schema.as_object().expect("top-level is object");
+    assert_eq!(obj["additionalProperties"], false);
+    let required = obj["required"].as_array().expect("required is array");
+    assert!(
+        required.iter().any(|v| v == "summary"),
+        "summary field must be required"
+    );
 }
