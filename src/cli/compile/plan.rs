@@ -3,6 +3,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 
+use serde_yaml_ng::Value;
+
 use crate::domain::frontmatter;
 use crate::domain::manifest::{BranchRecord, LeafRecord, Manifest, TreeMeta};
 use crate::domain::slug::Slug;
@@ -77,6 +79,13 @@ pub(super) fn repair_stale_branches(
         .map(String::as_str)
         .collect();
 
+    let deleted_filenames: HashSet<&str> = manifest
+        .leaves
+        .iter()
+        .filter(|l| deleted_set.contains(l.slug.as_str()))
+        .map(|l| l.file.as_str())
+        .collect();
+
     let branch_referenced_slugs: HashSet<&str> = manifest
         .branches
         .iter()
@@ -128,6 +137,38 @@ pub(super) fn repair_stale_branches(
             let removed_count = branch.leaves.len() - remaining.len();
             if removed_count > 0 {
                 repaired_branch_slugs.push(branch.slug.as_str().to_string());
+                // Repair branch .md frontmatter: drop deleted leaf filenames
+                // from leaves: list so the file matches the repaired manifest.
+                // Body is left as-is (may reference removed leaves; --all
+                // resynthesizes).
+                let branch_path = cfg.tree().join(&branch.file);
+                if let Ok(content) = fs::read_to_string(&branch_path) {
+                    if let Ok((mut mapping, body)) = frontmatter::parse(&content) {
+                        let leaves_key = Value::String("leaves".to_string());
+                        if let Some(Value::Sequence(seq)) = mapping.get(&leaves_key) {
+                            let filtered: Vec<Value> = seq
+                                .iter()
+                                .filter(|v| {
+                                    if let Value::String(filename) = v {
+                                        !deleted_filenames.contains(filename.as_str())
+                                    } else {
+                                        true
+                                    }
+                                })
+                                .cloned()
+                                .collect();
+                            mapping.insert(leaves_key, Value::Sequence(filtered));
+                        }
+                        if let Ok(new_content) = frontmatter::render(&mapping, &body) {
+                            let _ = fs::write(&branch_path, &new_content);
+                            let note = format!(
+                                "branch '{}' frontmatter repaired (body may reference removed leaves; recompile with --all to resynthesize)",
+                                branch.slug.as_str()
+                            );
+                            notifications.push(note);
+                        }
+                    }
+                }
             }
             let mut repaired = branch.clone();
             repaired.leaves = remaining;
