@@ -165,26 +165,6 @@ fn compile_produces_at_least_one_branch_file() {
 
 #[test]
 #[ignore = "requires OPENAI_API_KEY"]
-fn compile_gives_every_leaf_a_branches_field() {
-    let dir = setup_fixture_collection();
-    let cfg = make_config(dir.path());
-
-    compile::run_compile_with_options(&cfg, Default::default()).unwrap();
-
-    for doc in FIXTURE_DOCS {
-        let leaf_path = dir.path().join(doc.file);
-        let content = fs::read_to_string(&leaf_path).unwrap();
-        let (mapping, _) = bo::domain::frontmatter::parse(&content).unwrap();
-        assert!(
-            mapping.get("branches").is_some(),
-            "leaf {} missing 'branches' field after compile",
-            doc.file
-        );
-    }
-}
-
-#[test]
-#[ignore = "requires OPENAI_API_KEY"]
 fn compile_does_not_create_index_jsonl() {
     let dir = setup_fixture_collection();
     let cfg = make_config(dir.path());

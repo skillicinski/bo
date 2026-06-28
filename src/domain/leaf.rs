@@ -8,8 +8,9 @@
 //
 // The title field is always double-quoted in the written YAML so that special
 // characters (colons, embedded quotes) are escaped consistently. This is the
-// canonical on-disk format for leaf files and is preserved by patch_fields
-// when bo compile updates the frontmatter later.
+// canonical on-disk format for leaf files. The leaf→branch relationship is
+// not written into leaf frontmatter; the manifest is the sole source of truth
+// (see `Manifest::branches_for_leaf`).
 
 use crate::domain::{Timestamp, Title, Url};
 
