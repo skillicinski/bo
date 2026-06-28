@@ -89,7 +89,7 @@ pub(super) fn repair_stale_branches(
         .cloned()
         .collect();
 
-    let prune_notification = if !orphan_slugs.is_empty() {
+    let mut notifications = if !orphan_slugs.is_empty() {
         let n = orphan_slugs.len();
         let msg = format!(
             "pruned {} orphan leaf record{} (file{} missing, not in any branch)",
@@ -138,7 +138,7 @@ pub(super) fn repair_stale_branches(
     // Emit messages for branch-level repairs (separate from orphan leaf pruning above).
     if !repaired_branch_slugs.is_empty() {
         let names = repaired_branch_slugs.join(", ");
-        eprintln!(
+        let msg = format!(
             "repaired {} branch{} with deleted leaves: {}",
             repaired_branch_slugs.len(),
             if repaired_branch_slugs.len() == 1 {
@@ -148,10 +148,12 @@ pub(super) fn repair_stale_branches(
             },
             names,
         );
+        eprintln!("{}", msg);
+        notifications.push(msg);
     }
     if !branches_removed.is_empty() {
         let names: Vec<&str> = branches_removed.iter().map(|b| b.slug.as_str()).collect();
-        eprintln!(
+        let msg = format!(
             "removed {} stale branch{} below threshold: {}",
             branches_removed.len(),
             if branches_removed.len() == 1 {
@@ -161,6 +163,8 @@ pub(super) fn repair_stale_branches(
             },
             names.join(", "),
         );
+        eprintln!("{}", msg);
+        notifications.push(msg);
     }
 
     let repaired_leaves: Vec<LeafRecord> = manifest
@@ -190,7 +194,7 @@ pub(super) fn repair_stale_branches(
         }
     }
 
-    Ok(prune_notification)
+    Ok(notifications)
 }
 pub(super) fn select_new_leaf_slugs(manifest: &Manifest) -> Result<Vec<String>, CompileError> {
     let Some(last_compiled_at) = &manifest.tree.last_compiled_at else {
