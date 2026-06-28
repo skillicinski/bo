@@ -1,4 +1,4 @@
-use super::{plan, render_human, CompileResult};
+use super::{plan, render_human, CompileOptions, CompileResult, CompileRunMode};
 use crate::domain::manifest::{LeafRecord, Manifest, TreeMeta};
 use crate::domain::{Slug, Timestamp};
 use crate::engine::config::SeededConfig;
@@ -217,4 +217,87 @@ fn human_output_includes_notifications() {
 
     assert!(output.contains("test-tree is empty"));
     assert!(output.contains("\u{2192} pruned 1 orphan"));
+}
+
+// ── run-mode selection (see #95) ─────────────────────────────────────────────
+
+#[test]
+fn select_run_mode_forces_full_when_no_branches_exist() {
+    // A fresh tree (no branches) has nothing to incrementally update, so it
+    // must compile full even without --all. Incremental mode against an empty
+    // branch graph sends a prompt with no branch context but an incremental
+    // response schema — the root of #87.
+    let manifest = fresh_manifest("t", "2026-01-01T00:00:00Z", None);
+    assert_eq!(
+        plan::select_run_mode(CompileOptions { all: false }, &manifest),
+        CompileRunMode::Full,
+        "fresh tree with no branches must compile full even without --all"
+    );
+}
+
+#[test]
+fn select_run_mode_incremental_only_with_branches_and_no_all() {
+    use crate::domain::manifest::BranchRecord;
+    use crate::domain::Title;
+
+    let mut manifest = fresh_manifest("t", "2026-01-01T00:00:00Z", Some("2026-01-02T00:00:00Z"));
+    manifest.branches.push(BranchRecord {
+        slug: Slug::generate("existing", ""),
+        file: "branches/existing.md".to_string(),
+        title: Title::from("existing"),
+        created_at: Timestamp::parse("2026-01-02T00:00:00Z").unwrap(),
+        updated_at: Timestamp::parse("2026-01-02T00:00:00Z").unwrap(),
+        leaves: vec![Slug::generate("a", "")],
+    });
+
+    assert_eq!(
+        plan::select_run_mode(CompileOptions { all: false }, &manifest),
+        CompileRunMode::Incremental,
+        "tree with branches and no --all runs incremental"
+    );
+    assert_eq!(
+        plan::select_run_mode(CompileOptions { all: true }, &manifest),
+        CompileRunMode::Full,
+        "--all always forces full"
+    );
+}
+
+// ── context-mode selection (see #95) ─────────────────────────────────────────
+
+#[test]
+fn choose_context_mode_incremental_never_yields_full_corpus() {
+    use crate::cli::compile::execute::choose_context_mode;
+    use crate::cli::compile::CompileContextMode;
+    use crate::engine::llm::{Model, Provider};
+
+    let model = Model::parse("gpt-4.1-mini", Provider::OpenAI).unwrap();
+
+    // Incremental with a fitting prompt yields IncrementalContext, never
+    // FullCorpus (the broken optimization that paired the branch-less full
+    // prompt with the incremental schema).
+    let small = execute_prompt_tokens(64);
+    assert_eq!(
+        choose_context_mode(&model, CompileRunMode::Incremental, small).unwrap(),
+        CompileContextMode::IncrementalContext,
+    );
+
+    // Incremental that overflows context errors rather than silently falling
+    // back to FullCorpus.
+    let huge = execute_prompt_tokens(usize::MAX);
+    assert!(
+        choose_context_mode(&model, CompileRunMode::Incremental, huge).is_err(),
+        "incremental overflow must error, not fall back to full corpus"
+    );
+
+    // Full still yields FullCorpus when it fits.
+    assert_eq!(
+        choose_context_mode(&model, CompileRunMode::Full, small).unwrap(),
+        CompileContextMode::FullCorpus,
+    );
+}
+
+/// Wrap a byte count into a token estimate comparable to what the compile
+/// pipeline computes, so tests exercise the same fit-check path.
+fn execute_prompt_tokens(prompt_bytes: usize) -> usize {
+    crate::cli::compile::execute::estimate_compile_prompt_tokens(prompt_bytes)
 }

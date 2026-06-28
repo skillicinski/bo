@@ -10,7 +10,7 @@ use crate::domain::Timestamp;
 use crate::engine::config::SeededConfig;
 
 use super::parse::{CompilePlan, ValidatedBranch};
-use super::{BranchResult, CompileError, CompileRunMode};
+use super::{BranchResult, CompileError, CompileOptions, CompileRunMode};
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
@@ -192,6 +192,20 @@ pub(super) fn repair_stale_branches(
 
     Ok(prune_notification)
 }
+/// Decide whether this compile re-derives the whole branch graph (`Full`) or
+/// fits new leaves into existing branches (`Incremental`).
+///
+/// A tree with no branches has nothing to incrementally update, so it compiles
+/// from scratch regardless of `--all`. Incremental mode is only coherent
+/// against an existing branch graph.
+pub(super) fn select_run_mode(options: CompileOptions, manifest: &Manifest) -> CompileRunMode {
+    if options.all || manifest.branches.is_empty() {
+        CompileRunMode::Full
+    } else {
+        CompileRunMode::Incremental
+    }
+}
+
 pub(super) fn select_new_leaf_slugs(manifest: &Manifest) -> Result<Vec<String>, CompileError> {
     let Some(last_compiled_at) = &manifest.tree.last_compiled_at else {
         return Ok(manifest
