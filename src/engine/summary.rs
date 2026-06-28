@@ -117,7 +117,9 @@ pub async fn generate_llm(
         Message::user(user_message),
     ];
 
-    let schema = serde_json::to_value(schemars::schema_for!(SummaryResponse)).unwrap();
+    let schema =
+        serde_json::to_value(crate::engine::schema::inline_schema_for::<SummaryResponse>())
+            .unwrap();
 
     let response =
         complete_with_policy(provider, &messages, model, 512, Some(&schema), true, policy)
