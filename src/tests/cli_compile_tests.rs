@@ -319,14 +319,14 @@ fn human_output_includes_notifications() {
     assert!(output.contains("\u{2192} pruned 1 orphan"));
 }
 
-// ── run-mode selection (see #95) ─────────────────────────────────────────────
+// ── run-mode selection ─────────────────────────────────────────────────────
 
 #[test]
 fn select_run_mode_forces_full_when_no_branches_exist() {
     // A fresh tree (no branches) has nothing to incrementally update, so it
     // must compile full even without --all. Incremental mode against an empty
     // branch graph sends a prompt with no branch context but an incremental
-    // response schema — the root of #87.
+    // response schema, so the LLM cannot produce valid updated_branches.
     let manifest = fresh_manifest("t", "2026-01-01T00:00:00Z", None);
     assert_eq!(
         plan::select_run_mode(CompileOptions { all: false }, &manifest),
@@ -362,7 +362,7 @@ fn select_run_mode_incremental_only_with_branches_and_no_all() {
     );
 }
 
-// ── context-mode selection (see #95) ─────────────────────────────────────────
+// ── context-mode selection ─────────────────────────────────────────────────
 
 #[test]
 fn choose_context_mode_incremental_never_yields_full_corpus() {
@@ -425,4 +425,149 @@ fn derived_incremental_compile_schema_requires_updated_and_new_branches() {
         .unwrap_or_default();
     assert!(required.contains(&"updated_branches"));
     assert!(required.contains(&"new_branches"));
+}
+
+// ── leaf reference fidelity ───────────────────────────────────────────────
+
+use super::parse::{parse_and_validate_with_input_size, valid_leaf_reference_map};
+use super::plan::LoadedLeaf;
+use super::CompileError;
+
+fn loaded_leaf(slug: &str, title: &str) -> LoadedLeaf {
+    LoadedLeaf {
+        slug: slug.to_string(),
+        filename: format!("{}.md", slug),
+        title: title.to_string(),
+        summary: None,
+        body: format!("body of {}", title),
+        collected_at: "2026-01-01T00:00:00Z".to_string(),
+    }
+}
+
+/// Minimal valid full-compile response: one branch over the given leaf refs.
+fn branch_response(leaves: &[&str]) -> String {
+    let leaves_json = leaves
+        .iter()
+        .map(|l| format!("\"{}\"", l))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        r#"{{"branches":[{{"title":"Concept","body":"body text","leaves":[{}]}}]}}"#,
+        leaves_json
+    )
+}
+
+#[test]
+fn valid_leaf_reference_map_resolves_by_filename_stem_and_unique_title() {
+    let leaves = vec![
+        loaded_leaf("alpha-concept", "Alpha Concept"),
+        loaded_leaf("beta-thing", "Beta Thing"),
+    ];
+    let (refs, collisions) = valid_leaf_reference_map(&leaves);
+
+    assert!(collisions.is_empty());
+    // filename, stem (= slug), lowercased title, slugified title all resolve.
+    assert_eq!(
+        refs.get("alpha-concept.md"),
+        Some(&"alpha-concept.md".to_string())
+    );
+    assert_eq!(
+        refs.get("alpha-concept"),
+        Some(&"alpha-concept.md".to_string())
+    );
+    assert_eq!(
+        refs.get("alpha concept"),
+        Some(&"alpha-concept.md".to_string())
+    );
+    assert_eq!(
+        refs.get("beta-thing.md"),
+        Some(&"beta-thing.md".to_string())
+    );
+}
+
+#[test]
+fn valid_leaf_reference_map_drops_ambiguous_title_keys() {
+    // Two leaves share a title → the title key is removed so a title reference
+    // fails validation rather than silently resolving to the wrong leaf.
+    let leaves = vec![
+        loaded_leaf("gamma-one", "Shared Topic"),
+        loaded_leaf("gamma-two", "Shared Topic"),
+    ];
+    let (refs, collisions) = valid_leaf_reference_map(&leaves);
+
+    assert!(!collisions.is_empty(), "expected a collision warning");
+    assert!(
+        !refs.contains_key("shared topic"),
+        "ambiguous title key must be absent"
+    );
+    // Slugs (stems) stay unique and resolvable.
+    assert_eq!(refs.get("gamma-one"), Some(&"gamma-one.md".to_string()));
+    assert_eq!(refs.get("gamma-two"), Some(&"gamma-two.md".to_string()));
+}
+
+#[test]
+fn parse_resolves_leaf_references_by_slug_filename_and_title() {
+    let leaves = vec![
+        loaded_leaf("alpha-concept", "Alpha Concept"),
+        loaded_leaf("beta-thing", "Beta Thing"),
+    ];
+
+    // slug/stem + filename both resolve and normalize to the canonical filename.
+    let plan = parse_and_validate_with_input_size(
+        &branch_response(&["alpha-concept", "beta-thing.md"]),
+        &leaves,
+        1024,
+    )
+    .expect("refs by slug and filename must resolve");
+    assert_eq!(
+        plan.branches[0].leaves,
+        vec!["alpha-concept.md", "beta-thing.md"]
+    );
+
+    // unique title resolves (case-insensitive).
+    parse_and_validate_with_input_size(
+        &branch_response(&["Alpha Concept", "Beta Thing"]),
+        &leaves,
+        1024,
+    )
+    .expect("refs by unique title must resolve");
+}
+
+#[test]
+fn parse_rejects_invented_leaf_reference() {
+    let leaves = vec![
+        loaded_leaf("alpha-concept", "Alpha Concept"),
+        loaded_leaf("beta-thing", "Beta Thing"),
+    ];
+    let err = parse_and_validate_with_input_size(
+        &branch_response(&["alpha-concept", "invented-name"]),
+        &leaves,
+        1024,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, CompileError::Validation(ref msg) if msg.contains("unknown leaf")),
+        "invented leaf reference must be a validation error: {:?}",
+        err
+    );
+}
+
+#[test]
+fn parse_rejects_ambiguous_title_reference() {
+    let leaves = vec![
+        loaded_leaf("gamma-one", "Shared Topic"),
+        loaded_leaf("gamma-two", "Shared Topic"),
+        loaded_leaf("alpha-concept", "Alpha Concept"),
+    ];
+    let err = parse_and_validate_with_input_size(
+        &branch_response(&["Shared Topic", "alpha-concept"]),
+        &leaves,
+        1024,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, CompileError::Validation(ref msg) if msg.contains("unknown leaf")),
+        "ambiguous title reference must fail validation, not silently resolve: {:?}",
+        err
+    );
 }
