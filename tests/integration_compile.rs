@@ -6,10 +6,11 @@
 //   OPENAI_API_KEY=sk-... cargo test --test integration_compile -- --ignored
 
 use bo::domain::Timestamp;
+use bo::domain::Title;
 use std::fs;
 
 use bo::cli::compile;
-use bo::domain::manifest::{self, LeafRecord, Manifest, TreeMeta};
+use bo::domain::manifest::{self, BranchRecord, LeafRecord, Manifest, TreeMeta};
 use bo::engine::config::SeededConfig;
 
 struct FixtureDoc {
@@ -411,4 +412,358 @@ fn crash_mid_collect_rollback_leaves_tree_unchanged() {
         .iter()
         .any(|leaf| leaf.slug.as_str() == "interrupted"));
     assert!(!bo_dir.join("pending.json").exists());
+}
+
+// ── canned-response integration tests (no API key required) ──────────────────
+
+use async_trait::async_trait;
+
+struct FakeLlmProvider {
+    response: String,
+}
+
+#[async_trait]
+impl bo::engine::llm::LlmProvider for FakeLlmProvider {
+    async fn complete(
+        &self,
+        _messages: &[bo::engine::llm::Message],
+        _model: &str,
+        _max_tokens: u32,
+        _response_schema: Option<&serde_json::Value>,
+        _reasoning_disabled: bool,
+    ) -> Result<bo::engine::llm::LlmResponse, bo::engine::llm::LlmError> {
+        Ok(bo::engine::llm::LlmResponse {
+            content: self.response.clone(),
+            finish_reason: bo::engine::llm::FinishReason::Stop,
+        })
+    }
+}
+
+fn compile_model() -> bo::engine::llm::Model {
+    bo::engine::llm::Model::parse("gpt-4.1", bo::engine::llm::Provider::OpenAI).unwrap()
+}
+
+#[test]
+fn compile_full_with_canned_response_creates_branches() {
+    let dir = setup_fixture_collection();
+    let cfg = make_config(dir.path());
+    let model = compile_model();
+    let started_at = Timestamp::now();
+
+    // Canned response: two branches, each covering two leaves.
+    let canned = serde_json::json!({
+        "branches": [
+            {
+                "title": "Rust Memory Safety",
+                "body": "# Rust Memory Safety\n\nOwnership and borrowing make memory safety a compile-time guarantee.",
+                "leaves": ["rust-ownership.md", "memory-safety.md"]
+            },
+            {
+                "title": "Systems Design in Rust",
+                "body": "# Systems Design in Rust\n\nZero-cost abstractions and safe concurrency shape Rust systems code.",
+                "leaves": ["safe-concurrency.md", "zero-cost-abstractions.md"]
+            }
+        ]
+    })
+    .to_string();
+    let provider = FakeLlmProvider {
+        response: canned.to_string(),
+    };
+
+    let result = compile::run_compile_with_provider_started_at(
+        &cfg,
+        Default::default(),
+        &provider,
+        &model,
+        &started_at,
+        Vec::new(),
+    );
+
+    let compile_result = result.unwrap();
+    assert_eq!(compile_result.status, "compiled");
+    assert_eq!(compile_result.branches.len(), 2);
+
+    // Verify branch files were written to disk
+    let branches_dir = dir.path().join("branches");
+    assert!(branches_dir.exists());
+
+    let branch_a = branches_dir.join("rust-memory-safety.md");
+    assert!(branch_a.exists(), "missing branch file: {:?}", branch_a);
+    let content = fs::read_to_string(&branch_a).unwrap();
+    assert!(content.contains("Rust Memory Safety"));
+    assert!(content.contains("rust-ownership.md"));
+    assert!(content.contains("memory-safety.md"));
+
+    let branch_b = branches_dir.join("systems-design-in-rust.md");
+    assert!(branch_b.exists(), "missing branch file: {:?}", branch_b);
+    let content_b = fs::read_to_string(&branch_b).unwrap();
+    assert!(content_b.contains("Systems Design in Rust"));
+
+    // Manifest updated with branches
+    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    assert_eq!(m.branches.len(), 2);
+    assert!(m.tree.last_compiled_at.is_some());
+}
+
+#[test]
+fn compile_incremental_with_canned_response_updates_existing_branches() {
+    // Build a tree with an existing compile: 2 leaves, 1 branch, last_compiled_at set.
+    // Then add 2 new leaves with later collected_at.
+    let dir = tempfile::TempDir::new().unwrap();
+    let bo_dir = dir.path().join(".bo");
+    fs::create_dir_all(&bo_dir).unwrap();
+    fs::create_dir_all(dir.path().join("branches")).unwrap();
+
+    let ts_old = Timestamp::parse("2025-06-01T10:00:00Z").unwrap();
+    let ts_last_compile = Timestamp::parse("2025-06-02T00:00:00Z").unwrap();
+    let ts_new = Timestamp::parse("2025-06-03T10:00:00Z").unwrap();
+
+    // Two existing leaves (already compiled)
+    for (file, title, body) in [
+        (
+            "ownership.md",
+            "Ownership",
+            "Rust ownership ensures memory safety at compile time.",
+        ),
+        (
+            "borrowing.md",
+            "Borrowing",
+            "Borrowing allows shared references without GC.",
+        ),
+    ] {
+        let t = title.to_string();
+        let u = format!("https://example.com/{}", file);
+        let content = bo::domain::leaf::format_content(Some(&t), &u, &ts_old, body, None);
+        fs::write(dir.path().join(file), content).unwrap();
+    }
+
+    // Two new leaves (collected after last compile)
+    for (file, title, body) in [
+        (
+            "lifetimes.md",
+            "Lifetimes",
+            "Lifetimes let the compiler verify references.",
+        ),
+        (
+            "traits.md",
+            "Traits",
+            "Traits define shared behaviour across types.",
+        ),
+    ] {
+        let t = title.to_string();
+        let u = format!("https://example.com/{}", file);
+        let content = bo::domain::leaf::format_content(Some(&t), &u, &ts_new, body, None);
+        fs::write(dir.path().join(file), content).unwrap();
+    }
+
+    // Write existing branch file on disk (needed for incremental prompt)
+    fs::write(
+        dir.path().join("branches/memory-model.md"),
+        "---\ntitle: Memory Model\ncreated_at: 2025-06-02T00:00:00Z\nupdated_at: 2025-06-02T00:00:00Z\nleaves:\n  - ownership\n  - borrowing\n---\n\n# Memory Model\n\nOriginal body.\n",
+    )
+    .unwrap();
+
+    manifest::write(
+        &bo_dir.join("manifest.json"),
+        &Manifest {
+            tree: TreeMeta {
+                name: "incremental-fixture".to_string(),
+                created_at: ts_old.clone(),
+                last_compiled_at: Some(ts_last_compile.clone()),
+            },
+            leaves: vec![
+                LeafRecord {
+                    slug: bo::domain::Slug::parse("ownership").unwrap(),
+                    file: "ownership.md".to_string(),
+                    title: "Ownership".to_string(),
+                    url: "https://example.com/ownership.md".to_string(),
+                    collected_at: ts_old.clone(),
+                    summary: None,
+                },
+                LeafRecord {
+                    slug: bo::domain::Slug::parse("borrowing").unwrap(),
+                    file: "borrowing.md".to_string(),
+                    title: "Borrowing".to_string(),
+                    url: "https://example.com/borrowing.md".to_string(),
+                    collected_at: ts_old.clone(),
+                    summary: None,
+                },
+                LeafRecord {
+                    slug: bo::domain::Slug::parse("lifetimes").unwrap(),
+                    file: "lifetimes.md".to_string(),
+                    title: "Lifetimes".to_string(),
+                    url: "https://example.com/lifetimes.md".to_string(),
+                    collected_at: ts_new.clone(),
+                    summary: None,
+                },
+                LeafRecord {
+                    slug: bo::domain::Slug::parse("traits").unwrap(),
+                    file: "traits.md".to_string(),
+                    title: "Traits".to_string(),
+                    url: "https://example.com/traits.md".to_string(),
+                    collected_at: ts_new.clone(),
+                    summary: None,
+                },
+            ],
+            branches: vec![BranchRecord {
+                slug: bo::domain::Slug::parse("memory-model").unwrap(),
+                file: "branches/memory-model.md".to_string(),
+                title: Title::from("Memory Model"),
+                created_at: ts_last_compile.clone(),
+                updated_at: ts_last_compile.clone(),
+                leaves: vec![
+                    bo::domain::Slug::parse("ownership").unwrap(),
+                    bo::domain::Slug::parse("borrowing").unwrap(),
+                ],
+            }],
+        },
+    )
+    .unwrap();
+
+    let cfg = make_config(dir.path());
+    let model = compile_model();
+    let started_at = Timestamp::now();
+
+    // Canned incremental response: update existing branch and create a new one.
+    let canned = serde_json::json!({
+        "updated_branches": [
+            {
+                "slug": "memory-model",
+                "title": "Memory Model",
+                "body": "# Memory Model\n\nUpdated with lifetimes.",
+                "leaves": ["ownership.md", "borrowing.md", "lifetimes.md"]
+            }
+        ],
+        "new_branches": [
+            {
+                "title": "Type System",
+                "body": "# Type System\n\nTraits enable polymorphism.",
+                "leaves": ["traits.md", "ownership.md"]
+            }
+        ]
+    })
+    .to_string();
+    let provider = FakeLlmProvider { response: canned };
+
+    let result = compile::run_compile_with_provider_started_at(
+        &cfg,
+        Default::default(),
+        &provider,
+        &model,
+        &started_at,
+        Vec::new(),
+    );
+
+    let compile_result = result.unwrap();
+    assert_eq!(compile_result.status, "compiled");
+
+    // Both branches should exist on disk
+    let branches_dir = dir.path().join("branches");
+    assert!(branches_dir.join("memory-model.md").exists());
+    assert!(branches_dir.join("type-system.md").exists());
+
+    // Manifest reflects both branches
+    let m = manifest::read(&bo_dir.join("manifest.json")).unwrap();
+    assert_eq!(m.branches.len(), 2);
+    let slugs: Vec<&str> = m.branches.iter().map(|b| b.slug.as_str()).collect();
+    assert!(slugs.contains(&"memory-model"));
+    assert!(slugs.contains(&"type-system"));
+}
+
+#[test]
+fn compile_all_leaves_deleted_repair_handles_missing_files() {
+    // Create a tree with leaves and a branch, then delete all leaf files.
+    // The stale-repair pass should prune orphan leaves and remove the branch.
+    // The compile itself returns noop since no leaves remain.
+    let dir = tempfile::TempDir::new().unwrap();
+    let bo_dir = dir.path().join(".bo");
+    fs::create_dir_all(&bo_dir).unwrap();
+    fs::create_dir_all(dir.path().join("branches")).unwrap();
+
+    let ts = Timestamp::parse("2025-06-01T10:00:00Z").unwrap();
+
+    // Only write one leaf file; record two in manifest.
+    let title = "Survivor".to_string();
+    let url = "https://example.com/survivor".to_string();
+    let content =
+        bo::domain::leaf::format_content(Some(&title), &url, &ts, "This leaf still exists.", None);
+    fs::write(dir.path().join("survivor.md"), content).unwrap();
+
+    // Write branch file that references both survivor and missing leaf
+    fs::write(
+        dir.path().join("branches/mixed-branch.md"),
+        "---\ntitle: Mixed Branch\n---\n\n# Mixed Branch\n\nBody.\n",
+    )
+    .unwrap();
+
+    manifest::write(
+        &bo_dir.join("manifest.json"),
+        &Manifest {
+            tree: TreeMeta {
+                name: "repair-fixture".to_string(),
+                created_at: ts.clone(),
+                last_compiled_at: Some(Timestamp::parse("2025-06-01T11:00:00Z").unwrap()),
+            },
+            leaves: vec![
+                LeafRecord {
+                    slug: bo::domain::Slug::parse("survivor").unwrap(),
+                    file: "survivor.md".to_string(),
+                    title: "Survivor".to_string(),
+                    url: "https://example.com/survivor".to_string(),
+                    collected_at: ts.clone(),
+                    summary: None,
+                },
+                LeafRecord {
+                    slug: bo::domain::Slug::parse("deleted").unwrap(),
+                    file: "deleted.md".to_string(),
+                    title: "Deleted".to_string(),
+                    url: "https://example.com/deleted".to_string(),
+                    collected_at: ts.clone(),
+                    summary: None,
+                },
+            ],
+            branches: vec![BranchRecord {
+                slug: bo::domain::Slug::parse("mixed-branch").unwrap(),
+                file: "branches/mixed-branch.md".to_string(),
+                title: Title::from("Mixed Branch"),
+                created_at: ts.clone(),
+                updated_at: ts.clone(),
+                leaves: vec![
+                    bo::domain::Slug::parse("survivor").unwrap(),
+                    bo::domain::Slug::parse("deleted").unwrap(),
+                ],
+            }],
+        },
+    )
+    .unwrap();
+
+    // Verify the deleted leaf file is actually missing
+    assert!(!dir.path().join("deleted.md").exists());
+
+    let cfg = make_config(dir.path());
+    let result = compile::run_compile_with_options(&cfg, Default::default());
+    assert!(
+        result.is_ok(),
+        "compile should succeed after repair: {:?}",
+        result.err()
+    );
+
+    let compile_result = result.unwrap();
+    // With only 1 surviving leaf, compile returns noop (single_leaf or empty_tree)
+    assert_eq!(compile_result.status, "noop");
+
+    // Manifest cleaned: deleted leaf removed, branch removed (only 1 leaf left)
+    let m = manifest::read(&bo_dir.join("manifest.json")).unwrap();
+    assert!(
+        !m.leaves.iter().any(|l| l.slug.as_str() == "deleted"),
+        "deleted leaf should be pruned from manifest"
+    );
+    // Branch is removed because it fell below 2 leaves
+    let branch_slugs: Vec<&str> = m.branches.iter().map(|b| b.slug.as_str()).collect();
+    assert!(
+        !branch_slugs.contains(&"mixed-branch"),
+        "branch should be removed after leaf deletion"
+    );
+    // Branch file deleted from disk
+    assert!(!dir.path().join("branches/mixed-branch.md").exists());
 }

@@ -33,5 +33,6 @@ serde_yaml_ng = "0.10"
 schemars = "0.8"
 
 [dev-dependencies]
+async-trait = "0.1"
 serial_test = "3.4.0"
 tempfile = "3"
