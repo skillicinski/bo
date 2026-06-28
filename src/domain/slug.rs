@@ -127,10 +127,11 @@ pub fn resolve_slug(slug: &Slug, url: &str, output_dir: &Path) -> Slug {
     if !output_dir.join(&candidate).exists() {
         return slug.clone();
     }
-    // Collision: append hash suffix
+    // Collision: append hash suffix. Truncate base slug so the total
+    // stays ≤ 80 chars (12 hex + 1 hyphen = 13 chars reserved).
     let hash = url_hash(url);
-    let resolved = format!("{}-{}", slug.as_str(), hash);
-    // The resolved slug is valid by construction (original slug + hyphen + hex chars).
+    let base = truncate_at_boundary(slug.as_str(), 80 - 1 - 12);
+    let resolved = format!("{}-{}", base, hash);
     Slug(resolved)
 }
 
