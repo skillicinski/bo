@@ -11,6 +11,7 @@ use crate::engine::llm::{
     complete_with_policy, FinishReason, LlmCallPolicy, LlmError, LlmProvider, Message, Model,
 };
 use crate::engine::retrieval;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashSet;
@@ -710,7 +711,8 @@ provided source material. Follow these rules strictly:
 4. Keep your answer concise — 1 to 3 paragraphs.
 5. The cited_slugs array must contain every slug you reference in your answer.";
 
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct SynthesisResponse {
     answer: String,
     cited_slugs: Vec<String>,
@@ -739,22 +741,7 @@ fn synthesize_with_provider(
         Message::user(user_message),
     ];
 
-    let schema = serde_json::json!({
-        "type": "object",
-        "properties": {
-            "answer": {
-                "type": "string",
-                "description": "Prose answer with [[slug]] citations inline"
-            },
-            "cited_slugs": {
-                "type": "array",
-                "items": { "type": "string" },
-                "description": "List of leaf slugs actually cited in the answer"
-            }
-        },
-        "required": ["answer", "cited_slugs"],
-        "additionalProperties": false
-    });
+    let schema = serde_json::to_value(schemars::schema_for!(SynthesisResponse)).unwrap();
 
     let response = rt
         .block_on(complete_with_policy(

@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::domain::Slug;
@@ -13,13 +14,13 @@ use super::{CompileError, MAX_COMPILED_BODY_BYTES_MIN, MAX_COMPILED_BODY_BYTES_P
 // ── types ─────────────────────────────────────────────────────────────────────
 
 /// Deserialized LLM response.
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct CompileResponse {
     pub(super) branches: Vec<RawBranch>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct RawBranch {
     pub(super) title: String,
@@ -28,14 +29,14 @@ pub(super) struct RawBranch {
 }
 
 /// Deserialized incremental LLM response.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct IncrementalCompileResponse {
     pub(super) updated_branches: Vec<RawUpdatedBranch>,
     pub(super) new_branches: Vec<RawBranch>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct RawUpdatedBranch {
     pub(super) slug: String,

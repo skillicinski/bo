@@ -318,3 +318,28 @@ fn human_output_includes_notifications() {
     assert!(output.contains("test-tree is empty"));
     assert!(output.contains("\u{2192} pruned 1 orphan"));
 }
+
+#[test]
+fn derived_compile_schema_requires_branches() {
+    let schema = super::schema::compile_response_schema();
+    let obj = schema.as_object().expect("top-level is object");
+    assert_eq!(obj["additionalProperties"], false);
+    let required: Vec<&str> = obj["required"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+    assert!(required.contains(&"branches"));
+}
+
+#[test]
+fn derived_incremental_compile_schema_requires_updated_and_new_branches() {
+    let schema = super::schema::incremental_compile_response_schema();
+    let obj = schema.as_object().expect("top-level is object");
+    assert_eq!(obj["additionalProperties"], false);
+    let required: Vec<&str> = obj["required"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+    assert!(required.contains(&"updated_branches"));
+    assert!(required.contains(&"new_branches"));
+}
