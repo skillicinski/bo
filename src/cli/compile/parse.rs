@@ -62,25 +62,48 @@ pub(super) struct ValidatedBranch {
 
 pub(super) fn valid_leaf_reference_map(
     loaded_leaves: &[plan::LoadedLeaf],
-) -> HashMap<String, String> {
+) -> (HashMap<String, String>, Vec<String>) {
     let mut refs = HashMap::new();
+    let mut collisions: Vec<String> = Vec::new();
     for leaf in loaded_leaves {
         let filename = &leaf.filename;
         refs.insert(filename.clone(), filename.clone());
         if let Some(stem) = filename.strip_suffix(".md") {
             refs.insert(stem.to_string(), filename.clone());
         }
-        // ponytail: title-based keys so LLM can reference leaves by title
+        // ponytail: title-based keys so LLM can reference leaves by title.
+        // Collision detected → remove key so ambiguous references fail validation
+        // rather than silently resolving to the wrong leaf.
         let title_lower = leaf.title.to_lowercase();
         if !title_lower.is_empty() {
-            refs.insert(title_lower, filename.clone());
+            if let Some(existing) = refs.get(&title_lower) {
+                if existing != filename {
+                    collisions.push(format!(
+                        "leaf title '{}' is shared by '{}' and '{}'",
+                        leaf.title, existing, filename
+                    ));
+                    refs.remove(&title_lower);
+                }
+            } else {
+                refs.insert(title_lower, filename.clone());
+            }
         }
         let slugified = Slug::generate(&leaf.title, "").to_string();
         if !slugified.is_empty() {
-            refs.insert(slugified, filename.clone());
+            if let Some(existing) = refs.get(&slugified) {
+                if existing != filename {
+                    collisions.push(format!(
+                        "slugified title '{}' collides between '{}' and '{}'",
+                        slugified, existing, filename
+                    ));
+                    refs.remove(&slugified);
+                }
+            } else {
+                refs.insert(slugified, filename.clone());
+            }
         }
     }
-    refs
+    (refs, collisions)
 }
 
 pub(super) fn parse_and_validate_with_input_size(
@@ -100,8 +123,10 @@ pub(super) fn parse_and_validate_with_input_size(
 
     let mut validated_branches: Vec<ValidatedBranch> = Vec::new();
     let mut seen_slugs: HashSet<String> = HashSet::new();
-    let valid_leaf_refs = valid_leaf_reference_map(loaded_leaves);
-
+    let (valid_leaf_refs, collisions) = valid_leaf_reference_map(loaded_leaves);
+    for msg in &collisions {
+        eprintln!("warning: title collision — {}", msg);
+    }
     for (index, raw) in parsed.branches.into_iter().enumerate() {
         let branch_number = index + 1;
         let title = raw.title.trim().to_string();
@@ -197,7 +222,10 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
     let new_leaf_slugs_vec = select_new_leaf_slugs(&manifest)?;
     let new_leaf_slugs: HashSet<String> = new_leaf_slugs_vec.into_iter().collect();
-    let valid_leaf_refs = valid_leaf_reference_map(loaded_leaves);
+    let (valid_leaf_refs, collisions) = valid_leaf_reference_map(loaded_leaves);
+    for msg in &collisions {
+        eprintln!("warning: title collision — {}", msg);
+    }
     let mut seen_branch_slugs = HashSet::new();
     let mut seen_updated_branch_slugs = HashSet::new();
     let mut validated_branches = Vec::new();
