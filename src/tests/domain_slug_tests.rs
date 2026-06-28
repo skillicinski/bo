@@ -162,6 +162,33 @@ fn parse_accepts_max_length() {
     assert!(Slug::parse(&s).is_ok());
 }
 
+// ── resolve_slug edge cases ────────────────────────────────────────────────
+
+#[test]
+fn collision_with_long_base_slug_stays_within_limit() {
+    let dir = TempDir::new().unwrap();
+    // Max-length (80-char) base slug.
+    let long_base = Slug::parse(&"a".repeat(80)).unwrap();
+    // Force collision.
+    fs::write(
+        dir.path().join(format!("{}.md", long_base.as_str())),
+        "existing",
+    )
+    .unwrap();
+    let resolved = resolve_slug(&long_base, "https://example.com/conflict", dir.path());
+    assert!(
+        resolved.as_str().len() <= 80,
+        "resolved slug too long: {} chars",
+        resolved.as_str().len()
+    );
+    // Must be parseable after the fix.
+    assert!(
+        Slug::parse(resolved.as_str()).is_ok(),
+        "resolved slug fails validation: {:?}",
+        resolved.as_str()
+    );
+}
+
 // ── Slug::generate ───────────────────────────────────────────────────────────
 
 #[test]
