@@ -295,7 +295,7 @@ pub fn run_compile_with_options(
     )
 }
 
-fn run_compile_with_provider_started_at(
+pub fn run_compile_with_provider_started_at(
     cfg: &SeededConfig,
     options: CompileOptions,
     provider: &dyn LlmProvider,

@@ -624,3 +624,294 @@ fn build_manifest_delta_allows_one_leaf_in_multiple_branches() {
         "a leaf must be allowed in multiple branches"
     );
 }
+
+// ── full-mode parse validation gaps ──────────────────────────────────────
+
+#[test]
+fn parse_full_rejects_empty_title() {
+    let leaves = vec![loaded_leaf("a", "A"), loaded_leaf("b", "B")];
+    let json = r#"{"branches":[{"title":"","body":"some body","leaves":["a","b"]}]}"#;
+    let err = parse_and_validate_with_input_size(json, &leaves, 1024).unwrap_err();
+    assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("empty title")));
+}
+
+#[test]
+fn parse_full_rejects_empty_body() {
+    let leaves = vec![loaded_leaf("a", "A"), loaded_leaf("b", "B")];
+    let json = r#"{"branches":[{"title":"Concept","body":"","leaves":["a","b"]}]}"#;
+    let err = parse_and_validate_with_input_size(json, &leaves, 1024).unwrap_err();
+    assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("empty body")));
+}
+
+#[test]
+fn parse_full_rejects_duplicate_slug() {
+    let leaves = vec![
+        loaded_leaf("a", "A"),
+        loaded_leaf("b", "B"),
+        loaded_leaf("c", "C"),
+        loaded_leaf("d", "D"),
+    ];
+    // Two branches with the same title → same slug → duplicate slug error
+    let json = r#"{"branches":[{"title":"Same Thing","body":"body","leaves":["a","b"]},{"title":"Same Thing","body":"body","leaves":["c","d"]}]}"#;
+    let err = parse_and_validate_with_input_size(json, &leaves, 1024).unwrap_err();
+    assert!(
+        matches!(err, CompileError::Validation(ref msg) if msg.contains("duplicate branch slug"))
+    );
+}
+
+#[test]
+fn parse_full_rejects_single_leaf_branch() {
+    let leaves = vec![
+        loaded_leaf("a", "A"),
+        loaded_leaf("b", "B"),
+        loaded_leaf("c", "C"),
+    ];
+    let json = r#"{"branches":[{"title":"Concept","body":"body","leaves":["a"]}]}"#;
+    let err = parse_and_validate_with_input_size(json, &leaves, 1024).unwrap_err();
+    assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("at least 2 leaves")));
+}
+
+// ── incremental-mode parse validation ─────────────────────────────────────
+
+use super::parse::parse_and_validate_incremental_with_input_size;
+
+/// Minimal valid incremental response helper.
+fn incremental_response(updated: &str, new: &str) -> String {
+    format!(
+        r#"{{"updated_branches":{},"new_branches":{}}}"#,
+        updated, new
+    )
+}
+
+/// Set up a tree on disk with 4 leaves, 1 existing branch (covering the 2 older
+/// leaves), and fresh leaf files. Returns config, manifest, and loaded leaves.
+fn setup_incremental_tree(dir: &Path) -> (SeededConfig, Manifest, Vec<LoadedLeaf>) {
+    let mut manifest = fresh_manifest("test", "2026-01-01T00:00:00Z", Some("2026-01-10T00:00:00Z"));
+    // leaf-a, leaf-b: new (collected after last_compile)
+    manifest.leaves.push(leaf_record(
+        "leaf-a",
+        "leaf-a.md",
+        "Leaf A",
+        "2026-01-15T00:00:00Z",
+    ));
+    manifest.leaves.push(leaf_record(
+        "leaf-b",
+        "leaf-b.md",
+        "Leaf B",
+        "2026-01-15T00:00:00Z",
+    ));
+    // leaf-c, leaf-d: existing (collected before last_compile, already branched)
+    manifest.leaves.push(leaf_record(
+        "leaf-c",
+        "leaf-c.md",
+        "Leaf C",
+        "2026-01-05T00:00:00Z",
+    ));
+    manifest.leaves.push(leaf_record(
+        "leaf-d",
+        "leaf-d.md",
+        "Leaf D",
+        "2026-01-05T00:00:00Z",
+    ));
+    manifest.branches.push(branch_record(
+        "existing",
+        "Existing Branch",
+        &["leaf-c", "leaf-d"],
+    ));
+
+    write_leaf(dir, "leaf-a.md", "---\ntitle: Leaf A\n---\n\nbody a\n");
+    write_leaf(dir, "leaf-b.md", "---\ntitle: Leaf B\n---\n\nbody b\n");
+    write_leaf(dir, "leaf-c.md", "---\ntitle: Leaf C\n---\n\nbody c\n");
+    write_leaf(dir, "leaf-d.md", "---\ntitle: Leaf D\n---\n\nbody d\n");
+
+    std::fs::create_dir_all(dir.join("branches")).unwrap();
+    std::fs::write(
+        dir.join("branches/existing.md"),
+        "---\ntitle: Existing Branch\n---\n\n# Existing Branch\n\nbody\n",
+    )
+    .unwrap();
+
+    write_manifest(dir, &manifest);
+
+    let cfg = seeded_config(dir);
+    let loaded = vec![
+        loaded_leaf("leaf-a", "Leaf A"),
+        loaded_leaf("leaf-b", "Leaf B"),
+        loaded_leaf("leaf-c", "Leaf C"),
+        loaded_leaf("leaf-d", "Leaf D"),
+    ];
+    (cfg, manifest, loaded)
+}
+
+#[test]
+fn parse_incremental_update_preserves_existing_leaves_and_adds_new() {
+    let dir = TempDir::new().unwrap();
+    let (cfg, _, loaded) = setup_incremental_tree(dir.path());
+
+    // Update existing branch: preserves leaf-c, leaf-d and adds leaf-a
+    let updated = r#"[{"slug":"existing","title":"Existing Branch","body":"updated body","leaves":["leaf-c","leaf-d","leaf-a"]}]"#;
+    let new = r#"[]"#;
+    let plan = parse_and_validate_incremental_with_input_size(
+        &incremental_response(updated, new),
+        &cfg,
+        &loaded,
+        4096,
+    )
+    .unwrap();
+
+    assert_eq!(plan.branches.len(), 1);
+    assert_eq!(plan.branches[0].slug, "existing");
+    assert!(plan.branches[0].leaves.contains(&"leaf-a.md".to_string()));
+    assert!(plan.branches[0].leaves.contains(&"leaf-c.md".to_string()));
+    assert!(plan.branches[0].leaves.contains(&"leaf-d.md".to_string()));
+}
+
+#[test]
+fn parse_incremental_update_dropping_existing_leaf_errors() {
+    let dir = TempDir::new().unwrap();
+    let (cfg, _, loaded) = setup_incremental_tree(dir.path());
+
+    // Update that omits leaf-d (an existing leaf) — not allowed
+    let updated = r#"[{"slug":"existing","title":"Existing Branch","body":"body","leaves":["leaf-c","leaf-a"]}]"#;
+    let new = r#"[]"#;
+    let err = parse_and_validate_incremental_with_input_size(
+        &incremental_response(updated, new),
+        &cfg,
+        &loaded,
+        4096,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, CompileError::Validation(ref msg) if msg.contains("dropped existing leaf"))
+    );
+}
+
+#[test]
+fn parse_incremental_new_branch_without_new_leaf_is_dropped() {
+    let dir = TempDir::new().unwrap();
+    let (cfg, _, loaded) = setup_incremental_tree(dir.path());
+
+    // New branch references only old leaves (no new leaf integrated)
+    let updated = r#"[]"#;
+    let new = r#"[{"title":"Reorganised","body":"body","leaves":["leaf-c","leaf-d"]}]"#;
+    let plan = parse_and_validate_incremental_with_input_size(
+        &incremental_response(updated, new),
+        &cfg,
+        &loaded,
+        4096,
+    )
+    .unwrap();
+
+    // Branch is silently dropped (no new leaves)
+    assert!(
+        plan.branches.is_empty(),
+        "new branch without new leaf must be dropped"
+    );
+}
+
+#[test]
+fn parse_incremental_update_unknown_branch_errors() {
+    let dir = TempDir::new().unwrap();
+    let (cfg, _, loaded) = setup_incremental_tree(dir.path());
+
+    let updated =
+        r#"[{"slug":"nonexistent","title":"Whatever","body":"body","leaves":["leaf-a","leaf-b"]}]"#;
+    let new = r#"[]"#;
+    let err = parse_and_validate_incremental_with_input_size(
+        &incremental_response(updated, new),
+        &cfg,
+        &loaded,
+        4096,
+    )
+    .unwrap_err();
+    assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("unknown branch")));
+}
+
+#[test]
+fn parse_incremental_title_change_errors() {
+    let dir = TempDir::new().unwrap();
+    let (cfg, _, loaded) = setup_incremental_tree(dir.path());
+
+    let updated = r#"[{"slug":"existing","title":"Different Title","body":"body","leaves":["leaf-c","leaf-d","leaf-a"]}]"#;
+    let new = r#"[]"#;
+    let err = parse_and_validate_incremental_with_input_size(
+        &incremental_response(updated, new),
+        &cfg,
+        &loaded,
+        4096,
+    )
+    .unwrap_err();
+    assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("changed title")));
+}
+
+#[test]
+fn parse_incremental_new_branch_empty_title_errors() {
+    let dir = TempDir::new().unwrap();
+    let (cfg, _, loaded) = setup_incremental_tree(dir.path());
+
+    let updated = r#"[]"#;
+    let new = r#"[{"title":"","body":"body","leaves":["leaf-a","leaf-b"]}]"#;
+    let err = parse_and_validate_incremental_with_input_size(
+        &incremental_response(updated, new),
+        &cfg,
+        &loaded,
+        4096,
+    )
+    .unwrap_err();
+    assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("empty title")));
+}
+
+#[test]
+fn parse_incremental_new_branch_empty_body_errors() {
+    let dir = TempDir::new().unwrap();
+    let (cfg, _, loaded) = setup_incremental_tree(dir.path());
+
+    let updated = r#"[]"#;
+    let new = r#"[{"title":"Valid Title","body":"","leaves":["leaf-a","leaf-b"]}]"#;
+    let err = parse_and_validate_incremental_with_input_size(
+        &incremental_response(updated, new),
+        &cfg,
+        &loaded,
+        4096,
+    )
+    .unwrap_err();
+    assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("empty body")));
+}
+
+#[test]
+fn parse_incremental_update_with_no_new_leaf_errors() {
+    let dir = TempDir::new().unwrap();
+    let (cfg, _, loaded) = setup_incremental_tree(dir.path());
+
+    // Update that adds no new leaf
+    let updated = r#"[{"slug":"existing","title":"Existing Branch","body":"body","leaves":["leaf-c","leaf-d"]}]"#;
+    let new = r#"[]"#;
+    let err = parse_and_validate_incremental_with_input_size(
+        &incremental_response(updated, new),
+        &cfg,
+        &loaded,
+        4096,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, CompileError::Validation(ref msg) if msg.contains("no newly processed leaf"))
+    );
+}
+
+#[test]
+fn parse_incremental_insufficient_leaves_errors() {
+    let dir = TempDir::new().unwrap();
+    let (cfg, _, loaded) = setup_incremental_tree(dir.path());
+
+    // New branch with only 1 leaf
+    let updated = r#"[]"#;
+    let new = r#"[{"title":"Solo","body":"body","leaves":["leaf-a"]}]"#;
+    let err = parse_and_validate_incremental_with_input_size(
+        &incremental_response(updated, new),
+        &cfg,
+        &loaded,
+        4096,
+    )
+    .unwrap_err();
+    assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("at least 2 leaves")));
+}
