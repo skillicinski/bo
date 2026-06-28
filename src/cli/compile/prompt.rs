@@ -26,9 +26,10 @@ documents, then produce structured output describing each concept.
   in turn.
 - The body should begin with a single markdown heading matching the title (e.g. `# Concept Name`). \
   Do not repeat the heading or nest a second heading immediately after.
-- Reference documents by their filename only when making a specific point about that document's \
-  contribution to the concept.
-- Only use document filenames exactly as provided in the input.
+- Reference documents by their slug or filename (exactly as provided) only when making a specific \
+  point about that document's contribution to the concept. Never derive or guess an identifier \
+  from a title — use the slug or filename verbatim from the input.
+- Only use document slugs and filenames exactly as provided in the input.
 - If no cross-cutting concepts span two or more documents, return an empty branches array.
 ";
 
@@ -40,8 +41,8 @@ pub(super) fn build_user_message(leaves: &[LoadedLeaf]) -> String {
 
     for leaf in leaves {
         msg.push_str(&format!(
-            "<document filename=\"{}\" title=\"{}\">\n{}\n</document>\n\n",
-            leaf.filename, leaf.title, leaf.body
+            "<document slug=\"{}\" filename=\"{}\" title=\"{}\">\n{}\n</document>\n\n",
+            leaf.slug, leaf.filename, leaf.title, leaf.body
         ));
     }
 
