@@ -1,4 +1,5 @@
 use super::{plan, render_human, CompileResult};
+use crate::cli::json;
 use crate::domain::manifest::{BranchRecord, LeafRecord, Manifest, TreeMeta};
 use crate::domain::{Slug, Timestamp};
 use crate::engine::config::SeededConfig;
@@ -172,29 +173,29 @@ fn all_leaves_deleted_manifest_repaired_to_empty() {
 }
 
 #[test]
-fn compile_result_notifications_serialized_and_omitted_when_empty() {
+fn compile_result_notifications_skipped_from_json() {
     let result = CompileResult {
-        status: "noop".to_string(),
-        reason: Some("empty_tree".to_string()),
-        mode: None,
-        context_mode: None,
-        model: None,
-        branches: Vec::new(),
-        leaves_processed: 0,
+        status: "compiled".to_string(),
+        reason: None,
+        mode: Some(super::CompileRunMode::Full),
+        context_mode: Some(super::CompileContextMode::FullCorpus),
+        model: Some("gpt-4.1".to_string()),
+        branches: vec![super::BranchResult {
+            slug: "test-branch".to_string(),
+            title: "Test Branch".to_string(),
+            leaf_count: 2,
+        }],
+        leaves_processed: 2,
         leaves_skipped: Vec::new(),
         notifications: vec!["pruned 3 orphan leaf records".to_string()],
     };
 
-    let json = serde_json::to_string_pretty(&result).unwrap();
-    assert!(json.contains("notifications"));
-    assert!(json.contains("pruned 3 orphan leaf records"));
+    let encoded = json::success_string("compile", &result, Vec::new()).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&encoded).unwrap();
 
-    let result_no_notifications = CompileResult {
-        notifications: Vec::new(),
-        ..result
-    };
-    let json_empty = serde_json::to_string_pretty(&result_no_notifications).unwrap();
-    assert!(!json_empty.contains("notifications"));
+    assert_eq!(parsed["schema_version"], 1);
+    assert_eq!(parsed["ok"], true);
+    assert!(parsed["data"]["notifications"].is_null());
 }
 
 fn branch_record(slug: &str, title: &str, leaf_slugs: &[&str]) -> BranchRecord {
