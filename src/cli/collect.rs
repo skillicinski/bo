@@ -415,6 +415,7 @@ where
     )
 }
 
+// ponytail: dead from CLI (main inlined the single-URL path), kept for unit tests.
 pub fn collect_inputs_with_collector<F>(
     inputs: Vec<String>,
     output_dir: &Path,
@@ -542,6 +543,7 @@ fn is_url_list_file(input: &str) -> bool {
     true
 }
 
+// ponytail: dead from CLI, kept for unit tests via collect_inputs_with_collector.
 fn collect_batch<F>(
     expanded: Vec<ExpandedCollectInput>,
     output_dir: &Path,
