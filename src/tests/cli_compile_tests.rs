@@ -1026,21 +1026,24 @@ fn repair_stale_branches_fixes_branch_frontmatter() {
 
 use super::BranchResult;
 
+fn branch_result(slug: &str, leaf_count: usize) -> BranchResult {
+    BranchResult {
+        slug: slug.to_string(),
+        title: slug.to_string(),
+        leaf_count,
+    }
+}
+
 #[test]
 fn degenerate_warning_when_single_branch_for_many_leaves() {
     // gpt-4.1 at 64 leaves silently produced 1 branch / 2 leaves.
     // <2 branches for >20 leaves is degenerate.
     let warning = degenerate_result_warning(
         Some(CompileRunMode::Full),
-        &[BranchResult {
-            slug: "catch-all".to_string(),
-            title: "Everything".to_string(),
-            leaf_count: 2,
-        }],
+        &[branch_result("catch-all", 2)],
         64,
     );
-    assert!(warning.is_some());
-    let msg = warning.unwrap();
+    let msg = warning.expect("expected a degenerate warning");
     assert!(msg.contains("degenerate compile result"));
     assert!(msg.contains("1 branch"));
     assert!(msg.contains("64 leaves"));
@@ -1052,26 +1055,13 @@ fn degenerate_warning_when_most_leaves_unbranched() {
     let warning = degenerate_result_warning(
         Some(CompileRunMode::Full),
         &[
-            BranchResult {
-                slug: "a".to_string(),
-                title: "A".to_string(),
-                leaf_count: 2,
-            },
-            BranchResult {
-                slug: "b".to_string(),
-                title: "B".to_string(),
-                leaf_count: 2,
-            },
-            BranchResult {
-                slug: "c".to_string(),
-                title: "C".to_string(),
-                leaf_count: 1,
-            },
+            branch_result("a", 2),
+            branch_result("b", 2),
+            branch_result("c", 1),
         ],
         30,
     );
-    assert!(warning.is_some());
-    let msg = warning.unwrap();
+    let msg = warning.expect("expected a degenerate warning");
     assert!(msg.contains("degenerate compile result"));
     assert!(msg.contains("25 of 30 leaves unbranched"));
 }
@@ -1082,21 +1072,9 @@ fn no_degenerate_warning_for_normal_full_compile() {
     let warning = degenerate_result_warning(
         Some(CompileRunMode::Full),
         &[
-            BranchResult {
-                slug: "a".to_string(),
-                title: "A".to_string(),
-                leaf_count: 10,
-            },
-            BranchResult {
-                slug: "b".to_string(),
-                title: "B".to_string(),
-                leaf_count: 10,
-            },
-            BranchResult {
-                slug: "c".to_string(),
-                title: "C".to_string(),
-                leaf_count: 8,
-            },
+            branch_result("a", 10),
+            branch_result("b", 10),
+            branch_result("c", 8),
         ],
         30,
     );
@@ -1116,11 +1094,7 @@ fn no_degenerate_warning_for_incremental_mode() {
     // produces fewer branches by design.
     let warning = degenerate_result_warning(
         Some(CompileRunMode::Incremental),
-        &[BranchResult {
-            slug: "single".to_string(),
-            title: "Single".to_string(),
-            leaf_count: 2,
-        }],
+        &[branch_result("single", 2)],
         64,
     );
     assert!(warning.is_none());
