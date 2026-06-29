@@ -271,7 +271,7 @@ fn query_uses_model_not_compile_model() {
     let cfg = SeededConfig::new(
         bo::engine::config::Config {
             provider: bo::engine::llm::Provider::OpenAI,
-            model: Some("gpt-4o-mini".to_string()),
+            model: "gpt-4o-mini".to_string(),
             compile_model: Some("gpt-4.1".to_string()),
             tree: None,
         },
@@ -356,7 +356,7 @@ fn seeded_config(tree: &Path) -> SeededConfig {
     SeededConfig::new(
         bo::engine::config::Config {
             provider: bo::engine::llm::Provider::OpenAI,
-            model: Some("gpt-4o".to_string()),
+            model: "gpt-4o".to_string(),
             compile_model: None,
             tree: None,
         },

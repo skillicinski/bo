@@ -24,7 +24,7 @@ fn seeded_config() -> Config {
             name: "tree".to_string(),
             created_at: test_timestamp(),
         }),
-        model: None,
+        model: "gpt-4.1-mini".to_string(),
         compile_model: None,
     }
 }
@@ -37,7 +37,7 @@ fn seeded_config_with_models() -> Config {
             name: "tree".to_string(),
             created_at: test_timestamp(),
         }),
-        model: Some("gpt-4o-mini".to_string()),
+        model: "gpt-4o-mini".to_string(),
         compile_model: Some("gpt-4.1-mini".to_string()),
     }
 }
@@ -58,9 +58,9 @@ fn write_absent_config_creates_default_with_model() {
     .unwrap();
 
     assert_eq!(result.status, "ok");
-    assert_eq!(result.model.as_deref(), Some("gpt-4.1-mini"));
+    assert_eq!(result.model, "gpt-4.1-mini");
     let loaded = engine_config::read_config(&path).unwrap();
-    assert_eq!(loaded.model.as_deref(), Some("gpt-4.1-mini"));
+    assert_eq!(loaded.model, "gpt-4.1-mini");
 }
 
 #[test]
@@ -80,7 +80,7 @@ fn write_creates_config() {
 
     assert_eq!(result.status, "ok");
     let loaded = engine_config::read_config(&path).unwrap();
-    assert_eq!(loaded.model.as_deref(), Some("gpt-4.1-mini"));
+    assert_eq!(loaded.model, "gpt-4.1-mini");
     assert!(loaded.compile_model.is_none());
     assert!(loaded.tree.is_none());
 }
@@ -93,7 +93,7 @@ fn write_model_with_existing_compile_model_preserves_fallback() {
         &Config {
             provider: Provider::OpenAI,
             tree: None,
-            model: Some("gpt-4o-mini".to_string()),
+            model: "gpt-4o-mini".to_string(),
             compile_model: None,
         },
         &path,
@@ -113,7 +113,7 @@ fn write_model_with_existing_compile_model_preserves_fallback() {
 
     assert_eq!(result.status, "ok");
     let loaded = engine_config::read_config(&path).unwrap();
-    assert_eq!(loaded.model.as_deref(), Some("gpt-4o"));
+    assert_eq!(loaded.model, "gpt-4o");
     assert_eq!(loaded.compile_model.as_deref(), None);
 }
 
@@ -134,7 +134,7 @@ fn write_compile_model_persists_only_compile_model() {
 
     assert_eq!(result.status, "ok");
     let loaded = engine_config::read_config(&path).unwrap();
-    assert!(loaded.model.is_none());
+    assert!(loaded.model.is_empty());
     assert_eq!(loaded.compile_model.as_deref(), Some("gpt-4.1-mini"));
     assert!(loaded.tree.is_none());
 }
@@ -155,7 +155,7 @@ fn write_trims_model_value() {
     .unwrap();
 
     let loaded = engine_config::read_config(&path).unwrap();
-    assert_eq!(loaded.model.as_deref(), Some("gpt-4.1-mini"));
+    assert_eq!(loaded.model, "gpt-4.1-mini");
 }
 
 #[test]
@@ -175,7 +175,7 @@ fn write_preserves_tree_metadata() {
     .unwrap();
 
     let loaded = engine_config::read_config(&path).unwrap();
-    assert_eq!(loaded.model.as_deref(), Some("gpt-4.1-mini"));
+    assert_eq!(loaded.model, "gpt-4.1-mini");
     let tree = loaded.tree.unwrap();
     assert_eq!(tree.path, PathBuf::from("/tmp/tree"));
     assert_eq!(tree.name, "tree");
@@ -198,7 +198,7 @@ fn write_model_preserves_compile_model_and_tree_metadata() {
     .unwrap();
 
     let loaded = engine_config::read_config(&path).unwrap();
-    assert_eq!(loaded.model.as_deref(), Some("gpt-4.1"));
+    assert_eq!(loaded.model, "gpt-4.1");
     assert_eq!(loaded.compile_model.as_deref(), Some("gpt-4.1-mini"));
     let tree = loaded.tree.unwrap();
     assert_eq!(tree.path, PathBuf::from("/tmp/tree"));
@@ -300,7 +300,7 @@ fn write_deepseek_provider() {
     .unwrap();
 
     assert_eq!(result.provider, "deepseek");
-    assert_eq!(result.model.as_deref(), Some("deepseek-v4-flash"));
+    assert_eq!(result.model, "deepseek-v4-flash");
 }
 
 #[test]
@@ -308,7 +308,7 @@ fn render_human_includes_provider() {
     let rendered = render_human(&ConfigWriteResult {
         status: "ok".to_string(),
         provider: "openai".to_string(),
-        model: Some("gpt-4.1-mini".to_string()),
+        model: "gpt-4.1-mini".to_string(),
         compile_model: None,
     });
 
@@ -321,7 +321,7 @@ fn render_human_omits_none_compile_model() {
     let rendered = render_human(&ConfigWriteResult {
         status: "ok".to_string(),
         provider: "openai".to_string(),
-        model: Some("gpt-4.1-mini".to_string()),
+        model: "gpt-4.1-mini".to_string(),
         compile_model: None,
     });
 

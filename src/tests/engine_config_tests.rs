@@ -23,7 +23,7 @@ fn make_seeded_config(path: &str) -> Config {
     Config {
         provider: Provider::OpenAI,
         tree: Some(make_tree(path)),
-        model: None,
+        model: "gpt-4.1-mini".to_string(),
         compile_model: None,
     }
 }
@@ -49,7 +49,7 @@ fn written_file_is_valid_json_with_tree_key() {
     let contents = std::fs::read_to_string(&path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
     assert_eq!(parsed["tree"]["path"], "/some/path");
-    assert!(parsed.get("model").is_none());
+    assert_eq!(parsed["model"], "gpt-4.1-mini");
 }
 
 #[test]
@@ -81,13 +81,13 @@ fn model_roundtrip_with_value() {
     let config = Config {
         provider: Provider::OpenAI,
         tree: Some(make_tree("/tmp/bo")),
-        model: Some("gpt-4.1-mini".to_string()),
+        model: "gpt-4.1-mini".to_string(),
         compile_model: None,
     };
     write_config(&config, &path).unwrap();
 
     let loaded = read_config(&path).unwrap();
-    assert_eq!(loaded.model.as_deref(), Some("gpt-4.1-mini"));
+    assert_eq!(loaded.model, "gpt-4.1-mini");
     assert_eq!(loaded.effective_model().unwrap().as_str(), "gpt-4.1-mini");
 }
 
@@ -99,13 +99,13 @@ fn compile_model_roundtrip_with_value() {
     let config = Config {
         provider: Provider::OpenAI,
         tree: Some(make_tree("/tmp/bo")),
-        model: Some("gpt-4o-mini".to_string()),
+        model: "gpt-4o-mini".to_string(),
         compile_model: Some("gpt-4.1-mini".to_string()),
     };
     write_config(&config, &path).unwrap();
 
     let loaded = read_config(&path).unwrap();
-    assert_eq!(loaded.model.as_deref(), Some("gpt-4o-mini"));
+    assert_eq!(loaded.model, "gpt-4o-mini");
     assert_eq!(loaded.compile_model.as_deref(), Some("gpt-4.1-mini"));
     assert_eq!(loaded.effective_model().unwrap().as_str(), "gpt-4o-mini");
     assert_eq!(
@@ -126,7 +126,7 @@ fn tree_metadata_roundtrip() {
             name: "my-research".to_string(),
             created_at: test_timestamp(),
         }),
-        model: None,
+        model: "gpt-4.1-mini".to_string(),
         compile_model: None,
     };
     write_config(&config, &path).unwrap();
@@ -147,7 +147,7 @@ fn config_without_tree_deserializes() {
 
     let loaded = read_config(&path).unwrap();
     assert!(loaded.tree.is_none());
-    assert_eq!(loaded.model.as_deref(), Some("gpt-4.1-mini"));
+    assert_eq!(loaded.model, "gpt-4.1-mini");
     assert_eq!(loaded.effective_model().unwrap().as_str(), "gpt-4.1-mini");
 }
 
@@ -160,7 +160,7 @@ fn write_config_without_tree_omits_tree_key() {
         &Config {
             provider: Provider::OpenAI,
             tree: None,
-            model: Some("gpt-4.1-mini".to_string()),
+            model: "gpt-4.1-mini".to_string(),
             compile_model: None,
         },
         &path,
@@ -178,7 +178,7 @@ fn seeded_conversion_succeeds_when_tree_exists() {
     let cfg = Config {
         provider: Provider::OpenAI,
         tree: Some(make_tree("/tmp/bo")),
-        model: Some("gpt-4.1-mini".to_string()),
+        model: "gpt-4.1-mini".to_string(),
         compile_model: None,
     };
 
@@ -196,7 +196,7 @@ fn seeded_conversion_fails_when_tree_missing() {
     let cfg = Config {
         provider: Provider::OpenAI,
         tree: None,
-        model: Some("gpt-4.1-mini".to_string()),
+        model: "gpt-4.1-mini".to_string(),
         compile_model: None,
     };
 
@@ -204,24 +204,18 @@ fn seeded_conversion_fails_when_tree_missing() {
 }
 
 #[test]
-fn seeded_config_uses_default_model_when_absent() {
+fn seeded_config_effective_model_fails_with_empty_model() {
     let cfg = Config {
         provider: Provider::OpenAI,
         tree: Some(make_tree("/tmp/bo")),
-        model: None,
+        model: String::new(),
         compile_model: None,
     };
 
     let seeded = cfg.into_seeded().unwrap();
 
-    assert_eq!(
-        seeded.config.effective_model().unwrap().as_str(),
-        "gpt-4.1-mini"
-    );
-    assert_eq!(
-        seeded.config.effective_compile_model().unwrap().as_str(),
-        "gpt-4.1-mini"
-    );
+    assert!(seeded.config.effective_model().is_err());
+    assert!(seeded.config.effective_compile_model().is_err());
 }
 
 #[test]
@@ -229,7 +223,7 @@ fn seeded_config_effective_compile_model_prefers_compile_model() {
     let cfg = Config {
         provider: Provider::OpenAI,
         tree: Some(make_tree("/tmp/bo")),
-        model: Some("gpt-4o-mini".to_string()),
+        model: "gpt-4o-mini".to_string(),
         compile_model: Some("gpt-4.1-mini".to_string()),
     };
 
@@ -250,7 +244,7 @@ fn seeded_config_effective_compile_model_falls_back_to_model() {
     let cfg = Config {
         provider: Provider::OpenAI,
         tree: Some(make_tree("/tmp/bo")),
-        model: Some("gpt-4o-mini".to_string()),
+        model: "gpt-4o-mini".to_string(),
         compile_model: None,
     };
 
