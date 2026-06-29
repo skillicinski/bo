@@ -319,7 +319,7 @@ impl LlmProvider for QueryModelRecordingProvider {
         _messages: &[bo::engine::llm::Message],
         model: &str,
         _max_tokens: u32,
-        _response_schema: Option<&serde_json::Value>,
+        _response_schema: Option<&bo::engine::llm::NormalizedSchema>,
         _reasoning_disabled: bool,
     ) -> Result<bo::engine::llm::LlmResponse, bo::engine::llm::LlmError> {
         *self.model.lock().unwrap() = Some(model.to_string());

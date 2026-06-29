@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use bo::cli::query;
 use bo::domain::Timestamp;
-use bo::engine::llm::{LlmError, LlmProvider, LlmResponse, Message, Model};
+use bo::engine::llm::{LlmError, LlmProvider, LlmResponse, Message, Model, NormalizedSchema};
 use serde_json::Value;
 use std::fs;
 use tempfile::TempDir;
@@ -40,7 +40,7 @@ impl LlmProvider for MockProvider {
         _messages: &[Message],
         _model: &str,
         _max_tokens: u32,
-        _response_schema: Option<&Value>,
+        _response_schema: Option<&NormalizedSchema>,
         _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         Ok(LlmResponse {
