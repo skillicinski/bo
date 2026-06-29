@@ -70,7 +70,7 @@ fn fresh_seed_writes_config_without_manifest() {
     assert_eq!(tree.name, "tree");
     assert_eq!(tree.created_at, result.created_at);
     assert_eq!(cfg.provider, Provider::OpenAI);
-    assert_eq!(cfg.model.as_deref(), Some("gpt-4.1-mini"));
+    assert_eq!(cfg.model, "gpt-4.1-mini");
 }
 
 #[test]
@@ -147,7 +147,7 @@ fn existing_same_path_returns_already_exists_and_keeps_config_read_only() {
 
     let cfg = config::read_config(&config_path).unwrap();
     assert_eq!(cfg.tree.unwrap().name, "tree");
-    assert_eq!(cfg.model.as_deref(), Some("gpt-4.1-mini"));
+    assert_eq!(cfg.model, "gpt-4.1-mini");
 }
 
 #[test]

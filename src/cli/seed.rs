@@ -203,7 +203,7 @@ pub fn seed(
     config::write_config(
         &Config {
             provider,
-            model: Some(model.clone()),
+            model: model.clone(),
             compile_model: None,
             tree: Some(TreeConfig {
                 path: path.clone(),
@@ -274,7 +274,7 @@ fn read_existing_seed(global_config_path: &Path) -> Result<Option<ExistingSeed>,
 
 fn valid_existing_seed(config: Config) -> Option<ExistingSeed> {
     let tree = config.tree?;
-    let model = config.model?;
+    let model = config.model;
     if !is_supported_model(config.provider, &model) {
         return None;
     }

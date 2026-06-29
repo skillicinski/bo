@@ -118,12 +118,8 @@ fn short_retry_policy(max_attempts: usize) -> LlmCallPolicy {
 }
 
 #[test]
-fn model_catalog_exposes_default_model() {
-    assert_eq!(models::DEFAULT_MODEL, "gpt-4.1-mini");
-    assert!(models::is_supported_model(
-        Provider::OpenAI,
-        models::DEFAULT_MODEL
-    ));
+fn model_catalog_includes_gpt4_1_mini() {
+    assert!(models::is_supported_model(Provider::OpenAI, "gpt-4.1-mini"));
 }
 
 #[test]

@@ -182,17 +182,14 @@ fn config_fields(
         None => return (String::from("openai"), None, None, None, None),
     };
     let provider = cfg.provider.to_string();
-    let model_ctx = cfg
-        .model
-        .as_deref()
-        .and_then(|m| models::context_window_tokens(cfg.provider, m));
+    let model_ctx = models::context_window_tokens(cfg.provider, &cfg.model);
     let compile_ctx = cfg
         .compile_model
         .as_deref()
         .and_then(|m| models::context_window_tokens(cfg.provider, m));
     (
         provider,
-        cfg.model.clone(),
+        Some(cfg.model.clone()),
         cfg.compile_model.clone(),
         model_ctx,
         compile_ctx,

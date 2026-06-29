@@ -39,7 +39,7 @@ pub fn setup_tree(tmp: &TempDir) -> (PathBuf, PathBuf) {
                 name: "tree".to_string(),
                 created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             }),
-            model: None,
+            model: "gpt-4.1-mini".to_string(),
             compile_model: None,
         },
         &config_path,

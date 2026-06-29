@@ -29,8 +29,7 @@ pub struct WriteConfigOptions {
 pub struct ConfigWriteResult {
     pub status: String,
     pub provider: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
+    pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compile_model: Option<String>,
 }
@@ -141,7 +140,7 @@ pub fn write_config(
                 provider: effective_provider,
             });
         }
-        config.model = Some(trimmed);
+        config.model = trimmed;
     }
 
     // Validate and apply compile_model if specified
@@ -171,10 +170,10 @@ pub fn write_config(
 // ── Human output ─────────────────────────────────────────────────────────────
 
 pub fn render_human(result: &ConfigWriteResult) -> String {
-    let mut lines = vec![format!("provider: {}", result.provider)];
-    if let Some(ref m) = result.model {
-        lines.push(format!("model: {}", m));
-    }
+    let mut lines = vec![
+        format!("provider: {}", result.provider),
+        format!("model: {}", result.model),
+    ];
     if let Some(ref cm) = result.compile_model {
         lines.push(format!("compile_model: {}", cm));
     }
