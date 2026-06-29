@@ -78,6 +78,14 @@ pub const ALL_PROVIDERS: &[&str] = &["openai", "deepseek", "google"];
 
 // ── public types ──────────────────────────────────────────────────────────────
 
+/// A response schema that has been normalized into a provider's native dialect.
+///
+/// Only `LlmProvider::map_response_schema` can produce this value.
+/// Passing `Option<&NormalizedSchema>` to `complete()` is a compile-time
+/// guarantee that normalization happened — you cannot forget.
+#[derive(Debug, Clone)]
+pub struct NormalizedSchema(pub(crate) Value);
+
 #[derive(Debug)]
 pub enum LlmError {
     Network(String),
@@ -276,8 +284,9 @@ pub trait LlmProvider: Send + Sync {
     /// Return `Err` if the schema uses constructs the provider cannot satisfy —
     /// the caller must not silently degrade. This is called once per request
     /// by `complete_with_policy`, before the retry loop.
-    fn map_response_schema(&self, schema: &Value) -> Result<Value, LlmError> {
-        Ok(schema.clone())
+    fn map_response_schema(&self, schema: &Value) -> Result<NormalizedSchema, LlmError> {
+        // ponytail: default identity – most providers accept canonical JSON Schema as-is
+        Ok(NormalizedSchema(schema.clone()))
     }
 
     async fn complete(
@@ -285,7 +294,7 @@ pub trait LlmProvider: Send + Sync {
         messages: &[Message],
         model: &str,
         max_tokens: u32,
-        response_schema: Option<&Value>,
+        response_schema: Option<&NormalizedSchema>,
         reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError>;
 }

@@ -4,7 +4,7 @@ use serde_json::Value;
 use super::{map_http_error, map_reqwest_error};
 use crate::engine::llm::{
     sanitize_provider_error_message, FinishReason, LlmError, LlmProvider, LlmResponse, Message,
-    Role,
+    NormalizedSchema, Role,
 };
 
 pub struct DeepSeekProvider {
@@ -28,7 +28,7 @@ impl LlmProvider for DeepSeekProvider {
         messages: &[Message],
         model: &str,
         max_tokens: u32,
-        response_schema: Option<&Value>,
+        response_schema: Option<&NormalizedSchema>,
         reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         // 1. Convert messages to Deepseek chat format.
@@ -50,7 +50,7 @@ impl LlmProvider for DeepSeekProvider {
 
         // 2. Embed response schema into the system message if requested.
         let final_messages = if let Some(schema) = response_schema {
-            let schema_text = serde_json::to_string_pretty(schema)
+            let schema_text = serde_json::to_string_pretty(&schema.0)
                 .map_err(|e| LlmError::Parse(format!("failed to serialize schema: {}", e)))?;
             let instruction = format!(
                 "\n\nRespond with JSON matching this schema:\n```json\n{}\n```\n",

@@ -1,6 +1,5 @@
 use super::*;
 use async_trait::async_trait;
-use serde_json::Value;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -29,7 +28,7 @@ impl LlmProvider for TransientThenSuccessProvider {
         _messages: &[Message],
         _model: &str,
         _max_tokens: u32,
-        _response_schema: Option<&Value>,
+        _response_schema: Option<&NormalizedSchema>,
         _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
@@ -66,7 +65,7 @@ impl LlmProvider for PermanentFailureProvider {
         _messages: &[Message],
         _model: &str,
         _max_tokens: u32,
-        _response_schema: Option<&Value>,
+        _response_schema: Option<&NormalizedSchema>,
         _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -97,7 +96,7 @@ impl LlmProvider for HangingProvider {
         _messages: &[Message],
         _model: &str,
         _max_tokens: u32,
-        _response_schema: Option<&Value>,
+        _response_schema: Option<&NormalizedSchema>,
         _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         self.calls.fetch_add(1, Ordering::SeqCst);

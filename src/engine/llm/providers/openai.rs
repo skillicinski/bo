@@ -9,11 +9,10 @@ use async_openai::{
     Client,
 };
 use async_trait::async_trait;
-use serde_json::Value;
 
 use crate::engine::llm::{
     sanitize_provider_error_message, FinishReason, LlmError, LlmProvider, LlmResponse, Message,
-    Role,
+    NormalizedSchema, Role,
 };
 
 pub struct OpenAiProvider {
@@ -36,7 +35,7 @@ impl LlmProvider for OpenAiProvider {
         messages: &[Message],
         model: &str,
         max_tokens: u32,
-        response_schema: Option<&Value>,
+        response_schema: Option<&NormalizedSchema>,
         _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         let api_messages: Vec<ChatCompletionRequestMessage> = messages
@@ -55,7 +54,7 @@ impl LlmProvider for OpenAiProvider {
                 json_schema: ResponseFormatJsonSchema {
                     name: "response".to_string(),
                     description: None,
-                    schema: Some(schema.clone()),
+                    schema: Some(schema.0.clone()),
                     strict: Some(true),
                 },
             });

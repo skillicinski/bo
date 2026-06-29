@@ -179,8 +179,9 @@ async fn google_provider_smoke_structured_output() {
 
     let messages = vec![Message::user("What is 2+2?")];
 
+    let normalized = provider.map_response_schema(&schema).unwrap();
     let result = provider
-        .complete(&messages, "gemini-2.5-flash", 200, Some(&schema), false)
+        .complete(&messages, "gemini-2.5-flash", 200, Some(&normalized), false)
         .await;
 
     match result {

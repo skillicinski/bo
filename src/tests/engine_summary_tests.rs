@@ -1,11 +1,10 @@
 use super::*;
 use async_trait::async_trait;
-use serde_json::Value;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crate::engine::llm::{
-    FinishReason, LlmCallPolicy, LlmError, LlmProvider, LlmResponse, Message,
+    FinishReason, LlmCallPolicy, LlmError, LlmProvider, LlmResponse, Message, NormalizedSchema,
 };
 
 #[test]
@@ -85,7 +84,7 @@ impl LlmProvider for SummaryFakeProvider {
         _messages: &[Message],
         _model: &str,
         _max_tokens: u32,
-        _response_schema: Option<&Value>,
+        _response_schema: Option<&NormalizedSchema>,
         _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
@@ -122,7 +121,7 @@ impl LlmProvider for SummaryHangingProvider {
         _messages: &[Message],
         _model: &str,
         _max_tokens: u32,
-        _response_schema: Option<&Value>,
+        _response_schema: Option<&NormalizedSchema>,
         _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         self.calls.fetch_add(1, Ordering::SeqCst);

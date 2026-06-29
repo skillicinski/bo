@@ -1,9 +1,10 @@
 use super::*;
 use crate::domain::{Slug, Timestamp};
-use crate::engine::llm::{model::Model, FinishReason, LlmProvider, LlmResponse, Provider};
+use crate::engine::llm::{
+    model::Model, FinishReason, LlmProvider, LlmResponse, NormalizedSchema, Provider,
+};
 use crate::engine::retrieval::DocKind;
 use async_trait::async_trait;
-use serde_json::Value;
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -701,7 +702,7 @@ impl LlmProvider for FlakyQueryProvider {
         _messages: &[Message],
         _model: &str,
         _max_tokens: u32,
-        _response_schema: Option<&Value>,
+        _response_schema: Option<&NormalizedSchema>,
         _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
@@ -739,7 +740,7 @@ impl LlmProvider for HangingQueryProvider {
         _messages: &[Message],
         _model: &str,
         _max_tokens: u32,
-        _response_schema: Option<&Value>,
+        _response_schema: Option<&NormalizedSchema>,
         _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -939,7 +940,7 @@ impl LlmProvider for ZeroCitationProvider {
         _messages: &[Message],
         _model: &str,
         _max_tokens: u32,
-        _response_schema: Option<&Value>,
+        _response_schema: Option<&NormalizedSchema>,
         _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         Ok(LlmResponse {
