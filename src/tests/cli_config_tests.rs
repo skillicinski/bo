@@ -58,7 +58,7 @@ fn write_absent_config_creates_default_with_model() {
     .unwrap();
 
     assert_eq!(result.status, "ok");
-    assert_eq!(result.model.as_deref(), Some("gpt-4.1-mini"));
+    assert_eq!(result.model, "gpt-4.1-mini");
     let loaded = engine_config::read_config(&path).unwrap();
     assert_eq!(loaded.model, "gpt-4.1-mini");
 }
@@ -300,7 +300,7 @@ fn write_deepseek_provider() {
     .unwrap();
 
     assert_eq!(result.provider, "deepseek");
-    assert_eq!(result.model.as_deref(), Some("deepseek-v4-flash"));
+    assert_eq!(result.model, "deepseek-v4-flash");
 }
 
 #[test]
@@ -308,7 +308,7 @@ fn render_human_includes_provider() {
     let rendered = render_human(&ConfigWriteResult {
         status: "ok".to_string(),
         provider: "openai".to_string(),
-        model: Some("gpt-4.1-mini".to_string()),
+        model: "gpt-4.1-mini".to_string(),
         compile_model: None,
     });
 
@@ -321,7 +321,7 @@ fn render_human_omits_none_compile_model() {
     let rendered = render_human(&ConfigWriteResult {
         status: "ok".to_string(),
         provider: "openai".to_string(),
-        model: Some("gpt-4.1-mini".to_string()),
+        model: "gpt-4.1-mini".to_string(),
         compile_model: None,
     });
 
