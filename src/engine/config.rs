@@ -23,7 +23,6 @@
 
 use crate::domain::tree::{Tree, TreeConfig};
 use crate::engine::llm::model::Model;
-use crate::engine::llm::models;
 use crate::engine::llm::Provider;
 use crate::engine::llm::UnsupportedModel;
 use serde::{Deserialize, Serialize};
@@ -43,11 +42,11 @@ pub struct Config {
     #[serde(default = "default_provider")]
     pub provider: Provider,
 
-    /// Global model used by LLM-backed stages. Defaults to `DEFAULT_MODEL` when absent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
+    /// Global model used by LLM-backed stages.
+    #[serde(default)]
+    pub model: String,
 
-    /// Optional model used by compile. Falls back to `model`, then `DEFAULT_MODEL`.
+    /// Optional model used by compile. Falls back to `model`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compile_model: Option<String>,
 
@@ -60,7 +59,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             provider: Provider::OpenAI,
-            model: None,
+            model: String::new(),
             compile_model: None,
             tree: None,
         }
@@ -69,16 +68,11 @@ impl Default for Config {
 
 impl Config {
     pub fn effective_model(&self) -> Result<Model, UnsupportedModel> {
-        let model_id = self.model.as_deref().unwrap_or(models::DEFAULT_MODEL);
-        Model::parse(model_id, self.provider)
+        Model::parse(&self.model, self.provider)
     }
 
     pub fn effective_compile_model(&self) -> Result<Model, UnsupportedModel> {
-        let model_id = self
-            .compile_model
-            .as_deref()
-            .or(self.model.as_deref())
-            .unwrap_or(models::DEFAULT_MODEL);
+        let model_id = self.compile_model.as_deref().unwrap_or(&self.model);
         Model::parse(model_id, self.provider)
     }
 

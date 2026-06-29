@@ -141,7 +141,7 @@ pub fn write_config(
                 provider: effective_provider,
             });
         }
-        config.model = Some(trimmed);
+        config.model = trimmed;
     }
 
     // Validate and apply compile_model if specified
@@ -163,7 +163,7 @@ pub fn write_config(
     Ok(ConfigWriteResult {
         status: "ok".to_string(),
         provider: config.provider.to_string(),
-        model: config.model,
+        model: Some(config.model),
         compile_model: config.compile_model,
     })
 }

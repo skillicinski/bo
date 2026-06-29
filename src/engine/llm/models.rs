@@ -11,8 +11,6 @@ pub struct ModelInfo {
     pub context_tokens: usize,
 }
 
-pub const DEFAULT_MODEL: &str = "gpt-4.1-mini";
-
 pub const OPENAI_MODELS: &[ModelInfo] = &[
     ModelInfo {
         id: "gpt-4o",
