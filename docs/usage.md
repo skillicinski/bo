@@ -104,15 +104,32 @@ This is where bo does the heavy lifting. All collected leaves are sent to the co
 3. Writes a summary for each branch synthesising its leaves
 
 **Incremental by default** — only leaves collected since the last compile are processed. Existing branches are preserved; new leaves are fitted to them.
+On a fresh tree with no existing branches, compile automatically runs in
+full mode (equivalent to `--all`); incremental mode only activates once
+branches exist.
+
 
 ```bash
 # Recompile the full corpus (allow complete branch graph rewrite)
 bo compile --all
 ```
 
-**Validation gate** — if the LLM response is malformed (missing fields, phantom leaf references, empty branches), bo rejects it and writes nothing. No partial state.
+**Validation gate** — if the LLM response is malformed (missing fields, phantom
+leaf references, empty branches), bo rejects it and writes nothing. No partial
+state.
 
-**Trees grow in size over time — know your model's limits.** Smaller models (e.g. `gpt-4.1-nano`) have tighter context windows and will throw compile-time _context overflow_ errors once your collection passes a certain size. If this happens, try compiling with a larger model via `bo config --compile-model gpt-4.1`.
+**Quality guard** — when a full compile on a large corpus produces a
+suspiciously thin branch set (very few branches relative to the number of
+leaves, or most leaves unbranched), bo emits a warning. The tree is still
+written; recompile with `--all` or switch models if the warning appears
+consistently.
+
+**Trees grow in size over time — know your model's quality limits.** Single-pass
+compile on a large diverse corpus (~50+ leaves) can produce thin branch sets
+with some models. If your compile returns very few branches, try a stronger
+model (e.g. `gpt-4.1` or `gemini-2.5-pro`), recompile with `--all`, or use the
+`bo config --compile-model` flag to pin a dedicated model for the compile step.
+The compile command will warn when the result looks degenerate.
 
 ---
 
@@ -123,9 +140,13 @@ bo query "What are the core principles of knowledge graphs?"
 ```
 
 Behind the scenes:
-1. Your question is matched against leaf titles and content using lexical (keyword-based) retrieval
-2. The most relevant leaves and their parent branches are gathered as context
+1. Your question is matched against leaf titles and content using lexical
+   (term-density) retrieval. Compiled branches — synthesized concept pages
+   that draw connections across leaves — are also scored and included in the
+   context alongside leaves. The LLM may cite either kind.
+2. The most relevant matches are gathered as context
 3. The LLM generates an answer with citations back to source documents
+   (leaves and branches).
 
 **No-answer hardening** — if no relevant sources are found, bo reports "no answer from collected sources" rather than hallucinating.
 
