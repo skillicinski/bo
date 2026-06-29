@@ -332,6 +332,10 @@ pub fn collect_url_with_model(
 ) -> Result<Document, CollectError> {
     recover_pending_if_needed(output_dir)?;
 
+    // Check for an existing leaf with this URL before any network work —
+    // duplicate detection must not depend on a successful fetch.
+    ensure_not_duplicate(url, output_dir)?;
+
     match youtube::classify_url(url) {
         YoutubeUrlMatch::Supported(supported) => {
             let transcript = youtube::collect_transcript(&supported)?;
