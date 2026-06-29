@@ -16,7 +16,8 @@ bo supports OpenAI-compatible providers. Each provider enumerates a fixed set of
 
 ### Notes
 
-- **Structured output mode** — bo uses OpenAI's `response_format: json_schema` to guarantee well-formed compile responses. This is the reason validation gate failures are rare: the model is constrained to produce the expected shape from the start.
+- **Structured output mode** — bo uses OpenAI's `response_format: json_schema` to guarantee well-formed compile responses. Schema normalization is enforced at the type level across all providers.
+- **Model selection** — choose at seed time (flag or interactive prompt). No silent default; `bo seed` always requires an explicit `--model` or prompts for one.
 
 ---
 
@@ -29,7 +30,7 @@ bo supports OpenAI-compatible providers. Each provider enumerates a fixed set of
 
 ### Notes
 
-- **No structured output mode** — DeepSeek's API does not support `response_format: json_schema`. bo falls back to JSON-mode prompting (system message instructions + `response_format: json_object`). The compile validation gate catches malformed responses, but they are more likely with DeepSeek than OpenAI.
+- **No structured output mode** — DeepSeek's API does not support `response_format: json_schema`. bo falls back to JSON-mode prompting (system message instructions + `response_format: json_object`). Schema normalization is enforced at the type level; validation gate catches any malformed responses.
 
 ---
 
