@@ -637,12 +637,19 @@ fn execute_collect(inputs: Vec<String>) -> Result<CollectOutput, CliError> {
         return Ok(CollectOutput::Batch(result));
     }
 
-    // Single URL: use the existing sequential pipeline.
-    collect::collect_inputs_with_collector(inputs, &output_dir, |url| {
-        eprintln!("fetching {}...", url);
+    // ponytail: single URL — call collect_url_with_model directly.
+    // collect_inputs_with_collector kept for unit tests only.
+    let url = &inputs[0];
+    eprintln!("fetching {}...", url);
+    let doc =
         collect::collect_url_with_model(url, &output_dir, model.as_str(), cfg.config.provider)
-    })
-    .map_err(CliError::Collect)
+            .map_err(CliError::Collect)?;
+    let path = output_dir.join(&doc.filename);
+    Ok(CollectOutput::Single(collect::CollectResult {
+        url: doc.url,
+        file: doc.filename,
+        path: path.display().to_string(),
+    }))
 }
 
 fn execute_list(
