@@ -154,19 +154,11 @@ pub enum CompileRunMode {
     Full,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CompileContextMode {
-    FullCorpus,
-    IncrementalContext,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct CompileResult {
     pub status: String,
     pub reason: Option<String>,
     pub mode: Option<CompileRunMode>,
-    pub context_mode: Option<CompileContextMode>,
     pub model: Option<String>,
     pub branches: Vec<BranchResult>,
     pub leaves_processed: usize,
@@ -179,7 +171,6 @@ impl CompileResult {
     fn compiled(
         summary: CompileSummary,
         mode: CompileRunMode,
-        context_mode: CompileContextMode,
         model: &Model,
         notifications: Vec<String>,
     ) -> Self {
@@ -187,7 +178,6 @@ impl CompileResult {
             status: "compiled".to_string(),
             reason: None,
             mode: Some(mode),
-            context_mode: Some(context_mode),
             model: Some(model.to_string()),
             branches: summary.branches,
             leaves_processed: summary.leaves_processed,
@@ -201,7 +191,6 @@ impl CompileResult {
             status: "noop".to_string(),
             reason: Some(reason.to_string()),
             mode: None,
-            context_mode: None,
             model: None,
             branches: Vec::new(),
             leaves_processed: 0,
@@ -278,6 +267,8 @@ pub fn run_compile_with_options(
         return Ok(CompileResult::noop(NO_NEW_LEAVES_REASON, notifications));
     }
 
+    let expected_manifest_hash = pending::manifest_hash(tree.path())?;
+
     let api_key =
         auth::resolve_api_key(cfg.config.provider).map_err(|e| CompileError::Llm(e.to_string()))?;
     let provider = crate::engine::llm::create_provider(cfg.config.provider, &api_key);
@@ -292,9 +283,14 @@ pub fn run_compile_with_options(
         &compile_model,
         &compile_started_at,
         notifications,
+        &manifest,
+        &new_leaf_slugs,
+        &expected_manifest_hash,
     )
 }
 
+// ponytail: 9 args; collapse into a preflight struct if it grows further.
+#[allow(clippy::too_many_arguments)]
 pub fn run_compile_with_provider_started_at(
     cfg: &SeededConfig,
     options: CompileOptions,
@@ -302,20 +298,10 @@ pub fn run_compile_with_provider_started_at(
     model: &Model,
     compile_started_at: &crate::domain::Timestamp,
     mut notifications: Vec<String>,
+    manifest: &manifest::Manifest,
+    new_leaf_slugs: &[String],
+    expected_manifest_hash: &str,
 ) -> Result<CompileResult, CompileError> {
-    let tree = cfg.tree();
-    execute::recover_pending_if_needed(tree.path())?;
-
-    let manifest = manifest::read(&tree::manifest_path(tree.path()))
-        .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
-    let expected_manifest_hash = pending::manifest_hash(tree.path())?;
-
-    let new_leaf_slugs = plan::select_new_leaf_slugs(&manifest)?;
-
-    if !options.all && new_leaf_slugs.is_empty() {
-        return Ok(CompileResult::noop(NO_NEW_LEAVES_REASON, notifications));
-    }
-
     let (loaded_leaves, skipped_leaves) = plan::read_valid_leaves(cfg, &manifest.leaves);
 
     if loaded_leaves.len() < 2 {
@@ -329,7 +315,7 @@ pub fn run_compile_with_provider_started_at(
     // Each run mode has exactly one coherent prompt and schema. Incremental
     // mode is only chosen when branches exist (see select_run_mode) and always
     // sends the existing branch graph; Full mode sends all leaf bodies.
-    let run_mode = plan::select_run_mode(options, &manifest);
+    let run_mode = plan::select_run_mode(options, manifest);
 
     let (user_message, prompt_tokens, response_schema) = match run_mode {
         CompileRunMode::Full => {
@@ -344,9 +330,9 @@ pub fn run_compile_with_provider_started_at(
         CompileRunMode::Incremental => {
             let msg = prompt::build_incremental_user_message(
                 cfg,
-                &manifest,
+                manifest,
                 &loaded_leaves,
-                &new_leaf_slugs,
+                new_leaf_slugs,
             );
             let tokens = execute::estimate_compile_prompt_tokens(
                 prompt::COMPILE_SYSTEM_PROMPT
@@ -356,7 +342,7 @@ pub fn run_compile_with_provider_started_at(
             (msg, tokens, schema::incremental_compile_response_schema())
         }
     };
-    let context_mode = execute::choose_context_mode(model, run_mode, prompt_tokens)?;
+    execute::ensure_compile_context_fits(model, prompt_tokens)?;
 
     // ── LLM call ─────────────────────────────────────────────────────────────
     let response = execute::call_llm_blocking(provider, model, &user_message, &response_schema)?;
@@ -387,7 +373,7 @@ pub fn run_compile_with_provider_started_at(
         run_timestamp,
         &skipped_leaves,
         run_mode,
-        &expected_manifest_hash,
+        expected_manifest_hash,
     )?;
 
     if let Some(warning) =
@@ -399,7 +385,6 @@ pub fn run_compile_with_provider_started_at(
     Ok(CompileResult::compiled(
         summary,
         run_mode,
-        context_mode,
         model,
         notifications,
     ))

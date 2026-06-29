@@ -381,131 +381,177 @@ pub(super) fn build_manifest_delta(
     run_mode: CompileRunMode,
     run_timestamp: &Timestamp,
 ) -> Result<ManifestDelta, CompileError> {
+    match run_mode {
+        CompileRunMode::Full => build_full_delta(current, plan, run_timestamp),
+        CompileRunMode::Incremental => build_incremental_delta(current, plan, run_timestamp),
+    }
+}
+
+fn build_full_delta(
+    current: &Manifest,
+    plan: &CompilePlan,
+    run_timestamp: &Timestamp,
+) -> Result<ManifestDelta, CompileError> {
     let mut branch_writes = Vec::new();
     let mut branch_deletes = Vec::new();
     let mut branches_created = Vec::new();
     let mut branches_updated = Vec::new();
     let mut new_branches = Vec::new();
 
-    match run_mode {
-        CompileRunMode::Full => {
-            let planned_slugs: HashSet<&str> = plan
-                .branches
-                .iter()
-                .map(|branch| branch.slug.as_str())
-                .collect();
-            for branch in &current.branches {
-                if !planned_slugs.contains(branch.slug.as_str()) {
-                    branch_deletes.push(branch.file.clone());
-                }
-            }
-            for planned in &plan.branches {
-                let created_at = current
-                    .branch_by_slug_str(&planned.slug)
-                    .map(|branch| branch.created_at.clone())
-                    .unwrap_or_else(|| run_timestamp.clone());
-                let slug = Slug::parse(&planned.slug)
-                    .unwrap_or_else(|_| Slug::generate(&planned.slug, ""));
-                let record = BranchRecord {
-                    slug: slug.clone(),
-                    file: format!("branches/{}.md", planned.slug),
-                    title: planned.title.clone(),
-                    created_at,
-                    updated_at: run_timestamp.clone(),
-                    leaves: validated_branch_leaf_slugs(planned),
-                };
-                if current.branch_by_slug_str(&planned.slug).is_some() {
-                    branches_updated.push(branch_result(
-                        record.slug.as_str(),
-                        record.title.as_str(),
-                        record.leaves.len(),
-                    ));
-                    branch_writes.push(PlannedBranchWrite {
-                        record: record.clone(),
-                        file_leaves: planned.leaves.clone(),
-                        body: planned.body.clone(),
-                    });
-                } else {
-                    branches_created.push(branch_result(
-                        record.slug.as_str(),
-                        record.title.as_str(),
-                        record.leaves.len(),
-                    ));
-                    branch_writes.push(PlannedBranchWrite {
-                        record: record.clone(),
-                        file_leaves: planned.leaves.clone(),
-                        body: planned.body.clone(),
-                    });
-                }
-                new_branches.push(record);
-            }
-        }
-        CompileRunMode::Incremental => {
-            let planned_by_slug: HashMap<&str, &ValidatedBranch> = plan
-                .branches
-                .iter()
-                .map(|branch| (branch.slug.as_str(), branch))
-                .collect();
-            let current_branch_slugs: HashSet<&str> = current
-                .branches
-                .iter()
-                .map(|branch| branch.slug.as_str())
-                .collect();
-            for current_branch in &current.branches {
-                if let Some(planned) = planned_by_slug.get(current_branch.slug.as_str()) {
-                    let record = BranchRecord {
-                        slug: current_branch.slug.clone(),
-                        file: current_branch.file.clone(),
-                        title: planned.title.clone(),
-                        created_at: current_branch.created_at.clone(),
-                        updated_at: run_timestamp.clone(),
-                        leaves: validated_branch_leaf_slugs(planned),
-                    };
-                    let result = branch_result(
-                        record.slug.as_str(),
-                        record.title.as_str(),
-                        record.leaves.len(),
-                    );
-                    branches_updated.push(result.clone());
-                    branch_writes.push(PlannedBranchWrite {
-                        record: record.clone(),
-                        file_leaves: planned.leaves.clone(),
-                        body: planned.body.clone(),
-                    });
-                    new_branches.push(record);
-                } else {
-                    new_branches.push(current_branch.clone());
-                }
-            }
-            for planned in &plan.branches {
-                if current_branch_slugs.contains(planned.slug.as_str()) {
-                    continue;
-                }
-                let slug = Slug::parse(&planned.slug)
-                    .unwrap_or_else(|_| Slug::generate(&planned.slug, ""));
-                let record = BranchRecord {
-                    slug: slug.clone(),
-                    file: format!("branches/{}.md", planned.slug),
-                    title: planned.title.clone(),
-                    created_at: run_timestamp.clone(),
-                    updated_at: run_timestamp.clone(),
-                    leaves: validated_branch_leaf_slugs(planned),
-                };
-                branches_created.push(branch_result(
-                    record.slug.as_str(),
-                    record.title.as_str(),
-                    record.leaves.len(),
-                ));
-                branch_writes.push(PlannedBranchWrite {
-                    record: record.clone(),
-                    file_leaves: planned.leaves.clone(),
-                    body: planned.body.clone(),
-                });
-                new_branches.push(record);
-            }
+    let planned_slugs: HashSet<&str> = plan
+        .branches
+        .iter()
+        .map(|branch| branch.slug.as_str())
+        .collect();
+    for branch in &current.branches {
+        if !planned_slugs.contains(branch.slug.as_str()) {
+            branch_deletes.push(branch.file.clone());
         }
     }
+    for planned in &plan.branches {
+        let created_at = current
+            .branch_by_slug_str(&planned.slug)
+            .map(|branch| branch.created_at.clone())
+            .unwrap_or_else(|| run_timestamp.clone());
+        let slug = Slug::parse(&planned.slug).unwrap_or_else(|_| Slug::generate(&planned.slug, ""));
+        let record = BranchRecord {
+            slug: slug.clone(),
+            file: format!("branches/{}.md", planned.slug),
+            title: planned.title.clone(),
+            created_at,
+            updated_at: run_timestamp.clone(),
+            leaves: validated_branch_leaf_slugs(planned),
+        };
+        if current.branch_by_slug_str(&planned.slug).is_some() {
+            branches_updated.push(branch_result(
+                record.slug.as_str(),
+                record.title.as_str(),
+                record.leaves.len(),
+            ));
+            branch_writes.push(PlannedBranchWrite {
+                record: record.clone(),
+                file_leaves: planned.leaves.clone(),
+                body: planned.body.clone(),
+            });
+        } else {
+            branches_created.push(branch_result(
+                record.slug.as_str(),
+                record.title.as_str(),
+                record.leaves.len(),
+            ));
+            branch_writes.push(PlannedBranchWrite {
+                record: record.clone(),
+                file_leaves: planned.leaves.clone(),
+                body: planned.body.clone(),
+            });
+        }
+        new_branches.push(record);
+    }
 
+    finalize_manifest_delta(
+        current,
+        run_timestamp,
+        branch_writes,
+        branch_deletes,
+        branches_created,
+        branches_updated,
+        new_branches,
+    )
+}
+
+fn build_incremental_delta(
+    current: &Manifest,
+    plan: &CompilePlan,
+    run_timestamp: &Timestamp,
+) -> Result<ManifestDelta, CompileError> {
+    let mut branch_writes = Vec::new();
+    let mut branches_created = Vec::new();
+    let mut branches_updated = Vec::new();
+    let mut new_branches = Vec::new();
+
+    let planned_by_slug: HashMap<&str, &ValidatedBranch> = plan
+        .branches
+        .iter()
+        .map(|branch| (branch.slug.as_str(), branch))
+        .collect();
+    let current_branch_slugs: HashSet<&str> = current
+        .branches
+        .iter()
+        .map(|branch| branch.slug.as_str())
+        .collect();
+    for current_branch in &current.branches {
+        if let Some(planned) = planned_by_slug.get(current_branch.slug.as_str()) {
+            let record = BranchRecord {
+                slug: current_branch.slug.clone(),
+                file: current_branch.file.clone(),
+                title: planned.title.clone(),
+                created_at: current_branch.created_at.clone(),
+                updated_at: run_timestamp.clone(),
+                leaves: validated_branch_leaf_slugs(planned),
+            };
+            let result = branch_result(
+                record.slug.as_str(),
+                record.title.as_str(),
+                record.leaves.len(),
+            );
+            branches_updated.push(result.clone());
+            branch_writes.push(PlannedBranchWrite {
+                record: record.clone(),
+                file_leaves: planned.leaves.clone(),
+                body: planned.body.clone(),
+            });
+            new_branches.push(record);
+        } else {
+            new_branches.push(current_branch.clone());
+        }
+    }
+    for planned in &plan.branches {
+        if current_branch_slugs.contains(planned.slug.as_str()) {
+            continue;
+        }
+        let slug = Slug::parse(&planned.slug).unwrap_or_else(|_| Slug::generate(&planned.slug, ""));
+        let record = BranchRecord {
+            slug: slug.clone(),
+            file: format!("branches/{}.md", planned.slug),
+            title: planned.title.clone(),
+            created_at: run_timestamp.clone(),
+            updated_at: run_timestamp.clone(),
+            leaves: validated_branch_leaf_slugs(planned),
+        };
+        branches_created.push(branch_result(
+            record.slug.as_str(),
+            record.title.as_str(),
+            record.leaves.len(),
+        ));
+        branch_writes.push(PlannedBranchWrite {
+            record: record.clone(),
+            file_leaves: planned.leaves.clone(),
+            body: planned.body.clone(),
+        });
+        new_branches.push(record);
+    }
+
+    finalize_manifest_delta(
+        current,
+        run_timestamp,
+        branch_writes,
+        Vec::new(), // ponytail: incremental never deletes branches
+        branches_created,
+        branches_updated,
+        new_branches,
+    )
+}
+
+/// ponytail: shared finalizer; the Manifest construction is identical across modes.
+fn finalize_manifest_delta(
+    current: &Manifest,
+    run_timestamp: &Timestamp,
+    branch_writes: Vec<PlannedBranchWrite>,
+    branch_deletes: Vec<String>,
+    branches_created: Vec<BranchResult>,
+    branches_updated: Vec<BranchResult>,
+    new_branches: Vec<BranchRecord>,
+) -> Result<ManifestDelta, CompileError> {
     let new_manifest = Manifest {
         tree: TreeMeta {
             name: current.tree.name.clone(),

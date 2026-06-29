@@ -59,11 +59,17 @@ pub(super) struct ValidatedBranch {
     pub(super) leaves: Vec<String>,
 }
 
+/// Multi-form leaf resolver: maps filename/stem/title-lower/slugified-title
+/// → canonical filename, with collision detection.
+#[derive(Debug)]
+pub(super) struct LeafLookup {
+    pub(super) map: HashMap<String, String>,
+    pub(super) collisions: Vec<String>,
+}
+
 // ── functions ─────────────────────────────────────────────────────────────────
 
-pub(super) fn valid_leaf_reference_map(
-    loaded_leaves: &[plan::LoadedLeaf],
-) -> (HashMap<String, String>, Vec<String>) {
+pub(super) fn leaf_resolver(loaded_leaves: &[plan::LoadedLeaf]) -> LeafLookup {
     let mut refs = HashMap::new();
     let mut collisions: Vec<String> = Vec::new();
     for leaf in loaded_leaves {
@@ -104,7 +110,10 @@ pub(super) fn valid_leaf_reference_map(
             }
         }
     }
-    (refs, collisions)
+    LeafLookup {
+        map: refs,
+        collisions,
+    }
 }
 
 pub(super) fn parse_and_validate_with_input_size(
@@ -124,8 +133,8 @@ pub(super) fn parse_and_validate_with_input_size(
 
     let mut validated_branches: Vec<ValidatedBranch> = Vec::new();
     let mut seen_slugs: HashSet<String> = HashSet::new();
-    let (valid_leaf_refs, collisions) = valid_leaf_reference_map(loaded_leaves);
-    for msg in &collisions {
+    let lookup = leaf_resolver(loaded_leaves);
+    for msg in &lookup.collisions {
         eprintln!("warning: title collision — {}", msg);
     }
     for (index, raw) in parsed.branches.into_iter().enumerate() {
@@ -170,7 +179,7 @@ pub(super) fn parse_and_validate_with_input_size(
                     title
                 )));
             }
-            let Some(normalized_leaf_file) = valid_leaf_refs.get(&leaf_file.to_lowercase()) else {
+            let Some(normalized_leaf_file) = lookup.map.get(&leaf_file.to_lowercase()) else {
                 return Err(validation_error(format!(
                     "invalid compile response: branch '{}' references unknown leaf '{}'",
                     title, leaf_file
@@ -223,8 +232,8 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
     let new_leaf_slugs_vec = select_new_leaf_slugs(&manifest)?;
     let new_leaf_slugs: HashSet<String> = new_leaf_slugs_vec.into_iter().collect();
-    let (valid_leaf_refs, collisions) = valid_leaf_reference_map(loaded_leaves);
-    for msg in &collisions {
+    let lookup = leaf_resolver(loaded_leaves);
+    for msg in &lookup.collisions {
         eprintln!("warning: title collision — {}", msg);
     }
     let mut seen_branch_slugs = HashSet::new();
@@ -244,7 +253,7 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
                 raw.slug
             )));
         }
-        let leaves = normalize_incremental_leaf_refs(&raw.title, &raw.leaves, &valid_leaf_refs)?;
+        let leaves = normalize_incremental_leaf_refs(&raw.title, &raw.leaves, &lookup.map)?;
         let leaf_slugs: HashSet<String> = leaves
             .iter()
             .map(|leaf| leaf.strip_suffix(".md").unwrap_or(leaf).to_string())
@@ -310,7 +319,7 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
                 branch_slug
             )));
         }
-        let leaves = normalize_incremental_leaf_refs(&title, &raw.leaves, &valid_leaf_refs)?;
+        let leaves = normalize_incremental_leaf_refs(&title, &raw.leaves, &lookup.map)?;
         if leaves.len() < 2 {
             return Err(validation_error(format!(
                 "invalid incremental compile response: branch '{}' references {} leaf; branches must reference at least 2 leaves",

@@ -180,7 +180,6 @@ fn compile_result_notifications_skipped_from_json() {
         status: "compiled".to_string(),
         reason: None,
         mode: Some(super::CompileRunMode::Full),
-        context_mode: Some(super::CompileContextMode::FullCorpus),
         model: Some("gpt-4.1".to_string()),
         branches: vec![super::BranchResult {
             slug: "test-branch".to_string(),
@@ -304,7 +303,6 @@ fn human_output_includes_notifications() {
         status: "noop".to_string(),
         reason: Some("empty_tree".to_string()),
         mode: None,
-        context_mode: None,
         model: None,
         branches: Vec::new(),
         leaves_processed: 0,
@@ -367,34 +365,19 @@ fn select_run_mode_incremental_only_with_branches_and_no_all() {
 // ── context-mode selection ─────────────────────────────────────────────────
 
 #[test]
-fn choose_context_mode_incremental_never_yields_full_corpus() {
-    use crate::cli::compile::execute::choose_context_mode;
-    use crate::cli::compile::CompileContextMode;
+fn ensure_compile_context_fits_errors_on_overflow() {
+    use crate::cli::compile::execute::ensure_compile_context_fits;
     use crate::engine::llm::{Model, Provider};
 
     let model = Model::parse("gpt-4.1-mini", Provider::OpenAI).unwrap();
 
-    // Incremental with a fitting prompt yields IncrementalContext, never
-    // FullCorpus (the broken optimization that paired the branch-less full
-    // prompt with the incremental schema).
     let small = execute_prompt_tokens(64);
-    assert_eq!(
-        choose_context_mode(&model, CompileRunMode::Incremental, small).unwrap(),
-        CompileContextMode::IncrementalContext,
-    );
+    assert!(ensure_compile_context_fits(&model, small).is_ok());
 
-    // Incremental that overflows context errors rather than silently falling
-    // back to FullCorpus.
     let huge = execute_prompt_tokens(usize::MAX);
     assert!(
-        choose_context_mode(&model, CompileRunMode::Incremental, huge).is_err(),
-        "incremental overflow must error, not fall back to full corpus"
-    );
-
-    // Full still yields FullCorpus when it fits.
-    assert_eq!(
-        choose_context_mode(&model, CompileRunMode::Full, small).unwrap(),
-        CompileContextMode::FullCorpus,
+        ensure_compile_context_fits(&model, huge).is_err(),
+        "overflow must error"
     );
 }
 
@@ -431,7 +414,7 @@ fn derived_incremental_compile_schema_requires_updated_and_new_branches() {
 
 // ── leaf reference fidelity ───────────────────────────────────────────────
 
-use super::parse::{parse_and_validate_with_input_size, valid_leaf_reference_map};
+use super::parse::{leaf_resolver, parse_and_validate_with_input_size};
 use super::plan::LoadedLeaf;
 use super::CompileError;
 
@@ -465,24 +448,24 @@ fn valid_leaf_reference_map_resolves_by_filename_stem_and_unique_title() {
         loaded_leaf("alpha-concept", "Alpha Concept"),
         loaded_leaf("beta-thing", "Beta Thing"),
     ];
-    let (refs, collisions) = valid_leaf_reference_map(&leaves);
+    let lookup = leaf_resolver(&leaves);
 
-    assert!(collisions.is_empty());
+    assert!(lookup.collisions.is_empty());
     // filename, stem (= slug), lowercased title, slugified title all resolve.
     assert_eq!(
-        refs.get("alpha-concept.md"),
+        lookup.map.get("alpha-concept.md"),
         Some(&"alpha-concept.md".to_string())
     );
     assert_eq!(
-        refs.get("alpha-concept"),
+        lookup.map.get("alpha-concept"),
         Some(&"alpha-concept.md".to_string())
     );
     assert_eq!(
-        refs.get("alpha concept"),
+        lookup.map.get("alpha concept"),
         Some(&"alpha-concept.md".to_string())
     );
     assert_eq!(
-        refs.get("beta-thing.md"),
+        lookup.map.get("beta-thing.md"),
         Some(&"beta-thing.md".to_string())
     );
 }
@@ -495,16 +478,25 @@ fn valid_leaf_reference_map_drops_ambiguous_title_keys() {
         loaded_leaf("gamma-one", "Shared Topic"),
         loaded_leaf("gamma-two", "Shared Topic"),
     ];
-    let (refs, collisions) = valid_leaf_reference_map(&leaves);
+    let lookup = leaf_resolver(&leaves);
 
-    assert!(!collisions.is_empty(), "expected a collision warning");
     assert!(
-        !refs.contains_key("shared topic"),
+        !lookup.collisions.is_empty(),
+        "expected a collision warning"
+    );
+    assert!(
+        !lookup.map.contains_key("shared topic"),
         "ambiguous title key must be absent"
     );
     // Slugs (stems) stay unique and resolvable.
-    assert_eq!(refs.get("gamma-one"), Some(&"gamma-one.md".to_string()));
-    assert_eq!(refs.get("gamma-two"), Some(&"gamma-two.md".to_string()));
+    assert_eq!(
+        lookup.map.get("gamma-one"),
+        Some(&"gamma-one.md".to_string())
+    );
+    assert_eq!(
+        lookup.map.get("gamma-two"),
+        Some(&"gamma-two.md".to_string())
+    );
 }
 
 #[test]
