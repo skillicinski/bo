@@ -180,7 +180,6 @@ fn compile_result_notifications_skipped_from_json() {
         status: "compiled".to_string(),
         reason: None,
         mode: Some(super::CompileRunMode::Full),
-        context_mode: Some(super::CompileContextMode::FullCorpus),
         model: Some("gpt-4.1".to_string()),
         branches: vec![super::BranchResult {
             slug: "test-branch".to_string(),
@@ -304,7 +303,6 @@ fn human_output_includes_notifications() {
         status: "noop".to_string(),
         reason: Some("empty_tree".to_string()),
         mode: None,
-        context_mode: None,
         model: None,
         branches: Vec::new(),
         leaves_processed: 0,
@@ -367,34 +365,19 @@ fn select_run_mode_incremental_only_with_branches_and_no_all() {
 // ── context-mode selection ─────────────────────────────────────────────────
 
 #[test]
-fn choose_context_mode_incremental_never_yields_full_corpus() {
-    use crate::cli::compile::execute::choose_context_mode;
-    use crate::cli::compile::CompileContextMode;
+fn ensure_compile_context_fits_errors_on_overflow() {
+    use crate::cli::compile::execute::ensure_compile_context_fits;
     use crate::engine::llm::{Model, Provider};
 
     let model = Model::parse("gpt-4.1-mini", Provider::OpenAI).unwrap();
 
-    // Incremental with a fitting prompt yields IncrementalContext, never
-    // FullCorpus (the broken optimization that paired the branch-less full
-    // prompt with the incremental schema).
     let small = execute_prompt_tokens(64);
-    assert_eq!(
-        choose_context_mode(&model, CompileRunMode::Incremental, small).unwrap(),
-        CompileContextMode::IncrementalContext,
-    );
+    assert!(ensure_compile_context_fits(&model, small).is_ok());
 
-    // Incremental that overflows context errors rather than silently falling
-    // back to FullCorpus.
     let huge = execute_prompt_tokens(usize::MAX);
     assert!(
-        choose_context_mode(&model, CompileRunMode::Incremental, huge).is_err(),
-        "incremental overflow must error, not fall back to full corpus"
-    );
-
-    // Full still yields FullCorpus when it fits.
-    assert_eq!(
-        choose_context_mode(&model, CompileRunMode::Full, small).unwrap(),
-        CompileContextMode::FullCorpus,
+        ensure_compile_context_fits(&model, huge).is_err(),
+        "overflow must error"
     );
 }
 

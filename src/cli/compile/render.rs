@@ -34,12 +34,7 @@ pub fn render_human<W: Write>(
 
 fn render_summary_human<W: Write>(result: &CompileResult, stdout: &mut W) -> io::Result<()> {
     if let (Some(mode), Some(model)) = (&result.mode, &result.model) {
-        let ctx = result
-            .context_mode
-            .as_ref()
-            .map(|c| format!(", {c:?}"))
-            .unwrap_or_default();
-        writeln!(stdout, "compiled ({mode:?}{ctx}) using {model}")?;
+        writeln!(stdout, "compiled ({mode:?}) using {model}")?;
     } else {
         writeln!(stdout, "compiled")?;
     }

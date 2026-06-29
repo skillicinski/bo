@@ -16,9 +16,8 @@ use super::parse::CompilePlan;
 use super::plan::build_manifest_delta;
 use super::prompt::COMPILE_SYSTEM_PROMPT;
 use super::{
-    BranchResult, CompileContextMode, CompileError, CompileRunMode, CompileSummary,
-    COMPILE_LLM_POLICY, COMPILE_PROMPT_OVERHEAD_TOKENS, MAX_COMPLETION_TOKENS,
-    TOKEN_ESTIMATE_BYTES_PER_TOKEN,
+    BranchResult, CompileError, CompileRunMode, CompileSummary, COMPILE_LLM_POLICY,
+    COMPILE_PROMPT_OVERHEAD_TOKENS, MAX_COMPLETION_TOKENS, TOKEN_ESTIMATE_BYTES_PER_TOKEN,
 };
 
 // ── types ─────────────────────────────────────────────────────────────────────
@@ -68,18 +67,6 @@ pub(super) fn ensure_compile_context_fits(
     }
 
     Ok(())
-}
-
-pub(super) fn choose_context_mode(
-    model: &Model,
-    run_mode: CompileRunMode,
-    prompt_tokens: usize,
-) -> Result<CompileContextMode, CompileError> {
-    ensure_compile_context_fits(model, prompt_tokens)?;
-    Ok(match run_mode {
-        CompileRunMode::Full => CompileContextMode::FullCorpus,
-        CompileRunMode::Incremental => CompileContextMode::IncrementalContext,
-    })
 }
 
 // ── LLM call ──────────────────────────────────────────────────────────────────

@@ -12,6 +12,7 @@ use std::fs;
 use bo::cli::compile;
 use bo::domain::manifest::{self, BranchRecord, LeafRecord, Manifest, TreeMeta};
 use bo::engine::config::SeededConfig;
+use bo::engine::pending;
 
 struct FixtureDoc {
     file: &'static str,
@@ -477,6 +478,9 @@ fn compile_full_with_canned_response_creates_branches() {
         &model,
         &started_at,
         Vec::new(),
+        &manifest::read(&dir.path().join(".bo/manifest.json")).unwrap(),
+        &[], // ponytail: Full mode doesn't use new_leaf_slugs
+        &pending::manifest_hash(dir.path()).unwrap(),
     );
 
     let compile_result = result.unwrap();
@@ -645,6 +649,20 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
     .to_string();
     let provider = FakeLlmProvider { response: canned };
 
+    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let new_slugs: Vec<String> = m
+        .leaves
+        .iter()
+        .filter(|l| {
+            m.tree
+                .last_compiled_at
+                .as_ref()
+                .is_none_or(|ts| &l.collected_at > ts)
+        })
+        .map(|l| l.slug.as_str().to_string())
+        .collect();
+    let manifest_hash = pending::manifest_hash(dir.path()).unwrap();
+
     let result = compile::run_compile_with_provider_started_at(
         &cfg,
         Default::default(),
@@ -652,6 +670,9 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
         &model,
         &started_at,
         Vec::new(),
+        &m,
+        &new_slugs,
+        &manifest_hash,
     );
 
     let compile_result = result.unwrap();
