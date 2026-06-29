@@ -39,7 +39,25 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
+use std::sync::OnceLock;
 use std::time::Duration;
+
+// ── shared async executor ────────────────────────────────────────────────────
+
+/// One current-thread tokio runtime shared by all blocking LLM calls.
+/// Collect, query, and compile all call into the same runtime — avoid three
+/// different instantiation patterns and the per-call builder overhead.
+///
+/// Panics if the runtime cannot be built (fatal, process-wide).
+pub fn blocking_runtime() -> &'static tokio::runtime::Runtime {
+    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build shared tokio runtime")
+    })
+}
 
 // ── Provider enum ─────────────────────────────────────────────────────────────
 

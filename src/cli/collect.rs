@@ -20,7 +20,6 @@ use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::sync::OnceLock;
 use std::thread;
 
 use crate::adapters::youtube::{self, YoutubeError, YoutubeUrlMatch};
@@ -756,17 +755,6 @@ fn write_new_document_with_model(
     write_new_document_with_summary_result(url, title, body_markdown, output_dir, summary_text)
 }
 
-// ponytail: one runtime per process, separate runtimes if we ever need concurrent batches
-fn summary_runtime() -> &'static tokio::runtime::Runtime {
-    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-    RT.get_or_init(|| {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("failed to build tokio runtime")
-    })
-}
-
 fn generate_summary_with_model(
     body: &str,
     title: Option<&str>,
@@ -778,7 +766,7 @@ fn generate_summary_with_model(
         Err(_) => return summary::generate_fallback(body),
     };
     let provider = crate::engine::llm::create_provider(provider, &api_key);
-    summary_runtime().block_on(summary::generate_llm_or_fallback(
+    crate::engine::llm::blocking_runtime().block_on(summary::generate_llm_or_fallback(
         body,
         title,
         provider.as_ref(),
@@ -891,19 +879,8 @@ fn commit_manifest_and_writes(
     staged: &[(&PendingWrite, &[u8])],
     deletes: &[String],
 ) -> Result<(), CollectError> {
-    let writes: Vec<PendingWrite> = staged.iter().map(|(pw, _)| (*pw).clone()).collect();
-    let operation = pending::new_operation(output_dir, op, writes.clone(), deletes.to_vec())?;
-    let pending_path = pending::pending_path(output_dir);
-    pending::write(&pending_path, &operation)?;
-    for (pw, bytes) in staged {
-        pending::write_staged(output_dir, pw, bytes)?;
-    }
-    let manifest_path = output_dir.join(".bo").join("manifest.json");
-    manifest::write(&manifest_path, manifest)?;
-    pending::apply_writes(output_dir, &writes)?;
-    pending::apply_deletes(output_dir, deletes)?;
-    pending::clear(&pending_path)?;
-    Ok(())
+    pending::commit_with_manifest(output_dir, op, manifest, staged, deletes)
+        .map_err(|e| CollectError::Io(std::io::Error::other(e.to_string())))
 }
 
 // ── parallel batch collect ───────────────────────────────────────────────────

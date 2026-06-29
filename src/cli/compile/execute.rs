@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
-use crate::domain::{branch, manifest, tree, Timestamp};
+use crate::domain::{branch, Timestamp};
 
 use crate::engine::config::SeededConfig;
 use crate::engine::llm::{
@@ -77,12 +77,7 @@ pub(super) fn call_llm_blocking(
     user_message: &str,
     schema: &Value,
 ) -> Result<String, CompileError> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| CompileError::Io(format!("failed to create async runtime: {}", e)))?;
-
-    rt.block_on(call_llm_with_provider(
+    crate::engine::llm::blocking_runtime().block_on(call_llm_with_provider(
         provider,
         model.as_str(),
         user_message,
@@ -170,7 +165,6 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
 ) -> Result<CompileSummary, CompileError> {
     let tree = cfg.tree();
     let tree_dir = tree.path();
-    let manifest_path = tree::manifest_path(tree_dir);
     recover_pending_if_needed(tree_dir)?;
 
     // Load current manifest. Used to preserve branch `created_at` and carry
@@ -203,27 +197,22 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
 
     let leaves_processed = valid_filenames.len();
 
-    let writes: Vec<PendingWrite> = staged.iter().map(|write| write.pending.clone()).collect();
     let compile_mode = match run_mode {
         CompileRunMode::Incremental => CompileMode::Incremental,
         CompileRunMode::Full => CompileMode::Full,
     };
-    let operation = pending::new_operation(
+    let staged_refs: Vec<(&PendingWrite, &[u8])> = staged
+        .iter()
+        .map(|s| (&s.pending, s.bytes.as_slice()))
+        .collect();
+    pending::commit_with_manifest(
         tree_dir,
         OpKind::Compile { mode: compile_mode },
-        writes.clone(),
-        delta.branch_deletes.clone(),
-    )?;
-    let pending_path = pending::pending_path(tree_dir);
-    pending::write(&pending_path, &operation)?;
-    for write in &staged {
-        pending::write_staged(tree_dir, &write.pending, &write.bytes)?;
-    }
-    manifest::write(&manifest_path, &delta.new_manifest)
-        .map_err(|e| CompileError::Io(format!("failed to write manifest: {}", e)))?;
-    pending::apply_writes(tree_dir, &writes)?;
-    pending::apply_deletes(tree_dir, &delta.branch_deletes)?;
-    pending::clear(&pending_path)?;
+        &delta.new_manifest,
+        &staged_refs,
+        &delta.branch_deletes,
+    )
+    .map_err(|e| CompileError::Io(format!("failed to commit compile: {}", e)))?;
 
     let branch_results: Vec<BranchResult> = delta
         .branches_created
