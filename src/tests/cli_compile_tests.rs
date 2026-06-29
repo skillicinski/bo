@@ -414,7 +414,7 @@ fn derived_incremental_compile_schema_requires_updated_and_new_branches() {
 
 // ── leaf reference fidelity ───────────────────────────────────────────────
 
-use super::parse::{parse_and_validate_with_input_size, valid_leaf_reference_map};
+use super::parse::{leaf_resolver, parse_and_validate_with_input_size};
 use super::plan::LoadedLeaf;
 use super::CompileError;
 
@@ -448,24 +448,24 @@ fn valid_leaf_reference_map_resolves_by_filename_stem_and_unique_title() {
         loaded_leaf("alpha-concept", "Alpha Concept"),
         loaded_leaf("beta-thing", "Beta Thing"),
     ];
-    let (refs, collisions) = valid_leaf_reference_map(&leaves);
+    let lookup = leaf_resolver(&leaves);
 
-    assert!(collisions.is_empty());
+    assert!(lookup.collisions.is_empty());
     // filename, stem (= slug), lowercased title, slugified title all resolve.
     assert_eq!(
-        refs.get("alpha-concept.md"),
+        lookup.map.get("alpha-concept.md"),
         Some(&"alpha-concept.md".to_string())
     );
     assert_eq!(
-        refs.get("alpha-concept"),
+        lookup.map.get("alpha-concept"),
         Some(&"alpha-concept.md".to_string())
     );
     assert_eq!(
-        refs.get("alpha concept"),
+        lookup.map.get("alpha concept"),
         Some(&"alpha-concept.md".to_string())
     );
     assert_eq!(
-        refs.get("beta-thing.md"),
+        lookup.map.get("beta-thing.md"),
         Some(&"beta-thing.md".to_string())
     );
 }
@@ -478,16 +478,25 @@ fn valid_leaf_reference_map_drops_ambiguous_title_keys() {
         loaded_leaf("gamma-one", "Shared Topic"),
         loaded_leaf("gamma-two", "Shared Topic"),
     ];
-    let (refs, collisions) = valid_leaf_reference_map(&leaves);
+    let lookup = leaf_resolver(&leaves);
 
-    assert!(!collisions.is_empty(), "expected a collision warning");
     assert!(
-        !refs.contains_key("shared topic"),
+        !lookup.collisions.is_empty(),
+        "expected a collision warning"
+    );
+    assert!(
+        !lookup.map.contains_key("shared topic"),
         "ambiguous title key must be absent"
     );
     // Slugs (stems) stay unique and resolvable.
-    assert_eq!(refs.get("gamma-one"), Some(&"gamma-one.md".to_string()));
-    assert_eq!(refs.get("gamma-two"), Some(&"gamma-two.md".to_string()));
+    assert_eq!(
+        lookup.map.get("gamma-one"),
+        Some(&"gamma-one.md".to_string())
+    );
+    assert_eq!(
+        lookup.map.get("gamma-two"),
+        Some(&"gamma-two.md".to_string())
+    );
 }
 
 #[test]
