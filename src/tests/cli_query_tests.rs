@@ -1,6 +1,7 @@
 use super::*;
 use crate::domain::{Slug, Timestamp};
 use crate::engine::llm::{model::Model, FinishReason, LlmProvider, LlmResponse, Provider};
+use crate::engine::retrieval::DocKind;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::fs;
@@ -224,7 +225,7 @@ fn retrieve_or_semantics_scores_partial_matches() {
     );
 
     let terms = vec!["rust".to_string(), "ownership".to_string()];
-    let results = retrieve_leaves(tree, &terms).unwrap();
+    let results = retrieve_docs(tree, &terms).unwrap();
 
     // ownership leaf should rank highest (both terms match densely)
     assert_eq!(results[0].slug.as_str(), "ownership");
@@ -240,7 +241,7 @@ fn retrieve_empty_tree_returns_error() {
     let tree = dir.path();
     make_manifest(tree, &[]);
 
-    let err = retrieve_leaves(tree, &["rust".to_string()]).unwrap_err();
+    let err = retrieve_docs(tree, &["rust".to_string()]).unwrap_err();
     assert!(matches!(err, QueryError::EmptyTree));
 }
 
@@ -266,7 +267,7 @@ fn retrieve_no_matches_returns_error() {
         )],
     );
 
-    let err = retrieve_leaves(tree, &["rust".to_string()]).unwrap_err();
+    let err = retrieve_docs(tree, &["rust".to_string()]).unwrap_err();
     assert!(matches!(err, QueryError::NoResults));
 }
 
@@ -293,11 +294,127 @@ fn retrieve_missing_summary_uses_body_fallback() {
     );
 
     let terms = vec!["rust".to_string()];
-    let results = retrieve_leaves(tree, &terms).unwrap();
+    let results = retrieve_docs(tree, &terms).unwrap();
 
     assert_eq!(results[0].slug.as_str(), "nosummary");
     // Summary should be the body fallback (body is short, so full body used)
     assert!(results[0].summary.contains("Rust programming"));
+}
+
+// Retrieval must reach compiled branches, not just raw leaves — otherwise
+// `bo compile`'s synthesized output is invisible at query time.
+#[test]
+fn retrieve_returns_compiled_branch_when_no_leaf_matches() {
+    use crate::domain::manifest::{BranchRecord, LeafRecord, Manifest, TreeMeta};
+    use crate::domain::{Title, Url};
+
+    let dir = TempDir::new().unwrap();
+    let tree = dir.path();
+
+    // Two leaves about unrelated topics that do NOT mention the query terms.
+    make_leaf(
+        tree,
+        "cooking.md",
+        "Cooking Tips",
+        "https://example.com/cooking",
+        Some("How to cook"),
+        "Boil water. Chop vegetables. Simmer for twenty minutes.",
+    );
+    make_leaf(
+        tree,
+        "sports.md",
+        "Sports News",
+        "https://example.com/sports",
+        Some("Match reports"),
+        "The team won the final. Goals were scored in each half.",
+    );
+
+    // A compiled branch synthesizing the concept the user asks about. Its body
+    // mentions the query terms; no individual leaf does.
+    fs::create_dir_all(tree.join("branches")).unwrap();
+    fs::write(
+        tree.join("branches/rust-ownership.md"),
+        "---\n\
+         title: \"Rust Ownership\"\n\
+         created_at: 2025-01-01T00:00:00Z\n\
+         updated_at: 2025-01-01T00:00:00Z\n\
+         leaves: []\n\
+         ---\n\n\
+         # Rust Ownership\n\n\
+         Rust ownership is the core memory-safety mechanism. The borrow checker \
+         enforces ownership rules at compile time.\n",
+    )
+    .unwrap();
+
+    let manifest = Manifest {
+        tree: TreeMeta {
+            name: "query".to_string(),
+            created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+            last_compiled_at: Some(Timestamp::parse("2025-01-01T00:00:00Z").unwrap()),
+        },
+        leaves: vec![
+            LeafRecord {
+                slug: Slug::generate("cooking", ""),
+                file: "leaves/cooking.md".to_string(),
+                title: Title::from("Cooking Tips"),
+                url: Url::from("https://example.com/cooking"),
+                collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+                summary: Some("How to cook".to_string()),
+            },
+            LeafRecord {
+                slug: Slug::generate("sports", ""),
+                file: "leaves/sports.md".to_string(),
+                title: Title::from("Sports News"),
+                url: Url::from("https://example.com/sports"),
+                collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+                summary: Some("Match reports".to_string()),
+            },
+        ],
+        branches: vec![BranchRecord {
+            slug: Slug::generate("Rust Ownership", ""),
+            file: "branches/rust-ownership.md".to_string(),
+            title: Title::from("Rust Ownership"),
+            created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+            updated_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+            leaves: Vec::new(),
+        }],
+    };
+    let bo_dir = tree.join(".bo");
+    fs::create_dir_all(&bo_dir).unwrap();
+    crate::domain::manifest::write(&bo_dir.join("manifest.json"), &manifest).unwrap();
+
+    // Only the branch matches "ownership"; neither leaf does.
+    let results = retrieve_docs(tree, &["ownership".to_string()]).unwrap();
+
+    assert_eq!(results.len(), 1, "only the branch should match the query");
+    assert_eq!(results[0].slug.as_str(), "rust-ownership");
+    assert_eq!(
+        results[0].kind,
+        DocKind::Branch,
+        "the matching document must be the compiled branch"
+    );
+
+    // The branch must be a citable source after synthesis.
+    let retrieved = vec![RetrievedDoc {
+        kind: DocKind::Branch,
+        slug: "rust-ownership".to_string(),
+        title: "Rust Ownership".to_string(),
+        url: String::new(),
+        file: "branches/rust-ownership.md".to_string(),
+        summary: "summary".to_string(),
+        body: "body".to_string(),
+        score: 1.0,
+        diagnostics: RetrievalDiagnostics::default(),
+    }];
+    let (_answer, citations) = validate_citations(
+        SynthesisResponse {
+            answer: "See [[rust-ownership]] for the synthesis.".to_string(),
+            cited_slugs: vec!["rust-ownership".to_string()],
+        },
+        &retrieved,
+    );
+    assert_eq!(citations.len(), 1);
+    assert_eq!(citations[0].slug.as_str(), "rust-ownership");
 }
 
 #[test]
@@ -336,8 +453,9 @@ fn diagnostics_capture_focused_title_and_summary_matches() {
 
 // ── citation validation tests ────────────────────────────────────────
 
-fn retrieved_leaf(slug: &str) -> RetrievedLeaf {
-    RetrievedLeaf {
+fn retrieved_leaf(slug: &str) -> RetrievedDoc {
+    RetrievedDoc {
+        kind: DocKind::Leaf,
         slug: slug.to_string(),
         title: format!("Title for {}", slug),
         url: format!("https://example.com/{}", slug),
@@ -366,7 +484,8 @@ fn validate_preserves_valid_wikilinks_exactly() {
 
 #[test]
 fn validate_strips_invalid_citations() {
-    let retrieved = vec![RetrievedLeaf {
+    let retrieved = vec![RetrievedDoc {
+        kind: DocKind::Leaf,
         slug: "valid-leaf".to_string(),
         title: "Valid Leaf".to_string(),
         url: "https://example.com".to_string(),
@@ -477,7 +596,8 @@ fn validate_dedupes_citations_in_prose_then_structured_order() {
 #[test]
 fn validate_preserves_all_valid_citations() {
     let retrieved = vec![
-        RetrievedLeaf {
+        RetrievedDoc {
+            kind: DocKind::Leaf,
             slug: "leaf-a".to_string(),
             title: "Leaf A".to_string(),
             url: "https://a.com".to_string(),
@@ -487,7 +607,8 @@ fn validate_preserves_all_valid_citations() {
             score: 1.0,
             diagnostics: RetrievalDiagnostics::default(),
         },
-        RetrievedLeaf {
+        RetrievedDoc {
+            kind: DocKind::Leaf,
             slug: "leaf-b".to_string(),
             title: "Leaf B".to_string(),
             url: "https://b.com".to_string(),
@@ -755,8 +876,9 @@ fn answerable_one_source_query_invokes_provider_and_succeeds() {
 
 #[test]
 fn assemble_respects_depth_limit() {
-    let leaves: Vec<RetrievedLeaf> = (0..10)
-        .map(|i| RetrievedLeaf {
+    let leaves: Vec<RetrievedDoc> = (0..10)
+        .map(|i| RetrievedDoc {
+            kind: DocKind::Leaf,
             slug: format!("leaf-{}", i),
             title: format!("Leaf {}", i),
             url: format!("https://example.com/{}", i),
@@ -786,7 +908,8 @@ fn assemble_truncates_on_word_budget() {
     // Create a leaf with a massive body
     let test_budget_words = 1000;
     let big_body = "word ".repeat(test_budget_words + 1000);
-    let leaves = vec![RetrievedLeaf {
+    let leaves = vec![RetrievedDoc {
+        kind: DocKind::Leaf,
         slug: "big".to_string(),
         title: "Big Leaf".to_string(),
         url: "https://example.com/big".to_string(),

@@ -10,7 +10,7 @@ use crate::domain::tree::{self, TreeRuntimeState};
 use crate::engine::llm::{
     complete_with_policy, FinishReason, LlmCallPolicy, LlmError, LlmProvider, Message, Model,
 };
-use crate::engine::retrieval;
+use crate::engine::retrieval::{self, DocKind};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -251,7 +251,8 @@ struct RetrievalDiagnostics {
 }
 
 #[derive(Debug, Clone)]
-struct RetrievedLeaf {
+struct RetrievedDoc {
+    kind: DocKind,
     slug: String,
     title: String,
     url: String,
@@ -265,7 +266,7 @@ struct RetrievedLeaf {
 pub struct PreparedQuery {
     question: String,
     context: String,
-    retrieved: Vec<RetrievedLeaf>,
+    retrieved: Vec<RetrievedDoc>,
     leaves_consulted: usize,
     model: String,
 }
@@ -463,8 +464,10 @@ fn compute_retrieval_diagnostics(
 
 // ── retrieval ────────────────────────────────────────────────────────────────
 
-/// Retrieve top-k leaves scored by term density (OR semantics).
-fn retrieve_leaves(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedLeaf>, QueryError> {
+/// Retrieve top-k documents (leaves and branches) scored by term density
+/// (OR semantics). Branches are synthesized concept pages from `bo compile`;
+/// including them makes compile's output reachable at query time.
+fn retrieve_docs(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedDoc>, QueryError> {
     let manifest = match tree::runtime_state(tree_dir) {
         Ok(TreeRuntimeState::Initialized(manifest)) => manifest,
         Ok(TreeRuntimeState::FreshSeeded) => return Err(QueryError::EmptyTree),
@@ -481,17 +484,15 @@ fn retrieve_leaves(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedLea
         return Err(QueryError::EmptyTree);
     }
 
-    let corpus = retrieval::score_corpus(tree_dir, &manifest, terms);
+    let leaves = retrieval::score_corpus(tree_dir, &manifest, terms);
+    let branches = retrieval::score_branches(tree_dir, &manifest, terms);
+    let corpus = leaves.into_iter().chain(branches);
 
-    if corpus.is_empty() {
-        return Err(QueryError::NoResults);
-    }
-
-    let mut scored: Vec<RetrievedLeaf> = corpus
-        .into_iter()
+    let mut scored: Vec<RetrievedDoc> = corpus
         .map(|s| {
             let diagnostics = compute_retrieval_diagnostics(&s.title, &s.summary, &s.body, terms);
-            RetrievedLeaf {
+            RetrievedDoc {
+                kind: s.kind,
                 slug: s.slug,
                 title: s.title,
                 url: s.url,
@@ -504,6 +505,10 @@ fn retrieve_leaves(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedLea
         })
         .collect();
 
+    if scored.is_empty() {
+        return Err(QueryError::NoResults);
+    }
+
     // Sort by score descending
     scored.sort_by(|a, b| {
         b.score
@@ -515,7 +520,7 @@ fn retrieve_leaves(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedLea
     Ok(scored)
 }
 
-fn validate_relevance(terms: &[String], leaves: &[RetrievedLeaf]) -> Result<(), QueryError> {
+fn validate_relevance(terms: &[String], leaves: &[RetrievedDoc]) -> Result<(), QueryError> {
     if leaves.is_empty() {
         return Err(QueryError::NoResults);
     }
@@ -561,7 +566,7 @@ fn is_mostly_generic_query(terms: &[String]) -> bool {
         >= unique_terms.len() * MOSTLY_GENERIC_RATIO_NUMERATOR
 }
 
-fn is_focused_generic_match(leaf: &RetrievedLeaf, terms: &[String]) -> bool {
+fn is_focused_generic_match(leaf: &RetrievedDoc, terms: &[String]) -> bool {
     let unique_term_count = unique_terms(terms).len();
     if unique_term_count == 0 {
         return false;
@@ -573,7 +578,7 @@ fn is_focused_generic_match(leaf: &RetrievedLeaf, terms: &[String]) -> bool {
     leaf.diagnostics.matched_terms >= required_terms && title_summary_hits >= required_terms
 }
 
-fn is_strong_relevance_match(leaf: &RetrievedLeaf, terms: &[String]) -> bool {
+fn is_strong_relevance_match(leaf: &RetrievedDoc, terms: &[String]) -> bool {
     let diagnostics = &leaf.diagnostics;
     if diagnostics.matched_terms == 0 || diagnostics.total_hits == 0 {
         return false;
@@ -651,19 +656,26 @@ fn compute_query_context_budget_from_tokens(
     Ok(source_words)
 }
 
-/// Assemble LLM context from retrieved leaves.
+/// Assemble LLM context from retrieved documents (leaves and branches).
 /// Returns (context_string, leaves_consulted_count).
-fn assemble_context(leaves: &[RetrievedLeaf], source_word_budget: usize) -> (String, usize) {
+fn assemble_context(leaves: &[RetrievedDoc], source_word_budget: usize) -> (String, usize) {
     let mut context = String::new();
     let mut word_budget = source_word_budget;
     let mut consulted = 0;
 
-    // Breadth tier: all retrieved leaves get summary context
+    // Breadth tier: all retrieved docs get summary context
     context.push_str("## Available sources\n\n");
-    for leaf in leaves {
+    for doc in leaves {
+        // Branches are synthesized concept pages with no URL; leaves are raw
+        // sources collected from a URL. The label tells the LLM which is which.
+        let origin = match doc.kind {
+            DocKind::Leaf => format!("({})", doc.url),
+            DocKind::Branch => "(branch)".to_string(),
+        };
         let entry = format!(
-            "- [[{}]] — {} ({})\n  Summary: {}\n\n",
-            leaf.slug, leaf.title, leaf.url, leaf.summary
+            "- [[{}]] — {} {}
+  Summary: {}\n\n",
+            doc.slug, doc.title, origin, doc.summary
         );
         let words = entry.split_whitespace().count();
         if words > word_budget {
@@ -706,10 +718,13 @@ You are a knowledge base assistant. Answer the user's question using ONLY the \
 provided source material. Follow these rules strictly:
 
 1. Cite sources using [[slug]] wikilink format inline in your prose.
-2. If the sources don't contain enough information to answer, say so explicitly.
-3. Do not invent information not present in the sources.
-4. Keep your answer concise — 1 to 3 paragraphs.
-5. The cited_slugs array must contain every slug you reference in your answer.";
+2. Sources are of two kinds: leaves (raw collected documents, shown with a URL) \
+   and branches (synthesized concept pages that draw connections across leaves, \
+   shown as (branch)). Cite either kind by its slug.
+3. If the sources don't contain enough information to answer, say so explicitly.
+4. Do not invent information not present in the sources.
+5. Keep your answer concise — 1 to 3 paragraphs.
+6. The cited_slugs array must contain every slug you reference in your answer.";
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -781,7 +796,7 @@ fn synthesize_with_provider(
 /// Strips invalid slugs from cited_slugs and removes invalid [[slug]] from prose.
 fn validate_citations(
     response: SynthesisResponse,
-    retrieved: &[RetrievedLeaf],
+    retrieved: &[RetrievedDoc],
 ) -> (String, Vec<Citation>) {
     let valid_slugs: HashSet<&str> = retrieved.iter().map(|l| l.slug.as_str()).collect();
 
@@ -882,7 +897,7 @@ pub fn prepare(
     let source_words = compute_query_context_budget(model)?;
 
     eprintln!("searching...");
-    let retrieved = retrieve_leaves(tree_dir, &terms)?;
+    let retrieved = retrieve_docs(tree_dir, &terms)?;
     validate_relevance(&terms, &retrieved)?;
 
     let (context, consulted) = assemble_context(&retrieved, source_words);
