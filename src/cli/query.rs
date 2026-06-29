@@ -491,6 +491,9 @@ fn retrieve_docs(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedDoc>,
     let mut scored: Vec<RetrievedDoc> = corpus
         .map(|s| {
             let diagnostics = compute_retrieval_diagnostics(&s.title, &s.summary, &s.body, terms);
+            // ponytail: field-by-field copy from ScoredDoc rather than embedding it —
+            // consumers (assemble_context, validate_citations) read flat fields, and
+            // embedding would push a `.scored.` prefix onto every read site.
             RetrievedDoc {
                 kind: s.kind,
                 slug: s.slug,
@@ -520,17 +523,15 @@ fn retrieve_docs(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedDoc>,
     Ok(scored)
 }
 
-fn validate_relevance(terms: &[String], leaves: &[RetrievedDoc]) -> Result<(), QueryError> {
-    if leaves.is_empty() {
+fn validate_relevance(terms: &[String], docs: &[RetrievedDoc]) -> Result<(), QueryError> {
+    if docs.is_empty() {
         return Err(QueryError::NoResults);
     }
 
-    let matched_sources = leaves.len();
+    let matched_sources = docs.len();
 
     if is_mostly_generic_query(terms)
-        && !leaves
-            .iter()
-            .any(|leaf| is_focused_generic_match(leaf, terms))
+        && !docs.iter().any(|doc| is_focused_generic_match(doc, terms))
     {
         return Err(QueryError::LowRelevance {
             reason: LowRelevanceReason::GenericQuery,
@@ -538,10 +539,7 @@ fn validate_relevance(terms: &[String], leaves: &[RetrievedDoc]) -> Result<(), Q
         });
     }
 
-    if !leaves
-        .iter()
-        .any(|leaf| is_strong_relevance_match(leaf, terms))
-    {
+    if !docs.iter().any(|doc| is_strong_relevance_match(doc, terms)) {
         return Err(QueryError::LowRelevance {
             reason: LowRelevanceReason::WeakMatches,
             matched_sources,
@@ -566,20 +564,20 @@ fn is_mostly_generic_query(terms: &[String]) -> bool {
         >= unique_terms.len() * MOSTLY_GENERIC_RATIO_NUMERATOR
 }
 
-fn is_focused_generic_match(leaf: &RetrievedDoc, terms: &[String]) -> bool {
+fn is_focused_generic_match(doc: &RetrievedDoc, terms: &[String]) -> bool {
     let unique_term_count = unique_terms(terms).len();
     if unique_term_count == 0 {
         return false;
     }
 
     let required_terms = unique_term_count.min(2);
-    let title_summary_hits = leaf.diagnostics.title_hits + leaf.diagnostics.summary_hits;
+    let title_summary_hits = doc.diagnostics.title_hits + doc.diagnostics.summary_hits;
 
-    leaf.diagnostics.matched_terms >= required_terms && title_summary_hits >= required_terms
+    doc.diagnostics.matched_terms >= required_terms && title_summary_hits >= required_terms
 }
 
-fn is_strong_relevance_match(leaf: &RetrievedDoc, terms: &[String]) -> bool {
-    let diagnostics = &leaf.diagnostics;
+fn is_strong_relevance_match(doc: &RetrievedDoc, terms: &[String]) -> bool {
+    let diagnostics = &doc.diagnostics;
     if diagnostics.matched_terms == 0 || diagnostics.total_hits == 0 {
         return false;
     }
@@ -658,14 +656,14 @@ fn compute_query_context_budget_from_tokens(
 
 /// Assemble LLM context from retrieved documents (leaves and branches).
 /// Returns (context_string, leaves_consulted_count).
-fn assemble_context(leaves: &[RetrievedDoc], source_word_budget: usize) -> (String, usize) {
+fn assemble_context(docs: &[RetrievedDoc], source_word_budget: usize) -> (String, usize) {
     let mut context = String::new();
     let mut word_budget = source_word_budget;
     let mut consulted = 0;
 
     // Breadth tier: all retrieved docs get summary context
     context.push_str("## Available sources\n\n");
-    for doc in leaves {
+    for doc in docs {
         // Branches are synthesized concept pages with no URL; leaves are raw
         // sources collected from a URL. The label tells the LLM which is which.
         let origin = match doc.kind {
@@ -686,12 +684,12 @@ fn assemble_context(leaves: &[RetrievedDoc], source_word_budget: usize) -> (Stri
     }
 
     // Depth tier: top-k get full body
-    let depth_count = leaves.len().min(DEPTH_TOP_K);
+    let depth_count = docs.len().min(DEPTH_TOP_K);
     if depth_count > 0 {
         context.push_str("## Full source content\n\n");
     }
-    for leaf in leaves.iter().take(depth_count) {
-        let body_words: Vec<&str> = leaf.body.split_whitespace().collect();
+    for doc in docs.iter().take(depth_count) {
+        let body_words: Vec<&str> = doc.body.split_whitespace().collect();
         let usable_words = body_words.len().min(word_budget);
         if usable_words == 0 {
             break;
@@ -700,7 +698,7 @@ fn assemble_context(leaves: &[RetrievedDoc], source_word_budget: usize) -> (Stri
 
         let entry = format!(
             "### [[{}]] — {}\n\n{}\n\n",
-            leaf.slug, leaf.title, truncated_body
+            doc.slug, doc.title, truncated_body
         );
         let entry_words = entry.split_whitespace().count();
         context.push_str(&entry);
