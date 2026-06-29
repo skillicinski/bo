@@ -739,11 +739,6 @@ fn synthesize_with_provider(
     model: &str,
     policy: LlmCallPolicy,
 ) -> Result<SynthesisResponse, QueryError> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| QueryError::Io(format!("failed to create async runtime: {}", e)))?;
-
     let user_message = format!(
         "<question>{}</question>\n\n<sources>\n{}</sources>",
         question, context
@@ -758,7 +753,7 @@ fn synthesize_with_provider(
         serde_json::to_value(crate::engine::schema::inline_schema_for::<SynthesisResponse>())
             .unwrap();
 
-    let response = rt
+    let response = crate::engine::llm::blocking_runtime()
         .block_on(complete_with_policy(
             provider,
             &messages,

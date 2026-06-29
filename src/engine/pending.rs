@@ -281,6 +281,32 @@ pub fn apply_deletes(tree_dir: &Path, deletes: &[String]) -> Result<usize, Pendi
     Ok(changes)
 }
 
+/// Atomic commit: write pending, stage content, write manifest, apply writes
+/// and deletes, clear pending. Used by collect and compile — they share
+/// the same 6-step transaction idiom.
+pub fn commit_with_manifest(
+    tree_dir: &Path,
+    op: OpKind,
+    manifest: &crate::domain::manifest::Manifest,
+    staged: &[(&PendingWrite, &[u8])],
+    deletes: &[String],
+) -> Result<(), PendingError> {
+    let writes: Vec<PendingWrite> = staged.iter().map(|(pw, _)| (*pw).clone()).collect();
+    let operation = new_operation(tree_dir, op, writes.clone(), deletes.to_vec())?;
+    let pending_path = pending_path(tree_dir);
+    write(&pending_path, &operation)?;
+    for (pw, bytes) in staged {
+        write_staged(tree_dir, pw, bytes)?;
+    }
+    let manifest_path = tree_dir.join(".bo").join("manifest.json");
+    crate::domain::manifest::write(&manifest_path, manifest)
+        .map_err(|e| PendingError::Io(std::io::Error::other(e.to_string())))?;
+    apply_writes(tree_dir, &writes)?;
+    apply_deletes(tree_dir, deletes)?;
+    clear(&pending_path)?;
+    Ok(())
+}
+
 pub fn staged_path(tree_dir: &Path, relative: &str) -> Result<PathBuf, PendingError> {
     let final_path = resolve_relative(tree_dir, relative)?;
     let mut staged = final_path.as_os_str().to_owned();
