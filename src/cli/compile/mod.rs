@@ -301,7 +301,7 @@ pub fn run_compile_with_provider_started_at(
     provider: &dyn LlmProvider,
     model: &Model,
     compile_started_at: &crate::domain::Timestamp,
-    notifications: Vec<String>,
+    mut notifications: Vec<String>,
 ) -> Result<CompileResult, CompileError> {
     let tree = cfg.tree();
     execute::recover_pending_if_needed(tree.path())?;
@@ -390,6 +390,12 @@ pub fn run_compile_with_provider_started_at(
         &expected_manifest_hash,
     )?;
 
+    if let Some(warning) =
+        degenerate_result_warning(Some(run_mode), &summary.branches, summary.leaves_processed)
+    {
+        notifications.push(warning);
+    }
+
     Ok(CompileResult::compiled(
         summary,
         run_mode,
@@ -397,6 +403,38 @@ pub fn run_compile_with_provider_started_at(
         model,
         notifications,
     ))
+}
+
+/// Check for a degenerate Full compile result (quality collapse):
+/// returns a warning string when the branch-to-leaf ratio is implausibly low.
+/// Only applies to Full mode; Incremental mode naturally produces fewer branches.
+pub fn degenerate_result_warning(
+    mode: Option<CompileRunMode>,
+    branches: &[BranchResult],
+    leaves_processed: usize,
+) -> Option<String> {
+    if mode != Some(CompileRunMode::Full) || leaves_processed <= 20 {
+        return None;
+    }
+    // ponytail: shared remediation hint; both failure modes suggest the same fix.
+    const FIX: &str = "the model likely collapsed; try `bo compile --all` again or switch models with `bo config --compile-model <model>`";
+    let branch_count = branches.len();
+    if branch_count < 2 {
+        return Some(format!(
+            "degenerate compile result: {} branch(es) for {} leaves — {FIX}",
+            branch_count, leaves_processed
+        ));
+    }
+    let branched_leaf_count: usize = branches.iter().map(|b| b.leaf_count).sum();
+    let unbranched = leaves_processed.saturating_sub(branched_leaf_count);
+    let unbranched_pct = (unbranched as f64 / leaves_processed as f64) * 100.0;
+    if unbranched_pct > 80.0 {
+        return Some(format!(
+            "degenerate compile result: {} of {} leaves unbranched ({:.0}%) — {FIX}",
+            unbranched, leaves_processed, unbranched_pct
+        ));
+    }
+    None
 }
 
 pub fn render_human<W: std::io::Write>(
