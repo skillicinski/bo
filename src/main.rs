@@ -729,18 +729,26 @@ fn list_warnings(result: &list::ListResult) -> Vec<JsonWarning> {
 }
 
 fn compile_warnings(result: &CompileResult) -> Vec<JsonWarning> {
-    if result.leaves_skipped.is_empty() {
-        return Vec::new();
+    let mut warnings = Vec::new();
+
+    if !result.leaves_skipped.is_empty() {
+        warnings.push(JsonWarning::with_details(
+            "skipped_leaves",
+            format!(
+                "skipped {} leaves with unparseable frontmatter",
+                result.leaves_skipped.len()
+            ),
+            json!({ "files": result.leaves_skipped }),
+        ));
     }
 
-    vec![JsonWarning::with_details(
-        "skipped_leaves",
-        format!(
-            "skipped {} leaves with unparseable frontmatter",
-            result.leaves_skipped.len()
-        ),
-        json!({ "files": result.leaves_skipped }),
-    )]
+    if let Some(msg) =
+        compile::degenerate_result_warning(result.mode, &result.branches, result.leaves_processed)
+    {
+        warnings.push(JsonWarning::new("degenerate_result", msg));
+    }
+
+    warnings
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────

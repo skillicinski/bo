@@ -1,4 +1,6 @@
-use super::{plan, render_human, CompileOptions, CompileResult, CompileRunMode};
+use super::{
+    degenerate_result_warning, plan, render_human, CompileOptions, CompileResult, CompileRunMode,
+};
 use crate::cli::json;
 use crate::domain::manifest::{BranchRecord, LeafRecord, Manifest, TreeMeta};
 use crate::domain::{Slug, Timestamp};
@@ -1018,4 +1020,108 @@ fn repair_stale_branches_fixes_branch_frontmatter() {
         .find(|b| b.slug.as_str() == "test-branch")
         .unwrap();
     assert_eq!(branch.leaves.len(), 2);
+}
+
+// ── degenerate result warning ────────────────────────────────────────────
+
+use super::BranchResult;
+
+#[test]
+fn degenerate_warning_when_single_branch_for_many_leaves() {
+    // gpt-4.1 at 64 leaves silently produced 1 branch / 2 leaves.
+    // <2 branches for >20 leaves is degenerate.
+    let warning = degenerate_result_warning(
+        Some(CompileRunMode::Full),
+        &[BranchResult {
+            slug: "catch-all".to_string(),
+            title: "Everything".to_string(),
+            leaf_count: 2,
+        }],
+        64,
+    );
+    assert!(warning.is_some());
+    let msg = warning.unwrap();
+    assert!(msg.contains("degenerate compile result"));
+    assert!(msg.contains("1 branch"));
+    assert!(msg.contains("64 leaves"));
+}
+
+#[test]
+fn degenerate_warning_when_most_leaves_unbranched() {
+    // 3 branches covering only 5 of 30 leaves = 83% unbranched.
+    let warning = degenerate_result_warning(
+        Some(CompileRunMode::Full),
+        &[
+            BranchResult {
+                slug: "a".to_string(),
+                title: "A".to_string(),
+                leaf_count: 2,
+            },
+            BranchResult {
+                slug: "b".to_string(),
+                title: "B".to_string(),
+                leaf_count: 2,
+            },
+            BranchResult {
+                slug: "c".to_string(),
+                title: "C".to_string(),
+                leaf_count: 1,
+            },
+        ],
+        30,
+    );
+    assert!(warning.is_some());
+    let msg = warning.unwrap();
+    assert!(msg.contains("degenerate compile result"));
+    assert!(msg.contains("25 of 30 leaves unbranched"));
+}
+
+#[test]
+fn no_degenerate_warning_for_normal_full_compile() {
+    // 3 branches covering 28 of 30 leaves = 7% unbranched, well within bounds.
+    let warning = degenerate_result_warning(
+        Some(CompileRunMode::Full),
+        &[
+            BranchResult {
+                slug: "a".to_string(),
+                title: "A".to_string(),
+                leaf_count: 10,
+            },
+            BranchResult {
+                slug: "b".to_string(),
+                title: "B".to_string(),
+                leaf_count: 10,
+            },
+            BranchResult {
+                slug: "c".to_string(),
+                title: "C".to_string(),
+                leaf_count: 8,
+            },
+        ],
+        30,
+    );
+    assert!(warning.is_none());
+}
+
+#[test]
+fn no_degenerate_warning_for_small_corpus() {
+    // 20 leaves or fewer are never warned about, even with 0 branches.
+    let warning = degenerate_result_warning(Some(CompileRunMode::Full), &[], 20);
+    assert!(warning.is_none());
+}
+
+#[test]
+fn no_degenerate_warning_for_incremental_mode() {
+    // Incremental mode never produces degenerate warnings — it naturally
+    // produces fewer branches by design.
+    let warning = degenerate_result_warning(
+        Some(CompileRunMode::Incremental),
+        &[BranchResult {
+            slug: "single".to_string(),
+            title: "Single".to_string(),
+            leaf_count: 2,
+        }],
+        64,
+    );
+    assert!(warning.is_none());
 }
