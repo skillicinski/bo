@@ -4,11 +4,39 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.0.5] - 2026-06-30
 
 ### Added
 
 - `google` provider — Gemini API support via `bo config --provider google --model gemini-2.5-flash`. Includes `gemini-2.5-flash-lite`, `gemini-2.5-flash`, and `gemini-2.5-pro` models with 1M token context windows. Auth via `GEMINI_API_KEY` env var or `google_api_key` in `~/.bo/auth.json`.
+- `bo query` now retrieves compiled branches in addition to raw leaves — the LLM sees synthesized concept pages alongside source documents and may cite either kind.
+- Compile degenerate-result warning: when a Full compile on a large corpus produces a suspiciously thin branch set, bo warns the user without blocking the output. Retry with `--all` or switch models if the warning appears consistently.
+- Architecture documentation: `docs/architecture.md` (design decisions) and `src/AGENTS.md` (code rules for contributors / coding agents).
+- `deepseek-v4-pro` model entry (1M context, stronger than v4-flash).
+
+### Changed
+
+- Fresh trees auto-run Full compile mode. Incremental mode now only activates when branches already exist, fixing a class of validation errors where the LLM was asked to update non-existent branches.
+- `bo seed` no longer silently defaults to gpt-4.1-mini when no model is given. The model field is required — either via the `--model` flag or the interactive prompt. `bo config` without a model now fails with a clear error instead of silently falling back.
+- Compile validation hardened: ambiguous leaf title references (two leaves sharing a title) are now rejected rather than silently resolving to the wrong leaf. Leaf slugs are included in the full-compile prompt so models see the canonical identifier.
+- Schema generation uses `schemars`-derived inline schemas (no `$ref`/`definitions`/$schema`) — fixes a Google provider rejection and keeps schemas portable across all three providers.
+- Type-level schema enforcement: the `LlmProvider` contract now requires normalized schemas at compile time, not runtime.
+- Compile output (`--json`) no longer reports a redundant `context_mode` field (it was always 1:1 with `mode`).
+- Three different LLM runtime patterns unified behind a shared `OnceLock`-backed runtime. All CLI modules share one long-lived async executor rather than building fresh ones per call.
+
+### Fixed
+
+- Branch `.md` frontmatter now correctly drops deleted leaf filenames from the `leaves:` list when a leaf is removed. Previously the manifest was updated but the branch file on disk was stale.
+- Google provider compile returning HTTP 400 on schema fields injected by `schemars` — fixed by inlining subschemas.
+- Duplicate-URL detection on single-URL `bo collect` — a regression from an internal refactor that dropped the pre-fetch duplicate check.
+- Five distinct compile failure modes are now caught by the validation gate and refuse to write, rather than silently producing a corrupted or degraded tree.
+
+### Architecture (non-user-facing)
+
+- Compile pipeline refactored: mode-delta logic split into focused functions, duplicated preflight collapsed, `CompileContextMode` redundant type removed. God-function eliminated; pipeline reads as a traceable progression.
+- Retrieval scoring deduplicated: leaf and branch scoring share a single parameterized function.
+- Atomic manifest-commit sequence extracted from duplicate collect/compile sites into a shared `engine::pending` helper.
+- `pub(super)` visibility discipline enforced throughout compile and query modules — no internal plumbing leaks across commands.
 
 ## [0.0.4] - 2026-05-26
 
