@@ -10,8 +10,6 @@ bo's architecture is guided by one tenet: **code that a human can trace top-to-b
 
 The manifest (`{tree}/.bo/manifest.json`) is the one topology record. Branches reference their leaves by slug; there is no inverse persisted. `Manifest::branches_for_leaf` computes the inverse in-memory on demand rather than storing redundant state. This avoids bidirectional-write consistency problems: only branches list their leaves, so adding a leaf to a branch touches one record.
 
-Proven correct across the compile rework (session 2026-06-28/29): multi-membership (#100) works because a slug appearing in two branch records is structurally valid with no exclusive check.
-
 ---
 
 ## Deterministic validation gate (never trust the LLM)
