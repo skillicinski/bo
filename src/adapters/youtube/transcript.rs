@@ -51,8 +51,10 @@ fn parse_segments(xml: &str) -> Result<Vec<String>, YoutubeError> {
                 current.push_str(&unescaped);
             }
             Ok(Event::CData(text)) if in_p || in_text => {
-                let content = String::from_utf8_lossy(text.as_ref());
-                current.push_str(&content);
+                let raw = String::from_utf8_lossy(text.as_ref());
+                let decoded = quick_xml::escape::unescape(&raw)
+                    .map_err(|e| YoutubeError::Parse(e.to_string()))?;
+                current.push_str(&decoded);
             }
             Ok(Event::End(event)) => match event.name().as_ref() {
                 b"p" if in_p => {
@@ -87,84 +89,18 @@ fn push_current(segments: &mut Vec<String>, current: &mut String) {
 }
 
 fn clean_text(input: &str) -> String {
-    let mut text = decode_common_entities(input);
+    let mut text = input.to_string();
     loop {
-        let decoded = decode_common_entities(&text);
-        if decoded == text {
-            break;
+        match quick_xml::escape::unescape(&text) {
+            Ok(decoded) if decoded.as_ref() != text => text = decoded.into_owned(),
+            _ => break,
         }
-        text = decoded;
     }
     normalize_whitespace(&text)
 }
 
 fn normalize_whitespace(input: &str) -> String {
     input.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn decode_common_entities(input: &str) -> String {
-    let mut output = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch != '&' {
-            output.push(ch);
-            continue;
-        }
-
-        let mut entity = String::new();
-        while let Some(&next) = chars.peek() {
-            entity.push(next);
-            chars.next();
-            if next == ';' {
-                break;
-            }
-            if entity.len() >= 32 {
-                break;
-            }
-        }
-
-        // If we hit 32-byte limit without finding ';', emit raw &... as literal text
-        if !entity.ends_with(';') {
-            output.push('&');
-            output.push_str(&entity);
-            continue;
-        }
-
-        let decoded = match entity.as_str() {
-            "amp;" => Some('&'),
-            "lt;" => Some('<'),
-            "gt;" => Some('>'),
-            "quot;" => Some('"'),
-            "apos;" => Some('\''),
-            "#39;" => Some('\''),
-            _ => decode_numeric_entity(&entity),
-        };
-
-        if let Some(decoded) = decoded {
-            output.push(decoded);
-        } else {
-            output.push('&');
-            output.push_str(&entity);
-        }
-    }
-
-    output
-}
-
-fn decode_numeric_entity(entity: &str) -> Option<char> {
-    let value = entity.strip_suffix(';')?;
-    let codepoint = if let Some(hex) = value
-        .strip_prefix("#x")
-        .or_else(|| value.strip_prefix("#X"))
-    {
-        u32::from_str_radix(hex, 16).ok()?
-    } else if let Some(decimal) = value.strip_prefix('#') {
-        decimal.parse::<u32>().ok()?
-    } else {
-        return None;
-    };
-    char::from_u32(codepoint)
 }
 
 #[cfg(test)]

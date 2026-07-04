@@ -409,42 +409,14 @@ fn build_full_delta(
         }
     }
     for planned in &plan.branches {
-        let created_at = current
-            .branch_by_slug_str(&planned.slug)
-            .map(|branch| branch.created_at.clone())
-            .unwrap_or_else(|| run_timestamp.clone());
-        let slug = Slug::parse(&planned.slug).unwrap_or_else(|_| Slug::generate(&planned.slug, ""));
-        let record = BranchRecord {
-            slug: slug.clone(),
-            file: format!("branches/{}.md", planned.slug),
-            title: planned.title.clone(),
-            created_at,
-            updated_at: run_timestamp.clone(),
-            leaves: validated_branch_leaf_slugs(planned),
-        };
-        if current.branch_by_slug_str(&planned.slug).is_some() {
-            branches_updated.push(branch_result(
-                record.slug.as_str(),
-                record.title.as_str(),
-                record.leaves.len(),
-            ));
-            branch_writes.push(PlannedBranchWrite {
-                record: record.clone(),
-                file_leaves: planned.leaves.clone(),
-                body: planned.body.clone(),
-            });
+        let existing = current.branch_by_slug_str(&planned.slug);
+        let (record, result, write) = build_branch_artifacts(planned, existing, run_timestamp);
+        if existing.is_some() {
+            branches_updated.push(result);
         } else {
-            branches_created.push(branch_result(
-                record.slug.as_str(),
-                record.title.as_str(),
-                record.leaves.len(),
-            ));
-            branch_writes.push(PlannedBranchWrite {
-                record: record.clone(),
-                file_leaves: planned.leaves.clone(),
-                body: planned.body.clone(),
-            });
+            branches_created.push(result);
         }
+        branch_writes.push(write);
         new_branches.push(record);
     }
 
@@ -457,6 +429,42 @@ fn build_full_delta(
         branches_updated,
         new_branches,
     )
+}
+
+/// ponytail: shared artifact builder; eliminates duplicate BranchRecord/
+/// BranchResult/PlannedBranchWrite construction between full and incremental deltas.
+fn build_branch_artifacts(
+    planned: &ValidatedBranch,
+    existing: Option<&BranchRecord>,
+    run_timestamp: &Timestamp,
+) -> (BranchRecord, BranchResult, PlannedBranchWrite) {
+    let slug = Slug::parse(&planned.slug).unwrap_or_else(|_| Slug::generate(&planned.slug, ""));
+    let (file, created_at) = match existing {
+        Some(ex) => (ex.file.clone(), ex.created_at.clone()),
+        None => (
+            format!("branches/{}.md", planned.slug),
+            run_timestamp.clone(),
+        ),
+    };
+    let record = BranchRecord {
+        slug: slug.clone(),
+        file,
+        title: planned.title.clone(),
+        created_at,
+        updated_at: run_timestamp.clone(),
+        leaves: validated_branch_leaf_slugs(planned),
+    };
+    let result = branch_result(
+        record.slug.as_str(),
+        record.title.as_str(),
+        record.leaves.len(),
+    );
+    let write = PlannedBranchWrite {
+        record: record.clone(),
+        file_leaves: planned.leaves.clone(),
+        body: planned.body.clone(),
+    };
+    (record, result, write)
 }
 
 fn build_incremental_delta(
@@ -481,25 +489,10 @@ fn build_incremental_delta(
         .collect();
     for current_branch in &current.branches {
         if let Some(planned) = planned_by_slug.get(current_branch.slug.as_str()) {
-            let record = BranchRecord {
-                slug: current_branch.slug.clone(),
-                file: current_branch.file.clone(),
-                title: planned.title.clone(),
-                created_at: current_branch.created_at.clone(),
-                updated_at: run_timestamp.clone(),
-                leaves: validated_branch_leaf_slugs(planned),
-            };
-            let result = branch_result(
-                record.slug.as_str(),
-                record.title.as_str(),
-                record.leaves.len(),
-            );
-            branches_updated.push(result.clone());
-            branch_writes.push(PlannedBranchWrite {
-                record: record.clone(),
-                file_leaves: planned.leaves.clone(),
-                body: planned.body.clone(),
-            });
+            let (record, result, write) =
+                build_branch_artifacts(planned, Some(current_branch), run_timestamp);
+            branches_updated.push(result);
+            branch_writes.push(write);
             new_branches.push(record);
         } else {
             new_branches.push(current_branch.clone());
@@ -509,25 +502,9 @@ fn build_incremental_delta(
         if current_branch_slugs.contains(planned.slug.as_str()) {
             continue;
         }
-        let slug = Slug::parse(&planned.slug).unwrap_or_else(|_| Slug::generate(&planned.slug, ""));
-        let record = BranchRecord {
-            slug: slug.clone(),
-            file: format!("branches/{}.md", planned.slug),
-            title: planned.title.clone(),
-            created_at: run_timestamp.clone(),
-            updated_at: run_timestamp.clone(),
-            leaves: validated_branch_leaf_slugs(planned),
-        };
-        branches_created.push(branch_result(
-            record.slug.as_str(),
-            record.title.as_str(),
-            record.leaves.len(),
-        ));
-        branch_writes.push(PlannedBranchWrite {
-            record: record.clone(),
-            file_leaves: planned.leaves.clone(),
-            body: planned.body.clone(),
-        });
+        let (record, result, write) = build_branch_artifacts(planned, None, run_timestamp);
+        branches_created.push(result);
+        branch_writes.push(write);
         new_branches.push(record);
     }
 

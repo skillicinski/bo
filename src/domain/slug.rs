@@ -88,12 +88,6 @@ impl Slug {
     }
 }
 
-impl AsRef<str> for Slug {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
 impl fmt::Display for Slug {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)

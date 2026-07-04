@@ -20,26 +20,6 @@ use super::{
     COMPILE_PROMPT_OVERHEAD_TOKENS, MAX_COMPLETION_TOKENS, TOKEN_ESTIMATE_BYTES_PER_TOKEN,
 };
 
-// ── types ─────────────────────────────────────────────────────────────────────
-
-pub(super) struct StagedWrite {
-    pub(super) pending: PendingWrite,
-    pub(super) bytes: Vec<u8>,
-}
-
-impl StagedWrite {
-    pub(super) fn new(path: String, content: String) -> Self {
-        let bytes = content.into_bytes();
-        Self {
-            pending: PendingWrite {
-                path,
-                content_hash: pending::content_hash(&bytes),
-            },
-            bytes,
-        }
-    }
-}
-
 // ── token estimation ──────────────────────────────────────────────────────────
 
 pub(super) fn estimate_tokens_from_bytes(bytes: usize) -> usize {
@@ -183,7 +163,7 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
     // Stale branches already repaired in pre-LLM pass; no deleted leaves remain.
     let delta = build_manifest_delta(&current, plan, run_mode, run_timestamp)?;
 
-    let mut staged: Vec<StagedWrite> = Vec::new();
+    let mut staged: Vec<(PendingWrite, Vec<u8>)> = Vec::new();
     for planned_write in &delta.branch_writes {
         let content = branch::format_content(
             planned_write.record.title.as_str(),
@@ -192,7 +172,14 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
             &planned_write.record.created_at.to_rfc3339_millis(),
             &run_timestamp.to_rfc3339_millis(),
         );
-        staged.push(StagedWrite::new(planned_write.record.file.clone(), content));
+        let bytes = content.into_bytes();
+        staged.push((
+            PendingWrite {
+                path: planned_write.record.file.clone(),
+                content_hash: pending::content_hash(&bytes),
+            },
+            bytes,
+        ));
     }
 
     let leaves_processed = valid_filenames.len();
@@ -201,10 +188,8 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
         CompileRunMode::Incremental => CompileMode::Incremental,
         CompileRunMode::Full => CompileMode::Full,
     };
-    let staged_refs: Vec<(&PendingWrite, &[u8])> = staged
-        .iter()
-        .map(|s| (&s.pending, s.bytes.as_slice()))
-        .collect();
+    let staged_refs: Vec<(&PendingWrite, &[u8])> =
+        staged.iter().map(|(pw, b)| (pw, b.as_slice())).collect();
     pending::commit_with_manifest(
         tree_dir,
         OpKind::Compile { mode: compile_mode },

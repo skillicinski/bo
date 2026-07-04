@@ -162,7 +162,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let tmp_path = tmp_path_for(path);
+    let tmp_path = PathBuf::from(format!("{}.tmp", path.display()));
     {
         let mut f = fs::File::create(&tmp_path)?;
         f.write_all(bytes)?;
@@ -170,12 +170,6 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     }
     fs::rename(&tmp_path, path)?;
     Ok(())
-}
-
-fn tmp_path_for(path: &Path) -> PathBuf {
-    let mut s = path.as_os_str().to_owned();
-    s.push(".tmp");
-    PathBuf::from(s)
 }
 
 fn debug_assert_unique_slugs(m: &Manifest) {

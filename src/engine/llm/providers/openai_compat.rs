@@ -7,22 +7,32 @@ use crate::engine::llm::{
     NormalizedSchema, Role,
 };
 
-pub struct ZaiProvider {
+pub struct OpenAiCompatProvider {
     client: reqwest::Client,
     api_key: String,
+    base_url: String,
 }
 
-impl ZaiProvider {
-    pub fn new(api_key: &str) -> Self {
+impl OpenAiCompatProvider {
+    pub fn deepseek(api_key: &str) -> Self {
         Self {
             client: reqwest::Client::new(),
             api_key: api_key.to_string(),
+            base_url: "https://api.deepseek.com/chat/completions".to_string(),
+        }
+    }
+
+    pub fn zai(api_key: &str) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            api_key: api_key.to_string(),
+            base_url: "https://api.z.ai/api/coding/paas/v4/chat/completions".to_string(),
         }
     }
 }
 
 #[async_trait]
-impl LlmProvider for ZaiProvider {
+impl LlmProvider for OpenAiCompatProvider {
     async fn complete(
         &self,
         messages: &[Message],
@@ -31,8 +41,8 @@ impl LlmProvider for ZaiProvider {
         response_schema: Option<&NormalizedSchema>,
         reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
-        // 1. Convert messages to Z.ai chat format.
-        let zai_messages: Vec<Value> = messages
+        // 1. Convert messages to chat format.
+        let api_messages: Vec<Value> = messages
             .iter()
             .map(|m| {
                 let role = match m.role {
@@ -57,9 +67,8 @@ impl LlmProvider for ZaiProvider {
                 schema_text
             );
 
-            let mut cloned = zai_messages;
+            let mut cloned = api_messages;
 
-            // Find the first system message by role.
             let system_idx = cloned.iter().position(|m| m["role"] == "system");
 
             if let Some(idx) = system_idx {
@@ -82,7 +91,7 @@ impl LlmProvider for ZaiProvider {
 
             cloned
         } else {
-            zai_messages
+            api_messages
         };
 
         // 3. Build request body.
@@ -100,10 +109,10 @@ impl LlmProvider for ZaiProvider {
             body["thinking"] = serde_json::json!({"type": "disabled"});
         }
 
-        // 4. POST to Z.ai GLM Coding Plan endpoint.
+        // 4. POST to API.
         let response = self
             .client
-            .post("https://api.z.ai/api/coding/paas/v4/chat/completions")
+            .post(&self.base_url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&body)
             .send()
@@ -151,5 +160,5 @@ impl LlmProvider for ZaiProvider {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/engine_llm_zai_provider_tests.rs"]
+#[path = "../../../tests/engine_llm_openai_compat_provider_tests.rs"]
 mod tests;

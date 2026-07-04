@@ -43,7 +43,6 @@ pub enum OpKind {
 pub enum CompileMode {
     Incremental,
     Full,
-    RebuildStale,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

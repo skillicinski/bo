@@ -1,14 +1,12 @@
-pub mod deepseek;
 pub mod google;
 pub mod openai;
-pub mod zai;
+pub mod openai_compat;
 
 use crate::engine::llm::{sanitize_provider_error_message, LlmError};
 
-pub use deepseek::DeepSeekProvider;
 pub use google::GoogleProvider;
 pub use openai::OpenAiProvider;
-pub use zai::ZaiProvider;
+pub use openai_compat::OpenAiCompatProvider;
 
 fn map_reqwest_error(error: &reqwest::Error) -> LlmError {
     let message = sanitize_provider_error_message(&error.to_string());
