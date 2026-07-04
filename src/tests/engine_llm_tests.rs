@@ -138,6 +138,17 @@ fn model_catalog_lists_deepseek_models() {
 }
 
 #[test]
+fn model_catalog_lists_zai_models() {
+    let models = models::models_for(Provider::Zai);
+    let ids: Vec<&str> = models.iter().map(|m| m.id).collect();
+    assert!(ids.contains(&"glm-4.7"));
+    assert!(ids.contains(&"glm-4.5-air"));
+    assert!(ids.contains(&"glm-5.1"));
+    assert!(ids.contains(&"glm-5-turbo"));
+    assert!(ids.contains(&"glm-5.2"));
+}
+
+#[test]
 fn context_window_lookup_returns_known_windows() {
     assert_eq!(
         context_window_tokens(Provider::OpenAI, "gpt-4o"),

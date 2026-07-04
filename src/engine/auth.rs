@@ -18,6 +18,7 @@ impl fmt::Display for AuthError {
                     Provider::OpenAI => "OPENAI_API_KEY",
                     Provider::Deepseek => "DEEPSEEK_API_KEY",
                     Provider::Google => "GEMINI_API_KEY",
+                    Provider::Zai => "ZAI_API_KEY",
                 };
                 write!(f, "{} environment variable not set", env_var)
             }
@@ -34,14 +35,15 @@ pub fn auth_path() -> PathBuf {
 }
 
 /// Resolve the API key for a provider.
-/// 1. Check env var (OPENAI_API_KEY or DEEPSEEK_API_KEY)
-/// 2. Fall back to ~/.bo/auth.json with flat keys `openai_api_key` / `deepseek_api_key`
+/// 1. Check env var (OPENAI_API_KEY, DEEPSEEK_API_KEY, GEMINI_API_KEY, or ZAI_API_KEY)
+/// 2. Fall back to ~/.bo/auth.json with flat keys `openai_api_key` / `deepseek_api_key` / `google_api_key` / `zai_api_key`
 /// 3. Error with missing key message
 pub fn resolve_api_key(provider: Provider) -> Result<String, AuthError> {
     let env_var = match provider {
         Provider::OpenAI => "OPENAI_API_KEY",
         Provider::Deepseek => "DEEPSEEK_API_KEY",
         Provider::Google => "GEMINI_API_KEY",
+        Provider::Zai => "ZAI_API_KEY",
     };
 
     // 1. Check env var
@@ -60,6 +62,7 @@ pub fn resolve_api_key(provider: Provider) -> Result<String, AuthError> {
             Provider::OpenAI => "openai_api_key",
             Provider::Deepseek => "deepseek_api_key",
             Provider::Google => "google_api_key",
+            Provider::Zai => "zai_api_key",
         };
         if let Some(key) = parsed.get(key_name).and_then(|v| v.as_str()) {
             if !key.trim().is_empty() {
