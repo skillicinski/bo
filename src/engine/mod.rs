@@ -3,6 +3,7 @@ pub mod config;
 pub mod extract;
 pub mod fetch;
 pub mod llm;
+pub mod manifest;
 pub mod pending;
 pub mod quality;
 pub mod retrieval;

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::time::SystemTime;
 use tempfile::TempDir;
 
-use crate::domain::manifest::{self, BranchRecord, LeafRecord, Manifest, TreeMeta};
+use crate::domain::manifest::{BranchRecord, LeafRecord, Manifest, TreeMeta};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct FileSnapshot {
@@ -726,7 +726,7 @@ fn write_manifest(tree_dir: &Path, leaves: &[LeafRecord], branches: &[(&str, &[&
         leaves: leaves.to_vec(),
         branches: branch_records,
     };
-    manifest::write(&tree_dir.join(".bo/manifest.json"), &m).unwrap();
+    crate::engine::manifest::write(&tree_dir.join(".bo/manifest.json"), &m).unwrap();
 }
 
 fn write_leaf_files(tree_dir: &Path, slugs: &[&str]) {

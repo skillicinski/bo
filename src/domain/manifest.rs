@@ -6,14 +6,14 @@
 // in-memory at call time. The manifest is the only tree-state store. Missing
 // or corrupt manifests are surfaced as errors; there is no secondary
 // reconstruction path.
+//
+// Pure types and resolution logic live here. Filesystem I/O lives in
+// `engine::manifest` so domain stays free of I/O.
 
 use crate::domain::{Slug, Timestamp, Title, Url};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::fmt;
-use std::fs;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::io;
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
@@ -124,73 +124,6 @@ impl Manifest {
             .iter()
             .filter(|b| b.leaves.iter().any(|s| s == leaf_slug))
             .collect()
-    }
-}
-
-// ── public I/O ────────────────────────────────────────────────────────────────
-
-/// Read a manifest from disk.
-///
-/// - File present + valid JSON  → `Ok(Manifest)`
-/// - File present + invalid JSON → `Err(Parse)`
-/// - File absent                → `Err(TreeNotInitialized)`
-pub fn read(path: &Path) -> Result<Manifest, ManifestError> {
-    match fs::read_to_string(path) {
-        Ok(s) => serde_json::from_str(&s).map_err(ManifestError::Parse),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Err(ManifestError::TreeNotInitialized),
-        Err(e) => Err(ManifestError::Io(e)),
-    }
-}
-
-/// Atomically write a manifest to disk.
-///
-/// Writes to `{path}.tmp`, fsyncs the file, then renames into place. POSIX rename
-/// guarantees atomic replacement on a single filesystem.
-///
-/// In debug builds, panics if leaf or branch slug uniqueness is violated.
-/// Release builds skip the check (zero cost).
-pub fn write(path: &Path, manifest: &Manifest) -> Result<(), ManifestError> {
-    debug_assert_unique_slugs(manifest);
-    let json = serde_json::to_string_pretty(manifest)?;
-    atomic_write(path, json.as_bytes())?;
-    Ok(())
-}
-
-// ── internals ─────────────────────────────────────────────────────────────────
-
-pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let tmp_path = PathBuf::from(format!("{}.tmp", path.display()));
-    {
-        let mut f = fs::File::create(&tmp_path)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-    }
-    fs::rename(&tmp_path, path)?;
-    Ok(())
-}
-
-fn debug_assert_unique_slugs(m: &Manifest) {
-    if !cfg!(debug_assertions) {
-        return;
-    }
-    let mut leaf_slugs = HashSet::new();
-    for l in &m.leaves {
-        assert!(
-            leaf_slugs.insert(l.slug.as_str()),
-            "duplicate leaf slug: {}",
-            l.slug
-        );
-    }
-    let mut branch_slugs = HashSet::new();
-    for b in &m.branches {
-        assert!(
-            branch_slugs.insert(b.slug.as_str()),
-            "duplicate branch slug: {}",
-            b.slug
-        );
     }
 }
 

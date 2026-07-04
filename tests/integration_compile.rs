@@ -10,7 +10,7 @@ use bo::domain::Title;
 use std::fs;
 
 use bo::cli::compile;
-use bo::domain::manifest::{self, BranchRecord, LeafRecord, Manifest, TreeMeta};
+use bo::domain::manifest::{BranchRecord, LeafRecord, Manifest, TreeMeta};
 use bo::engine::config::SeededConfig;
 use bo::engine::pending;
 
@@ -72,7 +72,7 @@ fn setup_fixture_collection() -> tempfile::TempDir {
         });
     }
 
-    manifest::write(
+    bo::engine::manifest::write(
         &bo_dir.join("manifest.json"),
         &Manifest {
             tree: TreeMeta {
@@ -235,9 +235,9 @@ fn crash_mid_compile_rollback_cleans_staged_files() {
 
     // Mark all leaves as compiled so compile returns noop after recovery
     let manifest_path = bo_dir.join("manifest.json");
-    let mut m = manifest::read(&manifest_path).unwrap();
+    let mut m = bo::engine::manifest::read(&manifest_path).unwrap();
     m.tree.last_compiled_at = Some(Timestamp::parse("2099-01-01T00:00:00Z").unwrap());
-    manifest::write(&manifest_path, &m).unwrap();
+    bo::engine::manifest::write(&manifest_path, &m).unwrap();
 
     // Record manifest hash before "crash"
     let manifest_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
@@ -298,9 +298,9 @@ fn crash_mid_compile_roll_forward_applies_staged_writes() {
 
     // Mark all leaves as compiled
     let manifest_path = bo_dir.join("manifest.json");
-    let mut m = manifest::read(&manifest_path).unwrap();
+    let mut m = bo::engine::manifest::read(&manifest_path).unwrap();
     m.tree.last_compiled_at = Some(Timestamp::parse("2099-01-01T00:00:00Z").unwrap());
-    manifest::write(&manifest_path, &m).unwrap();
+    bo::engine::manifest::write(&manifest_path, &m).unwrap();
 
     // Write a staged .tmp file
     fs::create_dir_all(tree_dir.join("branches")).unwrap();
@@ -364,9 +364,9 @@ fn crash_mid_collect_rollback_leaves_tree_unchanged() {
 
     // Mark all leaves as compiled
     let manifest_path = bo_dir.join("manifest.json");
-    let mut m = manifest::read(&manifest_path).unwrap();
+    let mut m = bo::engine::manifest::read(&manifest_path).unwrap();
     m.tree.last_compiled_at = Some(Timestamp::parse("2099-01-01T00:00:00Z").unwrap());
-    manifest::write(&manifest_path, &m).unwrap();
+    bo::engine::manifest::write(&manifest_path, &m).unwrap();
 
     let manifest_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
 
@@ -407,7 +407,7 @@ fn crash_mid_collect_rollback_leaves_tree_unchanged() {
     // Manifest unchanged by the failed collect
     let _manifest_after = fs::read_to_string(bo_dir.join("manifest.json")).unwrap();
     // Note: compile may update manifest (last_compiled_at), so just verify no interrupted leaf
-    let m = manifest::read(&bo_dir.join("manifest.json")).unwrap();
+    let m = bo::engine::manifest::read(&bo_dir.join("manifest.json")).unwrap();
     assert!(!m
         .leaves
         .iter()
@@ -478,7 +478,7 @@ fn compile_full_with_canned_response_creates_branches() {
         &model,
         &started_at,
         Vec::new(),
-        &manifest::read(&dir.path().join(".bo/manifest.json")).unwrap(),
+        &bo::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap(),
         &[], // ponytail: Full mode doesn't use new_leaf_slugs
         &pending::manifest_hash(dir.path()).unwrap(),
     );
@@ -504,7 +504,7 @@ fn compile_full_with_canned_response_creates_branches() {
     assert!(content_b.contains("Systems Design in Rust"));
 
     // Manifest updated with branches
-    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = bo::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.branches.len(), 2);
     assert!(m.tree.last_compiled_at.is_some());
 }
@@ -567,7 +567,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
     )
     .unwrap();
 
-    manifest::write(
+    bo::engine::manifest::write(
         &bo_dir.join("manifest.json"),
         &Manifest {
             tree: TreeMeta {
@@ -649,7 +649,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
     .to_string();
     let provider = FakeLlmProvider { response: canned };
 
-    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = bo::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     let new_slugs: Vec<String> = m
         .leaves
         .iter()
@@ -684,7 +684,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
     assert!(branches_dir.join("type-system.md").exists());
 
     // Manifest reflects both branches
-    let m = manifest::read(&bo_dir.join("manifest.json")).unwrap();
+    let m = bo::engine::manifest::read(&bo_dir.join("manifest.json")).unwrap();
     assert_eq!(m.branches.len(), 2);
     let slugs: Vec<&str> = m.branches.iter().map(|b| b.slug.as_str()).collect();
     assert!(slugs.contains(&"memory-model"));
@@ -717,7 +717,7 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
     )
     .unwrap();
 
-    manifest::write(
+    bo::engine::manifest::write(
         &bo_dir.join("manifest.json"),
         &Manifest {
             tree: TreeMeta {
@@ -774,7 +774,7 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
     assert_eq!(compile_result.status, "noop");
 
     // Manifest cleaned: deleted leaf removed, branch removed (only 1 leaf left)
-    let m = manifest::read(&bo_dir.join("manifest.json")).unwrap();
+    let m = bo::engine::manifest::read(&bo_dir.join("manifest.json")).unwrap();
     assert!(
         !m.leaves.iter().any(|l| l.slug.as_str() == "deleted"),
         "deleted leaf should be pruned from manifest"

@@ -1,5 +1,5 @@
 use super::*;
-use crate::domain::manifest::{self, BranchRecord, LeafRecord, Manifest, TreeMeta};
+use crate::domain::manifest::{BranchRecord, LeafRecord, Manifest, TreeMeta};
 use crate::domain::{Slug, Timestamp};
 use std::fs;
 use tempfile::TempDir;
@@ -28,7 +28,7 @@ fn write_manifest(
         leaves: leaves.to_vec(),
         branches: branches.to_vec(),
     };
-    manifest::write(&dir.join(".bo/manifest.json"), &m).unwrap();
+    crate::engine::manifest::write(&dir.join(".bo/manifest.json"), &m).unwrap();
 }
 
 fn leaf(slug: &str, url: &str, collected_at: &str) -> LeafRecord {

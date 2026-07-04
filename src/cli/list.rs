@@ -3,7 +3,7 @@
 use crate::cli::json::JsonError;
 use crate::cli::resolve_leaf_path;
 use crate::domain::manifest::{self, LeafRecord, Manifest};
-use crate::domain::tree::{self, TreeRuntimeState};
+use crate::domain::tree::TreeRuntimeState;
 use chrono::{DateTime, FixedOffset};
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -150,7 +150,7 @@ impl ListError {
 // ── list_tree ────────────────────────────────────────────────────────────────
 
 pub fn list_tree(tree_dir: &Path, options: &ListOptions) -> Result<ListResult, ListError> {
-    let m = match tree::runtime_state(tree_dir) {
+    let m = match crate::engine::manifest::runtime_state(tree_dir) {
         Ok(TreeRuntimeState::Initialized(manifest)) => manifest,
         Ok(TreeRuntimeState::FreshSeeded) => {
             return Ok(ListResult {

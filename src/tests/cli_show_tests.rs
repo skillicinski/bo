@@ -304,7 +304,7 @@ fn write_index(tree: &Path, entries: &[(&str, &str)]) {
     };
     let bo_dir = tree.join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    crate::domain::manifest::write(&bo_dir.join("manifest.json"), &m).unwrap();
+    crate::engine::manifest::write(&bo_dir.join("manifest.json"), &m).unwrap();
 }
 
 fn write_leaf(tree: &Path, file: &str, frontmatter_fields: &str, body: &str) {

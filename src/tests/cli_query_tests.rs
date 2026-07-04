@@ -159,7 +159,7 @@ fn make_manifest(dir: &Path, entries: &[(&str, &str, &str)]) {
         .collect();
     let bo_dir = dir.join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    crate::domain::manifest::write(
+    crate::engine::manifest::write(
         &bo_dir.join("manifest.json"),
         &crate::domain::manifest::Manifest {
             tree: crate::domain::manifest::TreeMeta {
@@ -382,7 +382,7 @@ fn retrieve_returns_compiled_branch_when_no_leaf_matches() {
     };
     let bo_dir = tree.join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    crate::domain::manifest::write(&bo_dir.join("manifest.json"), &manifest).unwrap();
+    crate::engine::manifest::write(&bo_dir.join("manifest.json"), &manifest).unwrap();
 
     // Only the branch matches "ownership"; neither leaf does.
     let results = retrieve_docs(tree, &["ownership".to_string()]).unwrap();

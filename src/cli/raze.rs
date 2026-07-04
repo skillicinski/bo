@@ -72,7 +72,7 @@ pub fn raze_with_auth(
     recover_pending_if_needed(output_dir)?;
 
     let manifest_path = tree::manifest_path(output_dir);
-    let manifest = match tree::runtime_state(output_dir) {
+    let manifest = match crate::engine::manifest::runtime_state(output_dir) {
         Ok(TreeRuntimeState::Initialized(manifest)) => Some(manifest),
         Ok(TreeRuntimeState::FreshSeeded | TreeRuntimeState::MissingManifest) => None,
         Err(error) => return Err(RazeError::Io(format!("failed to read manifest: {error}"))),

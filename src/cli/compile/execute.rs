@@ -149,8 +149,7 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
 
     // Load current manifest. Used to preserve branch `created_at` and carry
     // leaf records / tree metadata forward into the new manifest.
-    let current = tree
-        .manifest_or_empty_if_fresh()
+    let current = crate::engine::manifest::manifest_or_empty_if_fresh(&tree)
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
 
     let current_manifest_hash = pending::manifest_hash(tree_dir)?;

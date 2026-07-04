@@ -714,7 +714,7 @@ fn summarize_collect_items(items: &[CollectItemResult]) -> BatchCollectSummary {
 
 pub fn duplicate_file(url: &str, output_dir: &Path) -> Result<Option<String>, CollectError> {
     let manifest_path = output_dir.join(".bo").join("manifest.json");
-    let manifest = match manifest::read(&manifest_path) {
+    let manifest = match crate::engine::manifest::read(&manifest_path) {
         Ok(m) => m,
         Err(manifest::ManifestError::TreeNotInitialized) => return Ok(None),
         Err(e) => return Err(CollectError::Manifest(e)),
@@ -849,7 +849,7 @@ fn load_or_bootstrap_manifest(
     now: &Timestamp,
 ) -> Result<Manifest, CollectError> {
     let manifest_path = output_dir.join(".bo").join("manifest.json");
-    match manifest::read(&manifest_path) {
+    match crate::engine::manifest::read(&manifest_path) {
         Ok(m) => Ok(m),
         Err(manifest::ManifestError::TreeNotInitialized) => Ok(Manifest {
             tree: TreeMeta {
