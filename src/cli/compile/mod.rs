@@ -419,6 +419,15 @@ pub fn degenerate_result_warning(
             unbranched, leaves_processed, unbranched_pct
         ));
     }
+    // ponytail: 0.30 threshold is a guess calibrated against the 15/66≈0.23
+    // dogfooding case; re-tune against more real-world degenerate results.
+    let coverage = branched_leaf_count as f64 / leaves_processed as f64;
+    if coverage < 0.30 {
+        return Some(format!(
+            "degenerate compile result: only {} of {} leaves placed in branches — {FIX}",
+            branched_leaf_count, leaves_processed
+        ));
+    }
     None
 }
 
