@@ -135,6 +135,34 @@ pub fn resolve_slug(slug: &Slug, url: &str, output_dir: &Path) -> Slug {
     Slug(resolved)
 }
 
+/// Resolve a slug against both on-disk files and an in-memory set of
+/// already-claimed stems. Used by parallel batch collect where staged
+/// writes aren't on disk yet, so intra-batch collisions would otherwise
+/// be invisible to `resolve_slug`.
+///
+/// # ponytail: one extra function beats plumbing a used-set through
+/// every call site. If seq and batch paths later share more logic,
+/// fold back into resolve_slug with an Option<&mut HashSet>.
+pub fn resolve_slug_batch(
+    slug: &Slug,
+    url: &str,
+    output_dir: &Path,
+    used: &mut std::collections::HashSet<String>,
+) -> Slug {
+    let resolved = resolve_slug(slug, url, output_dir);
+    if used.insert(resolved.as_str().to_string()) {
+        return resolved;
+    }
+    // Intra-batch collision (two leaves with the same base slug and no
+    // on-disk conflict).  Append the URL hash — same disambiguation as
+    // the sequential path.
+    let hash = url_hash(url);
+    let base = truncate_at_boundary(slug.as_str(), 80 - 1 - 12);
+    let disambiguated = format!("{}-{}", base, hash);
+    used.insert(disambiguated.clone());
+    Slug(disambiguated)
+}
+
 // ── internals ─────────────────────────────────────────────────────────────────
 
 fn slugify_raw(input: &str) -> String {

@@ -1091,3 +1091,62 @@ fn no_degenerate_warning_for_incremental_mode() {
     );
     assert!(warning.is_none());
 }
+
+#[test]
+fn degenerate_warning_low_coverage_ratio() {
+    // 2 branches, 66 leaves processed, but branches only claim 15 leaves
+    // total (7+8). Coverage = 15/66 ≈ 0.23, below the 0.30 threshold.
+    // The unbranched heuristic (77% < 80%) does NOT fire, so this
+    // exercises the new coverage-ratio path exclusively.
+    let warning = degenerate_result_warning(
+        Some(CompileRunMode::Full),
+        &[branch_result("concept-a", 7), branch_result("concept-b", 8)],
+        66,
+    );
+    let msg = warning.expect("expected a degenerate warning from low coverage ratio");
+    assert!(msg.contains("degenerate compile result"));
+    assert!(msg.contains("only 15 of 66 leaves placed in branches"));
+}
+
+#[test]
+fn no_degenerate_warning_for_healthy_coverage() {
+    // 3 branches covering 26 of 30 leaves = 87% coverage, 13% unbranched.
+    // Both the unbranched (>80%) and coverage (<30%) guards pass through.
+    let warning = degenerate_result_warning(
+        Some(CompileRunMode::Full),
+        &[
+            branch_result("a", 10),
+            branch_result("b", 9),
+            branch_result("c", 7),
+        ],
+        30,
+    );
+    assert!(warning.is_none());
+}
+
+#[test]
+fn degenerate_warning_single_branch_regression() {
+    // Regression guard: branch_count < 2 with >20 leaves still warns.
+    let warning = degenerate_result_warning(
+        Some(CompileRunMode::Full),
+        &[branch_result("catch-all", 2)],
+        64,
+    );
+    assert!(warning.is_some());
+}
+
+#[test]
+fn degenerate_warning_unbranched_regression() {
+    // Regression guard: >80% unbranched still warns.
+    // 3 branches, 5 of 30 leaves branched → 25 unbranched (83%).
+    let warning = degenerate_result_warning(
+        Some(CompileRunMode::Full),
+        &[
+            branch_result("a", 2),
+            branch_result("b", 2),
+            branch_result("c", 1),
+        ],
+        30,
+    );
+    assert!(warning.is_some());
+}

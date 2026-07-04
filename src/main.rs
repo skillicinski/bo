@@ -601,7 +601,13 @@ fn execute_raze(include_auth: bool) -> Result<raze::RazeOutput, CliError> {
 
             match raze::raze_auth_only(&auth_path).map_err(CliError::Raze)? {
                 Some(output) => Ok(output),
-                None => Err(CliError::NotSeeded),
+                None => Ok(raze::RazeOutput {
+                    result: raze::RazeResult {
+                        auth_path: auth_path.to_string_lossy().into_owned(),
+                        ..Default::default()
+                    },
+                    warnings: Vec::new(),
+                }),
             }
         }
         Err(error) => Err(CliError::ConfigRead(format!(
