@@ -8,7 +8,7 @@ use serde_json::json;
 use std::io::{BufRead, ErrorKind as IoErrorKind, Write};
 use std::path::{Component, Path};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct RazeResult {
     /// Signals the user declined confirmation. All other fields are zero/false when cancelled.
     #[serde(default)]
