@@ -9,7 +9,7 @@ pub mod providers;
 
 pub use model::{Model, UnsupportedModel};
 pub use models::context_window_tokens;
-pub use providers::{DeepSeekProvider, GoogleProvider, OpenAiProvider};
+pub use providers::{DeepSeekProvider, GoogleProvider, OpenAiProvider, ZaiProvider};
 
 /// Sanitize a provider error message by redacting API key fragments.
 pub(crate) fn sanitize_provider_error_message(message: &str) -> String {
@@ -32,6 +32,7 @@ pub fn create_provider(provider: Provider, api_key: &str) -> Box<dyn LlmProvider
         Provider::OpenAI => Box::new(OpenAiProvider::new(api_key)),
         Provider::Deepseek => Box::new(DeepSeekProvider::new(api_key)),
         Provider::Google => Box::new(GoogleProvider::new(api_key)),
+        Provider::Zai => Box::new(ZaiProvider::new(api_key)),
     }
 }
 
@@ -69,6 +70,8 @@ pub enum Provider {
     Deepseek,
     #[serde(rename = "google")]
     Google,
+    #[serde(rename = "zai")]
+    Zai,
 }
 
 impl Provider {
@@ -77,6 +80,7 @@ impl Provider {
             "openai" => Some(Provider::OpenAI),
             "deepseek" => Some(Provider::Deepseek),
             "google" => Some(Provider::Google),
+            "zai" => Some(Provider::Zai),
             _ => None,
         }
     }
@@ -88,11 +92,12 @@ impl fmt::Display for Provider {
             Provider::OpenAI => write!(f, "openai"),
             Provider::Deepseek => write!(f, "deepseek"),
             Provider::Google => write!(f, "google"),
+            Provider::Zai => write!(f, "zai"),
         }
     }
 }
 
-pub const ALL_PROVIDERS: &[&str] = &["openai", "deepseek", "google"];
+pub const ALL_PROVIDERS: &[&str] = &["openai", "deepseek", "google", "zai"];
 
 // ── public types ──────────────────────────────────────────────────────────────
 

@@ -64,7 +64,7 @@ Commands other than `seed` support `--json` for machine-readable output, intende
 
 ## Provider setup
 
-bo currently supports **OpenAI**, **DeepSeek**, and **Google**.
+bo currently supports **OpenAI**, **DeepSeek**, **Google**, and **Z.ai (GLM)**.
 
 ### 1. Choose provider and model
 
@@ -74,6 +74,8 @@ bo config --provider openai --model gpt-4.1-mini
 bo config --provider deepseek --model deepseek-v4-flash
 # or
 bo config --provider google --model gemini-2.5-flash
+# or
+bo config --provider zai --model glm-4.7
 ```
 
 You can also pin a heavier model just for the compile step:
@@ -92,6 +94,7 @@ Resolution order: environment variable → `~/.bo/auth.json` → error.
 export OPENAI_API_KEY=sk-...
 export DEEPSEEK_API_KEY=sk-...
 export GEMINI_API_KEY=...
+export ZAI_API_KEY=...
 ```
 
 **Option B — `~/.bo/auth.json`** (chmod 600):
@@ -100,7 +103,8 @@ export GEMINI_API_KEY=...
 {
   "openai_api_key": "sk-...",
   "deepseek_api_key": "sk-...",
-  "google_api_key": "..."
+  "google_api_key": "...",
+  "zai_api_key": "..."
 }
 ```
 

@@ -45,6 +45,38 @@ pub const DEEPSEEK_MODELS: &[ModelInfo] = &[
     },
 ];
 
+// Z.ai GLM Coding Plan (subscription) models, served from the coding endpoint
+// (https://api.z.ai/api/coding/paas/v4). Context windows per Z.ai's coding-tool
+// config guidance: glm-5.2 = 1M, others = 200k. Z.ai recommends glm-4.7 for
+// routine tasks (1x quota); glm-5.2 / glm-5-turbo consume 2–3x quota.
+//
+// The plan also exposes glm-5v-turbo (vision), excluded here since bo is
+// text-only. Pay-per-token PaaS-only models (glm-4.6, glm-4.5-x/airx,
+// glm-4-32b, glm-4.7-flash/flashx) aren't on the coding plan and aren't listed;
+// add the standard PaaS endpoint as a separate provider if needed.
+pub const ZAI_MODELS: &[ModelInfo] = &[
+    ModelInfo {
+        id: "glm-4.7",
+        context_tokens: 200_000,
+    },
+    ModelInfo {
+        id: "glm-4.5-air",
+        context_tokens: 200_000,
+    },
+    ModelInfo {
+        id: "glm-5.1",
+        context_tokens: 200_000,
+    },
+    ModelInfo {
+        id: "glm-5-turbo",
+        context_tokens: 200_000,
+    },
+    ModelInfo {
+        id: "glm-5.2",
+        context_tokens: 1_000_000,
+    },
+];
+
 pub const GOOGLE_MODELS: &[ModelInfo] = &[
     ModelInfo {
         id: "gemini-2.5-flash-lite",
@@ -65,6 +97,7 @@ pub fn models_for(provider: Provider) -> &'static [ModelInfo] {
         Provider::OpenAI => OPENAI_MODELS,
         Provider::Deepseek => DEEPSEEK_MODELS,
         Provider::Google => GOOGLE_MODELS,
+        Provider::Zai => ZAI_MODELS,
     }
 }
 

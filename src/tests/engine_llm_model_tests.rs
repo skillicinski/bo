@@ -22,6 +22,13 @@ fn parse_valid_google_model() {
 }
 
 #[test]
+fn parse_valid_zai_model() {
+    let m = Model::parse("glm-4.7", Provider::Zai).unwrap();
+    assert_eq!(m.as_str(), "glm-4.7");
+    assert_eq!(m.context_tokens(), 200_000);
+}
+
+#[test]
 fn parse_trims_whitespace() {
     let m = Model::parse("  gpt-4.1-mini  ", Provider::OpenAI).unwrap();
     assert_eq!(m.as_str(), "gpt-4.1-mini");

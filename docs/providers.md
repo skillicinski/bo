@@ -34,6 +34,29 @@ bo supports OpenAI-compatible providers. Each provider enumerates a fixed set of
 
 ---
 
+## Z.ai (GLM)
+
+bo targets the Z.ai **GLM Coding Plan** (subscription) endpoint, not the pay-per-token PaaS endpoint.
+
+| Model | Context | Notes |
+|---|---|---|
+| `glm-4.7` | 200K | Default. Routine tasks, 1x quota consumption. |
+| `glm-4.5-air` | 200K | Lightweight text model. |
+| `glm-5.1` | 200K | Flagship-class. |
+| `glm-5-turbo` | 200K | Fast flagship-class, 2–3x quota. |
+| `glm-5.2` | 1M | Flagship. Complex/large compiles, 2–3x quota. |
+
+### Notes
+
+- **Coding Plan endpoint** — bo hits `https://api.z.ai/api/coding/paas/v4/chat/completions` with Bearer auth. Requires a GLM Coding Plan subscription; a pay-per-token PaaS key returns `code 1113` (insufficient balance). Pin a compile model (`bo config --compile-model glm-5.2`) for heavier work.
+- **Quota** — glm-5.2 / glm-5-turbo consume 2–3x quota (3x peak 14:00–18:00 UTC+8); glm-4.7 consumes 1x. Prefer glm-4.7 for routine queries.
+- **No structured output mode** — like DeepSeek, Z.ai has no `response_format: json_schema`. bo falls back to JSON-mode prompting (system message instructions + `response_format: json_object`).
+- **reasoning toggle** — `{"thinking": {"type": "disabled"}}` suppresses reasoning tokens (same parameter shape as DeepSeek).
+- **Vision not supported** — the plan exposes `glm-5v-turbo`, but bo is text-only; it is intentionally not listed.
+- **Auth** — set `ZAI_API_KEY` or store `zai_api_key` in `~/.bo/auth.json`.
+
+---
+
 ## Google (Gemini)
 
 | Model | Notes |

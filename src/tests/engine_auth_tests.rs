@@ -201,3 +201,38 @@ fn test_auth_json_fallback_google() {
     let result = resolve_api_key(Provider::Google).unwrap();
     assert_eq!(result, "gemini-json-key");
 }
+
+#[test]
+#[serial]
+fn test_env_var_zai() {
+    let dir = TempDir::new().unwrap();
+    let _guard = EnvGuard::set("ZAI_API_KEY", "sk-zai-env");
+    let _home_guard = EnvGuard::set("HOME", dir.path().to_str().unwrap());
+
+    let result = resolve_api_key(Provider::Zai).unwrap();
+    assert_eq!(result, "sk-zai-env");
+}
+
+#[test]
+#[serial]
+fn test_auth_json_fallback_zai() {
+    let dir = TempDir::new().unwrap();
+    let _guard = EnvGuard::unset("ZAI_API_KEY");
+    let _home_guard = EnvGuard::set("HOME", dir.path().to_str().unwrap());
+    write_auth_json(&dir, "zai_api_key", "sk-zai-json");
+
+    let result = resolve_api_key(Provider::Zai).unwrap();
+    assert_eq!(result, "sk-zai-json");
+}
+
+#[test]
+#[serial]
+fn test_display_missing_zai() {
+    let error = AuthError::Missing {
+        provider: Provider::Zai,
+    };
+    assert_eq!(
+        error.to_string(),
+        "ZAI_API_KEY environment variable not set"
+    );
+}
