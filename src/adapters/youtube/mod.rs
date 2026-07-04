@@ -69,8 +69,14 @@ pub fn collect_transcript(
         .replace(['\u{2018}', '\u{2019}'], "'")
         .replace(['\u{201c}', '\u{201d}'], "\"");
 
-    let track = innertube::select_english_caption_track(player.caption_tracks())
-        .ok_or(YoutubeError::NoEnglishCaptions)?;
+    let tracks = player
+        .captions
+        .as_ref()
+        .and_then(|c| c.player_captions_tracklist_renderer.as_ref())
+        .map(|r| r.caption_tracks.as_slice())
+        .unwrap_or(&[]);
+    let track =
+        innertube::select_english_caption_track(tracks).ok_or(YoutubeError::NoEnglishCaptions)?;
     let xml = innertube::fetch_caption_xml(&client, &track.base_url)?;
     let body_markdown = transcript::parse_transcript_markdown(&xml)?;
 

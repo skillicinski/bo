@@ -136,7 +136,7 @@ pub fn read(path: &Path) -> Result<Option<PendingOperation>, PendingError> {
 
 pub fn write(path: &Path, pending: &PendingOperation) -> Result<(), PendingError> {
     let json = serde_json::to_string_pretty(pending)?;
-    atomic_write(path, json.as_bytes())?;
+    crate::domain::manifest::atomic_write(path, json.as_bytes())?;
     Ok(())
 }
 
@@ -400,22 +400,6 @@ fn hash_file_or_missing(path: &Path) -> Result<String, PendingError> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(MISSING_MANIFEST_HASH.to_string()),
         Err(e) => Err(PendingError::Io(e)),
     }
-}
-
-fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let mut tmp_path = path.as_os_str().to_owned();
-    tmp_path.push(".tmp");
-    let tmp_path = PathBuf::from(tmp_path);
-    {
-        let mut f = fs::File::create(&tmp_path)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-    }
-    fs::rename(&tmp_path, path)?;
-    Ok(())
 }
 
 #[cfg(test)]

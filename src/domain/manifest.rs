@@ -158,7 +158,7 @@ pub fn write(path: &Path, manifest: &Manifest) -> Result<(), ManifestError> {
 
 // ── internals ─────────────────────────────────────────────────────────────────
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
