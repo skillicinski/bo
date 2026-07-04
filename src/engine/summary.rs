@@ -98,7 +98,7 @@ pub async fn generate_llm_or_fallback(
 }
 
 /// Generate a summary via a single structured-output LLM call.
-pub async fn generate_llm(
+async fn generate_llm(
     body: &str,
     title: Option<&str>,
     provider: &dyn LlmProvider,

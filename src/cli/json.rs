@@ -4,13 +4,13 @@ use serde_json::{json, Value};
 pub const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct JsonError {
+pub struct JsonMessage {
     pub code: String,
     pub message: String,
     pub details: Value,
 }
 
-impl JsonError {
+impl JsonMessage {
     pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code: code.into(),
@@ -32,34 +32,9 @@ impl JsonError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct JsonWarning {
-    pub code: String,
-    pub message: String,
-    pub details: Value,
-}
-
-impl JsonWarning {
-    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            code: code.into(),
-            message: message.into(),
-            details: json!({}),
-        }
-    }
-
-    pub fn with_details(
-        code: impl Into<String>,
-        message: impl Into<String>,
-        details: Value,
-    ) -> Self {
-        Self {
-            code: code.into(),
-            message: message.into(),
-            details: object_or_empty(details),
-        }
-    }
-}
+// ponytail: type aliases so existing call sites compile unchanged
+pub type JsonError = JsonMessage;
+pub type JsonWarning = JsonMessage;
 
 #[derive(Serialize)]
 struct SuccessEnvelope<'a, T> {

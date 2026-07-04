@@ -389,7 +389,9 @@ fn execute_prompt_tokens(prompt_bytes: usize) -> usize {
 
 #[test]
 fn derived_compile_schema_requires_branches() {
-    let schema = super::schema::compile_response_schema();
+    let schema =
+        serde_json::to_value(crate::engine::schema::inline_schema_for::<CompileResponse>())
+            .unwrap();
     let obj = schema.as_object().expect("top-level is object");
     assert_eq!(obj["additionalProperties"], false);
     let required: Vec<&str> = obj["required"]
@@ -401,7 +403,10 @@ fn derived_compile_schema_requires_branches() {
 
 #[test]
 fn derived_incremental_compile_schema_requires_updated_and_new_branches() {
-    let schema = super::schema::incremental_compile_response_schema();
+    let schema = serde_json::to_value(crate::engine::schema::inline_schema_for::<
+        IncrementalCompileResponse,
+    >())
+    .unwrap();
     let obj = schema.as_object().expect("top-level is object");
     assert_eq!(obj["additionalProperties"], false);
     let required: Vec<&str> = obj["required"]
@@ -414,7 +419,9 @@ fn derived_incremental_compile_schema_requires_updated_and_new_branches() {
 
 // ── leaf reference fidelity ───────────────────────────────────────────────
 
-use super::parse::{leaf_resolver, parse_and_validate_with_input_size};
+use super::parse::{
+    leaf_resolver, parse_and_validate_with_input_size, CompileResponse, IncrementalCompileResponse,
+};
 use super::plan::LoadedLeaf;
 use super::CompileError;
 
@@ -570,7 +577,9 @@ fn parse_rejects_ambiguous_title_reference() {
 
 #[test]
 fn derived_compile_schema_has_no_ref_or_defs_or_schema_key() {
-    let schema = super::schema::compile_response_schema();
+    let schema =
+        serde_json::to_value(crate::engine::schema::inline_schema_for::<CompileResponse>())
+            .unwrap();
     let json_str = schema.to_string();
     assert!(!json_str.contains("\"$schema\""));
     assert!(!json_str.contains("\"definitions\""));
@@ -579,7 +588,10 @@ fn derived_compile_schema_has_no_ref_or_defs_or_schema_key() {
 
 #[test]
 fn derived_incremental_compile_schema_has_no_ref_or_defs_or_schema_key() {
-    let schema = super::schema::incremental_compile_response_schema();
+    let schema = serde_json::to_value(crate::engine::schema::inline_schema_for::<
+        IncrementalCompileResponse,
+    >())
+    .unwrap();
     let json_str = schema.to_string();
     assert!(!json_str.contains("\"$schema\""));
     assert!(!json_str.contains("\"definitions\""));

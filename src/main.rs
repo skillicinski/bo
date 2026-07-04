@@ -232,7 +232,6 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                     "seed",
                     false,
                     CliError::Seed(seed::SeedError::UnsupportedFlag { flag: "--json" }),
-                    stdout,
                     stderr,
                 );
             }
@@ -248,10 +247,8 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 &config::config_path(),
                 &mut prompt,
             ) {
-                Ok(result) => {
-                    write_human_or_error(write!(stdout, "{}", seed::render_human(&result)))
-                }
-                Err(error) => emit_cli_error("seed", false, CliError::Seed(error), stdout, stderr),
+                Ok(result) => wrote(write!(stdout, "{}", seed::render_human(&result)), 0),
+                Err(error) => emit_cli_error("seed", false, CliError::Seed(error), stderr),
             }
         }
         Commands::Config {
@@ -264,13 +261,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                     Some(provider) => provider,
                     None => {
                         let err = cli_config::ConfigWriteError::UnknownProvider { raw: p.clone() };
-                        return emit_cli_error(
-                            "config",
-                            json,
-                            CliError::ConfigWrite(err),
-                            stdout,
-                            stderr,
-                        );
+                        return emit_cli_error("config", json, CliError::ConfigWrite(err), stderr);
                     }
                 }),
                 None => None,
@@ -285,21 +276,15 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 &config::config_path(),
             ) {
                 Ok(result) if json => emit_json_success("config", &result, Vec::new(), stdout),
-                Ok(result) => {
-                    write_human_or_error(write!(stdout, "{}", cli_config::render_human(&result)))
-                }
-                Err(error) => {
-                    emit_cli_error("config", json, CliError::ConfigWrite(error), stdout, stderr)
-                }
+                Ok(result) => wrote(write!(stdout, "{}", cli_config::render_human(&result)), 0),
+                Err(error) => emit_cli_error("config", json, CliError::ConfigWrite(error), stderr),
             }
         }
         Commands::Collect { inputs } => match execute_collect(inputs) {
             Ok(CollectOutput::Single(result)) if json => {
                 emit_json_success("collect", &result, Vec::new(), stdout)
             }
-            Ok(CollectOutput::Single(result)) => {
-                write_human_or_error(collect::render_human(&result, stdout))
-            }
+            Ok(CollectOutput::Single(result)) => wrote(collect::render_human(&result, stdout), 0),
             Ok(CollectOutput::Batch(result)) if json => emit_batch_collect_json(&result, stdout),
             Ok(CollectOutput::Batch(result)) => {
                 let exit_code = if result.has_failures() { 1 } else { 0 };
@@ -308,7 +293,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                     Err(_) => 1,
                 }
             }
-            Err(error) => emit_cli_error("collect", json, error, stdout, stderr),
+            Err(error) => emit_cli_error("collect", json, error, stderr),
         },
         Commands::Compile { all } => match require_seeded_config().and_then(|config| {
             compile::run_compile_with_options(&config, CompileOptions { all })
@@ -323,9 +308,9 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                     .ok()
                     .map(|c| c.tree().name)
                     .unwrap_or_else(|| "bo".to_string());
-                write_human_or_error(compile::render_human(&result, stdout, &tree_name))
+                wrote(compile::render_human(&result, stdout, &tree_name), 0)
             }
-            Err(error) => emit_cli_error("compile", json, error, stdout, stderr),
+            Err(error) => emit_cli_error("compile", json, error, stderr),
         },
         Commands::List {
             branches,
@@ -339,13 +324,13 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 let warnings = list_warnings(&result);
                 emit_json_success("list", &result, warnings, stdout)
             }
-            Ok(result) => write_human_or_error(write!(stdout, "{}", list::render_human(&result))),
-            Err(error) => emit_cli_error("list", json, error, stdout, stderr),
+            Ok(result) => wrote(write!(stdout, "{}", list::render_human(&result)), 0),
+            Err(error) => emit_cli_error("list", json, error, stderr),
         },
         Commands::Show { title, full } => match execute_show(title, full) {
             Ok(result) if json => emit_json_success("show", &result, Vec::new(), stdout),
-            Ok(result) => write_human_or_error(write!(stdout, "{}", show::render_human(&result))),
-            Err(error) => emit_cli_error("show", json, error, stdout, stderr),
+            Ok(result) => wrote(write!(stdout, "{}", show::render_human(&result)), 0),
+            Err(error) => emit_cli_error("show", json, error, stderr),
         },
         Commands::Raze { include_auth } => match execute_raze(include_auth) {
             Ok(output) if json => {
@@ -355,17 +340,15 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 for warning in &output.warnings {
                     let _ = writeln!(stderr, "warning: {}", warning.message);
                 }
-                write_human_or_error(write!(stdout, "{}", raze::render_human(&output.result)))
+                wrote(write!(stdout, "{}", raze::render_human(&output.result)), 0)
             }
-            Err(error) => emit_cli_error("raze", json, error, stdout, stderr),
+            Err(error) => emit_cli_error("raze", json, error, stderr),
         },
         Commands::Query { question } => {
             let question_str = question.join(" ");
             match execute_query(&question_str) {
                 Ok(result) if json => emit_json_success("query", &result, Vec::new(), stdout),
-                Ok(result) => {
-                    write_human_or_error(write!(stdout, "{}", query::render_human(&result)))
-                }
+                Ok(result) => wrote(write!(stdout, "{}", query::render_human(&result)), 0),
                 Err(error) => {
                     let exit_code = error.exit_code();
                     let json_error = error.json_error();
@@ -379,8 +362,8 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
         }
         Commands::Status => match execute_status() {
             Ok(result) if json => emit_json_success("status", &result, Vec::new(), stdout),
-            Ok(result) => write_human_or_error(write!(stdout, "{}", status::render_human(&result))),
-            Err(error) => emit_cli_error("status", json, error, stdout, stderr),
+            Ok(result) => wrote(write!(stdout, "{}", status::render_human(&result)), 0),
+            Err(error) => emit_cli_error("status", json, error, stderr),
         },
     }
 }
@@ -398,12 +381,12 @@ fn render_parse_error<W: Write, E: Write>(
         error.kind(),
         ClapErrorKind::DisplayHelp | ClapErrorKind::DisplayVersion
     ) {
-        return write_rendered(stdout, &error.render().to_string(), exit_code);
+        return wrote(write!(stdout, "{}", error.render()), exit_code);
     }
 
     let command = infer_command(args);
     if raw_json_mode && command == "seed" {
-        return write_rendered(stderr, &error.render().to_string(), exit_code);
+        return wrote(write!(stderr, "{}", error.render()), exit_code);
     }
 
     if raw_json_mode {
@@ -419,7 +402,7 @@ fn render_parse_error<W: Write, E: Write>(
         return emit_json_error(command, json_error, Vec::new(), exit_code);
     }
 
-    write_rendered(stderr, &error.render().to_string(), exit_code)
+    wrote(write!(stderr, "{}", error.render()), exit_code)
 }
 
 fn raw_json_mode_requested(args: &[OsString]) -> bool {
@@ -457,8 +440,8 @@ fn infer_command(args: &[OsString]) -> &'static str {
     "bo"
 }
 
-fn write_rendered<W: Write>(writer: &mut W, rendered: &str, exit_code: i32) -> i32 {
-    match write!(writer, "{}", rendered) {
+fn wrote(result: io::Result<()>, exit_code: i32) -> i32 {
+    match result {
         Ok(()) => exit_code,
         Err(_) => 1,
     }
@@ -516,13 +499,7 @@ fn emit_json_error(
     }
 }
 
-fn emit_cli_error<W: Write, E: Write>(
-    command: &str,
-    json: bool,
-    error: CliError,
-    _stdout: &mut W,
-    stderr: &mut E,
-) -> i32 {
+fn emit_cli_error<E: Write>(command: &str, json: bool, error: CliError, stderr: &mut E) -> i32 {
     let exit_code = error.exit_code();
     if json {
         return emit_json_error(command, error.to_json_error(), Vec::new(), exit_code);
@@ -530,13 +507,6 @@ fn emit_cli_error<W: Write, E: Write>(
 
     match writeln!(stderr, "error: {}", error) {
         Ok(()) => exit_code,
-        Err(_) => 1,
-    }
-}
-
-fn write_human_or_error(result: io::Result<()>) -> i32 {
-    match result {
-        Ok(()) => 0,
         Err(_) => 1,
     }
 }

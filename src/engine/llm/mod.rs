@@ -9,7 +9,7 @@ pub mod providers;
 
 pub use model::{Model, UnsupportedModel};
 pub use models::context_window_tokens;
-pub use providers::{DeepSeekProvider, GoogleProvider, OpenAiProvider, ZaiProvider};
+pub use providers::{GoogleProvider, OpenAiCompatProvider, OpenAiProvider};
 
 /// Sanitize a provider error message by redacting API key fragments.
 pub(crate) fn sanitize_provider_error_message(message: &str) -> String {
@@ -30,9 +30,9 @@ pub(crate) fn sanitize_provider_error_message(message: &str) -> String {
 pub fn create_provider(provider: Provider, api_key: &str) -> Box<dyn LlmProvider> {
     match provider {
         Provider::OpenAI => Box::new(OpenAiProvider::new(api_key)),
-        Provider::Deepseek => Box::new(DeepSeekProvider::new(api_key)),
+        Provider::Deepseek => Box::new(OpenAiCompatProvider::deepseek(api_key)),
         Provider::Google => Box::new(GoogleProvider::new(api_key)),
-        Provider::Zai => Box::new(ZaiProvider::new(api_key)),
+        Provider::Zai => Box::new(OpenAiCompatProvider::zai(api_key)),
     }
 }
 
@@ -157,6 +157,7 @@ pub struct LlmCallPolicy {
     pub initial_backoff: Duration,
 }
 
+#[tracing::instrument(skip(provider, messages, response_schema, policy), fields(model = %model))]
 pub async fn complete_with_policy(
     provider: &dyn LlmProvider,
     messages: &[Message],
@@ -201,6 +202,7 @@ pub async fn complete_with_policy(
                 if !is_transient_error(&error) {
                     return Err(error);
                 }
+                tracing::warn!(attempt, %error, "transient LLM failure");
                 last_error = Some(error);
             }
             Err(_) => {
@@ -218,13 +220,12 @@ pub async fn complete_with_policy(
         }
     }
 
+    let last_error = last_error
+        .unwrap_or_else(|| LlmError::Api("LLM request failed without an error".to_string()));
+    tracing::warn!(attempts = policy.max_attempts, %last_error, "LLM retry exhausted");
     Err(LlmError::RetryExhausted {
         attempts: policy.max_attempts,
-        last_error: Box::new(
-            last_error.unwrap_or_else(|| {
-                LlmError::Api("LLM request failed without an error".to_string())
-            }),
-        ),
+        last_error: Box::new(last_error),
     })
 }
 

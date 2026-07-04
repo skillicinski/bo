@@ -113,15 +113,6 @@ impl From<io::Error> for ShowError {
 }
 
 impl ShowError {
-    fn code(&self) -> &'static str {
-        match self {
-            ShowError::SuspiciousPath { .. } => "suspicious_path",
-            ShowError::MissingFile { .. } => "not_found",
-            ShowError::InvalidFrontmatter { .. } => "validation_error",
-            _ => "unknown_error",
-        }
-    }
-
     pub fn json_error(&self) -> JsonError {
         match self {
             ShowError::NotFound { title } => {
@@ -134,11 +125,19 @@ impl ShowError {
             ),
             ShowError::Io(_) => JsonError::new("io_error", self.to_string()),
             ShowError::Manifest(_) => JsonError::new("manifest_error", self.to_string()),
-            ShowError::SuspiciousPath { file }
-            | ShowError::MissingFile { file }
-            | ShowError::InvalidFrontmatter { file, .. } => {
-                JsonError::with_details(self.code(), self.to_string(), json!({ "file": file }))
+            ShowError::SuspiciousPath { file } => JsonError::with_details(
+                "suspicious_path",
+                self.to_string(),
+                json!({ "file": file }),
+            ),
+            ShowError::MissingFile { file } => {
+                JsonError::with_details("not_found", self.to_string(), json!({ "file": file }))
             }
+            ShowError::InvalidFrontmatter { file, .. } => JsonError::with_details(
+                "validation_error",
+                self.to_string(),
+                json!({ "file": file }),
+            ),
             ShowError::UnreadableFile { file, source: _ } => {
                 JsonError::with_details("io_error", self.to_string(), json!({ "file": file }))
             }
@@ -178,17 +177,17 @@ pub fn show_leaf(
 
     let mut matches = Vec::new();
     for leaf in &manifest.leaves {
-        match load_candidate(tree_dir, canonical_tree_dir.as_deref(), leaf) {
+        let candidate = load_candidate(tree_dir, canonical_tree_dir.as_deref(), leaf);
+        let title_match = match &candidate {
             CandidateLoad::Loaded(loaded) => {
-                if normalize_title(&loaded.summary.title) == requested_title {
-                    matches.push(MatchedCandidate::Loaded(loaded));
-                }
+                normalize_title(&loaded.summary.title) == requested_title
             }
-            CandidateLoad::Broken { summary, error } => {
-                if normalize_title(&summary.title) == requested_title {
-                    matches.push(MatchedCandidate::Broken { summary, error });
-                }
+            CandidateLoad::Broken { summary, .. } => {
+                normalize_title(&summary.title) == requested_title
             }
+        };
+        if title_match {
+            matches.push(candidate);
         }
     }
 
@@ -197,12 +196,12 @@ pub fn show_leaf(
             title: title.to_string(),
         }),
         1 => match matches.remove(0) {
-            MatchedCandidate::Loaded(leaf) => Ok(build_result(leaf, options)),
-            MatchedCandidate::Broken { error, .. } => Err(error),
+            CandidateLoad::Loaded(leaf) => Ok(build_result(leaf, options)),
+            CandidateLoad::Broken { error, .. } => Err(error),
         },
         _ => Err(ShowError::Ambiguous {
             title: title.to_string(),
-            candidates: matches.into_iter().map(MatchedCandidate::summary).collect(),
+            candidates: matches.into_iter().map(CandidateLoad::summary).collect(),
         }),
     }
 }
@@ -415,20 +414,11 @@ enum CandidateLoad {
     },
 }
 
-#[derive(Debug)]
-enum MatchedCandidate {
-    Loaded(LoadedLeaf),
-    Broken {
-        summary: ShowCandidateSummary,
-        error: ShowError,
-    },
-}
-
-impl MatchedCandidate {
+impl CandidateLoad {
     fn summary(self) -> ShowCandidateSummary {
         match self {
-            MatchedCandidate::Loaded(leaf) => leaf.summary,
-            MatchedCandidate::Broken { summary, .. } => summary,
+            CandidateLoad::Loaded(leaf) => leaf.summary,
+            CandidateLoad::Broken { summary, .. } => summary,
         }
     }
 }

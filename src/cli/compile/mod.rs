@@ -25,7 +25,6 @@ mod parse;
 mod plan;
 mod prompt;
 mod render;
-mod schema;
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
@@ -78,9 +77,7 @@ impl std::fmt::Display for CompileError {
             CompileError::ContextOverflow { model, .. } => write!(
                 f,
                 "compile model context is too small for '{}' — set a larger compile model, for example:\n{}\n{}",
-                model,
-                COMPILE_MODEL_NEXT_STEPS[0],
-                COMPILE_MODEL_NEXT_STEPS[1]
+                model, COMPILE_MODEL_NEXT_STEPS[0], COMPILE_MODEL_NEXT_STEPS[1]
             ),
             CompileError::Truncated => write!(
                 f,
@@ -325,7 +322,14 @@ pub fn run_compile_with_provider_started_at(
                     .len()
                     .saturating_add(msg.len()),
             );
-            (msg, tokens, schema::compile_response_schema())
+            (
+                msg,
+                tokens,
+                serde_json::to_value(crate::engine::schema::inline_schema_for::<
+                    parse::CompileResponse,
+                >())
+                .unwrap(),
+            )
         }
         CompileRunMode::Incremental => {
             let msg = prompt::build_incremental_user_message(
@@ -339,7 +343,14 @@ pub fn run_compile_with_provider_started_at(
                     .len()
                     .saturating_add(msg.len()),
             );
-            (msg, tokens, schema::incremental_compile_response_schema())
+            (
+                msg,
+                tokens,
+                serde_json::to_value(crate::engine::schema::inline_schema_for::<
+                    parse::IncrementalCompileResponse,
+                >())
+                .unwrap(),
+            )
         }
     };
     execute::ensure_compile_context_fits(model, prompt_tokens)?;

@@ -1,29 +1,22 @@
-use async_openai::{
-    config::OpenAIConfig,
-    error::{ApiError, OpenAIError},
-    types::chat::{
-        ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
-        ChatCompletionRequestUserMessageArgs, CreateChatCompletionRequestArgs,
-        FinishReason as OaiFinishReason, ResponseFormat, ResponseFormatJsonSchema,
-    },
-    Client,
-};
 use async_trait::async_trait;
+use serde_json::Value;
 
+use super::{map_http_error, map_reqwest_error};
 use crate::engine::llm::{
     sanitize_provider_error_message, FinishReason, LlmError, LlmProvider, LlmResponse, Message,
     NormalizedSchema, Role,
 };
 
 pub struct OpenAiProvider {
-    client: Client<OpenAIConfig>,
+    client: reqwest::Client,
+    api_key: String,
 }
 
 impl OpenAiProvider {
     pub fn new(api_key: &str) -> Self {
-        let config = OpenAIConfig::new().with_api_key(api_key);
         Self {
-            client: Client::with_config(config),
+            client: reqwest::Client::new(),
+            api_key: api_key.to_string(),
         }
     }
 }
@@ -38,121 +31,80 @@ impl LlmProvider for OpenAiProvider {
         response_schema: Option<&NormalizedSchema>,
         _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
-        let api_messages: Vec<ChatCompletionRequestMessage> = messages
+        let api_messages: Vec<Value> = messages
             .iter()
-            .map(to_api_message)
-            .collect::<Result<_, _>>()?;
+            .map(|m| {
+                let role = match m.role {
+                    Role::System => "system",
+                    Role::User => "user",
+                };
+                serde_json::json!({
+                    "role": role,
+                    "content": m.content,
+                })
+            })
+            .collect();
 
-        let mut builder = CreateChatCompletionRequestArgs::default();
-        builder
-            .model(model)
-            .max_completion_tokens(max_tokens)
-            .messages(api_messages);
+        let mut body = serde_json::json!({
+            "model": model,
+            "messages": api_messages,
+            "max_completion_tokens": max_tokens,
+        });
 
         if let Some(schema) = response_schema {
-            builder.response_format(ResponseFormat::JsonSchema {
-                json_schema: ResponseFormatJsonSchema {
-                    name: "response".to_string(),
-                    description: None,
-                    schema: Some(schema.0.clone()),
-                    strict: Some(true),
+            body["response_format"] = serde_json::json!({
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "response",
+                    "schema": schema.0,
+                    "strict": true,
                 },
             });
         }
 
-        let request = builder
-            .build()
-            .map_err(|e| LlmError::Parse(e.to_string()))?;
-
         let response = self
             .client
-            .chat()
-            .create(request)
+            .post("https://api.openai.com/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&body)
+            .send()
             .await
-            .map_err(map_openai_error)?;
+            .map_err(|e| map_reqwest_error(&e))?;
 
-        let choice = response
-            .choices
-            .into_iter()
-            .next()
-            .ok_or_else(|| LlmError::Parse("no choices in response".into()))?;
+        let status = response.status();
+        let response_text = response
+            .text()
+            .await
+            .map_err(|e| LlmError::Parse(format!("failed to read response body: {}", e)))?;
 
-        let finish_reason = match choice.finish_reason {
-            Some(OaiFinishReason::Stop) => FinishReason::Stop,
-            Some(OaiFinishReason::Length) => FinishReason::Length,
-            Some(OaiFinishReason::ContentFilter) => FinishReason::ContentFilter,
-            other => FinishReason::Other(format!("{:?}", other)),
+        if !status.is_success() {
+            return Err(map_http_error(status, &response_text));
+        }
+
+        let response_json: Value = serde_json::from_str(&response_text).map_err(|e| {
+            let sanitized = sanitize_provider_error_message(&response_text);
+            LlmError::Parse(format!("{}; body: {}", e, sanitized))
+        })?;
+
+        let choice = &response_json["choices"][0];
+        let finish_reason_str = choice["finish_reason"].as_str().unwrap_or("stop");
+
+        let finish_reason = match finish_reason_str {
+            "stop" => FinishReason::Stop,
+            "length" => FinishReason::Length,
+            "content_filter" => FinishReason::ContentFilter,
+            other => FinishReason::Other(other.to_string()),
         };
 
-        let content = choice.message.content.unwrap_or_default();
+        let content = choice["message"]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
 
         Ok(LlmResponse {
             content,
             finish_reason,
         })
-    }
-}
-
-fn map_openai_error(error: OpenAIError) -> LlmError {
-    match error {
-        OpenAIError::Reqwest(e) => {
-            LlmError::Network(sanitize_provider_error_message(&e.to_string()))
-        }
-        OpenAIError::ApiError(api_error) => map_api_error(api_error),
-        OpenAIError::JSONDeserialize(e, body) => LlmError::Parse(sanitize_provider_error_message(
-            &format!("{}; body: {}", e, body),
-        )),
-        OpenAIError::InvalidArgument(message) => {
-            LlmError::Parse(sanitize_provider_error_message(&message))
-        }
-        OpenAIError::FileSaveError(message) | OpenAIError::FileReadError(message) => {
-            LlmError::Api(sanitize_provider_error_message(&message))
-        }
-        OpenAIError::StreamError(error) => {
-            LlmError::Network(sanitize_provider_error_message(&error.to_string()))
-        }
-    }
-}
-
-fn map_api_error(error: ApiError) -> LlmError {
-    let message = sanitize_provider_error_message(&error.to_string());
-    let code = error.code.as_deref().unwrap_or_default();
-    let error_type = error.r#type.as_deref().unwrap_or_default();
-    let lower_message = message.to_lowercase();
-
-    if code.contains("rate_limit")
-        || error_type.contains("rate_limit")
-        || lower_message.contains("rate limit")
-        || lower_message.contains("rate_limit")
-    {
-        return LlmError::RateLimited(message);
-    }
-
-    if error_type == "insufficient_quota" || code == "insufficient_quota" {
-        return LlmError::Api(message);
-    }
-
-    if error.r#type.is_none() && error.code.is_none() && error.param.is_none() {
-        return LlmError::Server(message);
-    }
-
-    LlmError::Api(message)
-}
-
-fn to_api_message(m: &Message) -> Result<ChatCompletionRequestMessage, LlmError> {
-    match m.role {
-        Role::System => Ok(ChatCompletionRequestMessage::System(
-            ChatCompletionRequestSystemMessageArgs::default()
-                .content(m.content.clone())
-                .build()
-                .map_err(|e| LlmError::Parse(e.to_string()))?,
-        )),
-        Role::User => Ok(ChatCompletionRequestMessage::User(
-            ChatCompletionRequestUserMessageArgs::default()
-                .content(m.content.clone())
-                .build()
-                .map_err(|e| LlmError::Parse(e.to_string()))?,
-        )),
     }
 }
 

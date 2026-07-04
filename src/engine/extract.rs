@@ -33,7 +33,7 @@ pub fn extract_content(html: &str) -> Result<ExtractedContent, ExtractError> {
     let opts = Options::default();
     let result = extract(html, &opts).map_err(|e| ExtractError::ExtractionFailed(e.to_string()))?;
 
-    let body = result.content_markdown();
+    let mut body = result.content_markdown();
     let title = choose_title(
         if result.metadata.title.is_empty() {
             None
@@ -44,11 +44,18 @@ pub fn extract_content(html: &str) -> Result<ExtractedContent, ExtractError> {
     );
 
     // Strip leading H1 if it matches the selected title — we add our own in the markdown template
-    let body = if let Some(title_str) = title.as_deref() {
-        strip_leading_h1(&body, title_str)
-    } else {
-        body
-    };
+    if let Some(title_str) = title.as_deref() {
+        let trimmed = body.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("# ") {
+            let (first_line, remainder) = match rest.find('\n') {
+                Some(pos) => (&rest[..pos], &rest[pos + 1..]),
+                None => (rest, ""),
+            };
+            if first_line.trim().eq_ignore_ascii_case(title_str.trim()) {
+                body = remainder.to_string();
+            }
+        }
+    }
 
     if body.trim().len() < MIN_CONTENT_LENGTH {
         return Err(ExtractError::EmptyContent);
@@ -78,15 +85,10 @@ fn choose_title(metadata_title: Option<&str>, body_markdown: &str) -> Option<Str
         first_meaningful_heading(body_markdown)
     };
 
-    title.map(|t| normalize_smart_quotes(&t))
-}
-
-/// Normalize curly/smart quotes and apostrophes to their ASCII equivalents.
-/// Handles the common Medium-style U+2018/U+2019 (single) and
-/// U+201C/U+201D (double) smart quotes.
-fn normalize_smart_quotes(s: &str) -> String {
-    s.replace(['\u{2018}', '\u{2019}'], "'")
-        .replace(['\u{201c}', '\u{201d}'], "\"")
+    title.map(|t| {
+        t.replace(['\u{2018}', '\u{2019}'], "'")
+            .replace(['\u{201c}', '\u{201d}'], "\"")
+    })
 }
 
 fn first_meaningful_heading(body_markdown: &str) -> Option<String> {
@@ -109,34 +111,12 @@ fn first_meaningful_heading(body_markdown: &str) -> Option<String> {
 }
 
 fn is_clearly_chrome_title(title: &str) -> bool {
-    normalize_title(title) == "keyboard shortcuts"
-}
-
-fn normalize_title(title: &str) -> String {
     title
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase()
-}
-
-/// Remove a leading `# Title` line from markdown body if it matches the page title.
-/// Prevents duplicate headings since we add our own `# Title` in the template.
-fn strip_leading_h1(body: &str, title: &str) -> String {
-    let trimmed = body.trim_start();
-    // Check for "# Title" or "# Title\n"
-    if let Some(rest) = trimmed.strip_prefix("# ") {
-        // Find the end of the first line
-        let (first_line, remainder) = match rest.find('\n') {
-            Some(pos) => (&rest[..pos], &rest[pos + 1..]),
-            None => (rest, ""),
-        };
-        // Compare case-insensitively, trimming whitespace
-        if first_line.trim().eq_ignore_ascii_case(title.trim()) {
-            return remainder.to_string();
-        }
-    }
-    body.to_string()
+        == "keyboard shortcuts"
 }
 
 /// Strip markdown links [text](url) to just text.

@@ -3,7 +3,6 @@
 use std::fmt;
 use std::thread;
 use std::time::Duration;
-use tracing::warn;
 use url::Url;
 
 /// The result of a successful HTTP fetch.
@@ -38,16 +37,6 @@ impl fmt::Display for FetchError {
 const MAX_RETRIES: u32 = 3;
 const BACKOFF_BASE: u64 = 1; // seconds
 
-fn is_retryable(err: &FetchError) -> bool {
-    match err {
-        FetchError::InvalidUrl(_) => false,
-        FetchError::Timeout => true,
-        FetchError::Network(_) => true,
-        FetchError::HttpStatus(code, _) => *code >= 500,
-        FetchError::NotHtml(_) => false,
-    }
-}
-
 pub fn fetch_url(url: &str) -> Result<FetchResult, FetchError> {
     // Validate and normalise before any network attempt.
     let parsed = Url::parse(url)
@@ -78,14 +67,19 @@ pub fn fetch_url(url: &str) -> Result<FetchResult, FetchError> {
                 })
             }
             Err(e) => {
-                if !is_retryable(&e) {
+                let retryable = match &e {
+                    FetchError::Timeout | FetchError::Network(_) => true,
+                    FetchError::HttpStatus(code, _) => *code >= 500,
+                    _ => false,
+                };
+                if !retryable {
                     return Err(e);
                 }
                 last_err = e;
                 let next = attempt + 1;
                 if next < MAX_RETRIES {
                     let delay = Duration::from_secs(BACKOFF_BASE * (1 << attempt));
-                    warn!(
+                    eprintln!(
                         "attempt {}/{} failed ({}), retrying in {}s",
                         next,
                         MAX_RETRIES,

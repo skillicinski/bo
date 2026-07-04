@@ -14,16 +14,6 @@ pub struct PlayerResponse {
     pub captions: Option<Captions>,
 }
 
-impl PlayerResponse {
-    pub fn caption_tracks(&self) -> &[CaptionTrack] {
-        self.captions
-            .as_ref()
-            .and_then(|captions| captions.player_captions_tracklist_renderer.as_ref())
-            .map(|renderer| renderer.caption_tracks.as_slice())
-            .unwrap_or(&[])
-    }
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayabilityStatus {

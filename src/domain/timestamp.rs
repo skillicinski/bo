@@ -7,7 +7,7 @@ use chrono::{DateTime, SecondsFormat, Timelike, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Timestamp(DateTime<Utc>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,18 +38,6 @@ impl Timestamp {
 
     pub fn to_rfc3339_millis(&self) -> String {
         self.0.to_rfc3339_opts(SecondsFormat::Millis, true)
-    }
-}
-
-impl PartialOrd for Timestamp {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Timestamp {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.cmp(&other.0)
     }
 }
 

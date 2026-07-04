@@ -122,7 +122,7 @@ pub(super) fn parse_and_validate_with_input_size(
     input_body_bytes: usize,
 ) -> Result<CompilePlan, CompileError> {
     let parsed: CompileResponse = serde_json::from_str(response)
-        .map_err(|e| validation_error(format!("invalid compile response shape: {}", e)))?;
+        .map_err(|e| CompileError::Validation(format!("invalid compile response shape: {}", e)))?;
 
     // Empty branches is valid — means no cross-cutting concepts found.
     if parsed.branches.is_empty() {
@@ -141,13 +141,13 @@ pub(super) fn parse_and_validate_with_input_size(
         let branch_number = index + 1;
         let title = raw.title.trim().to_string();
         if title.is_empty() {
-            return Err(validation_error(format!(
+            return Err(CompileError::Validation(format!(
                 "invalid compile response: branch #{} has empty title",
                 branch_number
             )));
         }
         if raw.body.trim().is_empty() {
-            return Err(validation_error(format!(
+            return Err(CompileError::Validation(format!(
                 "invalid compile response: branch '{}' has empty body",
                 title
             )));
@@ -156,13 +156,13 @@ pub(super) fn parse_and_validate_with_input_size(
         // Generate slug and check uniqueness post-slugification.
         let branch_slug = Slug::generate(&title, "").to_string();
         if branch_slug.is_empty() {
-            return Err(validation_error(format!(
+            return Err(CompileError::Validation(format!(
                 "invalid compile response: branch '{}' title produces empty file slug",
                 title
             )));
         }
         if seen_slugs.contains(&branch_slug) {
-            return Err(validation_error(format!(
+            return Err(CompileError::Validation(format!(
                 "invalid compile response: duplicate branch slug '{}' (from title '{}') — titles must be distinct",
                 branch_slug, title
             )));
@@ -174,13 +174,13 @@ pub(super) fn parse_and_validate_with_input_size(
         let mut seen_leaves: HashSet<String> = HashSet::new();
         for leaf_file in &raw.leaves {
             if leaf_file.trim().is_empty() {
-                return Err(validation_error(format!(
+                return Err(CompileError::Validation(format!(
                     "invalid compile response: branch '{}' contains an empty leaf reference",
                     title
                 )));
             }
             let Some(normalized_leaf_file) = lookup.map.get(&leaf_file.to_lowercase()) else {
-                return Err(validation_error(format!(
+                return Err(CompileError::Validation(format!(
                     "invalid compile response: branch '{}' references unknown leaf '{}'",
                     title, leaf_file
                 )));
@@ -191,7 +191,7 @@ pub(super) fn parse_and_validate_with_input_size(
         }
 
         if branch_leaves.len() < 2 {
-            return Err(validation_error(format!(
+            return Err(CompileError::Validation(format!(
                 "invalid compile response: branch '{}' references {} leaf; branches must reference at least 2 leaves",
                 title,
                 branch_leaves.len()
@@ -224,7 +224,7 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
     input_body_bytes: usize,
 ) -> Result<CompilePlan, CompileError> {
     let parsed: IncrementalCompileResponse = serde_json::from_str(response).map_err(|e| {
-        validation_error(format!("invalid incremental compile response shape: {}", e))
+        CompileError::Validation(format!("invalid incremental compile response shape: {}", e))
     })?;
     let tree = cfg.tree();
     let manifest_path = crate::domain::tree::manifest_path(tree.path());
@@ -242,13 +242,13 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
 
     for raw in parsed.updated_branches {
         let existing = manifest.branch_by_slug_str(&raw.slug).ok_or_else(|| {
-            validation_error(format!(
+            CompileError::Validation(format!(
                 "invalid incremental compile response: update references unknown branch '{}'",
                 raw.slug
             ))
         })?;
         if raw.title.trim() != existing.title.as_str() {
-            return Err(validation_error(format!(
+            return Err(CompileError::Validation(format!(
                 "invalid incremental compile response: branch '{}' changed title",
                 raw.slug
             )));
@@ -261,7 +261,7 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
         // Ensure existing leaves are preserved (no drops)
         for existing_leaf in &existing.leaves {
             if !leaf_slugs.contains(existing_leaf.as_str()) {
-                return Err(validation_error(format!(
+                return Err(CompileError::Validation(format!(
                     "invalid incremental compile response: branch '{}' dropped existing leaf '{}'",
                     raw.slug, existing_leaf
                 )));
@@ -269,13 +269,13 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
         }
         // Updated branch must add at least one new leaf
         if !leaf_slugs.iter().any(|slug| new_leaf_slugs.contains(slug)) {
-            return Err(validation_error(format!(
+            return Err(CompileError::Validation(format!(
                 "invalid incremental compile response: branch '{}' update adds no newly processed leaf",
                 raw.slug
             )));
         }
         if leaves.len() < 2 {
-            return Err(validation_error(format!(
+            return Err(CompileError::Validation(format!(
                 "invalid incremental compile response: branch '{}' references {} leaf; branches must reference at least 2 leaves",
                 raw.title,
                 leaves.len()
@@ -284,7 +284,7 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
         if !seen_updated_branch_slugs.insert(raw.slug.clone())
             || !seen_branch_slugs.insert(raw.slug.clone())
         {
-            return Err(validation_error(format!(
+            return Err(CompileError::Validation(format!(
                 "invalid incremental compile response: duplicate branch slug '{}'",
                 raw.slug
             )));
@@ -300,12 +300,12 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
     for raw in parsed.new_branches {
         let title = raw.title.trim().to_string();
         if title.is_empty() {
-            return Err(validation_error(
-                "invalid incremental compile response: new branch has empty title",
+            return Err(CompileError::Validation(
+                "invalid incremental compile response: new branch has empty title".to_string(),
             ));
         }
         if raw.body.trim().is_empty() {
-            return Err(validation_error(format!(
+            return Err(CompileError::Validation(format!(
                 "invalid incremental compile response: branch '{}' has empty body",
                 title
             )));
@@ -314,14 +314,14 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
         if manifest.branch_by_slug_str(&branch_slug).is_some()
             || !seen_branch_slugs.insert(branch_slug.clone())
         {
-            return Err(validation_error(format!(
+            return Err(CompileError::Validation(format!(
                 "invalid incremental compile response: duplicate branch slug '{}'",
                 branch_slug
             )));
         }
         let leaves = normalize_incremental_leaf_refs(&title, &raw.leaves, &lookup.map)?;
         if leaves.len() < 2 {
-            return Err(validation_error(format!(
+            return Err(CompileError::Validation(format!(
                 "invalid incremental compile response: branch '{}' references {} leaf; branches must reference at least 2 leaves",
                 title,
                 leaves.len()
@@ -363,7 +363,7 @@ pub(super) fn normalize_incremental_leaf_refs(
     let mut seen = HashSet::new();
     for raw_leaf in raw_leaves {
         let Some(normalized) = valid_leaf_refs.get(&raw_leaf.to_lowercase()) else {
-            return Err(validation_error(format!(
+            return Err(CompileError::Validation(format!(
                 "invalid incremental compile response: branch '{}' references unknown leaf '{}'",
                 branch_title, raw_leaf
             )));
@@ -384,15 +384,11 @@ pub(super) fn validate_compiled_body_size(
         .max(MAX_COMPILED_BODY_BYTES_MIN);
 
     if output_body_bytes > limit {
-        return Err(validation_error(format!(
+        return Err(CompileError::Validation(format!(
             "invalid compile response: branch bodies total {} bytes, exceeding {} byte limit for {} bytes of input",
             output_body_bytes, limit, input_body_bytes
         )));
     }
 
     Ok(())
-}
-
-pub(super) fn validation_error(message: impl Into<String>) -> CompileError {
-    CompileError::Validation(message.into())
 }
