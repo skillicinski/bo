@@ -791,18 +791,8 @@ fn write_new_document_with_summary_result(
     let domain_url = url.to_string();
     let domain_title = title.map(str::to_string);
     let leaf_file = format!("{}.md", filename);
-    let summary_field = if summary_text.is_empty() {
-        None
-    } else {
-        Some(summary_text.as_str())
-    };
-    let leaf_content = leaf::format_content(
-        domain_title.as_ref(),
-        &domain_url,
-        &now,
-        body_markdown,
-        summary_field,
-    );
+    let leaf_content =
+        leaf::format_content(domain_title.as_ref(), &domain_url, &now, body_markdown);
     let leaf_write = PendingWrite {
         path: leaf_file.clone(),
         content_hash: pending::content_hash(leaf_content.as_bytes()),
@@ -1013,17 +1003,11 @@ pub fn collect_batch_parallel(
                     &mut used_slugs,
                 );
                 let leaf_file = format!("{}.md", filename);
-                let summary_field = if computed.summary_text.is_empty() {
-                    None
-                } else {
-                    Some(computed.summary_text.as_str())
-                };
                 let leaf_content = leaf::format_content(
                     computed.title.as_ref(),
                     &computed.url,
                     &now,
                     &computed.body_markdown,
-                    summary_field,
                 );
                 let leaf_bytes = leaf_content.into_bytes();
                 let leaf_write = PendingWrite {

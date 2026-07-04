@@ -59,7 +59,7 @@ fn setup_fixture_collection() -> tempfile::TempDir {
         let title = doc.title.to_string();
         let url = doc.url.to_string();
         let ts = Timestamp::parse("2025-06-01T10:00:00Z").unwrap();
-        let content = bo::domain::leaf::format_content(Some(&title), &url, &ts, doc.body, None);
+        let content = bo::domain::leaf::format_content(Some(&title), &url, &ts, doc.body);
         fs::write(dir.path().join(doc.file), content).unwrap();
 
         leaves.push(LeafRecord {
@@ -537,7 +537,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
     ] {
         let t = title.to_string();
         let u = format!("https://example.com/{}", file);
-        let content = bo::domain::leaf::format_content(Some(&t), &u, &ts_old, body, None);
+        let content = bo::domain::leaf::format_content(Some(&t), &u, &ts_old, body);
         fs::write(dir.path().join(file), content).unwrap();
     }
 
@@ -556,7 +556,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
     ] {
         let t = title.to_string();
         let u = format!("https://example.com/{}", file);
-        let content = bo::domain::leaf::format_content(Some(&t), &u, &ts_new, body, None);
+        let content = bo::domain::leaf::format_content(Some(&t), &u, &ts_new, body);
         fs::write(dir.path().join(file), content).unwrap();
     }
 
@@ -707,7 +707,7 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
     let title = "Survivor".to_string();
     let url = "https://example.com/survivor".to_string();
     let content =
-        bo::domain::leaf::format_content(Some(&title), &url, &ts, "This leaf still exists.", None);
+        bo::domain::leaf::format_content(Some(&title), &url, &ts, "This leaf still exists.");
     fs::write(dir.path().join("survivor.md"), content).unwrap();
 
     // Write branch file that references both survivor and missing leaf

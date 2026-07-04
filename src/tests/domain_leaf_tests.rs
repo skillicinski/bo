@@ -22,11 +22,7 @@ fn format_content_title_with_newlines_is_valid_yaml() {
         &url("https://example.com"),
         &ts("2025-01-15T09:32:00Z"),
         "Body.",
-        None,
     );
-    // Should contain escaped newlines in YAML
-    assert!(content.contains("\\n"));
-    // Content must be parseable as YAML frontmatter
     let (mapping, _) = frontmatter::parse(&content).unwrap();
     assert_eq!(
         mapping.get("title").and_then(|v| v.as_str()),
@@ -42,9 +38,7 @@ fn format_content_title_with_tabs_is_valid_yaml() {
         &url("https://example.com"),
         &ts("2025-01-15T09:32:00Z"),
         "Body.",
-        None,
     );
-    assert!(content.contains("\\t"));
     let (mapping, _) = frontmatter::parse(&content).unwrap();
     assert_eq!(
         mapping.get("title").and_then(|v| v.as_str()),
@@ -60,9 +54,7 @@ fn format_content_title_with_cr_is_valid_yaml() {
         &url("https://example.com"),
         &ts("2025-01-15T09:32:00Z"),
         "Body.",
-        None,
     );
-    assert!(content.contains("\\r"));
     let (mapping, _) = frontmatter::parse(&content).unwrap();
     assert_eq!(
         mapping.get("title").and_then(|v| v.as_str()),
@@ -78,7 +70,6 @@ fn format_content_title_with_backslash_and_quote_is_valid_yaml() {
         &url("https://example.com"),
         &ts("2025-01-15T09:32:00Z"),
         "Body.",
-        None,
     );
     let (mapping, _) = frontmatter::parse(&content).unwrap();
     assert_eq!(
@@ -87,67 +78,20 @@ fn format_content_title_with_backslash_and_quote_is_valid_yaml() {
     );
 }
 
-// ── summary tests ─────────────────────────────────────────────────────────
+// ── omitted fields ────────────────────────────────────────────────────────
 
 #[test]
-fn format_content_with_single_line_summary() {
-    let content = format_content(
-        Some(&("Article").to_string()),
-        &url("https://example.com"),
-        &ts("2025-01-01T00:00:00Z"),
-        "Body content.",
-        Some("This is a single-line summary of the article."),
-    );
-    assert!(content.contains("summary: \"This is a single-line summary of the article.\""));
-    let (mapping, _) = frontmatter::parse(&content).unwrap();
-    assert_eq!(
-        mapping.get("summary").and_then(|v| v.as_str()),
-        Some("This is a single-line summary of the article.")
-    );
-}
-
-#[test]
-fn format_content_with_multi_line_summary() {
-    let summary = "First line of the summary.\nSecond line continues.\nThird line ends.";
+fn format_content_omits_summary_and_updated_at() {
     let content = format_content(
         Some(&("Article").to_string()),
         &url("https://example.com"),
         &ts("2025-01-01T00:00:00Z"),
         "Body.",
-        Some(summary),
-    );
-    assert!(content.contains("summary: |\n"));
-    assert!(content.contains("  First line of the summary.\n"));
-    let (mapping, _) = frontmatter::parse(&content).unwrap();
-    let parsed = mapping.get("summary").and_then(|v| v.as_str()).unwrap();
-    assert!(parsed.contains("First line"));
-    assert!(parsed.contains("Third line"));
-}
-
-#[test]
-fn format_content_with_summary_containing_special_chars() {
-    let summary = "Rust's \"ownership\" model: memory safety without GC.";
-    let content = format_content(
-        Some(&("Article").to_string()),
-        &url("https://example.com"),
-        &ts("2025-01-01T00:00:00Z"),
-        "Body.",
-        Some(summary),
     );
     let (mapping, _) = frontmatter::parse(&content).unwrap();
-    let parsed = mapping.get("summary").and_then(|v| v.as_str()).unwrap();
-    assert!(parsed.contains("ownership"));
-    assert!(parsed.contains("Rust's"));
-}
-
-#[test]
-fn format_content_with_none_summary_omits_field() {
-    let content = format_content(
-        Some(&("Article").to_string()),
-        &url("https://example.com"),
-        &ts("2025-01-01T00:00:00Z"),
-        "Body.",
-        None,
-    );
-    assert!(!content.contains("summary"));
+    assert!(mapping.get("summary").is_none());
+    assert!(mapping.get("updated_at").is_none());
+    assert!(mapping.get("title").is_some());
+    assert!(mapping.get("url").is_some());
+    assert!(mapping.get("collected_at").is_some());
 }

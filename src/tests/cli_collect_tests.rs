@@ -289,19 +289,29 @@ fn full_pipeline_happy_path() {
     assert!(dir.path().join(&page.filename).exists());
 
     let content = std::fs::read_to_string(dir.path().join(&page.filename)).unwrap();
-    assert!(content.contains("title: \"Test Article\""));
-    assert!(content.contains("url: https://example.com/article"));
-    assert!(content.contains("collected_at:"));
-    assert!(content.contains("updated_at:"));
-    assert!(!content.contains("fetched:"));
-    assert!(content.contains("# Test Article"));
-    assert!(content.contains("Section One"));
-    // Summary field is present (fallback: first ~200 words)
-    assert!(content.contains("summary:"));
+    // Assert via the parsed mapping so the test does not couple to serde's
+    // conditional quoting of plain scalars (the behaviour #137 unified on).
+    let (mapping, body) = crate::domain::frontmatter::parse(&content).unwrap();
+    assert_eq!(
+        mapping.get("title").and_then(|v| v.as_str()),
+        Some("Test Article")
+    );
+    assert_eq!(
+        mapping.get("url").and_then(|v| v.as_str()),
+        Some("https://example.com/article")
+    );
+    assert!(mapping.get("collected_at").is_some());
+    assert!(mapping.get("fetched").is_none());
+    assert!(body.contains("# Test Article"));
+    assert!(body.contains("Section One"));
+    // Summary and updated_at are NOT in leaf frontmatter — the manifest is the single source of truth.
+    assert!(mapping.get("summary").is_none());
+    assert!(mapping.get("updated_at").is_none());
 
     let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.leaves.len(), 1);
     assert_eq!(m.leaves[0].url.as_str(), "https://example.com/article");
+    assert!(m.leaves[0].summary.is_some());
 }
 
 #[test]
@@ -427,8 +437,11 @@ fn mdbook_page_with_bad_ui_title_and_substantive_body_is_accepted() {
     );
 
     let content = std::fs::read_to_string(dir.path().join(&page.filename)).unwrap();
-    assert!(content.contains("title: \"Understanding Ownership\""));
-    assert!(!content.contains("title: \"Keyboard shortcuts\""));
+    let (mapping, _) = crate::domain::frontmatter::parse(&content).unwrap();
+    assert_eq!(
+        mapping.get("title").and_then(|v| v.as_str()),
+        Some("Understanding Ownership")
+    );
 
     let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.leaves.len(), 1);
