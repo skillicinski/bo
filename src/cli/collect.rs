@@ -15,7 +15,7 @@
 // Dependency direction: collect → adapters, fetch, quality, extract, leaf, slug, index.
 
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::io::Write;
@@ -997,13 +997,21 @@ pub fn collect_batch_parallel(
     let now = Timestamp::now();
     let mut manifest = load_or_bootstrap_manifest(output_dir, &now)?;
     let mut staged: Vec<(PendingWrite, Vec<u8>)> = Vec::new();
+    // Track claimed slug stems so intra-batch collisions are resolved
+    // before writes hit disk (see issue #92).
+    let mut used_slugs: HashSet<String> = HashSet::new();
 
     for (input_label, url, result) in compute_results {
         match result {
             Ok(computed) => {
                 let base_slug =
                     Slug::generate(computed.title.as_deref().unwrap_or(""), &computed.url);
-                let filename = slug::resolve_slug(&base_slug, &computed.url, output_dir);
+                let filename = slug::resolve_slug_batch(
+                    &base_slug,
+                    &computed.url,
+                    output_dir,
+                    &mut used_slugs,
+                );
                 let leaf_file = format!("{}.md", filename);
                 let summary_field = if computed.summary_text.is_empty() {
                     None

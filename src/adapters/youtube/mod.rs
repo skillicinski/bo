@@ -63,6 +63,11 @@ pub fn collect_transcript(
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| supported.video_id().to_string());
+    // Normalize smart quotes that YouTube occasionally surfaces in
+    // auto-generated or translated video titles.
+    let title = title
+        .replace(['\u{2018}', '\u{2019}'], "'")
+        .replace(['\u{201c}', '\u{201d}'], "\"");
 
     let track = innertube::select_english_caption_track(player.caption_tracks())
         .ok_or(YoutubeError::NoEnglishCaptions)?;

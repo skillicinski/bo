@@ -68,17 +68,25 @@ fn choose_title(metadata_title: Option<&str>, body_markdown: &str) -> Option<Str
         .map(str::trim)
         .filter(|title| !title.is_empty());
 
-    if let Some(title) = metadata_title {
+    let title = if let Some(title) = metadata_title {
         if !is_clearly_chrome_title(title) {
-            return Some(title.to_string());
+            Some(title.to_string())
+        } else {
+            first_meaningful_heading(body_markdown).or_else(|| metadata_title.map(str::to_string))
         }
-    }
+    } else {
+        first_meaningful_heading(body_markdown)
+    };
 
-    if let Some(heading) = first_meaningful_heading(body_markdown) {
-        return Some(heading);
-    }
+    title.map(|t| normalize_smart_quotes(&t))
+}
 
-    metadata_title.map(str::to_string)
+/// Normalize curly/smart quotes and apostrophes to their ASCII equivalents.
+/// Handles the common Medium-style U+2018/U+2019 (single) and
+/// U+201C/U+201D (double) smart quotes.
+fn normalize_smart_quotes(s: &str) -> String {
+    s.replace(['\u{2018}', '\u{2019}'], "'")
+        .replace(['\u{201c}', '\u{201d}'], "\"")
 }
 
 fn first_meaningful_heading(body_markdown: &str) -> Option<String> {
