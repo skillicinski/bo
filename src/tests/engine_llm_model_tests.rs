@@ -65,3 +65,17 @@ fn context_tokens_are_correct() {
     let m = Model::parse("gpt-4.1", Provider::OpenAI).unwrap();
     assert_eq!(m.context_tokens(), 1_000_000);
 }
+
+#[test]
+fn parse_custom_accepts_any_non_empty_model() {
+    let m = Model::parse("  my-fine-tune  ", Provider::Custom).unwrap();
+    assert_eq!(m.as_str(), "my-fine-tune");
+    assert_eq!(m.context_tokens(), models::CUSTOM_CONTEXT_TOKENS);
+}
+
+#[test]
+fn parse_custom_rejects_empty_model() {
+    let err = Model::parse("   ", Provider::Custom).unwrap_err();
+    assert_eq!(err.id, "");
+    assert_eq!(err.provider, Provider::Custom);
+}

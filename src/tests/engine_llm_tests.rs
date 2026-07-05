@@ -267,3 +267,50 @@ async fn complete_with_policy_does_not_retry_permanent_error() {
     assert_eq!(provider.calls(), 1);
     assert!(matches!(err, LlmError::Parse(_)));
 }
+
+// ── custom provider ───────────────────────────────────────────────────────────
+
+#[test]
+fn provider_parses_custom() {
+    assert_eq!(Provider::parse("custom"), Some(Provider::Custom));
+    assert_eq!(Provider::Custom.to_string(), "custom");
+    assert!(ALL_PROVIDERS.contains(&"custom"));
+}
+
+#[test]
+fn model_catalog_accepts_any_non_empty_model_for_custom() {
+    assert!(models::is_supported_model(Provider::Custom, "my-fine-tune"));
+    assert!(!models::is_supported_model(Provider::Custom, "  "));
+    assert_eq!(
+        context_window_tokens(Provider::Custom, "anything"),
+        Some(models::CUSTOM_CONTEXT_TOKENS)
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn create_provider_custom_requires_base_url_in_config() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let original_home = std::env::var("HOME").ok();
+    std::env::set_var("HOME", dir.path());
+
+    match create_provider(Provider::Custom, "sk-test") {
+        Err(ProviderInitError::MissingBaseUrl) => {}
+        Err(other) => panic!("expected MissingBaseUrl, got: {}", other),
+        Ok(_) => panic!("expected MissingBaseUrl, got a provider"),
+    }
+
+    let config_dir = dir.path().join(".bo");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("config.json"),
+        r#"{"provider":"custom","model":"m","base_url":"https://api.example.com/v1"}"#,
+    )
+    .unwrap();
+    assert!(create_provider(Provider::Custom, "sk-test").is_ok());
+
+    match original_home {
+        Some(home) => std::env::set_var("HOME", home),
+        None => std::env::remove_var("HOME"),
+    }
+}

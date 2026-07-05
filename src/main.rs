@@ -66,9 +66,9 @@ enum Commands {
         #[arg(required = true, value_name = "URL_OR_URLS_FILE", num_args = 1..)]
         inputs: Vec<String>,
     },
-    /// Configure bo settings (provider, model, compile_model)
+    /// Configure bo settings (provider, model, compile_model, base_url)
     Config {
-        /// LLM provider (openai or deepseek)
+        /// LLM provider (openai, deepseek, google, zai, or custom)
         #[arg(long)]
         provider: Option<String>,
         /// Model for LLM operations
@@ -77,6 +77,10 @@ enum Commands {
         /// Model for compile operations (falls back to --model)
         #[arg(long)]
         compile_model: Option<String>,
+        /// OpenAI-compatible endpoint prefix for the custom provider
+        /// (everything before /chat/completions)
+        #[arg(long)]
+        base_url: Option<String>,
     },
     /// Compile collected documents into a linked knowledge graph
     Compile {
@@ -255,6 +259,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
             provider,
             model,
             compile_model,
+            base_url,
         } => {
             let provider_opt = match provider {
                 Some(ref p) => Some(match Provider::parse(p) {
@@ -272,6 +277,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                     provider: provider_opt,
                     model,
                     compile_model,
+                    base_url,
                 },
                 &config::config_path(),
             ) {
@@ -672,7 +678,8 @@ fn execute_query(question: &str) -> Result<query::QueryResult, query::QueryError
     execute_query_with_provider_resolver(&cfg, question, || {
         let api_key = auth::resolve_api_key(cfg.config.provider)
             .map_err(|e| query::QueryError::NoProvider(e.to_string()))?;
-        Ok(llm::create_provider(cfg.config.provider, &api_key))
+        llm::create_provider(cfg.config.provider, &api_key)
+            .map_err(|e| query::QueryError::NoProvider(e.to_string()))
     })
 }
 

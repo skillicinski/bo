@@ -26,6 +26,7 @@ fn seeded_config() -> Config {
         }),
         model: "gpt-4.1-mini".to_string(),
         compile_model: None,
+        base_url: None,
     }
 }
 
@@ -39,6 +40,7 @@ fn seeded_config_with_models() -> Config {
         }),
         model: "gpt-4o-mini".to_string(),
         compile_model: Some("gpt-4.1-mini".to_string()),
+        base_url: None,
     }
 }
 
@@ -52,6 +54,7 @@ fn write_absent_config_creates_default_with_model() {
             provider: None,
             model: Some("gpt-4.1-mini".to_string()),
             compile_model: None,
+            base_url: None,
         },
         &path,
     )
@@ -73,6 +76,7 @@ fn write_creates_config() {
             provider: None,
             model: Some("gpt-4.1-mini".to_string()),
             compile_model: None,
+            base_url: None,
         },
         &path,
     )
@@ -95,6 +99,7 @@ fn write_model_with_existing_compile_model_preserves_fallback() {
             tree: None,
             model: "gpt-4o-mini".to_string(),
             compile_model: None,
+            base_url: None,
         },
         &path,
     )
@@ -106,6 +111,7 @@ fn write_model_with_existing_compile_model_preserves_fallback() {
             provider: None,
             model: Some("gpt-4o".to_string()),
             compile_model: None,
+            base_url: None,
         },
         &path,
     )
@@ -127,6 +133,7 @@ fn write_compile_model_persists_only_compile_model() {
             provider: None,
             model: None,
             compile_model: Some("gpt-4.1-mini".to_string()),
+            base_url: None,
         },
         &path,
     )
@@ -149,6 +156,7 @@ fn write_trims_model_value() {
             provider: None,
             model: Some(" gpt-4.1-mini ".to_string()),
             compile_model: None,
+            base_url: None,
         },
         &path,
     )
@@ -169,6 +177,7 @@ fn write_preserves_tree_metadata() {
             provider: None,
             model: Some("gpt-4.1-mini".to_string()),
             compile_model: None,
+            base_url: None,
         },
         &path,
     )
@@ -192,6 +201,7 @@ fn write_model_preserves_compile_model_and_tree_metadata() {
             provider: None,
             model: Some("gpt-4.1".to_string()),
             compile_model: None,
+            base_url: None,
         },
         &path,
     )
@@ -215,6 +225,7 @@ fn write_unsupported_model_is_usage_error() {
             provider: None,
             model: Some("unknown-model".to_string()),
             compile_model: None,
+            base_url: None,
         },
         &path,
     )
@@ -234,6 +245,7 @@ fn write_unsupported_model_for_deepseek_is_usage_error() {
             provider: Some(Provider::Deepseek),
             model: Some("gpt-4o".to_string()),
             compile_model: None,
+            base_url: None,
         },
         &path,
     )
@@ -253,6 +265,7 @@ fn write_unsupported_compile_model_is_usage_error() {
             provider: None,
             model: None,
             compile_model: Some("unknown-model".to_string()),
+            base_url: None,
         },
         &path,
     )
@@ -274,6 +287,7 @@ fn write_malformed_config_is_not_overwritten() {
             provider: None,
             model: Some("gpt-4.1-mini".to_string()),
             compile_model: None,
+            base_url: None,
         },
         &path,
     )
@@ -294,6 +308,7 @@ fn write_deepseek_provider() {
             provider: Some(Provider::Deepseek),
             model: Some("deepseek-v4-flash".to_string()),
             compile_model: None,
+            base_url: None,
         },
         &path,
     )
@@ -310,6 +325,7 @@ fn render_human_includes_provider() {
         provider: "openai".to_string(),
         model: "gpt-4.1-mini".to_string(),
         compile_model: None,
+        base_url: None,
     });
 
     assert!(rendered.contains("provider: openai"));
@@ -323,7 +339,148 @@ fn render_human_omits_none_compile_model() {
         provider: "openai".to_string(),
         model: "gpt-4.1-mini".to_string(),
         compile_model: None,
+        base_url: None,
     });
 
     assert!(!rendered.contains("compile_model"));
+}
+
+// ── custom provider / base_url ───────────────────────────────────────────────
+
+#[test]
+fn write_custom_provider_with_base_url_and_model() {
+    let dir = TempDir::new().unwrap();
+    let path = temp_config_path(&dir);
+
+    let result = write_config(
+        WriteConfigOptions {
+            provider: Some(Provider::Custom),
+            model: Some("my-fine-tune".to_string()),
+            base_url: Some("https://api.example.com/v1".to_string()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+
+    assert_eq!(result.provider, "custom");
+    assert_eq!(result.model, "my-fine-tune");
+    assert_eq!(
+        result.base_url.as_deref(),
+        Some("https://api.example.com/v1")
+    );
+    let loaded = engine_config::read_config(&path).unwrap();
+    assert_eq!(loaded.provider, Provider::Custom);
+    assert_eq!(
+        loaded.base_url.as_deref(),
+        Some("https://api.example.com/v1")
+    );
+}
+
+#[test]
+fn write_custom_provider_without_base_url_is_usage_error() {
+    let dir = TempDir::new().unwrap();
+    let path = temp_config_path(&dir);
+
+    let err = write_config(
+        WriteConfigOptions {
+            provider: Some(Provider::Custom),
+            model: Some("my-fine-tune".to_string()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.exit_code(), 2);
+    assert!(matches!(err, ConfigWriteError::MissingBaseUrl));
+    assert!(!path.exists());
+}
+
+#[test]
+fn write_base_url_with_non_custom_provider_is_usage_error() {
+    let dir = TempDir::new().unwrap();
+    let path = temp_config_path(&dir);
+
+    let err = write_config(
+        WriteConfigOptions {
+            provider: Some(Provider::OpenAI),
+            model: Some("gpt-4.1-mini".to_string()),
+            base_url: Some("https://api.example.com/v1".to_string()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.exit_code(), 2);
+    assert!(matches!(
+        err,
+        ConfigWriteError::BaseUrlRequiresCustom { .. }
+    ));
+}
+
+#[test]
+fn write_invalid_base_url_is_usage_error() {
+    let dir = TempDir::new().unwrap();
+    let path = temp_config_path(&dir);
+
+    let err = write_config(
+        WriteConfigOptions {
+            provider: Some(Provider::Custom),
+            model: Some("my-fine-tune".to_string()),
+            base_url: Some("not a url".to_string()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.exit_code(), 2);
+    assert!(matches!(err, ConfigWriteError::InvalidBaseUrl { .. }));
+}
+
+#[test]
+fn write_model_change_preserves_existing_base_url() {
+    let dir = TempDir::new().unwrap();
+    let path = temp_config_path(&dir);
+    write_config(
+        WriteConfigOptions {
+            provider: Some(Provider::Custom),
+            model: Some("my-fine-tune".to_string()),
+            base_url: Some("https://api.example.com/v1".to_string()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+
+    write_config(
+        WriteConfigOptions {
+            model: Some("another-model".to_string()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+
+    let loaded = engine_config::read_config(&path).unwrap();
+    assert_eq!(loaded.model, "another-model");
+    assert_eq!(
+        loaded.base_url.as_deref(),
+        Some("https://api.example.com/v1")
+    );
+}
+
+#[test]
+fn render_human_includes_base_url() {
+    let rendered = render_human(&ConfigWriteResult {
+        status: "ok".to_string(),
+        provider: "custom".to_string(),
+        model: "my-fine-tune".to_string(),
+        compile_model: None,
+        base_url: Some("https://api.example.com/v1".to_string()),
+    });
+
+    assert!(rendered.contains("base_url: https://api.example.com/v1"));
 }

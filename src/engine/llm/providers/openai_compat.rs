@@ -29,6 +29,16 @@ impl OpenAiCompatProvider {
             base_url: "https://api.z.ai/api/coding/paas/v4/chat/completions".to_string(),
         }
     }
+
+    /// Any OpenAI-compatible endpoint. `base_url` is the prefix before
+    /// `/chat/completions`, e.g. `https://api.example.com/v1`.
+    pub fn custom(api_key: &str, base_url: &str) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            api_key: api_key.to_string(),
+            base_url: format!("{}/chat/completions", base_url.trim_end_matches('/')),
+        }
+    }
 }
 
 #[async_trait]

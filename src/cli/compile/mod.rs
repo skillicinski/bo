@@ -268,7 +268,8 @@ pub fn run_compile_with_options(
 
     let api_key =
         auth::resolve_api_key(cfg.config.provider).map_err(|e| CompileError::Llm(e.to_string()))?;
-    let provider = crate::engine::llm::create_provider(cfg.config.provider, &api_key);
+    let provider = crate::engine::llm::create_provider(cfg.config.provider, &api_key)
+        .map_err(|e| CompileError::Llm(e.to_string()))?;
     let compile_model = cfg
         .config
         .effective_compile_model()

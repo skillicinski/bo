@@ -1,6 +1,6 @@
 # Providers
 
-bo supports OpenAI-compatible providers. Each provider enumerates a fixed set of models.
+bo supports OpenAI-compatible providers. Each built-in provider enumerates a fixed set of models; the `custom` provider accepts any OpenAI-compatible endpoint and model.
 
 ---
 
@@ -71,3 +71,27 @@ bo targets the Z.ai **GLM Coding Plan** (subscription) endpoint, not the pay-per
 - **Structured output** — Gemini supports `responseSchema` with `responseMimeType: application/json`. bo uses this for compile responses.
 - **System instructions** — System messages are mapped to Gemini's `systemInstruction` field rather than inserted as conversation turns.
 - **Auth** — set `GEMINI_API_KEY` or store `google_api_key` in `~/.bo/auth.json`.
+
+---
+
+## Custom (any OpenAI-compatible endpoint)
+
+Point bo at any endpoint that speaks the OpenAI chat-completions dialect — a
+self-hosted model, a proxy, or a compatibility layer:
+
+```bash
+bo config --provider custom --base-url https://api.example.com/v1 --model my-model
+export CUSTOM_API_KEY=...
+```
+
+### Notes
+
+- **Base URL** — everything before `/chat/completions`; bo appends that path.
+  Required: `bo config` refuses to select `custom` without one.
+- **Models** — no registry; any non-empty model id is accepted and passed through.
+- **Context window** — assumed 128K tokens (conservative fixed default).
+- **No structured output mode** — treated like DeepSeek/Z.ai: JSON-mode prompting
+  (system message instructions + `response_format: json_object`), with the
+  validation gate catching malformed responses.
+- **Auth** — set `CUSTOM_API_KEY` or store `custom_api_key` in `~/.bo/auth.json`.
+  Sent as a Bearer token.
