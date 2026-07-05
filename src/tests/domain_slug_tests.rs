@@ -1,6 +1,5 @@
 use super::*;
-use std::fs;
-use tempfile::TempDir;
+use std::collections::HashSet;
 
 // ── Slug::generate (was slugify) ─────────────────────────────────────────────
 
@@ -55,12 +54,10 @@ fn non_ascii_title_falls_back_to_url() {
 
 #[test]
 fn collision_adds_hash() {
-    let dir = TempDir::new().unwrap();
-    // Create an existing file to force collision
-    fs::write(dir.path().join("introduction.md"), "existing").unwrap();
+    let mut used = HashSet::from(["introduction".to_string()]);
 
     let base = Slug::parse("introduction").unwrap();
-    let resolved = resolve_slug(&base, "https://example.com/intro1", dir.path());
+    let resolved = resolve_slug(&base, "https://example.com/intro1", &mut used);
     assert_ne!(resolved.as_str(), "introduction");
     assert!(resolved.as_str().starts_with("introduction-"));
     assert_eq!(resolved.as_str().len(), "introduction-".len() + 12); // 6 bytes = 12 hex chars
@@ -68,20 +65,19 @@ fn collision_adds_hash() {
 
 #[test]
 fn no_collision_no_hash() {
-    let dir = TempDir::new().unwrap();
+    let mut used = HashSet::new();
     let base = Slug::parse("introduction").unwrap();
-    let resolved = resolve_slug(&base, "https://example.com/intro1", dir.path());
+    let resolved = resolve_slug(&base, "https://example.com/intro1", &mut used);
     assert_eq!(resolved.as_str(), "introduction");
 }
 
 #[test]
 fn different_urls_get_different_hashes() {
-    let dir = TempDir::new().unwrap();
-    fs::write(dir.path().join("introduction.md"), "existing").unwrap();
+    let mut used = HashSet::from(["introduction".to_string()]);
 
     let base = Slug::parse("introduction").unwrap();
-    let r1 = resolve_slug(&base, "https://example.com/intro1", dir.path());
-    let r2 = resolve_slug(&base, "https://example.com/intro2", dir.path());
+    let r1 = resolve_slug(&base, "https://example.com/intro1", &mut used);
+    let r2 = resolve_slug(&base, "https://example.com/intro2", &mut used);
     assert_ne!(r1, r2);
 }
 
@@ -166,16 +162,10 @@ fn parse_accepts_max_length() {
 
 #[test]
 fn collision_with_long_base_slug_stays_within_limit() {
-    let dir = TempDir::new().unwrap();
     // Max-length (80-char) base slug.
     let long_base = Slug::parse(&"a".repeat(80)).unwrap();
-    // Force collision.
-    fs::write(
-        dir.path().join(format!("{}.md", long_base.as_str())),
-        "existing",
-    )
-    .unwrap();
-    let resolved = resolve_slug(&long_base, "https://example.com/conflict", dir.path());
+    let mut used = HashSet::from([long_base.as_str().to_string()]);
+    let resolved = resolve_slug(&long_base, "https://example.com/conflict", &mut used);
     assert!(
         resolved.as_str().len() <= 80,
         "resolved slug too long: {} chars",
@@ -187,6 +177,20 @@ fn collision_with_long_base_slug_stays_within_limit() {
         "resolved slug fails validation: {:?}",
         resolved.as_str()
     );
+}
+
+// ── intra-batch collision (ex resolve_slug_batch) ────────────────────────────
+
+#[test]
+fn intra_batch_collision_distinct_slugs() {
+    let mut used = HashSet::new();
+    let base = Slug::parse("introduction").unwrap();
+    let r1 = resolve_slug(&base, "https://example.com/intro1", &mut used);
+    let r2 = resolve_slug(&base, "https://example.com/intro2", &mut used);
+    assert_eq!(r1.as_str(), "introduction");
+    assert_ne!(r2.as_str(), "introduction");
+    assert!(r2.as_str().starts_with("introduction-"));
+    assert_ne!(r1, r2);
 }
 
 // ── Slug::generate ───────────────────────────────────────────────────────────
