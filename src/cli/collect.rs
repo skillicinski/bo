@@ -15,7 +15,7 @@
 // Dependency direction: collect → adapters, fetch, quality, extract, leaf, slug, index.
 
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::io::Write;
@@ -737,6 +737,26 @@ fn recover_pending_if_needed(output_dir: &Path) -> Result<(), CollectError> {
     Ok(())
 }
 
+/// Snapshot on-disk slug stems (filenames minus `.md`) so slug resolution
+/// can avoid collisions without probing the filesystem per slug.
+///
+/// # ponytail: read_dir failure = empty set, matches old .exists() false-on-error semantics
+fn existing_slug_stems(output_dir: &Path) -> std::collections::HashSet<String> {
+    let mut stems = std::collections::HashSet::new();
+    let entries = match std::fs::read_dir(output_dir) {
+        Ok(entries) => entries,
+        Err(_) => return stems,
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if let Some(stem) = name.strip_suffix(".md") {
+            stems.insert(stem.to_string());
+        }
+    }
+    stems
+}
+
 fn ensure_not_duplicate(url: &str, output_dir: &Path) -> Result<(), CollectError> {
     if let Some(existing_file) = duplicate_file(url, output_dir)? {
         return Err(CollectError::DuplicateUrl { existing_file });
@@ -787,7 +807,8 @@ fn write_new_document_with_summary_result(
 
     let title_ref = title.unwrap_or("");
     let base_slug = Slug::generate(title_ref, url);
-    let filename = slug::resolve_slug(&base_slug, url, output_dir);
+    let mut used = existing_slug_stems(output_dir);
+    let filename = slug::resolve_slug(&base_slug, url, &mut used);
     let now = Timestamp::now();
     // ponytail: URL already validated at fetch time; panic on impossible parse error.
     let domain_url = Url::parse(url).expect("URL already validated at fetch time");
@@ -990,20 +1011,16 @@ pub fn collect_batch_parallel(
     let mut manifest = load_or_bootstrap_manifest(output_dir, &now)?;
     let mut staged: Vec<(PendingWrite, Vec<u8>)> = Vec::new();
     // Track claimed slug stems so intra-batch collisions are resolved
-    // before writes hit disk (see issue #92).
-    let mut used_slugs: HashSet<String> = HashSet::new();
+    // before writes hit disk. Snapshot on-disk stems first, then track
+    // newly-claimed stems inside the loop (see issues #92, #145).
+    let mut used_slugs = existing_slug_stems(output_dir);
 
     for (input_label, url, result) in compute_results {
         match result {
             Ok(computed) => {
                 let base_slug =
                     Slug::generate(computed.title.as_deref().unwrap_or(""), &computed.url);
-                let filename = slug::resolve_slug_batch(
-                    &base_slug,
-                    &computed.url,
-                    output_dir,
-                    &mut used_slugs,
-                );
+                let filename = slug::resolve_slug(&base_slug, &computed.url, &mut used_slugs);
                 let leaf_file = format!("{}.md", filename);
                 let domain_url =
                     Url::parse(&computed.url).expect("URL already validated at fetch time");
