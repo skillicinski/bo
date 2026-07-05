@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-07-05
+
 ### Added
 
 - `zai` provider — Z.ai (GLM) API support via the GLM Coding Plan endpoint (`https://api.z.ai/api/coding/paas/v4`). Includes `glm-4.7` (default), `glm-4.5-air`, `glm-5.1`, `glm-5-turbo`, and `glm-5.2` models. Auth via `ZAI_API_KEY` env var or `zai_api_key` in `~/.bo/auth.json`.
