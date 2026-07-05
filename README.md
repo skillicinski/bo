@@ -64,7 +64,7 @@ Commands other than `seed` support `--json` for machine-readable output, intende
 
 ## Provider setup
 
-bo currently supports **OpenAI**, **DeepSeek**, **Google**, and **Z.ai (GLM)**.
+bo currently supports **OpenAI**, **DeepSeek**, **Google**, and **Z.ai (GLM)**, plus a **custom** provider for any OpenAI-compatible endpoint.
 
 ### 1. Choose provider and model
 
@@ -76,6 +76,8 @@ bo config --provider deepseek --model deepseek-v4-flash
 bo config --provider google --model gemini-2.5-flash
 # or
 bo config --provider zai --model glm-4.7
+# or any OpenAI-compatible endpoint (base URL is everything before /chat/completions)
+bo config --provider custom --base-url https://api.example.com/v1 --model my-model
 ```
 
 You can also pin a heavier model just for the compile step:
@@ -95,6 +97,7 @@ export OPENAI_API_KEY=sk-...
 export DEEPSEEK_API_KEY=sk-...
 export GEMINI_API_KEY=...
 export ZAI_API_KEY=...
+export CUSTOM_API_KEY=...
 ```
 
 **Option B — `~/.bo/auth.json`** (chmod 600):
@@ -104,7 +107,8 @@ export ZAI_API_KEY=...
   "openai_api_key": "sk-...",
   "deepseek_api_key": "sk-...",
   "google_api_key": "...",
-  "zai_api_key": "..."
+  "zai_api_key": "...",
+  "custom_api_key": "..."
 }
 ```
 

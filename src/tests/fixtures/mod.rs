@@ -54,6 +54,7 @@ pub fn setup_tree(tmp: &TempDir) -> (PathBuf, PathBuf) {
             }),
             model: "gpt-4.1-mini".to_string(),
             compile_model: None,
+            base_url: None,
         },
         &config_path,
     )

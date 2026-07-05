@@ -786,7 +786,10 @@ fn generate_summary_with_model(
         Ok(key) => key,
         Err(_) => return summary::generate_fallback(body),
     };
-    let provider = crate::engine::llm::create_provider(provider, &api_key);
+    let provider = match crate::engine::llm::create_provider(provider, &api_key) {
+        Ok(provider) => provider,
+        Err(_) => return summary::generate_fallback(body),
+    };
     crate::engine::llm::blocking_runtime().block_on(summary::generate_llm_or_fallback(
         body,
         title,

@@ -271,6 +271,7 @@ fn query_uses_model_not_compile_model() {
             provider: bo::engine::llm::Provider::OpenAI,
             model: "gpt-4o-mini".to_string(),
             compile_model: Some("gpt-4.1".to_string()),
+            base_url: None,
             tree: None,
         },
         TreeConfig {
@@ -356,6 +357,7 @@ fn seeded_config(tree: &Path) -> SeededConfig {
             provider: bo::engine::llm::Provider::OpenAI,
             model: "gpt-4o".to_string(),
             compile_model: None,
+            base_url: None,
             tree: None,
         },
         TreeConfig {

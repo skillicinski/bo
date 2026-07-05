@@ -26,13 +26,49 @@ pub(crate) fn sanitize_provider_error_message(message: &str) -> String {
         .join(" ")
 }
 
+/// Error creating a provider: the custom provider needs a base URL from config.
+#[derive(Debug)]
+pub enum ProviderInitError {
+    MissingBaseUrl,
+    ConfigRead(String),
+}
+
+impl fmt::Display for ProviderInitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProviderInitError::MissingBaseUrl => write!(
+                f,
+                "custom provider requires a base URL — run: bo config --provider custom --base-url <url>"
+            ),
+            ProviderInitError::ConfigRead(message) => {
+                write!(f, "failed to read config for custom provider: {}", message)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProviderInitError {}
+
 /// Create the correct LlmProvider for a given provider with the API key.
-pub fn create_provider(provider: Provider, api_key: &str) -> Box<dyn LlmProvider> {
+///
+/// For `Provider::Custom` the base URL is resolved from `~/.bo/config.json`,
+/// mirroring how `auth::resolve_api_key` reads `~/.bo/auth.json`.
+pub fn create_provider(
+    provider: Provider,
+    api_key: &str,
+) -> Result<Box<dyn LlmProvider>, ProviderInitError> {
     match provider {
-        Provider::OpenAI => Box::new(OpenAiProvider::new(api_key)),
-        Provider::Deepseek => Box::new(OpenAiCompatProvider::deepseek(api_key)),
-        Provider::Google => Box::new(GoogleProvider::new(api_key)),
-        Provider::Zai => Box::new(OpenAiCompatProvider::zai(api_key)),
+        Provider::OpenAI => Ok(Box::new(OpenAiProvider::new(api_key))),
+        Provider::Deepseek => Ok(Box::new(OpenAiCompatProvider::deepseek(api_key))),
+        Provider::Google => Ok(Box::new(GoogleProvider::new(api_key))),
+        Provider::Zai => Ok(Box::new(OpenAiCompatProvider::zai(api_key))),
+        Provider::Custom => {
+            let base_url =
+                crate::engine::config::custom_base_url(&crate::engine::config::config_path())
+                    .map_err(|e| ProviderInitError::ConfigRead(e.to_string()))?
+                    .ok_or(ProviderInitError::MissingBaseUrl)?;
+            Ok(Box::new(OpenAiCompatProvider::custom(api_key, &base_url)))
+        }
     }
 }
 
@@ -72,6 +108,9 @@ pub enum Provider {
     Google,
     #[serde(rename = "zai")]
     Zai,
+    /// Any OpenAI-compatible endpoint; base URL comes from config.
+    #[serde(rename = "custom")]
+    Custom,
 }
 
 impl Provider {
@@ -81,6 +120,7 @@ impl Provider {
             "deepseek" => Some(Provider::Deepseek),
             "google" => Some(Provider::Google),
             "zai" => Some(Provider::Zai),
+            "custom" => Some(Provider::Custom),
             _ => None,
         }
     }
@@ -93,11 +133,12 @@ impl fmt::Display for Provider {
             Provider::Deepseek => write!(f, "deepseek"),
             Provider::Google => write!(f, "google"),
             Provider::Zai => write!(f, "zai"),
+            Provider::Custom => write!(f, "custom"),
         }
     }
 }
 
-pub const ALL_PROVIDERS: &[&str] = &["openai", "deepseek", "google", "zai"];
+pub const ALL_PROVIDERS: &[&str] = &["openai", "deepseek", "google", "zai", "custom"];
 
 // ── public types ──────────────────────────────────────────────────────────────
 

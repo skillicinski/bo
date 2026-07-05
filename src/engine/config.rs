@@ -11,6 +11,7 @@
 //     "provider": "openai",          // operator-level: spans all trees
 //     "model": "gpt-4.1-mini",      // operator-level: spans all trees
 //     "compile_model": "gpt-4.1",   // optional model used by compile
+//     "base_url": "https://...",    // optional; required by the custom provider
 //     "tree": {                      // active tree metadata
 //       "path": "/path/to/tree",
 //       "name": "my-research",
@@ -50,6 +51,11 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compile_model: Option<String>,
 
+    /// OpenAI-compatible endpoint prefix (everything before `/chat/completions`).
+    /// Required by the custom provider; inert for all others.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+
     /// Active tree metadata. Absent when config exists before `bo seed`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tree: Option<TreeConfig>,
@@ -61,6 +67,7 @@ impl Default for Config {
             provider: Provider::OpenAI,
             model: String::new(),
             compile_model: None,
+            base_url: None,
             tree: None,
         }
     }
@@ -121,6 +128,16 @@ pub fn config_path() -> PathBuf {
     let home = std::env::var("HOME")
         .expect("$HOME environment variable must be set to locate bo configuration");
     PathBuf::from(home).join(".bo").join("config.json")
+}
+
+/// Read the configured custom-provider base URL, if any.
+/// A missing config file means no base URL, not an error.
+pub fn custom_base_url(path: &Path) -> Result<Option<String>, ConfigError> {
+    match read_config(path) {
+        Ok(config) => Ok(config.base_url),
+        Err(ConfigError::NotFound) => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// Read and deserialise the config from `path`.

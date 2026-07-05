@@ -92,12 +92,18 @@ pub const GOOGLE_MODELS: &[ModelInfo] = &[
     },
 ];
 
+// ponytail: fixed conservative window for custom endpoints; make it a config
+// override when a real endpoint with a bigger/smaller window needs it.
+pub const CUSTOM_CONTEXT_TOKENS: usize = 128_000;
+
 pub fn models_for(provider: Provider) -> &'static [ModelInfo] {
     match provider {
         Provider::OpenAI => OPENAI_MODELS,
         Provider::Deepseek => DEEPSEEK_MODELS,
         Provider::Google => GOOGLE_MODELS,
         Provider::Zai => ZAI_MODELS,
+        // The custom provider has no registry — any non-empty model id is accepted.
+        Provider::Custom => &[],
     }
 }
 
@@ -109,9 +115,15 @@ pub(crate) fn find_model(provider: Provider, model_id: &str) -> Option<&'static 
 }
 
 pub fn is_supported_model(provider: Provider, model_id: &str) -> bool {
+    if provider == Provider::Custom {
+        return !model_id.trim().is_empty();
+    }
     find_model(provider, model_id).is_some()
 }
 
 pub fn context_window_tokens(provider: Provider, model_id: &str) -> Option<usize> {
+    if provider == Provider::Custom {
+        return Some(CUSTOM_CONTEXT_TOKENS);
+    }
     find_model(provider, model_id).map(|entry| entry.context_tokens)
 }

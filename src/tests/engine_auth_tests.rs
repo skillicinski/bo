@@ -236,3 +236,38 @@ fn test_display_missing_zai() {
         "ZAI_API_KEY environment variable not set"
     );
 }
+
+#[test]
+#[serial]
+fn test_env_var_custom() {
+    let dir = TempDir::new().unwrap();
+    let _guard = EnvGuard::set("CUSTOM_API_KEY", "sk-custom-env");
+    let _home_guard = EnvGuard::set("HOME", dir.path().to_str().unwrap());
+
+    let result = resolve_api_key(Provider::Custom).unwrap();
+    assert_eq!(result, "sk-custom-env");
+}
+
+#[test]
+#[serial]
+fn test_auth_json_fallback_custom() {
+    let dir = TempDir::new().unwrap();
+    let _guard = EnvGuard::unset("CUSTOM_API_KEY");
+    let _home_guard = EnvGuard::set("HOME", dir.path().to_str().unwrap());
+    write_auth_json(&dir, "custom_api_key", "sk-custom-json");
+
+    let result = resolve_api_key(Provider::Custom).unwrap();
+    assert_eq!(result, "sk-custom-json");
+}
+
+#[test]
+#[serial]
+fn test_display_missing_custom() {
+    let error = AuthError::Missing {
+        provider: Provider::Custom,
+    };
+    assert_eq!(
+        error.to_string(),
+        "CUSTOM_API_KEY environment variable not set"
+    );
+}

@@ -96,6 +96,7 @@ fn make_config(output_dir: &std::path::Path) -> SeededConfig {
             provider: bo::engine::llm::Provider::OpenAI,
             model: "gpt-4o-mini".to_string(), // cheaper model for tests
             compile_model: None,
+            base_url: None,
             tree: None,
         },
         bo::domain::tree::TreeConfig {

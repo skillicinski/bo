@@ -97,6 +97,9 @@ impl fmt::Display for SeedError {
                 ALL_PROVIDERS.join(", ")
             ),
             SeedError::UnsupportedModel { model, provider } => {
+                if *provider == Provider::Custom {
+                    return write!(f, "custom provider requires a non-empty model");
+                }
                 let supported = models_for(*provider)
                     .iter()
                     .map(|model| model.id)
@@ -205,6 +208,7 @@ pub fn seed(
             provider,
             model: model.clone(),
             compile_model: None,
+            base_url: None,
             tree: Some(TreeConfig {
                 path: path.clone(),
                 name: name.clone(),

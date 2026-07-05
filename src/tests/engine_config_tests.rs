@@ -25,6 +25,7 @@ fn make_seeded_config(path: &str) -> Config {
         tree: Some(make_tree(path)),
         model: "gpt-4.1-mini".to_string(),
         compile_model: None,
+        base_url: None,
     }
 }
 
@@ -83,6 +84,7 @@ fn model_roundtrip_with_value() {
         tree: Some(make_tree("/tmp/bo")),
         model: "gpt-4.1-mini".to_string(),
         compile_model: None,
+        base_url: None,
     };
     write_config(&config, &path).unwrap();
 
@@ -101,6 +103,7 @@ fn compile_model_roundtrip_with_value() {
         tree: Some(make_tree("/tmp/bo")),
         model: "gpt-4o-mini".to_string(),
         compile_model: Some("gpt-4.1-mini".to_string()),
+        base_url: None,
     };
     write_config(&config, &path).unwrap();
 
@@ -128,6 +131,7 @@ fn tree_metadata_roundtrip() {
         }),
         model: "gpt-4.1-mini".to_string(),
         compile_model: None,
+        base_url: None,
     };
     write_config(&config, &path).unwrap();
 
@@ -162,6 +166,7 @@ fn write_config_without_tree_omits_tree_key() {
             tree: None,
             model: "gpt-4.1-mini".to_string(),
             compile_model: None,
+            base_url: None,
         },
         &path,
     )
@@ -180,6 +185,7 @@ fn seeded_conversion_succeeds_when_tree_exists() {
         tree: Some(make_tree("/tmp/bo")),
         model: "gpt-4.1-mini".to_string(),
         compile_model: None,
+        base_url: None,
     };
 
     let seeded = cfg.into_seeded().unwrap();
@@ -198,6 +204,7 @@ fn seeded_conversion_fails_when_tree_missing() {
         tree: None,
         model: "gpt-4.1-mini".to_string(),
         compile_model: None,
+        base_url: None,
     };
 
     assert!(cfg.into_seeded().is_none());
@@ -210,6 +217,7 @@ fn seeded_config_effective_model_fails_with_empty_model() {
         tree: Some(make_tree("/tmp/bo")),
         model: String::new(),
         compile_model: None,
+        base_url: None,
     };
 
     let seeded = cfg.into_seeded().unwrap();
@@ -225,6 +233,7 @@ fn seeded_config_effective_compile_model_prefers_compile_model() {
         tree: Some(make_tree("/tmp/bo")),
         model: "gpt-4o-mini".to_string(),
         compile_model: Some("gpt-4.1-mini".to_string()),
+        base_url: None,
     };
 
     let seeded = cfg.into_seeded().unwrap();
@@ -246,6 +255,7 @@ fn seeded_config_effective_compile_model_falls_back_to_model() {
         tree: Some(make_tree("/tmp/bo")),
         model: "gpt-4o-mini".to_string(),
         compile_model: None,
+        base_url: None,
     };
 
     let seeded = cfg.into_seeded().unwrap();
@@ -253,5 +263,48 @@ fn seeded_config_effective_compile_model_falls_back_to_model() {
     assert_eq!(
         seeded.config.effective_compile_model().unwrap().as_str(),
         "gpt-4o-mini"
+    );
+}
+
+#[test]
+fn base_url_roundtrip_and_omitted_when_none() {
+    let dir = TempDir::new().unwrap();
+    let path = temp_config_path(&dir);
+
+    write_config(&make_seeded_config("/tmp/bo"), &path).unwrap();
+    let contents = std::fs::read_to_string(&path).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
+    assert!(parsed.get("base_url").is_none());
+
+    let config = Config {
+        provider: Provider::Custom,
+        base_url: Some("https://api.example.com/v1".to_string()),
+        ..make_seeded_config("/tmp/bo")
+    };
+    write_config(&config, &path).unwrap();
+
+    let loaded = read_config(&path).unwrap();
+    assert_eq!(
+        loaded.base_url.as_deref(),
+        Some("https://api.example.com/v1")
+    );
+}
+
+#[test]
+fn custom_base_url_reads_config_value() {
+    let dir = TempDir::new().unwrap();
+    let path = temp_config_path(&dir);
+
+    assert_eq!(custom_base_url(&path).unwrap(), None);
+
+    let config = Config {
+        base_url: Some("https://api.example.com/v1".to_string()),
+        ..Config::default()
+    };
+    write_config(&config, &path).unwrap();
+
+    assert_eq!(
+        custom_base_url(&path).unwrap().as_deref(),
+        Some("https://api.example.com/v1")
     );
 }

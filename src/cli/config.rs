@@ -16,11 +16,12 @@ use std::path::Path;
 
 // ── Options ─────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct WriteConfigOptions {
     pub provider: Option<Provider>,
     pub model: Option<String>,
     pub compile_model: Option<String>,
+    pub base_url: Option<String>,
 }
 
 // ── Result types ─────────────────────────────────────────────────────────────
@@ -32,12 +33,17 @@ pub struct ConfigWriteResult {
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compile_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
 }
 
 #[derive(Debug)]
 pub enum ConfigWriteError {
     UnknownProvider { raw: String },
     UnsupportedModel { model: String, provider: Provider },
+    InvalidBaseUrl { raw: String },
+    BaseUrlRequiresCustom { provider: Provider },
+    MissingBaseUrl,
     Read(String),
     Write(String),
 }
@@ -47,6 +53,9 @@ impl ConfigWriteError {
         match self {
             ConfigWriteError::UnknownProvider { .. } => 2,
             ConfigWriteError::UnsupportedModel { .. } => 2,
+            ConfigWriteError::InvalidBaseUrl { .. } => 2,
+            ConfigWriteError::BaseUrlRequiresCustom { .. } => 2,
+            ConfigWriteError::MissingBaseUrl => 2,
             ConfigWriteError::Read(_) => 1,
             ConfigWriteError::Write(_) => 1,
         }
@@ -56,6 +65,9 @@ impl ConfigWriteError {
         match self {
             ConfigWriteError::UnknownProvider { .. } => "usage_error",
             ConfigWriteError::UnsupportedModel { .. } => "usage_error",
+            ConfigWriteError::InvalidBaseUrl { .. } => "usage_error",
+            ConfigWriteError::BaseUrlRequiresCustom { .. } => "usage_error",
+            ConfigWriteError::MissingBaseUrl => "usage_error",
             ConfigWriteError::Read(_) => "io_error",
             ConfigWriteError::Write(_) => "io_error",
         }
@@ -72,6 +84,10 @@ impl ConfigWriteError {
                 "provider": provider.to_string(),
                 "supported_models": models_for(*provider).iter().map(|m| m.id).collect::<Vec<_>>(),
             }),
+            ConfigWriteError::InvalidBaseUrl { raw } => json!({ "base_url": raw }),
+            ConfigWriteError::BaseUrlRequiresCustom { provider } => json!({
+                "provider": provider.to_string(),
+            }),
             _ => json!({}),
         }
     }
@@ -87,6 +103,9 @@ impl fmt::Display for ConfigWriteError {
                 ALL_PROVIDERS.join(", ")
             ),
             ConfigWriteError::UnsupportedModel { model, provider } => {
+                if *provider == Provider::Custom {
+                    return write!(f, "custom provider requires a non-empty model");
+                }
                 let supported: Vec<&str> = models_for(*provider).iter().map(|m| m.id).collect();
                 write!(
                     f,
@@ -96,6 +115,18 @@ impl fmt::Display for ConfigWriteError {
                     supported.join(", ")
                 )
             }
+            ConfigWriteError::InvalidBaseUrl { raw } => {
+                write!(f, "invalid base URL '{}'; expected http(s) URL", raw)
+            }
+            ConfigWriteError::BaseUrlRequiresCustom { provider } => write!(
+                f,
+                "--base-url only applies to the custom provider (current provider: {})",
+                provider
+            ),
+            ConfigWriteError::MissingBaseUrl => write!(
+                f,
+                "custom provider requires a base URL; rerun with --base-url <url>"
+            ),
             ConfigWriteError::Read(msg) => write!(f, "failed to read config: {}", msg),
             ConfigWriteError::Write(msg) => write!(f, "failed to write config: {}", msg),
         }
@@ -131,6 +162,28 @@ pub fn write_config(
         config.provider = provider;
     }
 
+    // Validate and apply base_url if specified
+    if let Some(ref base_url) = options.base_url {
+        if effective_provider != Provider::Custom {
+            return Err(ConfigWriteError::BaseUrlRequiresCustom {
+                provider: effective_provider,
+            });
+        }
+        let trimmed = base_url.trim().to_string();
+        let valid_http = url::Url::parse(&trimmed)
+            .map(|parsed| matches!(parsed.scheme(), "http" | "https"))
+            .unwrap_or(false);
+        if !valid_http {
+            return Err(ConfigWriteError::InvalidBaseUrl { raw: trimmed });
+        }
+        config.base_url = Some(trimmed);
+    }
+
+    // The custom provider is unusable without a base URL — refuse to write one
+    if effective_provider == Provider::Custom && config.base_url.is_none() {
+        return Err(ConfigWriteError::MissingBaseUrl);
+    }
+
     // Validate and apply model if specified
     if let Some(ref model) = options.model {
         let trimmed = model.trim().to_string();
@@ -164,6 +217,7 @@ pub fn write_config(
         provider: config.provider.to_string(),
         model: config.model,
         compile_model: config.compile_model,
+        base_url: config.base_url,
     })
 }
 
@@ -176,6 +230,9 @@ pub fn render_human(result: &ConfigWriteResult) -> String {
     ];
     if let Some(ref cm) = result.compile_model {
         lines.push(format!("compile_model: {}", cm));
+    }
+    if let Some(ref base_url) = result.base_url {
+        lines.push(format!("base_url: {}", base_url));
     }
     lines.join("\n") + "\n"
 }
