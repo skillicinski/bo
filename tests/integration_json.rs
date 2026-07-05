@@ -102,7 +102,7 @@ fn add_manifest_leaf(tree: &Path, file: &str, title: &str, url: &str) {
     let mut manifest = bo::engine::manifest::read(&manifest_path).unwrap();
     let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let slug = Slug::parse(&format!("leaf-{}", idx)).unwrap_or_else(|_| Slug::generate(title, url));
-    manifest.leaves.push(bo::domain::manifest::LeafRecord {
+    manifest.leaves.push(bo::domain::Leaf {
         slug,
         file: file.to_string(),
         title: title.to_string(),

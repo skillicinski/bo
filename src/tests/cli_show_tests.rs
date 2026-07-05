@@ -278,12 +278,12 @@ fn fixture_result(body: Option<&str>, full: bool) -> ShowResult {
 
 fn write_index(tree: &Path, entries: &[(&str, &str)]) {
     fs::create_dir_all(tree).unwrap();
-    let leaves: Vec<crate::domain::manifest::LeafRecord> = entries
+    let leaves: Vec<crate::domain::Leaf> = entries
         .iter()
         .enumerate()
         .map(|(i, (file, title))| {
             let slug = Slug::parse(&format!("test-leaf-{}", i)).unwrap();
-            crate::domain::manifest::LeafRecord {
+            crate::domain::Leaf {
                 slug,
                 file: (*file).to_string(),
                 title: (*title).to_string(),

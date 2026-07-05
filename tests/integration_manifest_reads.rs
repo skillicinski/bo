@@ -82,7 +82,7 @@ fn stage_tree(home: &Path) -> std::path::PathBuf {
         },
         leaves: leaves
             .iter()
-            .map(|(slug, title, url)| bo::domain::manifest::LeafRecord {
+            .map(|(slug, title, url)| bo::domain::Leaf {
                 slug: Slug::parse(slug).unwrap(),
                 file: format!("{slug}.md"),
                 title: title.to_string(),
@@ -91,7 +91,7 @@ fn stage_tree(home: &Path) -> std::path::PathBuf {
                 summary: None,
             })
             .collect(),
-        branches: vec![bo::domain::manifest::BranchRecord {
+        branches: vec![bo::domain::Branch {
             slug: Slug::parse("topic-x").unwrap(),
             file: "branches/topic-x.md".to_string(),
             title: "topic-x".to_string(),

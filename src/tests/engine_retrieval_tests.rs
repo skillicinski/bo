@@ -1,12 +1,13 @@
 use super::*;
-use crate::domain::manifest::{LeafRecord, Manifest, TreeMeta};
+use crate::domain::manifest::{Manifest, TreeMeta};
 use crate::domain::slug::Slug;
 use crate::domain::timestamp::Timestamp;
+use crate::domain::Leaf;
 use std::fs;
 use tempfile::TempDir;
 
-fn make_leaf(slug: &str, title: &str, url: &str, summary: Option<&str>) -> LeafRecord {
-    LeafRecord {
+fn make_leaf(slug: &str, title: &str, url: &str, summary: Option<&str>) -> Leaf {
+    Leaf {
         slug: Slug::parse(slug).unwrap(),
         file: format!("{}.md", slug),
         title: title.to_string(),
@@ -16,7 +17,7 @@ fn make_leaf(slug: &str, title: &str, url: &str, summary: Option<&str>) -> LeafR
     }
 }
 
-fn make_manifest(leaves: Vec<LeafRecord>) -> Manifest {
+fn make_manifest(leaves: Vec<Leaf>) -> Manifest {
     Manifest {
         tree: TreeMeta {
             name: "test".to_string(),

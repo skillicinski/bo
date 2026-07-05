@@ -79,7 +79,7 @@ fn write_leaf(tree_dir: &Path, slug: &str, url: &str) {
     let manifest_path = tree_dir.join(".bo/manifest.json");
     ensure_manifest(tree_dir);
     let mut m = bo::engine::manifest::read(&manifest_path).unwrap();
-    m.leaves.push(bo::domain::manifest::LeafRecord {
+    m.leaves.push(bo::domain::Leaf {
         slug: Slug::parse(slug).unwrap(),
         file: filename,
         title: slug.to_string(),
@@ -102,7 +102,7 @@ fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
     let manifest_path = tree_dir.join(".bo/manifest.json");
     ensure_manifest(tree_dir);
     let mut m = bo::engine::manifest::read(&manifest_path).unwrap();
-    m.branches.push(bo::domain::manifest::BranchRecord {
+    m.branches.push(bo::domain::Branch {
         slug: Slug::parse(slug).unwrap(),
         file: format!("branches/{}.md", slug),
         title: slug.to_string(),

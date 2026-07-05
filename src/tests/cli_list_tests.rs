@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 use std::time::SystemTime;
 use tempfile::TempDir;
 
-use crate::domain::manifest::{BranchRecord, LeafRecord, Manifest, TreeMeta};
+use crate::domain::manifest::{Manifest, TreeMeta};
+use crate::domain::{Branch, Leaf};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct FileSnapshot {
@@ -54,10 +55,10 @@ fn suspicious_path_is_degraded_and_never_read() {
     let sandbox = TempDir::new().unwrap();
     let tree_dir = sandbox.path().join("tree");
     fs::create_dir_all(&tree_dir).unwrap();
-    // LeafRecord.file traverses out of the tree.
+    // Leaf.file traverses out of the tree.
     write_manifest(
         &tree_dir,
-        &[LeafRecord {
+        &[Leaf {
             slug: Slug::parse("outside").unwrap(),
             file: "../outside.md".to_string(),
             title: ("Outside Title").to_string(),
@@ -305,7 +306,7 @@ fn list_tree_is_read_only() {
         dir.path(),
         &[
             leaf("one", "One", "2025-01-01T00:00:00Z"),
-            LeafRecord {
+            Leaf {
                 slug: Slug::parse("two").unwrap(),
                 file: "nested/two.md".to_string(),
                 title: ("Two").to_string(),
@@ -693,8 +694,8 @@ fn degraded_leaves_empty_for_branches_view() {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-fn leaf(slug: &str, title: &str, collected_at: &str) -> LeafRecord {
-    LeafRecord {
+fn leaf(slug: &str, title: &str, collected_at: &str) -> Leaf {
+    Leaf {
         slug: Slug::parse(slug).unwrap(),
         file: format!("{}.md", slug),
         title: title.to_string(),
@@ -704,11 +705,11 @@ fn leaf(slug: &str, title: &str, collected_at: &str) -> LeafRecord {
     }
 }
 
-fn write_manifest(tree_dir: &Path, leaves: &[LeafRecord], branches: &[(&str, &[&str])]) {
+fn write_manifest(tree_dir: &Path, leaves: &[Leaf], branches: &[(&str, &[&str])]) {
     fs::create_dir_all(tree_dir.join(".bo")).unwrap();
-    let branch_records: Vec<BranchRecord> = branches
+    let branch_records: Vec<Branch> = branches
         .iter()
-        .map(|(slug, leaf_slugs)| BranchRecord {
+        .map(|(slug, leaf_slugs)| Branch {
             slug: Slug::parse(slug).unwrap(),
             file: format!("branches/{}.md", slug),
             title: slug.to_string(),

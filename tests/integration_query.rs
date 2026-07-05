@@ -97,7 +97,7 @@ fn make_manifest(dir: &std::path::Path, entries: &[(&str, &str, &str)]) {
                             .map(str::to_string)
                     })
             });
-            bo::domain::manifest::LeafRecord {
+            bo::domain::Leaf {
                 slug,
                 file: file.to_string(),
                 title: title.to_string(),

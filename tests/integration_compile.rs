@@ -10,7 +10,8 @@ use bo::domain::Title;
 use std::fs;
 
 use bo::cli::compile;
-use bo::domain::manifest::{BranchRecord, LeafRecord, Manifest, TreeMeta};
+use bo::domain::manifest::{Manifest, TreeMeta};
+use bo::domain::{Branch, Leaf};
 use bo::engine::config::SeededConfig;
 use bo::engine::pending;
 
@@ -62,7 +63,7 @@ fn setup_fixture_collection() -> tempfile::TempDir {
         let content = bo::domain::leaf::format_content(Some(&title), &url, &ts, doc.body);
         fs::write(dir.path().join(doc.file), content).unwrap();
 
-        leaves.push(LeafRecord {
+        leaves.push(Leaf {
             slug: bo::domain::Slug::parse(doc.file.trim_end_matches(".md")).unwrap(),
             file: doc.file.to_string(),
             title: doc.title.to_string(),
@@ -576,7 +577,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
                 last_compiled_at: Some(ts_last_compile.clone()),
             },
             leaves: vec![
-                LeafRecord {
+                Leaf {
                     slug: bo::domain::Slug::parse("ownership").unwrap(),
                     file: "ownership.md".to_string(),
                     title: "Ownership".to_string(),
@@ -584,7 +585,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
                     collected_at: ts_old.clone(),
                     summary: None,
                 },
-                LeafRecord {
+                Leaf {
                     slug: bo::domain::Slug::parse("borrowing").unwrap(),
                     file: "borrowing.md".to_string(),
                     title: "Borrowing".to_string(),
@@ -592,7 +593,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
                     collected_at: ts_old.clone(),
                     summary: None,
                 },
-                LeafRecord {
+                Leaf {
                     slug: bo::domain::Slug::parse("lifetimes").unwrap(),
                     file: "lifetimes.md".to_string(),
                     title: "Lifetimes".to_string(),
@@ -600,7 +601,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
                     collected_at: ts_new.clone(),
                     summary: None,
                 },
-                LeafRecord {
+                Leaf {
                     slug: bo::domain::Slug::parse("traits").unwrap(),
                     file: "traits.md".to_string(),
                     title: "Traits".to_string(),
@@ -609,7 +610,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
                     summary: None,
                 },
             ],
-            branches: vec![BranchRecord {
+            branches: vec![Branch {
                 slug: bo::domain::Slug::parse("memory-model").unwrap(),
                 file: "branches/memory-model.md".to_string(),
                 title: Title::from("Memory Model"),
@@ -726,7 +727,7 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
                 last_compiled_at: Some(Timestamp::parse("2025-06-01T11:00:00Z").unwrap()),
             },
             leaves: vec![
-                LeafRecord {
+                Leaf {
                     slug: bo::domain::Slug::parse("survivor").unwrap(),
                     file: "survivor.md".to_string(),
                     title: "Survivor".to_string(),
@@ -734,7 +735,7 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
                     collected_at: ts.clone(),
                     summary: None,
                 },
-                LeafRecord {
+                Leaf {
                     slug: bo::domain::Slug::parse("deleted").unwrap(),
                     file: "deleted.md".to_string(),
                     title: "Deleted".to_string(),
@@ -743,7 +744,7 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
                     summary: None,
                 },
             ],
-            branches: vec![BranchRecord {
+            branches: vec![Branch {
                 slug: bo::domain::Slug::parse("mixed-branch").unwrap(),
                 file: "branches/mixed-branch.md".to_string(),
                 title: Title::from("Mixed Branch"),

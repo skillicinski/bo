@@ -2,8 +2,9 @@
 
 use crate::cli::json::JsonError;
 use crate::cli::resolve_leaf_path;
-use crate::domain::manifest::{self, LeafRecord};
+use crate::domain::manifest::{self};
 use crate::domain::tree::TreeRuntimeState;
+use crate::domain::Leaf;
 use serde::Serialize;
 use serde_json::json;
 use serde_yaml_ng::{Mapping, Value};
@@ -209,7 +210,7 @@ pub fn show_leaf(
 fn load_candidate(
     tree_dir: &Path,
     canonical_tree_dir: Option<&Path>,
-    leaf: &LeafRecord,
+    leaf: &Leaf,
 ) -> CandidateLoad {
     let fallback_title = leaf.title.as_str().trim().to_string();
     let fallback_url = non_empty_trimmed(leaf.url.as_str());

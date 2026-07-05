@@ -106,7 +106,7 @@ fn upsert_manifest_leaf(tree: &Path, file: &str, title: &str, collected_at: &str
         existing.url = url.clone();
         existing.collected_at = Timestamp::parse(collected_at).unwrap();
     } else {
-        manifest.leaves.push(bo::domain::manifest::LeafRecord {
+        manifest.leaves.push(bo::domain::Leaf {
             slug: Slug::parse(&slug).unwrap_or_else(|_| Slug::generate(&slug, "")),
             file: file.to_string(),
             title: title.to_string(),
@@ -141,7 +141,7 @@ fn set_manifest_branches_for_leaf(tree: &Path, file: &str, branches: &[&str], ti
                 branch.leaves.push(Slug::parse(&leaf_slug).unwrap());
             }
         } else {
-            manifest.branches.push(bo::domain::manifest::BranchRecord {
+            manifest.branches.push(bo::domain::Branch {
                 slug: Slug::parse(branch_slug).unwrap(),
                 file: format!("branches/{branch_slug}.md"),
                 title: branch_slug.to_string(),

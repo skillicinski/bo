@@ -9,7 +9,7 @@ fn resolution_fixture() -> Manifest {
             last_compiled_at: Some(Timestamp::parse("2026-05-19T15:00:00Z").unwrap()),
         },
         leaves: vec![
-            LeafRecord {
+            Leaf {
                 slug: Slug::parse("alpha").unwrap(),
                 file: "alpha.md".to_string(),
                 title: ("Alpha").to_string(),
@@ -17,7 +17,7 @@ fn resolution_fixture() -> Manifest {
                 collected_at: Timestamp::parse("2026-05-19T14:00:00Z").unwrap(),
                 summary: None,
             },
-            LeafRecord {
+            Leaf {
                 slug: Slug::parse("beta").unwrap(),
                 file: "beta.md".to_string(),
                 title: ("Beta").to_string(),
@@ -25,7 +25,7 @@ fn resolution_fixture() -> Manifest {
                 collected_at: Timestamp::parse("2026-05-19T14:30:00Z").unwrap(),
                 summary: None,
             },
-            LeafRecord {
+            Leaf {
                 slug: Slug::parse("gamma").unwrap(),
                 file: "gamma.md".to_string(),
                 title: ("Gamma").to_string(),
@@ -35,7 +35,7 @@ fn resolution_fixture() -> Manifest {
             },
         ],
         branches: vec![
-            BranchRecord {
+            Branch {
                 slug: Slug::parse("topic-x").unwrap(),
                 file: "branches/topic-x.md".to_string(),
                 title: ("Topic X").to_string(),
@@ -43,7 +43,7 @@ fn resolution_fixture() -> Manifest {
                 updated_at: Timestamp::parse("2026-05-19T15:00:00Z").unwrap(),
                 leaves: vec![Slug::parse("alpha").unwrap(), Slug::parse("beta").unwrap()],
             },
-            BranchRecord {
+            Branch {
                 slug: Slug::parse("topic-y").unwrap(),
                 file: "branches/topic-y.md".to_string(),
                 title: ("Topic Y").to_string(),

@@ -147,7 +147,7 @@ fn make_manifest(dir: &Path, entries: &[(&str, &str, &str)]) {
                         .and_then(|value| value.as_str())
                         .map(str::to_string)
                 });
-            crate::domain::manifest::LeafRecord {
+            crate::domain::Leaf {
                 slug: Slug::generate(&Path::new(file).file_stem().unwrap().to_string_lossy(), ""),
                 file: file.to_string(),
                 title: title.to_string(),
@@ -306,7 +306,8 @@ fn retrieve_missing_summary_uses_body_fallback() {
 // `bo compile`'s synthesized output is invisible at query time.
 #[test]
 fn retrieve_returns_compiled_branch_when_no_leaf_matches() {
-    use crate::domain::manifest::{BranchRecord, LeafRecord, Manifest, TreeMeta};
+    use crate::domain::manifest::{Manifest, TreeMeta};
+    use crate::domain::{Branch, Leaf};
     use crate::domain::{Title, Url};
 
     let dir = TempDir::new().unwrap();
@@ -354,7 +355,7 @@ fn retrieve_returns_compiled_branch_when_no_leaf_matches() {
             last_compiled_at: Some(Timestamp::parse("2025-01-01T00:00:00Z").unwrap()),
         },
         leaves: vec![
-            LeafRecord {
+            Leaf {
                 slug: Slug::generate("cooking", ""),
                 file: "leaves/cooking.md".to_string(),
                 title: Title::from("Cooking Tips"),
@@ -362,7 +363,7 @@ fn retrieve_returns_compiled_branch_when_no_leaf_matches() {
                 collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                 summary: Some("How to cook".to_string()),
             },
-            LeafRecord {
+            Leaf {
                 slug: Slug::generate("sports", ""),
                 file: "leaves/sports.md".to_string(),
                 title: Title::from("Sports News"),
@@ -371,7 +372,7 @@ fn retrieve_returns_compiled_branch_when_no_leaf_matches() {
                 summary: Some("Match reports".to_string()),
             },
         ],
-        branches: vec![BranchRecord {
+        branches: vec![Branch {
             slug: Slug::generate("Rust Ownership", ""),
             file: "branches/rust-ownership.md".to_string(),
             title: Title::from("Rust Ownership"),
@@ -450,7 +451,7 @@ fn diagnostics_capture_focused_title_and_summary_matches() {
 
 // ── helper tests ─────────────────────────────────────────────────────
 
-// (slug_from_file removed: slugs now come from manifest LeafRecord.slug)
+// (slug_from_file removed: slugs now come from manifest Leaf.slug)
 
 // ── citation validation tests ────────────────────────────────────────
 

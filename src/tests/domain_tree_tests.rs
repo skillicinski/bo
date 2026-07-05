@@ -62,3 +62,43 @@ fn free_manifest_path_matches_tree_method() {
         super::manifest_path(&tree.path)
     );
 }
+
+// ── round-trip: on-disk JSON shape unchanged ──────────────────────────────
+
+#[test]
+fn tree_config_round_trip_preserves_json_shape() {
+    let json = r#"{
+  "path": "/tmp/my-research",
+  "name": "my-research",
+  "created_at": "2026-04-14T09:00:00.000Z"
+}"#;
+
+    let cfg: TreeConfig = serde_json::from_str(json).unwrap();
+    assert_eq!(cfg.path, PathBuf::from("/tmp/my-research"));
+    assert_eq!(cfg.name, "my-research");
+    assert_eq!(cfg.created_at.to_string(), "2026-04-14T09:00:00.000Z");
+
+    let round_tripped = serde_json::to_string_pretty(&cfg).unwrap();
+    assert_eq!(round_tripped, json);
+}
+
+#[test]
+fn tree_meta_round_trip_preserves_json_shape() {
+    let json = r#"{
+  "name": "my-research",
+  "created_at": "2026-04-14T09:00:00.000Z",
+  "last_compiled_at": "2026-04-14T10:00:00.000Z"
+}"#;
+
+    use crate::domain::manifest::TreeMeta;
+    let meta: TreeMeta = serde_json::from_str(json).unwrap();
+    assert_eq!(meta.name, "my-research");
+    assert_eq!(meta.created_at.to_string(), "2026-04-14T09:00:00.000Z");
+    assert_eq!(
+        meta.last_compiled_at.as_ref().unwrap().to_string(),
+        "2026-04-14T10:00:00.000Z"
+    );
+
+    let round_tripped = serde_json::to_string_pretty(&meta).unwrap();
+    assert_eq!(round_tripped, json);
+}

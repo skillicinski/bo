@@ -24,8 +24,9 @@ use std::thread;
 
 use crate::adapters::youtube::{self, YoutubeError, YoutubeUrlMatch};
 use crate::cli::json::JsonError;
-use crate::domain::manifest::{self, LeafRecord, Manifest, TreeMeta};
+use crate::domain::manifest::{self, Manifest, TreeMeta};
 use crate::domain::slug::Slug;
+use crate::domain::Leaf;
 use crate::domain::{leaf, slug, Timestamp};
 use crate::engine::auth;
 use crate::engine::pending::{self, OpKind, PendingWrite};
@@ -804,7 +805,7 @@ fn write_new_document_with_summary_result(
             existing_file: existing.file.clone(),
         });
     }
-    manifest.leaves.push(LeafRecord {
+    manifest.leaves.push(Leaf {
         slug: filename.clone(),
         file: leaf_file.clone(),
         title: title.unwrap_or_default().to_string(),
@@ -1031,7 +1032,7 @@ pub fn collect_batch_parallel(
                     continue;
                 }
 
-                manifest.leaves.push(LeafRecord {
+                manifest.leaves.push(Leaf {
                     slug: filename.clone(),
                     file: leaf_file.clone(),
                     title: computed.title.unwrap_or_default(),

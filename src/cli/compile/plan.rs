@@ -6,9 +6,10 @@ use std::fs;
 use serde_yaml_ng::Value;
 
 use crate::domain::frontmatter;
-use crate::domain::manifest::{BranchRecord, LeafRecord, Manifest, TreeMeta};
+use crate::domain::manifest::{Manifest, TreeMeta};
 use crate::domain::slug::Slug;
 use crate::domain::Timestamp;
+use crate::domain::{Branch, Leaf};
 use crate::engine::config::SeededConfig;
 
 use super::parse::{CompilePlan, ValidatedBranch};
@@ -43,7 +44,7 @@ pub(super) struct RemovedBranchResult {
 
 #[derive(Debug)]
 pub(super) struct PlannedBranchWrite {
-    pub(super) record: BranchRecord,
+    pub(super) record: Branch,
     pub(super) file_leaves: Vec<String>,
     pub(super) body: String,
 }
@@ -208,7 +209,7 @@ pub(super) fn repair_stale_branches(
         notifications.push(msg);
     }
 
-    let repaired_leaves: Vec<LeafRecord> = manifest
+    let repaired_leaves: Vec<Leaf> = manifest
         .leaves
         .iter()
         .filter(|l| !deleted_set.contains(l.slug.as_str()))
@@ -321,7 +322,7 @@ pub(super) fn classify_leaf_files(
 
 pub(super) fn read_valid_leaves(
     cfg: &SeededConfig,
-    entries: &[LeafRecord],
+    entries: &[Leaf],
 ) -> (Vec<LoadedLeaf>, Vec<String>) {
     let tree = cfg.tree();
     let mut loaded = Vec::new();
@@ -431,13 +432,13 @@ fn build_full_delta(
     )
 }
 
-/// ponytail: shared artifact builder; eliminates duplicate BranchRecord/
+/// ponytail: shared artifact builder; eliminates duplicate Branch/
 /// BranchResult/PlannedBranchWrite construction between full and incremental deltas.
 fn build_branch_artifacts(
     planned: &ValidatedBranch,
-    existing: Option<&BranchRecord>,
+    existing: Option<&Branch>,
     run_timestamp: &Timestamp,
-) -> (BranchRecord, BranchResult, PlannedBranchWrite) {
+) -> (Branch, BranchResult, PlannedBranchWrite) {
     let slug = Slug::parse(&planned.slug).unwrap_or_else(|_| Slug::generate(&planned.slug, ""));
     let (file, created_at) = match existing {
         Some(ex) => (ex.file.clone(), ex.created_at.clone()),
@@ -446,7 +447,7 @@ fn build_branch_artifacts(
             run_timestamp.clone(),
         ),
     };
-    let record = BranchRecord {
+    let record = Branch {
         slug: slug.clone(),
         file,
         title: planned.title.clone(),
@@ -527,7 +528,7 @@ fn finalize_manifest_delta(
     branch_deletes: Vec<String>,
     branches_created: Vec<BranchResult>,
     branches_updated: Vec<BranchResult>,
-    new_branches: Vec<BranchRecord>,
+    new_branches: Vec<Branch>,
 ) -> Result<ManifestDelta, CompileError> {
     let new_manifest = Manifest {
         tree: TreeMeta {

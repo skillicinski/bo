@@ -384,7 +384,7 @@ fn write_index(tree: &Path, entries: &[(&str, &str, &str)]) {
     fs::create_dir_all(&bo_dir).unwrap();
     let leaves = entries
         .iter()
-        .map(|(file, title, url)| bo::domain::manifest::LeafRecord {
+        .map(|(file, title, url)| bo::domain::Leaf {
             slug: Slug::generate(&Path::new(file).file_stem().unwrap().to_string_lossy(), ""),
             file: file.to_string(),
             title: title.to_string(),

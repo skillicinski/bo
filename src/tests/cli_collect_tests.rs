@@ -107,7 +107,7 @@ fn batch_collect_skips_existing_manifest_duplicates_without_fetching() {
                 created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                 last_compiled_at: None,
             },
-            leaves: vec![manifest::LeafRecord {
+            leaves: vec![crate::domain::Leaf {
                 slug: Slug::parse("already").unwrap(),
                 file: "already.md".to_string(),
                 title: ("Already").to_string(),
@@ -589,7 +589,7 @@ fn dedup_uses_manifest_not_index_jsonl() {
     // path used by ensure_not_duplicate must consult the manifest now.
     let manifest_path = dir.path().join(".bo/manifest.json");
     let mut m = crate::engine::manifest::read(&manifest_path).unwrap();
-    m.leaves.push(crate::domain::manifest::LeafRecord {
+    m.leaves.push(crate::domain::Leaf {
         slug: Slug::parse("already-collected").unwrap(),
         file: "already-collected.md".to_string(),
         title: ("Already").to_string(),

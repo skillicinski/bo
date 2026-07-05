@@ -1,10 +1,29 @@
-// Branch file I/O.
+// Domain entity and I/O for branch documents.
 //
 // A branch is a synthesised concept file written by `bo compile`.
 // It lives at {output_dir}/branches/{slug}.md and has YAML frontmatter
 // followed by a markdown body beginning with a heading matching the title.
 
+use crate::domain::{Slug, Timestamp, Title};
+use serde::{Deserialize, Serialize};
 use serde_yaml_ng::{Mapping, Value};
+
+// ── Branch ────────────────────────────────────────────────────────────────────
+
+/// A synthesised concept in the knowledge graph, grouping related leaves.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Branch {
+    pub slug: Slug,
+    pub file: String,
+    pub title: Title,
+    /// First compile run that produced this branch. Preserved across recompiles.
+    pub created_at: Timestamp,
+    /// Most recent compile run that touched this branch. Updated every recompile.
+    pub updated_at: Timestamp,
+    /// Slugs of leaves assigned to this branch. Canonical direction of the
+    /// cross-reference.
+    pub leaves: Vec<Slug>,
+}
 
 pub(crate) fn format_content(
     title: &str,

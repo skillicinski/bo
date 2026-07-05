@@ -1,6 +1,7 @@
 //! Shared test fixtures — tree setup, leaf/branch construction helpers.
 
-use crate::domain::manifest::{LeafRecord, Manifest, TreeMeta};
+use crate::domain::manifest::{Manifest, TreeMeta};
+use crate::domain::Leaf;
 use crate::domain::{Slug, Timestamp};
 use crate::engine::config;
 use std::fs;
@@ -69,7 +70,7 @@ pub fn add_manifest_leaf(tree_dir: &Path, file: &str) {
     let mut manifest = crate::engine::manifest::read(&manifest_path).unwrap();
     let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let slug = Slug::parse(&format!("leaf-{}", idx)).unwrap();
-    manifest.leaves.push(LeafRecord {
+    manifest.leaves.push(Leaf {
         slug,
         file: file.to_string(),
         title: file.trim_end_matches(".md").to_string(),
@@ -82,9 +83,9 @@ pub fn add_manifest_leaf(tree_dir: &Path, file: &str) {
 
 // ─── record constructors ─────────────────────────────────────────────────────
 
-/// Construct a `LeafRecord` with sensible defaults for tests.
-pub fn make_leaf_record(slug: &str, file: &str) -> LeafRecord {
-    LeafRecord {
+/// Construct a `Leaf` with sensible defaults for tests.
+pub fn make_leaf_record(slug: &str, file: &str) -> Leaf {
+    Leaf {
         slug: Slug::parse(slug).expect("invalid test slug"),
         file: file.to_string(),
         title: file.trim_end_matches(".md").to_string(),
@@ -95,7 +96,7 @@ pub fn make_leaf_record(slug: &str, file: &str) -> LeafRecord {
 }
 
 /// Construct a `Manifest` with the given leaves and empty branches.
-pub fn make_manifest(name: &str, leaves: Vec<LeafRecord>) -> Manifest {
+pub fn make_manifest(name: &str, leaves: Vec<Leaf>) -> Manifest {
     Manifest {
         tree: TreeMeta {
             name: name.to_string(),

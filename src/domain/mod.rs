@@ -8,6 +8,8 @@ pub mod title;
 pub mod tree;
 pub mod url;
 
+pub use branch::Branch;
+pub use leaf::Leaf;
 pub use slug::Slug;
 pub use timestamp::Timestamp;
 pub use title::Title;

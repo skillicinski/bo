@@ -306,7 +306,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
             Ok(result) => {
                 let tree_name = require_seeded_config()
                     .ok()
-                    .map(|c| c.tree().name)
+                    .map(|c| c.tree().name.to_string())
                     .unwrap_or_else(|| "bo".to_string());
                 wrote(compile::render_human(&result, stdout, &tree_name), 0)
             }

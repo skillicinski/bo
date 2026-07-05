@@ -1,4 +1,4 @@
-// Domain entity I/O for leaf documents.
+// Domain entity and I/O for leaf documents.
 //
 // A leaf is a collected document produced by `bo add`. It lives at
 // {output_dir}/{slug}.md and has YAML frontmatter followed by a markdown body.
@@ -12,8 +12,23 @@
 // `summary` lives only in the manifest — it is never written to leaf
 // frontmatter.
 
-use crate::domain::{Timestamp, Title, Url};
+use crate::domain::{Slug, Timestamp, Title, Url};
+use serde::{Deserialize, Serialize};
 use serde_yaml_ng::{Mapping, Value};
+
+// ── Leaf ──────────────────────────────────────────────────────────────────────
+
+/// A collected document in the knowledge graph.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Leaf {
+    pub slug: Slug,
+    pub file: String,
+    pub title: Title,
+    pub url: Url,
+    pub collected_at: Timestamp,
+    #[serde(default)]
+    pub summary: Option<String>,
+}
 
 /// Format leaf document content — frontmatter block followed by body.
 ///

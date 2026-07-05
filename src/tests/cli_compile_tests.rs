@@ -2,7 +2,8 @@ use super::{
     degenerate_result_warning, plan, render_human, CompileOptions, CompileResult, CompileRunMode,
 };
 use crate::cli::json;
-use crate::domain::manifest::{BranchRecord, LeafRecord, Manifest, TreeMeta};
+use crate::domain::manifest::{Manifest, TreeMeta};
+use crate::domain::{Branch, Leaf};
 use crate::domain::{Slug, Timestamp};
 use crate::engine::config::SeededConfig;
 use std::collections::HashSet;
@@ -35,8 +36,8 @@ fn read_manifest(dir: &Path) -> Manifest {
     crate::engine::manifest::read(&manifest_path).unwrap()
 }
 
-fn leaf_record(slug: &str, file: &str, title: &str, collected_at: &str) -> LeafRecord {
-    LeafRecord {
+fn leaf_record(slug: &str, file: &str, title: &str, collected_at: &str) -> Leaf {
+    Leaf {
         slug: Slug::generate(slug, ""),
         file: file.to_string(),
         title: title.to_string(),
@@ -199,8 +200,8 @@ fn compile_result_notifications_skipped_from_json() {
     assert!(parsed["data"]["notifications"].is_null());
 }
 
-fn branch_record(slug: &str, title: &str, leaf_slugs: &[&str]) -> BranchRecord {
-    BranchRecord {
+fn branch_record(slug: &str, title: &str, leaf_slugs: &[&str]) -> Branch {
+    Branch {
         slug: Slug::generate(slug, ""),
         file: format!("branches/{}.md", slug),
         title: title.to_string(),
@@ -337,11 +338,11 @@ fn select_run_mode_forces_full_when_no_branches_exist() {
 
 #[test]
 fn select_run_mode_incremental_only_with_branches_and_no_all() {
-    use crate::domain::manifest::BranchRecord;
+    use crate::domain::Branch;
     use crate::domain::Title;
 
     let mut manifest = fresh_manifest("t", "2026-01-01T00:00:00Z", Some("2026-01-02T00:00:00Z"));
-    manifest.branches.push(BranchRecord {
+    manifest.branches.push(Branch {
         slug: Slug::generate("existing", ""),
         file: "branches/existing.md".to_string(),
         title: Title::from("existing"),
