@@ -3,7 +3,7 @@ use super::{
 };
 use crate::cli::json;
 use crate::domain::manifest::{Manifest, TreeMeta};
-use crate::domain::{Branch, Leaf};
+use crate::domain::{Branch, Leaf, Title, Url};
 use crate::domain::{Slug, Timestamp};
 use crate::engine::config::SeededConfig;
 use std::collections::HashSet;
@@ -40,8 +40,8 @@ fn leaf_record(slug: &str, file: &str, title: &str, collected_at: &str) -> Leaf 
     Leaf {
         slug: Slug::generate(slug, ""),
         file: file.to_string(),
-        title: title.to_string(),
-        url: ("https://example.com").to_string(),
+        title: Title::parse(title).ok(),
+        url: Url::parse("https://example.com").unwrap(),
         collected_at: Timestamp::parse(collected_at).unwrap(),
         summary: Some("summary text".to_string()),
     }
@@ -204,7 +204,7 @@ fn branch_record(slug: &str, title: &str, leaf_slugs: &[&str]) -> Branch {
     Branch {
         slug: Slug::generate(slug, ""),
         file: format!("branches/{}.md", slug),
-        title: title.to_string(),
+        title: Title::parse(title).unwrap(),
         created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         updated_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         leaves: leaf_slugs.iter().map(|s| Slug::generate(s, "")).collect(),
@@ -345,7 +345,7 @@ fn select_run_mode_incremental_only_with_branches_and_no_all() {
     manifest.branches.push(Branch {
         slug: Slug::generate("existing", ""),
         file: "branches/existing.md".to_string(),
-        title: Title::from("existing"),
+        title: Title::parse("existing").unwrap(),
         created_at: Timestamp::parse("2026-01-02T00:00:00Z").unwrap(),
         updated_at: Timestamp::parse("2026-01-02T00:00:00Z").unwrap(),
         leaves: vec![Slug::generate("a", "")],

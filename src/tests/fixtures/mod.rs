@@ -2,11 +2,23 @@
 
 use crate::domain::manifest::{Manifest, TreeMeta};
 use crate::domain::Leaf;
-use crate::domain::{Slug, Timestamp};
+use crate::domain::{Slug, Timestamp, Title, Url};
 use crate::engine::config;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
+
+// ─── test helpers ────────────────────────────────────────────────────────────
+
+/// Construct a validated Title; panics on invalid input (test-only convenience).
+pub fn title(s: &str) -> Title {
+    Title::parse(s).expect("invalid test title")
+}
+
+/// Construct a validated Url; panics on invalid input (test-only convenience).
+pub fn url(s: &str) -> Url {
+    Url::parse(s).expect("invalid test URL")
+}
 
 // ─── tree setup ──────────────────────────────────────────────────────────────
 
@@ -73,8 +85,8 @@ pub fn add_manifest_leaf(tree_dir: &Path, file: &str) {
     manifest.leaves.push(Leaf {
         slug,
         file: file.to_string(),
-        title: file.trim_end_matches(".md").to_string(),
-        url: ("https://example.com/test").to_string(),
+        title: Some(title(file.trim_end_matches(".md"))),
+        url: url("https://example.com/test"),
         collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
         summary: None,
     });
@@ -88,8 +100,8 @@ pub fn make_leaf_record(slug: &str, file: &str) -> Leaf {
     Leaf {
         slug: Slug::parse(slug).expect("invalid test slug"),
         file: file.to_string(),
-        title: file.trim_end_matches(".md").to_string(),
-        url: format!("https://example.com/{slug}"),
+        title: Some(title(file.trim_end_matches(".md"))),
+        url: url(&format!("https://example.com/{slug}")),
         collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
         summary: None,
     }

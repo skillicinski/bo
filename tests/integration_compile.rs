@@ -6,7 +6,7 @@
 //   OPENAI_API_KEY=sk-... cargo test --test integration_compile -- --ignored
 
 use bo::domain::Timestamp;
-use bo::domain::Title;
+use bo::domain::{Title, Url};
 use std::fs;
 
 use bo::cli::compile;
@@ -57,17 +57,17 @@ fn setup_fixture_collection() -> tempfile::TempDir {
     let mut leaves = Vec::new();
 
     for doc in FIXTURE_DOCS {
-        let title = doc.title.to_string();
-        let url = doc.url.to_string();
+        let title: Option<Title> = Title::parse(doc.title).ok();
+        let url = Url::parse(doc.url).unwrap();
         let ts = Timestamp::parse("2025-06-01T10:00:00Z").unwrap();
-        let content = bo::domain::leaf::format_content(Some(&title), &url, &ts, doc.body);
+        let content = bo::domain::leaf::format_content(title.as_ref(), &url, &ts, doc.body);
         fs::write(dir.path().join(doc.file), content).unwrap();
 
         leaves.push(Leaf {
             slug: bo::domain::Slug::parse(doc.file.trim_end_matches(".md")).unwrap(),
             file: doc.file.to_string(),
-            title: doc.title.to_string(),
-            url: doc.url.to_string(),
+            title,
+            url,
             collected_at: Timestamp::parse("2025-06-01T10:00:00Z").unwrap(),
             summary: None,
         });
@@ -536,8 +536,8 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
             "Borrowing allows shared references without GC.",
         ),
     ] {
-        let t = title.to_string();
-        let u = format!("https://example.com/{}", file);
+        let t = Title::parse(title).unwrap();
+        let u = Url::parse(&format!("https://example.com/{}", file)).unwrap();
         let content = bo::domain::leaf::format_content(Some(&t), &u, &ts_old, body);
         fs::write(dir.path().join(file), content).unwrap();
     }
@@ -555,8 +555,8 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
             "Traits define shared behaviour across types.",
         ),
     ] {
-        let t = title.to_string();
-        let u = format!("https://example.com/{}", file);
+        let t = Title::parse(title).unwrap();
+        let u = Url::parse(&format!("https://example.com/{}", file)).unwrap();
         let content = bo::domain::leaf::format_content(Some(&t), &u, &ts_new, body);
         fs::write(dir.path().join(file), content).unwrap();
     }
@@ -580,32 +580,32 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
                 Leaf {
                     slug: bo::domain::Slug::parse("ownership").unwrap(),
                     file: "ownership.md".to_string(),
-                    title: "Ownership".to_string(),
-                    url: "https://example.com/ownership.md".to_string(),
+                    title: Some(Title::parse("Ownership").unwrap()),
+                    url: Url::parse("https://example.com/ownership.md").unwrap(),
                     collected_at: ts_old.clone(),
                     summary: None,
                 },
                 Leaf {
                     slug: bo::domain::Slug::parse("borrowing").unwrap(),
                     file: "borrowing.md".to_string(),
-                    title: "Borrowing".to_string(),
-                    url: "https://example.com/borrowing.md".to_string(),
+                    title: Some(Title::parse("Borrowing").unwrap()),
+                    url: Url::parse("https://example.com/borrowing.md").unwrap(),
                     collected_at: ts_old.clone(),
                     summary: None,
                 },
                 Leaf {
                     slug: bo::domain::Slug::parse("lifetimes").unwrap(),
                     file: "lifetimes.md".to_string(),
-                    title: "Lifetimes".to_string(),
-                    url: "https://example.com/lifetimes.md".to_string(),
+                    title: Some(Title::parse("Lifetimes").unwrap()),
+                    url: Url::parse("https://example.com/lifetimes.md").unwrap(),
                     collected_at: ts_new.clone(),
                     summary: None,
                 },
                 Leaf {
                     slug: bo::domain::Slug::parse("traits").unwrap(),
                     file: "traits.md".to_string(),
-                    title: "Traits".to_string(),
-                    url: "https://example.com/traits.md".to_string(),
+                    title: Some(Title::parse("Traits").unwrap()),
+                    url: Url::parse("https://example.com/traits.md").unwrap(),
                     collected_at: ts_new.clone(),
                     summary: None,
                 },
@@ -613,7 +613,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
             branches: vec![Branch {
                 slug: bo::domain::Slug::parse("memory-model").unwrap(),
                 file: "branches/memory-model.md".to_string(),
-                title: Title::from("Memory Model"),
+                title: Title::parse("Memory Model").unwrap(),
                 created_at: ts_last_compile.clone(),
                 updated_at: ts_last_compile.clone(),
                 leaves: vec![
@@ -705,8 +705,8 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
     let ts = Timestamp::parse("2025-06-01T10:00:00Z").unwrap();
 
     // Only write one leaf file; record two in manifest.
-    let title = "Survivor".to_string();
-    let url = "https://example.com/survivor".to_string();
+    let title = Title::parse("Survivor").unwrap();
+    let url = Url::parse("https://example.com/survivor").unwrap();
     let content =
         bo::domain::leaf::format_content(Some(&title), &url, &ts, "This leaf still exists.");
     fs::write(dir.path().join("survivor.md"), content).unwrap();
@@ -730,16 +730,16 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
                 Leaf {
                     slug: bo::domain::Slug::parse("survivor").unwrap(),
                     file: "survivor.md".to_string(),
-                    title: "Survivor".to_string(),
-                    url: "https://example.com/survivor".to_string(),
+                    title: Some(Title::parse("Survivor").unwrap()),
+                    url: Url::parse("https://example.com/survivor").unwrap(),
                     collected_at: ts.clone(),
                     summary: None,
                 },
                 Leaf {
                     slug: bo::domain::Slug::parse("deleted").unwrap(),
                     file: "deleted.md".to_string(),
-                    title: "Deleted".to_string(),
-                    url: "https://example.com/deleted".to_string(),
+                    title: Some(Title::parse("Deleted").unwrap()),
+                    url: Url::parse("https://example.com/deleted").unwrap(),
                     collected_at: ts.clone(),
                     summary: None,
                 },
@@ -747,7 +747,7 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
             branches: vec![Branch {
                 slug: bo::domain::Slug::parse("mixed-branch").unwrap(),
                 file: "branches/mixed-branch.md".to_string(),
-                title: Title::from("Mixed Branch"),
+                title: Title::parse("Mixed Branch").unwrap(),
                 created_at: ts.clone(),
                 updated_at: ts.clone(),
                 leaves: vec![

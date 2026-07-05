@@ -94,11 +94,11 @@ fn score_candidates(
 pub fn score_corpus(tree_dir: &Path, manifest: &Manifest, terms: &[String]) -> Vec<ScoredDoc> {
     let candidates = manifest.leaves.iter().filter_map(|leaf| {
         let body = read_body(tree_dir, &leaf.file)?;
-        let title = if leaf.title.as_str().trim().is_empty() {
-            leaf.file.clone()
-        } else {
-            leaf.title.as_str().to_string()
-        };
+        let title = leaf
+            .title
+            .as_ref()
+            .map(|t| t.as_str().to_string())
+            .unwrap_or_else(|| leaf.file.clone());
         let summary = leaf
             .summary
             .clone()

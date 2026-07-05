@@ -1,5 +1,13 @@
 use super::*;
-use crate::domain::{Slug, Timestamp};
+use crate::domain::{Slug, Timestamp, Title, Url};
+
+fn title(s: &str) -> Title {
+    Title::parse(s).unwrap()
+}
+
+fn url(s: &str) -> Url {
+    Url::parse(s).unwrap()
+}
 
 fn resolution_fixture() -> Manifest {
     Manifest {
@@ -12,24 +20,24 @@ fn resolution_fixture() -> Manifest {
             Leaf {
                 slug: Slug::parse("alpha").unwrap(),
                 file: "alpha.md".to_string(),
-                title: ("Alpha").to_string(),
-                url: ("https://example.com/a").to_string(),
+                title: Some(title("Alpha")),
+                url: url("https://example.com/a"),
                 collected_at: Timestamp::parse("2026-05-19T14:00:00Z").unwrap(),
                 summary: None,
             },
             Leaf {
                 slug: Slug::parse("beta").unwrap(),
                 file: "beta.md".to_string(),
-                title: ("Beta").to_string(),
-                url: ("https://example.com/b").to_string(),
+                title: Some(title("Beta")),
+                url: url("https://example.com/b"),
                 collected_at: Timestamp::parse("2026-05-19T14:30:00Z").unwrap(),
                 summary: None,
             },
             Leaf {
                 slug: Slug::parse("gamma").unwrap(),
                 file: "gamma.md".to_string(),
-                title: ("Gamma").to_string(),
-                url: ("https://example.com/g").to_string(),
+                title: Some(title("Gamma")),
+                url: url("https://example.com/g"),
                 collected_at: Timestamp::parse("2026-05-19T16:00:00Z").unwrap(),
                 summary: None,
             },
@@ -38,7 +46,7 @@ fn resolution_fixture() -> Manifest {
             Branch {
                 slug: Slug::parse("topic-x").unwrap(),
                 file: "branches/topic-x.md".to_string(),
-                title: ("Topic X").to_string(),
+                title: title("Topic X"),
                 created_at: Timestamp::parse("2026-05-19T15:00:00Z").unwrap(),
                 updated_at: Timestamp::parse("2026-05-19T15:00:00Z").unwrap(),
                 leaves: vec![Slug::parse("alpha").unwrap(), Slug::parse("beta").unwrap()],
@@ -46,7 +54,7 @@ fn resolution_fixture() -> Manifest {
             Branch {
                 slug: Slug::parse("topic-y").unwrap(),
                 file: "branches/topic-y.md".to_string(),
-                title: ("Topic Y").to_string(),
+                title: title("Topic Y"),
                 created_at: Timestamp::parse("2026-05-19T15:00:00Z").unwrap(),
                 updated_at: Timestamp::parse("2026-05-19T15:00:00Z").unwrap(),
                 leaves: vec![Slug::parse("beta").unwrap()],

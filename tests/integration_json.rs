@@ -2,7 +2,7 @@
 //
 // Tests command JSON envelopes. `bo seed` intentionally rejects --json.
 
-use bo::domain::{Slug, Timestamp};
+use bo::domain::{Slug, Timestamp, Title, Url};
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
@@ -105,8 +105,8 @@ fn add_manifest_leaf(tree: &Path, file: &str, title: &str, url: &str) {
     manifest.leaves.push(bo::domain::Leaf {
         slug,
         file: file.to_string(),
-        title: title.to_string(),
-        url: url.to_string(),
+        title: Title::parse(title).ok(),
+        url: Url::parse(url).unwrap(),
         collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
         summary: None,
     });

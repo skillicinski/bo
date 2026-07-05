@@ -1,7 +1,7 @@
 use super::*;
 use crate::domain::manifest::{Manifest, ManifestError, TreeMeta};
 use crate::domain::tree::{Tree, TreeConfig};
-use crate::domain::{Branch, Leaf};
+use crate::domain::{Branch, Leaf, Title, Url};
 use crate::domain::{Slug, Timestamp};
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -18,15 +18,15 @@ fn sample_manifest() -> Manifest {
         leaves: vec![Leaf {
             slug: Slug::parse("ownership-and-borrowing").unwrap(),
             file: "ownership-and-borrowing.md".to_string(),
-            title: ("Ownership and Borrowing").to_string(),
-            url: ("https://example.com/ownership").to_string(),
+            title: Some(Title::parse("Ownership and Borrowing").unwrap()),
+            url: Url::parse("https://example.com/ownership").unwrap(),
             collected_at: Timestamp::parse("2026-05-19T14:05:32Z").unwrap(),
             summary: Some("Rust's ownership rules.".to_string()),
         }],
         branches: vec![Branch {
             slug: Slug::parse("memory-safety").unwrap(),
             file: "branches/memory-safety.md".to_string(),
-            title: ("Memory Safety").to_string(),
+            title: Title::parse("Memory Safety").unwrap(),
             created_at: Timestamp::parse("2026-05-19T14:32:11.000Z").unwrap(),
             updated_at: Timestamp::parse("2026-05-19T14:32:11.000Z").unwrap(),
             leaves: vec![Slug::parse("ownership-and-borrowing").unwrap()],

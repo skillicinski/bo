@@ -3,7 +3,7 @@
 // Uses $HOME override to redirect config to a temp dir, avoiding any
 // interaction with the real ~/.bo/config.json.
 
-use bo::domain::{Slug, Timestamp};
+use bo::domain::{Slug, Timestamp, Title, Url};
 use serde_json::Value;
 use std::fs;
 
@@ -102,15 +102,15 @@ fn upsert_manifest_leaf(tree: &Path, file: &str, title: &str, collected_at: &str
     let slug = file.trim_end_matches(".md").to_string();
     let url = format!("https://example.com/{}", file.trim_end_matches(".md"));
     if let Some(existing) = manifest.leaves.iter_mut().find(|leaf| leaf.file == file) {
-        existing.title = title.to_string();
-        existing.url = url.clone();
+        existing.title = Title::parse(title).ok();
+        existing.url = Url::parse(&url).unwrap();
         existing.collected_at = Timestamp::parse(collected_at).unwrap();
     } else {
         manifest.leaves.push(bo::domain::Leaf {
             slug: Slug::parse(&slug).unwrap_or_else(|_| Slug::generate(&slug, "")),
             file: file.to_string(),
-            title: title.to_string(),
-            url: url.clone(),
+            title: Title::parse(title).ok(),
+            url: Url::parse(&url).unwrap(),
             collected_at: Timestamp::parse(collected_at).unwrap(),
             summary: None,
         });
@@ -144,7 +144,7 @@ fn set_manifest_branches_for_leaf(tree: &Path, file: &str, branches: &[&str], ti
             manifest.branches.push(bo::domain::Branch {
                 slug: Slug::parse(branch_slug).unwrap(),
                 file: format!("branches/{branch_slug}.md"),
-                title: branch_slug.to_string(),
+                title: Title::parse(branch_slug).unwrap(),
                 created_at: Timestamp::parse(timestamp).unwrap(),
                 updated_at: Timestamp::parse(timestamp).unwrap(),
                 leaves: vec![Slug::parse(&leaf_slug).unwrap()],

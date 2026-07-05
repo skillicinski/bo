@@ -9,7 +9,7 @@ use crate::domain::frontmatter;
 use crate::domain::manifest::{Manifest, TreeMeta};
 use crate::domain::slug::Slug;
 use crate::domain::Timestamp;
-use crate::domain::{Branch, Leaf};
+use crate::domain::{Branch, Leaf, Title};
 use crate::engine::config::SeededConfig;
 
 use super::parse::{CompilePlan, ValidatedBranch};
@@ -338,7 +338,13 @@ pub(super) fn read_valid_leaves(
                         .and_then(|v| v.as_str())
                         .filter(|title| !title.trim().is_empty())
                         .map(str::to_string)
-                        .unwrap_or_else(|| entry.title.as_str().to_string());
+                        .unwrap_or_else(|| {
+                            entry
+                                .title
+                                .as_ref()
+                                .map(|t| t.as_str().to_string())
+                                .unwrap_or_default()
+                        });
                     loaded.push(LoadedLeaf {
                         slug: entry.slug.as_str().to_string(),
                         filename: entry.file.clone(),
@@ -450,7 +456,8 @@ fn build_branch_artifacts(
     let record = Branch {
         slug: slug.clone(),
         file,
-        title: planned.title.clone(),
+        // ponytail: title validated non-empty in parse phase; panic on impossible empty.
+        title: Title::parse(&planned.title).expect("branch title validated non-empty upstream"),
         created_at,
         updated_at: run_timestamp.clone(),
         leaves: validated_branch_leaf_slugs(planned),

@@ -110,8 +110,8 @@ fn batch_collect_skips_existing_manifest_duplicates_without_fetching() {
             leaves: vec![crate::domain::Leaf {
                 slug: Slug::parse("already").unwrap(),
                 file: "already.md".to_string(),
-                title: ("Already").to_string(),
-                url: (url).to_string(),
+                title: Some(Title::parse("Already").unwrap()),
+                url: Url::parse(url).unwrap(),
                 collected_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                 summary: None,
             }],
@@ -445,7 +445,10 @@ fn mdbook_page_with_bad_ui_title_and_substantive_body_is_accepted() {
 
     let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.leaves.len(), 1);
-    assert_eq!(m.leaves[0].title.as_str(), "Understanding Ownership");
+    assert_eq!(
+        m.leaves[0].title.as_ref().unwrap().as_str(),
+        "Understanding Ownership"
+    );
 }
 
 #[test]
@@ -520,7 +523,7 @@ fn collect_appends_leaf_record_to_manifest_with_full_metadata() {
     let rec = &m.leaves[0];
     assert_eq!(rec.slug.as_str(), doc.filename.strip_suffix(".md").unwrap());
     assert_eq!(rec.file, doc.filename);
-    assert_eq!(rec.title.as_str(), "Test Article");
+    assert_eq!(rec.title.as_ref().unwrap().as_str(), "Test Article");
     assert_eq!(rec.url.as_str(), "https://example.com/article");
     assert!(
         rec.collected_at.to_string().contains('T'),
@@ -558,7 +561,7 @@ fn collect_writes_only_manifest_records() {
         let n = n + 1;
         assert_eq!(rec.file, format!("page-{n}.md"));
         assert_eq!(rec.url.as_str(), &format!("https://example.com/page{n}"));
-        assert_eq!(rec.title.as_str(), format!("Page {n}"));
+        assert_eq!(rec.title.as_ref().unwrap().as_str(), format!("Page {n}"));
     }
 }
 
@@ -592,8 +595,8 @@ fn dedup_uses_manifest_not_index_jsonl() {
     m.leaves.push(crate::domain::Leaf {
         slug: Slug::parse("already-collected").unwrap(),
         file: "already-collected.md".to_string(),
-        title: ("Already").to_string(),
-        url: ("https://example.com/article").to_string(),
+        title: Some(Title::parse("Already").unwrap()),
+        url: Url::parse("https://example.com/article").unwrap(),
         collected_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         summary: None,
     });

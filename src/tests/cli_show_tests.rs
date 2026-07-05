@@ -1,5 +1,5 @@
 use super::*;
-use crate::domain::{Slug, Timestamp};
+use crate::domain::{Slug, Timestamp, Title, Url};
 use std::collections::BTreeMap;
 use std::time::SystemTime;
 use tempfile::TempDir;
@@ -286,8 +286,8 @@ fn write_index(tree: &Path, entries: &[(&str, &str)]) {
             crate::domain::Leaf {
                 slug,
                 file: (*file).to_string(),
-                title: (*title).to_string(),
-                url: ("https://example.com/test").to_string(),
+                title: Title::parse(title).ok(),
+                url: Url::parse("https://example.com/test").unwrap(),
                 collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                 summary: None,
             }

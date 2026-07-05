@@ -1,6 +1,6 @@
 use super::*;
 use crate::domain::manifest::{Manifest, TreeMeta};
-use crate::domain::{Branch, Leaf};
+use crate::domain::{Branch, Leaf, Title, Url};
 use crate::domain::{Slug, Timestamp};
 use std::fs;
 use tempfile::TempDir;
@@ -36,8 +36,8 @@ fn leaf(slug: &str, url: &str, collected_at: &str) -> Leaf {
     Leaf {
         slug: Slug::parse(slug).unwrap(),
         file: format!("{}.md", slug),
-        title: slug.to_string(),
-        url: (url).to_string(),
+        title: Title::parse(slug).ok(),
+        url: Url::parse(url).unwrap(),
         collected_at: Timestamp::parse(collected_at).unwrap(),
         summary: None,
     }
@@ -47,7 +47,7 @@ fn branch_record(slug: &str, ts: &str, leaf_slugs: &[&str]) -> Branch {
     Branch {
         slug: Slug::parse(slug).unwrap(),
         file: format!("branches/{}.md", slug),
-        title: slug.to_string(),
+        title: Title::parse(slug).unwrap(),
         created_at: Timestamp::parse(ts).unwrap(),
         updated_at: Timestamp::parse(ts).unwrap(),
         leaves: leaf_slugs.iter().map(|s| Slug::parse(s).unwrap()).collect(),

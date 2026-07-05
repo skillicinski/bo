@@ -12,6 +12,7 @@
 // `summary` lives only in the manifest — it is never written to leaf
 // frontmatter.
 
+use crate::domain::title::deserialize_option_title;
 use crate::domain::{Slug, Timestamp, Title, Url};
 use serde::{Deserialize, Serialize};
 use serde_yaml_ng::{Mapping, Value};
@@ -23,7 +24,8 @@ use serde_yaml_ng::{Mapping, Value};
 pub struct Leaf {
     pub slug: Slug,
     pub file: String,
-    pub title: Title,
+    #[serde(default, deserialize_with = "deserialize_option_title")]
+    pub title: Option<Title>,
     pub url: Url,
     pub collected_at: Timestamp,
     #[serde(default)]

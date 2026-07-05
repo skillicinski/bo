@@ -369,11 +369,11 @@ fn build_row(
     manifest: &Manifest,
     index_position: usize,
 ) -> ListLeafRow {
-    let display_title = if leaf.title.as_str().trim().is_empty() {
-        filename_fallback(&leaf.file)
-    } else {
-        leaf.title.as_str().to_string()
-    };
+    let display_title = leaf
+        .title
+        .as_ref()
+        .map(|t| t.as_str().to_string())
+        .unwrap_or_else(|| filename_fallback(&leaf.file));
     let collected_at = if leaf.collected_at.to_rfc3339_millis().trim().is_empty() {
         None
     } else {
