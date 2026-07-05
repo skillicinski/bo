@@ -6,7 +6,6 @@
 
 use crate::domain::{Slug, Timestamp, Title};
 use serde::{Deserialize, Serialize};
-use serde_yaml_ng::{Mapping, Value};
 
 // ── Branch ────────────────────────────────────────────────────────────────────
 
@@ -25,40 +24,43 @@ pub struct Branch {
     pub leaves: Vec<Slug>,
 }
 
+// ── typed frontmatter ────────────────────────────────────────────────────────
+
+/// Frontmatter written to branch .md files. Field order matches the on-disk YAML
+/// key order (title, created_at, updated_at, leaves).
+///
+/// `leaves` holds leaf filenames (with `.md` extension) as written to disk.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct BranchFrontmatter {
+    pub title: Title,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+    pub leaves: Vec<String>,
+}
+
 pub(crate) fn format_content(
-    title: &str,
+    title: &Title,
     body: &str,
     leaves: &[String],
-    created_at: &str,
-    updated_at: &str,
+    created_at: &Timestamp,
+    updated_at: &Timestamp,
 ) -> String {
-    // Build frontmatter mapping
-    let mut mapping = Mapping::new();
-    mapping.insert(
-        Value::String("title".to_string()),
-        Value::String(title.to_string()),
-    );
-    mapping.insert(
-        Value::String("created_at".to_string()),
-        Value::String(created_at.to_string()),
-    );
-    mapping.insert(
-        Value::String("updated_at".to_string()),
-        Value::String(updated_at.to_string()),
-    );
-
-    let leaves_seq = Value::Sequence(leaves.iter().map(|l| Value::String(l.clone())).collect());
-    mapping.insert(Value::String("leaves".to_string()), leaves_seq);
+    let fm = BranchFrontmatter {
+        title: title.clone(),
+        created_at: created_at.clone(),
+        updated_at: updated_at.clone(),
+        leaves: leaves.to_vec(),
+    };
 
     // Ensure body starts with the correct heading
-    let expected_heading = format!("# {}", title);
+    let expected_heading = format!("# {}", title.as_str());
     let full_body = if body.starts_with(&expected_heading) {
         body.to_string()
     } else {
         format!("{}\n\n{}", expected_heading, body)
     };
 
-    crate::domain::frontmatter::render(&mapping, &full_body)
+    crate::domain::frontmatter::render(&fm, &full_body)
         .expect("yaml serialization failure in branch frontmatter")
 }
 

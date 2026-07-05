@@ -16,6 +16,36 @@ fn title(s: &str) -> Title {
     Title::parse(s).unwrap()
 }
 
+// ── goldens: byte-stable on-disk format ──────────────────────────────────
+
+#[test]
+fn golden_leaf_with_title() {
+    let content = format_content(
+        Some(&title("Example Title")),
+        &url("https://example.com/page"),
+        &ts("2025-01-15T09:32:00Z"),
+        "Body text.",
+    );
+    assert_eq!(
+        content,
+        "---\ntitle: Example Title\nurl: https://example.com/page\ncollected_at: 2025-01-15T09:32:00.000Z\n---\n\n# Example Title\n\nBody text.\n"
+    );
+}
+
+#[test]
+fn golden_leaf_without_title() {
+    let content = format_content(
+        None,
+        &url("https://example.com/page"),
+        &ts("2025-01-15T09:32:00Z"),
+        "Body text.",
+    );
+    assert_eq!(
+        content,
+        "---\ntitle: ''\nurl: https://example.com/page\ncollected_at: 2025-01-15T09:32:00.000Z\n---\n\nBody text.\n"
+    );
+}
+
 // ── format_content title escaping tests ───────────────────────────────────
 
 #[test]

@@ -4,7 +4,7 @@ use crate::cli::json::JsonError;
 use crate::cli::resolve_leaf_path;
 use crate::domain::manifest::{self};
 use crate::domain::tree::TreeRuntimeState;
-use crate::domain::Leaf;
+use crate::domain::{Leaf, Title, Url};
 use serde::Serialize;
 use serde_json::json;
 use serde_yaml_ng::{Mapping, Value};
@@ -217,7 +217,7 @@ fn load_candidate(
         .as_ref()
         .map(|t| t.as_str().to_string())
         .unwrap_or_default();
-    let fallback_url = non_empty_trimmed(leaf.url.as_str());
+    let fallback_url = Some(leaf.url.as_str().to_string());
     let unresolved_summary = ShowCandidateSummary {
         file: leaf.file.clone(),
         title: fallback_title.clone(),
@@ -277,14 +277,18 @@ fn load_candidate(
         }
     };
 
-    let title = frontmatter_string(&document.frontmatter, "title")
-        .or_else(|| {
-            leaf.title
-                .as_ref()
-                .and_then(|t| non_empty_trimmed(t.as_str()))
-        })
+    let typed_fm = ShowFrontmatter::from_mapping(&document.frontmatter);
+    let title = typed_fm
+        .title
+        .as_ref()
+        .map(|t| t.as_str().to_string())
+        .or_else(|| leaf.title.as_ref().map(|t| t.as_str().to_string()))
         .unwrap_or_default();
-    let url = frontmatter_string(&document.frontmatter, "url").or(fallback_url);
+    let url = typed_fm
+        .url
+        .as_ref()
+        .map(|u| u.as_str().to_string())
+        .or(fallback_url);
 
     CandidateLoad::Loaded(LoadedLeaf {
         summary: ShowCandidateSummary {
@@ -361,18 +365,6 @@ fn parse_leaf_document(content: &str) -> Result<LeafDocument, String> {
     })
 }
 
-fn frontmatter_string(mapping: &Mapping, key: &str) -> Option<String> {
-    mapping
-        .get(key)
-        .and_then(Value::as_str)
-        .and_then(non_empty_trimmed)
-}
-
-fn non_empty_trimmed(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
-}
-
 fn normalize_title(title: &str) -> String {
     title.to_lowercase()
 }
@@ -404,6 +396,31 @@ struct LeafDocument {
     frontmatter: Mapping,
     frontmatter_raw: String,
     body: String,
+}
+
+/// Read-side typed frontmatter — the fields show consumes. Extracted from the
+/// YAML Mapping with per-field tolerance: mistyped scalars (e.g. `title: 123`)
+/// degrade to None instead of erroring, keeping show's read/inspect contract.
+/// The full mapping (including unknown keys) flows to the JSON envelope untouched.
+#[derive(Debug, Clone)]
+struct ShowFrontmatter {
+    title: Option<Title>,
+    url: Option<Url>,
+}
+
+impl ShowFrontmatter {
+    fn from_mapping(fm: &Mapping) -> Self {
+        Self {
+            title: fm
+                .get("title")
+                .and_then(Value::as_str)
+                .and_then(|s| Title::parse(s).ok()),
+            url: fm
+                .get("url")
+                .and_then(Value::as_str)
+                .and_then(|s| Url::parse(s).ok()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

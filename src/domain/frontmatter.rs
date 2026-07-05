@@ -1,5 +1,6 @@
 // YAML frontmatter parsing and rendering.
 
+use serde::Serialize;
 use serde_yaml_ng::Mapping;
 use std::fmt;
 
@@ -42,13 +43,12 @@ pub fn parse(content: &str) -> Result<(Mapping, String), FrontmatterError> {
 
 // ── render ────────────────────────────────────────────────────────────────────
 
-/// Assemble a complete document from a Mapping and a body string.
+/// Assemble a complete document from a serializable frontmatter value and a body string.
 ///
-/// Used when creating brand-new files (branch files).  The body must NOT
-/// include a leading blank line; `render` inserts the `---` separator and
-/// the blank line itself.
-pub fn render(mapping: &Mapping, body: &str) -> Result<String, FrontmatterError> {
-    let yaml = serde_yaml_ng::to_string(mapping)
+/// The body must NOT include a leading blank line; `render` inserts the `---`
+/// separator and the blank line itself.
+pub fn render<T: Serialize>(frontmatter: &T, body: &str) -> Result<String, FrontmatterError> {
+    let yaml = serde_yaml_ng::to_string(frontmatter)
         .map_err(|e| FrontmatterError::Serialization(e.to_string()))?;
     Ok(format!("---\n{}---\n\n{}", yaml, body))
 }
