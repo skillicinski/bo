@@ -136,7 +136,7 @@ pub fn read(path: &Path) -> Result<Option<PendingOperation>, PendingError> {
 
 pub fn write(path: &Path, pending: &PendingOperation) -> Result<(), PendingError> {
     let json = serde_json::to_string_pretty(pending)?;
-    crate::domain::manifest::atomic_write(path, json.as_bytes())?;
+    crate::engine::manifest::atomic_write(path, json.as_bytes())?;
     Ok(())
 }
 
@@ -298,8 +298,11 @@ pub fn commit_with_manifest(
         write_staged(tree_dir, pw, bytes)?;
     }
     let manifest_path = tree_dir.join(".bo").join("manifest.json");
-    crate::domain::manifest::write(&manifest_path, manifest)
-        .map_err(|e| PendingError::Io(std::io::Error::other(e.to_string())))?;
+    crate::engine::manifest::write(&manifest_path, manifest).map_err(
+        |e: crate::domain::manifest::ManifestError| {
+            PendingError::Io(std::io::Error::other(e.to_string()))
+        },
+    )?;
     apply_writes(tree_dir, &writes)?;
     apply_deletes(tree_dir, deletes)?;
     clear(&pending_path)?;

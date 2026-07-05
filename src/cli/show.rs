@@ -3,7 +3,7 @@
 use crate::cli::json::JsonError;
 use crate::cli::resolve_leaf_path;
 use crate::domain::manifest::{self, LeafRecord};
-use crate::domain::tree::{self, TreeRuntimeState};
+use crate::domain::tree::TreeRuntimeState;
 use serde::Serialize;
 use serde_json::json;
 use serde_yaml_ng::{Mapping, Value};
@@ -159,7 +159,7 @@ pub fn show_leaf(
         });
     }
 
-    let manifest = match tree::runtime_state(tree_dir) {
+    let manifest = match crate::engine::manifest::runtime_state(tree_dir) {
         Ok(TreeRuntimeState::Initialized(manifest)) => manifest,
         Ok(TreeRuntimeState::FreshSeeded) => {
             return Err(ShowError::NotFound {

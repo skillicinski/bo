@@ -100,7 +100,7 @@ fn stage_tree(home: &Path) -> std::path::PathBuf {
             leaves: vec![Slug::parse("alpha").unwrap(), Slug::parse("beta").unwrap()],
         }],
     };
-    bo::domain::manifest::write(&tree_dir.join(".bo/manifest.json"), &m).unwrap();
+    bo::engine::manifest::write(&tree_dir.join(".bo/manifest.json"), &m).unwrap();
 
     tree_dir
 }

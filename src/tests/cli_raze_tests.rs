@@ -44,7 +44,7 @@ fn deletes_manifest_alongside_other_infra() {
     // wipes the manifest. This test pins the behaviour and guards against
     // anyone reintroducing a manifest path that escapes infra teardown.
     let manifest_path = tree_dir.join(".bo/manifest.json");
-    crate::domain::manifest::write(
+    crate::engine::manifest::write(
         &manifest_path,
         &crate::domain::manifest::Manifest {
             tree: crate::domain::manifest::TreeMeta {

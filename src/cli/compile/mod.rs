@@ -234,7 +234,7 @@ pub fn run_compile_with_options(
     // Stale repair runs before preflight so preflight sees repaired state.
     let tree = cfg.tree();
     execute::recover_pending_if_needed(tree.path())?;
-    let manifest = match tree.runtime_state() {
+    let manifest = match crate::engine::manifest::runtime_state(tree.path()) {
         Ok(TreeRuntimeState::Initialized(manifest)) => manifest,
         Ok(TreeRuntimeState::FreshSeeded) => {
             return Ok(CompileResult::noop("empty_tree", Vec::new()));
@@ -253,7 +253,7 @@ pub fn run_compile_with_options(
         }
     };
     let notifications = plan::repair_stale_branches(cfg, &manifest)?;
-    let manifest = manifest::read(&tree::manifest_path(tree.path()))
+    let manifest = crate::engine::manifest::read(&tree::manifest_path(tree.path()))
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
 
     if let Some(noop) = preflight_noop(&manifest, options, &notifications) {

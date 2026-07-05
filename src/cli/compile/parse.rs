@@ -228,7 +228,7 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
     })?;
     let tree = cfg.tree();
     let manifest_path = crate::domain::tree::manifest_path(tree.path());
-    let manifest = crate::domain::manifest::read(&manifest_path)
+    let manifest = crate::engine::manifest::read(&manifest_path)
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
     let new_leaf_slugs_vec = select_new_leaf_slugs(&manifest)?;
     let new_leaf_slugs: HashSet<String> = new_leaf_slugs_vec.into_iter().collect();

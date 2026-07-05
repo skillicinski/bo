@@ -6,7 +6,7 @@
 // validation, context assembly, and LLM synthesis.
 
 use crate::cli::json::JsonError;
-use crate::domain::tree::{self, TreeRuntimeState};
+use crate::domain::tree::TreeRuntimeState;
 use crate::engine::llm::{
     complete_with_policy, FinishReason, LlmCallPolicy, LlmError, LlmProvider, Message, Model,
 };
@@ -468,7 +468,7 @@ fn compute_retrieval_diagnostics(
 /// (OR semantics). Branches are synthesized concept pages from `bo compile`;
 /// including them makes compile's output reachable at query time.
 fn retrieve_docs(tree_dir: &Path, terms: &[String]) -> Result<Vec<RetrievedDoc>, QueryError> {
-    let manifest = match tree::runtime_state(tree_dir) {
+    let manifest = match crate::engine::manifest::runtime_state(tree_dir) {
         Ok(TreeRuntimeState::Initialized(manifest)) => manifest,
         Ok(TreeRuntimeState::FreshSeeded) => return Err(QueryError::EmptyTree),
         Ok(TreeRuntimeState::MissingManifest) => {

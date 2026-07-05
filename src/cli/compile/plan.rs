@@ -224,7 +224,7 @@ pub(super) fn repair_stale_branches(
     // Write repaired manifest
     let tree = cfg.tree();
     let manifest_path = crate::domain::tree::manifest_path(tree.path());
-    crate::domain::manifest::write(&manifest_path, &repaired_manifest)
+    crate::engine::manifest::write(&manifest_path, &repaired_manifest)
         .map_err(|e| CompileError::Io(format!("failed to write repaired manifest: {}", e)))?;
 
     // Delete branch files

@@ -714,7 +714,7 @@ fn summarize_collect_items(items: &[CollectItemResult]) -> BatchCollectSummary {
 
 pub fn duplicate_file(url: &str, output_dir: &Path) -> Result<Option<String>, CollectError> {
     let manifest_path = output_dir.join(".bo").join("manifest.json");
-    let manifest = match manifest::read(&manifest_path) {
+    let manifest = match crate::engine::manifest::read(&manifest_path) {
         Ok(m) => m,
         Err(manifest::ManifestError::TreeNotInitialized) => return Ok(None),
         Err(e) => return Err(CollectError::Manifest(e)),
@@ -791,18 +791,8 @@ fn write_new_document_with_summary_result(
     let domain_url = url.to_string();
     let domain_title = title.map(str::to_string);
     let leaf_file = format!("{}.md", filename);
-    let summary_field = if summary_text.is_empty() {
-        None
-    } else {
-        Some(summary_text.as_str())
-    };
-    let leaf_content = leaf::format_content(
-        domain_title.as_ref(),
-        &domain_url,
-        &now,
-        body_markdown,
-        summary_field,
-    );
+    let leaf_content =
+        leaf::format_content(domain_title.as_ref(), &domain_url, &now, body_markdown);
     let leaf_write = PendingWrite {
         path: leaf_file.clone(),
         content_hash: pending::content_hash(leaf_content.as_bytes()),
@@ -849,7 +839,7 @@ fn load_or_bootstrap_manifest(
     now: &Timestamp,
 ) -> Result<Manifest, CollectError> {
     let manifest_path = output_dir.join(".bo").join("manifest.json");
-    match manifest::read(&manifest_path) {
+    match crate::engine::manifest::read(&manifest_path) {
         Ok(m) => Ok(m),
         Err(manifest::ManifestError::TreeNotInitialized) => Ok(Manifest {
             tree: TreeMeta {
@@ -1013,17 +1003,11 @@ pub fn collect_batch_parallel(
                     &mut used_slugs,
                 );
                 let leaf_file = format!("{}.md", filename);
-                let summary_field = if computed.summary_text.is_empty() {
-                    None
-                } else {
-                    Some(computed.summary_text.as_str())
-                };
                 let leaf_content = leaf::format_content(
                     computed.title.as_ref(),
                     &computed.url,
                     &now,
                     &computed.body_markdown,
-                    summary_field,
                 );
                 let leaf_bytes = leaf_content.into_bytes();
                 let leaf_write = PendingWrite {

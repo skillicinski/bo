@@ -52,7 +52,7 @@ fn ensure_manifest(tree_dir: &Path) {
     if manifest_path.exists() {
         return;
     }
-    bo::domain::manifest::write(
+    bo::engine::manifest::write(
         &manifest_path,
         &bo::domain::manifest::Manifest {
             tree: bo::domain::manifest::TreeMeta {
@@ -78,7 +78,7 @@ fn write_leaf(tree_dir: &Path, slug: &str, url: &str) {
     // Append to manifest so reads see the leaf.
     let manifest_path = tree_dir.join(".bo/manifest.json");
     ensure_manifest(tree_dir);
-    let mut m = bo::domain::manifest::read(&manifest_path).unwrap();
+    let mut m = bo::engine::manifest::read(&manifest_path).unwrap();
     m.leaves.push(bo::domain::manifest::LeafRecord {
         slug: Slug::parse(slug).unwrap(),
         file: filename,
@@ -87,7 +87,7 @@ fn write_leaf(tree_dir: &Path, slug: &str, url: &str) {
         collected_at: Timestamp::parse(collected_at).unwrap(),
         summary: None,
     });
-    bo::domain::manifest::write(&manifest_path, &m).unwrap();
+    bo::engine::manifest::write(&manifest_path, &m).unwrap();
 }
 
 fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
@@ -101,7 +101,7 @@ fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
     // Append to manifest.
     let manifest_path = tree_dir.join(".bo/manifest.json");
     ensure_manifest(tree_dir);
-    let mut m = bo::domain::manifest::read(&manifest_path).unwrap();
+    let mut m = bo::engine::manifest::read(&manifest_path).unwrap();
     m.branches.push(bo::domain::manifest::BranchRecord {
         slug: Slug::parse(slug).unwrap(),
         file: format!("branches/{}.md", slug),
@@ -111,7 +111,7 @@ fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
         leaves: vec![Slug::parse("some-leaf").unwrap()],
     });
     m.tree.last_compiled_at = Some(Timestamp::parse(created_at).unwrap());
-    bo::domain::manifest::write(&manifest_path, &m).unwrap();
+    bo::engine::manifest::write(&manifest_path, &m).unwrap();
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────

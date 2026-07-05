@@ -393,7 +393,7 @@ fn write_index(tree: &Path, entries: &[(&str, &str, &str)]) {
             summary: Some(title.to_string()),
         })
         .collect();
-    bo::domain::manifest::write(
+    bo::engine::manifest::write(
         &bo_dir.join("manifest.json"),
         &bo::domain::manifest::Manifest {
             tree: bo::domain::manifest::TreeMeta {

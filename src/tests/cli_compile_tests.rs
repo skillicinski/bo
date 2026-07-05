@@ -26,13 +26,13 @@ fn write_manifest(dir: &Path, manifest: &Manifest) {
         name: "test-tree".to_string(),
         created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
     });
-    crate::domain::manifest::write(&crate::domain::tree::manifest_path(&tree.path), manifest)
+    crate::engine::manifest::write(&crate::domain::tree::manifest_path(&tree.path), manifest)
         .unwrap();
 }
 
 fn read_manifest(dir: &Path) -> Manifest {
     let manifest_path = crate::domain::tree::manifest_path(dir);
-    crate::domain::manifest::read(&manifest_path).unwrap()
+    crate::engine::manifest::read(&manifest_path).unwrap()
 }
 
 fn leaf_record(slug: &str, file: &str, title: &str, collected_at: &str) -> LeafRecord {

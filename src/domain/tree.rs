@@ -10,7 +10,7 @@
 // The active tree's metadata lives in `~/.bo/config.json` under `tree`.
 // Runtime tree state lives in `{tree}/.bo/manifest.json` once collection starts.
 
-use crate::domain::manifest::{self, Manifest, TreeMeta};
+use crate::domain::manifest::{Manifest, TreeMeta};
 use crate::domain::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -45,10 +45,6 @@ impl Tree {
         }
     }
 
-    pub fn runtime_state(&self) -> Result<TreeRuntimeState, manifest::ManifestError> {
-        runtime_state(&self.path)
-    }
-
     pub fn empty_manifest(&self) -> Manifest {
         Manifest {
             tree: TreeMeta {
@@ -58,14 +54,6 @@ impl Tree {
             },
             leaves: Vec::new(),
             branches: Vec::new(),
-        }
-    }
-
-    pub fn manifest_or_empty_if_fresh(&self) -> Result<Manifest, manifest::ManifestError> {
-        match self.runtime_state()? {
-            TreeRuntimeState::Initialized(manifest) => Ok(manifest),
-            TreeRuntimeState::FreshSeeded => Ok(self.empty_manifest()),
-            TreeRuntimeState::MissingManifest => Err(manifest::ManifestError::TreeNotInitialized),
         }
     }
 
@@ -88,17 +76,6 @@ pub enum TreeRuntimeState {
     FreshSeeded,
     Initialized(Manifest),
     MissingManifest,
-}
-
-pub fn runtime_state(tree_dir: &Path) -> Result<TreeRuntimeState, manifest::ManifestError> {
-    match manifest::read(&manifest_path(tree_dir)) {
-        Ok(manifest) => Ok(TreeRuntimeState::Initialized(manifest)),
-        Err(manifest::ManifestError::TreeNotInitialized) if infra_dir(tree_dir).exists() => {
-            Ok(TreeRuntimeState::MissingManifest)
-        }
-        Err(manifest::ManifestError::TreeNotInitialized) => Ok(TreeRuntimeState::FreshSeeded),
-        Err(error) => Err(error),
-    }
 }
 
 // ── Free path helpers ──────────────────────────────────────────────────────────

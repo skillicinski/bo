@@ -109,7 +109,7 @@ fn make_manifest(dir: &std::path::Path, entries: &[(&str, &str, &str)]) {
         .collect();
     let bo_dir = dir.join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    bo::domain::manifest::write(
+    bo::engine::manifest::write(
         &bo_dir.join("manifest.json"),
         &bo::domain::manifest::Manifest {
             tree: bo::domain::manifest::TreeMeta {

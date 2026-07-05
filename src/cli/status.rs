@@ -102,7 +102,7 @@ pub fn compute_status(
 ) -> Result<StatusResult, StatusError> {
     let branches_dir = tree::branches_dir(tree_dir);
 
-    let manifest = match tree::runtime_state(tree_dir) {
+    let manifest = match crate::engine::manifest::runtime_state(tree_dir) {
         Ok(TreeRuntimeState::Initialized(manifest)) => manifest,
         Ok(TreeRuntimeState::FreshSeeded) => manifest::Manifest {
             tree: manifest::TreeMeta {

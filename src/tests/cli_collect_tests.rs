@@ -99,7 +99,7 @@ fn batch_collect_skips_existing_manifest_duplicates_without_fetching() {
 
     // Write the URL into the manifest, the dedup source.
     let manifest_path = dir.path().join(".bo/manifest.json");
-    manifest::write(
+    crate::engine::manifest::write(
         &manifest_path,
         &manifest::Manifest {
             tree: manifest::TreeMeta {
@@ -150,7 +150,7 @@ fn ordinary_html_collection_writes_leaf_and_manifest() {
         collect_html_test("https://example.com/article", ARTICLE_HTML, dir.path()).unwrap();
 
     assert!(dir.path().join(&document.filename).exists());
-    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.leaves.len(), 1);
     assert_eq!(m.leaves[0].url.as_str(), "https://example.com/article");
     assert!(!dir.path().join(".bo/index.jsonl").exists());
@@ -169,7 +169,7 @@ fn collect_html_keeps_exact_match_duplicate_semantics_for_youtube_urls() {
     .unwrap();
     collect_html_test("https://youtu.be/a1mhk7mAetk", ARTICLE_HTML, dir.path()).unwrap();
 
-    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.leaves.len(), 2);
 }
 
@@ -289,19 +289,29 @@ fn full_pipeline_happy_path() {
     assert!(dir.path().join(&page.filename).exists());
 
     let content = std::fs::read_to_string(dir.path().join(&page.filename)).unwrap();
-    assert!(content.contains("title: \"Test Article\""));
-    assert!(content.contains("url: https://example.com/article"));
-    assert!(content.contains("collected_at:"));
-    assert!(content.contains("updated_at:"));
-    assert!(!content.contains("fetched:"));
-    assert!(content.contains("# Test Article"));
-    assert!(content.contains("Section One"));
-    // Summary field is present (fallback: first ~200 words)
-    assert!(content.contains("summary:"));
+    // Assert via the parsed mapping so the test does not couple to serde's
+    // conditional quoting of plain scalars (the behaviour #137 unified on).
+    let (mapping, body) = crate::domain::frontmatter::parse(&content).unwrap();
+    assert_eq!(
+        mapping.get("title").and_then(|v| v.as_str()),
+        Some("Test Article")
+    );
+    assert_eq!(
+        mapping.get("url").and_then(|v| v.as_str()),
+        Some("https://example.com/article")
+    );
+    assert!(mapping.get("collected_at").is_some());
+    assert!(mapping.get("fetched").is_none());
+    assert!(body.contains("# Test Article"));
+    assert!(body.contains("Section One"));
+    // Summary and updated_at are NOT in leaf frontmatter — the manifest is the single source of truth.
+    assert!(mapping.get("summary").is_none());
+    assert!(mapping.get("updated_at").is_none());
 
-    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.leaves.len(), 1);
     assert_eq!(m.leaves[0].url.as_str(), "https://example.com/article");
+    assert!(m.leaves[0].summary.is_some());
 }
 
 #[test]
@@ -317,7 +327,7 @@ fn duplicate_rejected() {
         .to_string()
         .contains("already collected"));
 
-    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.leaves.len(), 1);
 }
 
@@ -343,7 +353,7 @@ fn slug_collision_disambiguated() {
         page2.filename
     );
 
-    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.leaves.len(), 2);
 }
 
@@ -427,10 +437,13 @@ fn mdbook_page_with_bad_ui_title_and_substantive_body_is_accepted() {
     );
 
     let content = std::fs::read_to_string(dir.path().join(&page.filename)).unwrap();
-    assert!(content.contains("title: \"Understanding Ownership\""));
-    assert!(!content.contains("title: \"Keyboard shortcuts\""));
+    let (mapping, _) = crate::domain::frontmatter::parse(&content).unwrap();
+    assert_eq!(
+        mapping.get("title").and_then(|v| v.as_str()),
+        Some("Understanding Ownership")
+    );
 
-    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.leaves.len(), 1);
     assert_eq!(m.leaves[0].title.as_str(), "Understanding Ownership");
 }
@@ -461,7 +474,7 @@ fn near_duplicate_urls_both_stored() {
     )
     .unwrap();
 
-    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.leaves.len(), 2);
 }
 
@@ -484,7 +497,7 @@ fn seed_for_collect(dir: &TempDir, name: &str) {
         leaves: Vec::new(),
         branches: Vec::new(),
     };
-    manifest::write(&manifest_path, &m).unwrap();
+    crate::engine::manifest::write(&manifest_path, &m).unwrap();
 }
 
 #[test]
@@ -502,7 +515,7 @@ fn collect_appends_leaf_record_to_manifest_with_full_metadata() {
     .unwrap();
 
     let manifest_path = dir.path().join(".bo/manifest.json");
-    let m = manifest::read(&manifest_path).unwrap();
+    let m = crate::engine::manifest::read(&manifest_path).unwrap();
     assert_eq!(m.leaves.len(), 1);
     let rec = &m.leaves[0];
     assert_eq!(rec.slug.as_str(), doc.filename.strip_suffix(".md").unwrap());
@@ -537,7 +550,7 @@ fn collect_writes_only_manifest_records() {
         .unwrap();
     }
 
-    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
 
     assert_eq!(m.leaves.len(), 3);
     assert!(!dir.path().join(".bo/index.jsonl").exists());
@@ -563,7 +576,7 @@ fn collect_omits_summary_field_when_empty_string() {
     )
     .unwrap();
 
-    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert!(m.leaves[0].summary.is_none());
 }
 
@@ -575,7 +588,7 @@ fn dedup_uses_manifest_not_index_jsonl() {
     // Pre-populate the manifest with a leaf, but NOT the index. The dedup
     // path used by ensure_not_duplicate must consult the manifest now.
     let manifest_path = dir.path().join(".bo/manifest.json");
-    let mut m = manifest::read(&manifest_path).unwrap();
+    let mut m = crate::engine::manifest::read(&manifest_path).unwrap();
     m.leaves.push(crate::domain::manifest::LeafRecord {
         slug: Slug::parse("already-collected").unwrap(),
         file: "already-collected.md".to_string(),
@@ -584,7 +597,7 @@ fn dedup_uses_manifest_not_index_jsonl() {
         collected_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         summary: None,
     });
-    manifest::write(&manifest_path, &m).unwrap();
+    crate::engine::manifest::write(&manifest_path, &m).unwrap();
 
     // Verify duplicate_file (the dedup helper) finds it via manifest only.
     let existing = duplicate_file("https://example.com/article", dir.path()).unwrap();
@@ -609,7 +622,7 @@ fn fresh_collect_after_3b_does_not_write_index_secondary() {
     )
     .unwrap();
 
-    let m = manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
     assert_eq!(m.leaves.len(), 1);
     assert_eq!(m.leaves[0].url.as_str(), "https://example.com/page");
     assert!(!dir.path().join(".bo/index.jsonl").exists());

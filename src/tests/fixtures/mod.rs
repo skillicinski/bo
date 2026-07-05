@@ -1,6 +1,6 @@
 //! Shared test fixtures — tree setup, leaf/branch construction helpers.
 
-use crate::domain::manifest::{self, LeafRecord, Manifest, TreeMeta};
+use crate::domain::manifest::{LeafRecord, Manifest, TreeMeta};
 use crate::domain::{Slug, Timestamp};
 use crate::engine::config;
 use std::fs;
@@ -17,7 +17,7 @@ pub fn setup_tree(tmp: &TempDir) -> (PathBuf, PathBuf) {
     fs::create_dir_all(&tree_dir).unwrap();
     let bo_dir = tree_dir.join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    manifest::write(
+    crate::engine::manifest::write(
         &bo_dir.join("manifest.json"),
         &Manifest {
             tree: TreeMeta {
@@ -66,7 +66,7 @@ pub fn add_leaf(tree_dir: &Path, file: &str) {
 pub fn add_manifest_leaf(tree_dir: &Path, file: &str) {
     static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let manifest_path = tree_dir.join(".bo/manifest.json");
-    let mut manifest = manifest::read(&manifest_path).unwrap();
+    let mut manifest = crate::engine::manifest::read(&manifest_path).unwrap();
     let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let slug = Slug::parse(&format!("leaf-{}", idx)).unwrap();
     manifest.leaves.push(LeafRecord {
@@ -77,7 +77,7 @@ pub fn add_manifest_leaf(tree_dir: &Path, file: &str) {
         collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
         summary: None,
     });
-    manifest::write(&manifest_path, &manifest).unwrap();
+    crate::engine::manifest::write(&manifest_path, &manifest).unwrap();
 }
 
 // ─── record constructors ─────────────────────────────────────────────────────

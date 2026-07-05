@@ -76,7 +76,7 @@ fn ensure_manifest(tree: &Path) {
     if manifest_path.exists() {
         return;
     }
-    bo::domain::manifest::write(
+    bo::engine::manifest::write(
         &manifest_path,
         &bo::domain::manifest::Manifest {
             tree: bo::domain::manifest::TreeMeta {
@@ -98,7 +98,7 @@ fn append_index_entry(tree: &Path, file: &str, title: &str) {
 fn upsert_manifest_leaf(tree: &Path, file: &str, title: &str, collected_at: &str) {
     let manifest_path = tree.join(".bo/manifest.json");
     ensure_manifest(tree);
-    let mut manifest = bo::domain::manifest::read(&manifest_path).unwrap();
+    let mut manifest = bo::engine::manifest::read(&manifest_path).unwrap();
     let slug = file.trim_end_matches(".md").to_string();
     let url = format!("https://example.com/{}", file.trim_end_matches(".md"));
     if let Some(existing) = manifest.leaves.iter_mut().find(|leaf| leaf.file == file) {
@@ -115,13 +115,13 @@ fn upsert_manifest_leaf(tree: &Path, file: &str, title: &str, collected_at: &str
             summary: None,
         });
     }
-    bo::domain::manifest::write(&manifest_path, &manifest).unwrap();
+    bo::engine::manifest::write(&manifest_path, &manifest).unwrap();
 }
 
 fn set_manifest_branches_for_leaf(tree: &Path, file: &str, branches: &[&str], timestamp: &str) {
     let manifest_path = tree.join(".bo/manifest.json");
     ensure_manifest(tree);
-    let mut manifest = bo::domain::manifest::read(&manifest_path).unwrap();
+    let mut manifest = bo::engine::manifest::read(&manifest_path).unwrap();
     let leaf_slug = file.trim_end_matches(".md").to_string();
 
     for branch in &mut manifest.branches {
@@ -153,7 +153,7 @@ fn set_manifest_branches_for_leaf(tree: &Path, file: &str, branches: &[&str], ti
     }
 
     manifest.branches.retain(|branch| !branch.leaves.is_empty());
-    bo::domain::manifest::write(&manifest_path, &manifest).unwrap();
+    bo::engine::manifest::write(&manifest_path, &manifest).unwrap();
 }
 
 fn write_leaf(tree: &Path, file: &str, title: &str, collected_at: &str, branches: Option<&[&str]>) {
