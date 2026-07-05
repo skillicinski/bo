@@ -10,6 +10,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `zai` provider — Z.ai (GLM) API support via the GLM Coding Plan endpoint (`https://api.z.ai/api/coding/paas/v4`). Includes `glm-4.7` (default), `glm-4.5-air`, `glm-5.1`, `glm-5-turbo`, and `glm-5.2` models. Auth via `ZAI_API_KEY` env var or `zai_api_key` in `~/.bo/auth.json`.
 
+### Changed
+
+- Untitled leaves now report `title: null` instead of an empty string in JSON output (`bo show`, `bo status`, `bo query --json`) and in the manifest. Existing manifests load unchanged.
+
+### Architecture (non-user-facing)
+
+- Tree/branch/leaf metaphor committed to types — `Leaf`/`Branch` domain entities (was `LeafRecord`/`BranchRecord`), validated `Title`/`Url` newtypes replace bare `String` aliases.
+- Frontmatter serialization unified on typed structs (`LeafFrontmatter`/`BranchFrontmatter`) with golden-tested byte-stable `.md` file output.
+- On-disk formats (`manifest.json`, `config.json`, `.md` frontmatter) unchanged — this is an internal type-strengthening, not a format migration.
+
 ## [0.0.5] - 2026-06-30
 
 ### Added

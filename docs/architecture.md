@@ -12,6 +12,18 @@ The manifest (`{tree}/.bo/manifest.json`) is the one topology record. Branches r
 
 ---
 
+## Tree, branch, leaf — the metaphor is typed
+
+The tree/branch/leaf vocabulary is backed by real types, not metaphor-in-comment. `Leaf` and `Branch` are the domain entities, co-located with their disk I/O in `src/domain/leaf.rs` and `src/domain/branch.rs`. The manifest records ARE the entities — deliberately no parallel record/entity split. The type that lives in `manifest.json` is the same type the rest of the system operates on.
+
+`Title` and `Url` are validated newtypes, not bare `String` aliases. `Title` is non-empty after trimming; an untitled leaf is `Option<Title>` — absence is a real state, not an empty string masquerading as one. `Url` is parse-validated via `url::Url::parse` but stored as the collected string, never normalized. Silent normalization would rewrite manifests and break duplicate detection, which compares collected URLs by exact string equality. Untitled leaves emit `title: null` in JSON output (`show`/`status`/`query --json`) and in the manifest — no more empty-string lies.
+
+Frontmatter is written from typed structs (`LeafFrontmatter`/`BranchFrontmatter`), replacing hand-built `serde_yaml::Mapping` insert chains. The on-disk `.md` file format is golden-tested byte-stable: the migration is field-for-field identical. `bo show` reads into a typed `ShowFrontmatter` with per-field tolerant extraction — a mistyped scalar (e.g. `title: 123`) degrades gracefully rather than erroring, because an inspect command must never get stricter than what it inspects. Unknown frontmatter keys remain visible in the JSON envelope, preserving user-added metadata.
+
+A shared `TreeIdentity { name, created_at }` core for `TreeConfig`, `Tree`, and `TreeMeta` was evaluated and rejected. Three structs sharing two coincident fields is not a domain concept — no call site uses the pair in isolation, and the indirection cost at every construction and read site outweighs the deduplication. Instead, round-trip tests guard the `config.json` and `manifest.json` on-disk shapes directly, catching drift without premature abstraction.
+
+---
+
 ## Deterministic validation gate (never trust the LLM)
 
 Every structured LLM response is deserialized, validated against the known set of leaves and branches, and **rejected without writing anything** on a single failure. The tree is never partially corrupted by a bad model output.
