@@ -165,11 +165,11 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
     let mut staged: Vec<(PendingWrite, Vec<u8>)> = Vec::new();
     for planned_write in &delta.branch_writes {
         let content = branch::format_content(
-            planned_write.record.title.as_str(),
+            &planned_write.record.title,
             &planned_write.body,
             &planned_write.file_leaves,
-            &planned_write.record.created_at.to_rfc3339_millis(),
-            &run_timestamp.to_rfc3339_millis(),
+            &planned_write.record.created_at,
+            run_timestamp,
         );
         let bytes = content.into_bytes();
         staged.push((

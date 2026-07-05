@@ -257,7 +257,11 @@ fn compute_health(tree_dir: &Path, manifest: &manifest::Manifest) -> HealthRepor
         .filter(|l| !tree_dir.join(&l.file).exists())
         .map(|l| OrphanEntry {
             file: l.file.clone(),
-            title: l.title.as_str().to_string(),
+            title: l
+                .title
+                .as_ref()
+                .map(|t| t.as_str().to_string())
+                .unwrap_or_default(),
             url: l.url.as_str().to_string(),
             remediation: format!("re-collect '{}' or remove the manifest entry", l.url),
         })

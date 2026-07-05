@@ -24,9 +24,10 @@ use std::thread;
 
 use crate::adapters::youtube::{self, YoutubeError, YoutubeUrlMatch};
 use crate::cli::json::JsonError;
-use crate::domain::manifest::{self, LeafRecord, Manifest, TreeMeta};
+use crate::domain::manifest::{self, Manifest, TreeMeta};
 use crate::domain::slug::Slug;
-use crate::domain::{leaf, slug, Timestamp};
+use crate::domain::Leaf;
+use crate::domain::{leaf, slug, Timestamp, Title, Url};
 use crate::engine::auth;
 use crate::engine::pending::{self, OpKind, PendingWrite};
 use crate::engine::quality::RejectReason;
@@ -788,8 +789,9 @@ fn write_new_document_with_summary_result(
     let base_slug = Slug::generate(title_ref, url);
     let filename = slug::resolve_slug(&base_slug, url, output_dir);
     let now = Timestamp::now();
-    let domain_url = url.to_string();
-    let domain_title = title.map(str::to_string);
+    // ponytail: URL already validated at fetch time; panic on impossible parse error.
+    let domain_url = Url::parse(url).expect("URL already validated at fetch time");
+    let domain_title = title.and_then(|t| Title::parse(t).ok());
     let leaf_file = format!("{}.md", filename);
     let leaf_content =
         leaf::format_content(domain_title.as_ref(), &domain_url, &now, body_markdown);
@@ -804,10 +806,10 @@ fn write_new_document_with_summary_result(
             existing_file: existing.file.clone(),
         });
     }
-    manifest.leaves.push(LeafRecord {
+    manifest.leaves.push(Leaf {
         slug: filename.clone(),
         file: leaf_file.clone(),
-        title: title.unwrap_or_default().to_string(),
+        title: domain_title,
         url: domain_url,
         collected_at: now,
         summary: if summary_text.is_empty() {
@@ -1003,9 +1005,12 @@ pub fn collect_batch_parallel(
                     &mut used_slugs,
                 );
                 let leaf_file = format!("{}.md", filename);
+                let domain_url =
+                    Url::parse(&computed.url).expect("URL already validated at fetch time");
+                let domain_title = computed.title.as_deref().and_then(|t| Title::parse(t).ok());
                 let leaf_content = leaf::format_content(
-                    computed.title.as_ref(),
-                    &computed.url,
+                    domain_title.as_ref(),
+                    &domain_url,
                     &now,
                     &computed.body_markdown,
                 );
@@ -1031,11 +1036,11 @@ pub fn collect_batch_parallel(
                     continue;
                 }
 
-                manifest.leaves.push(LeafRecord {
+                manifest.leaves.push(Leaf {
                     slug: filename.clone(),
                     file: leaf_file.clone(),
-                    title: computed.title.unwrap_or_default(),
-                    url: computed.url.clone(),
+                    title: domain_title,
+                    url: domain_url.clone(),
                     collected_at: now.clone(),
                     summary: if computed.summary_text.is_empty() {
                         None
@@ -1045,7 +1050,7 @@ pub fn collect_batch_parallel(
                 });
 
                 let result = CollectResult {
-                    url: computed.url,
+                    url: domain_url.as_str().to_string(),
                     file: leaf_file,
                     path: output_dir.join(&leaf_write.path).display().to_string(),
                 };

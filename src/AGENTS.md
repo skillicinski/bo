@@ -11,7 +11,7 @@ The load-bearing line:
 
 The discipline cuts both ways:
 
-1. Don't push command-specific logic into the engine. Example: "a branch is stale when its leaves are deleted and must be repaired" is compile-domain knowledge, so it lives in `cli/compile/`, not `engine/`. `BranchRecord` is data in `domain`; the staleness *rule* belongs to the command that enforces it.
+1. Don't push command-specific logic into the engine. Example: "a branch is stale when its leaves are deleted and must be repaired" is compile-domain knowledge, so it lives in `cli/compile/`, not `engine/`. `Branch` is data in `domain`; the staleness *rule* belongs to the command that enforces it.
 2. Don't carve the engine up per-command. The engine stays shared primitives; it doesn't gain per-command sub-folders.
 
 ## Pipeline-stage modularity

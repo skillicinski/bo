@@ -3,7 +3,7 @@
 // Tests the full CLI binary with $HOME override. Simulates tree states
 // by directly constructing files (no network/LLM required).
 
-use bo::domain::{Slug, Timestamp};
+use bo::domain::{Slug, Timestamp, Title, Url};
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
@@ -79,11 +79,11 @@ fn write_leaf(tree_dir: &Path, slug: &str, url: &str) {
     let manifest_path = tree_dir.join(".bo/manifest.json");
     ensure_manifest(tree_dir);
     let mut m = bo::engine::manifest::read(&manifest_path).unwrap();
-    m.leaves.push(bo::domain::manifest::LeafRecord {
+    m.leaves.push(bo::domain::Leaf {
         slug: Slug::parse(slug).unwrap(),
         file: filename,
-        title: slug.to_string(),
-        url: url.to_string(),
+        title: Title::parse(slug).ok(),
+        url: Url::parse(url).unwrap(),
         collected_at: Timestamp::parse(collected_at).unwrap(),
         summary: None,
     });
@@ -102,10 +102,10 @@ fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
     let manifest_path = tree_dir.join(".bo/manifest.json");
     ensure_manifest(tree_dir);
     let mut m = bo::engine::manifest::read(&manifest_path).unwrap();
-    m.branches.push(bo::domain::manifest::BranchRecord {
+    m.branches.push(bo::domain::Branch {
         slug: Slug::parse(slug).unwrap(),
         file: format!("branches/{}.md", slug),
-        title: slug.to_string(),
+        title: Title::parse(slug).unwrap(),
         created_at: Timestamp::parse(created_at).unwrap(),
         updated_at: Timestamp::parse(created_at).unwrap(),
         leaves: vec![Slug::parse("some-leaf").unwrap()],

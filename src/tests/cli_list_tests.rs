@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 use std::time::SystemTime;
 use tempfile::TempDir;
 
-use crate::domain::manifest::{BranchRecord, LeafRecord, Manifest, TreeMeta};
+use crate::domain::manifest::{Manifest, TreeMeta};
+use crate::domain::{Branch, Leaf, Title, Url};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct FileSnapshot {
@@ -54,14 +55,14 @@ fn suspicious_path_is_degraded_and_never_read() {
     let sandbox = TempDir::new().unwrap();
     let tree_dir = sandbox.path().join("tree");
     fs::create_dir_all(&tree_dir).unwrap();
-    // LeafRecord.file traverses out of the tree.
+    // Leaf.file traverses out of the tree.
     write_manifest(
         &tree_dir,
-        &[LeafRecord {
+        &[Leaf {
             slug: Slug::parse("outside").unwrap(),
             file: "../outside.md".to_string(),
-            title: ("Outside Title").to_string(),
-            url: ("https://example.com/outside").to_string(),
+            title: Title::parse("Outside Title").ok(),
+            url: Url::parse("https://example.com/outside").unwrap(),
             collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             summary: None,
         }],
@@ -305,11 +306,11 @@ fn list_tree_is_read_only() {
         dir.path(),
         &[
             leaf("one", "One", "2025-01-01T00:00:00Z"),
-            LeafRecord {
+            Leaf {
                 slug: Slug::parse("two").unwrap(),
                 file: "nested/two.md".to_string(),
-                title: ("Two").to_string(),
-                url: ("https://example.com/two").to_string(),
+                title: Title::parse("Two").ok(),
+                url: Url::parse("https://example.com/two").unwrap(),
                 collected_at: Timestamp::parse("2025-01-02T00:00:00Z").unwrap(),
                 summary: None,
             },
@@ -693,25 +694,25 @@ fn degraded_leaves_empty_for_branches_view() {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-fn leaf(slug: &str, title: &str, collected_at: &str) -> LeafRecord {
-    LeafRecord {
+fn leaf(slug: &str, title: &str, collected_at: &str) -> Leaf {
+    Leaf {
         slug: Slug::parse(slug).unwrap(),
         file: format!("{}.md", slug),
-        title: title.to_string(),
-        url: format!("https://example.com/{slug}"),
+        title: Title::parse(title).ok(),
+        url: Url::parse(&format!("https://example.com/{slug}")).unwrap(),
         collected_at: Timestamp::parse(collected_at).unwrap(),
         summary: None,
     }
 }
 
-fn write_manifest(tree_dir: &Path, leaves: &[LeafRecord], branches: &[(&str, &[&str])]) {
+fn write_manifest(tree_dir: &Path, leaves: &[Leaf], branches: &[(&str, &[&str])]) {
     fs::create_dir_all(tree_dir.join(".bo")).unwrap();
-    let branch_records: Vec<BranchRecord> = branches
+    let branch_records: Vec<Branch> = branches
         .iter()
-        .map(|(slug, leaf_slugs)| BranchRecord {
+        .map(|(slug, leaf_slugs)| Branch {
             slug: Slug::parse(slug).unwrap(),
             file: format!("branches/{}.md", slug),
-            title: slug.to_string(),
+            title: Title::parse(slug).unwrap(),
             created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             updated_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             leaves: leaf_slugs.iter().map(|s| Slug::parse(s).unwrap()).collect(),

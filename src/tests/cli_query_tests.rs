@@ -147,11 +147,11 @@ fn make_manifest(dir: &Path, entries: &[(&str, &str, &str)]) {
                         .and_then(|value| value.as_str())
                         .map(str::to_string)
                 });
-            crate::domain::manifest::LeafRecord {
+            crate::domain::Leaf {
                 slug: Slug::generate(&Path::new(file).file_stem().unwrap().to_string_lossy(), ""),
                 file: file.to_string(),
-                title: title.to_string(),
-                url: (url).to_string(),
+                title: crate::domain::Title::parse(title).ok(),
+                url: crate::domain::Url::parse(url).unwrap(),
                 collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                 summary,
             }
@@ -306,8 +306,8 @@ fn retrieve_missing_summary_uses_body_fallback() {
 // `bo compile`'s synthesized output is invisible at query time.
 #[test]
 fn retrieve_returns_compiled_branch_when_no_leaf_matches() {
-    use crate::domain::manifest::{BranchRecord, LeafRecord, Manifest, TreeMeta};
-    use crate::domain::{Title, Url};
+    use crate::domain::manifest::{Manifest, TreeMeta};
+    use crate::domain::{Branch, Leaf, Title, Url};
 
     let dir = TempDir::new().unwrap();
     let tree = dir.path();
@@ -354,27 +354,27 @@ fn retrieve_returns_compiled_branch_when_no_leaf_matches() {
             last_compiled_at: Some(Timestamp::parse("2025-01-01T00:00:00Z").unwrap()),
         },
         leaves: vec![
-            LeafRecord {
+            Leaf {
                 slug: Slug::generate("cooking", ""),
                 file: "leaves/cooking.md".to_string(),
-                title: Title::from("Cooking Tips"),
-                url: Url::from("https://example.com/cooking"),
+                title: Some(Title::parse("Cooking Tips").unwrap()),
+                url: Url::parse("https://example.com/cooking").unwrap(),
                 collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                 summary: Some("How to cook".to_string()),
             },
-            LeafRecord {
+            Leaf {
                 slug: Slug::generate("sports", ""),
                 file: "leaves/sports.md".to_string(),
-                title: Title::from("Sports News"),
-                url: Url::from("https://example.com/sports"),
+                title: Some(Title::parse("Sports News").unwrap()),
+                url: Url::parse("https://example.com/sports").unwrap(),
                 collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                 summary: Some("Match reports".to_string()),
             },
         ],
-        branches: vec![BranchRecord {
+        branches: vec![Branch {
             slug: Slug::generate("Rust Ownership", ""),
             file: "branches/rust-ownership.md".to_string(),
-            title: Title::from("Rust Ownership"),
+            title: Title::parse("Rust Ownership").unwrap(),
             created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             updated_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             leaves: Vec::new(),
@@ -450,7 +450,7 @@ fn diagnostics_capture_focused_title_and_summary_matches() {
 
 // ── helper tests ─────────────────────────────────────────────────────
 
-// (slug_from_file removed: slugs now come from manifest LeafRecord.slug)
+// (slug_from_file removed: slugs now come from manifest Leaf.slug)
 
 // ── citation validation tests ────────────────────────────────────────
 

@@ -1,11 +1,24 @@
 //! Shared test fixtures — tree setup, leaf/branch construction helpers.
 
-use crate::domain::manifest::{LeafRecord, Manifest, TreeMeta};
-use crate::domain::{Slug, Timestamp};
+use crate::domain::manifest::{Manifest, TreeMeta};
+use crate::domain::Leaf;
+use crate::domain::{Slug, Timestamp, Title, Url};
 use crate::engine::config;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
+
+// ─── test helpers ────────────────────────────────────────────────────────────
+
+/// Construct a validated Title; panics on invalid input (test-only convenience).
+pub fn title(s: &str) -> Title {
+    Title::parse(s).expect("invalid test title")
+}
+
+/// Construct a validated Url; panics on invalid input (test-only convenience).
+pub fn url(s: &str) -> Url {
+    Url::parse(s).expect("invalid test URL")
+}
 
 // ─── tree setup ──────────────────────────────────────────────────────────────
 
@@ -69,11 +82,11 @@ pub fn add_manifest_leaf(tree_dir: &Path, file: &str) {
     let mut manifest = crate::engine::manifest::read(&manifest_path).unwrap();
     let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let slug = Slug::parse(&format!("leaf-{}", idx)).unwrap();
-    manifest.leaves.push(LeafRecord {
+    manifest.leaves.push(Leaf {
         slug,
         file: file.to_string(),
-        title: file.trim_end_matches(".md").to_string(),
-        url: ("https://example.com/test").to_string(),
+        title: Some(title(file.trim_end_matches(".md"))),
+        url: url("https://example.com/test"),
         collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
         summary: None,
     });
@@ -82,20 +95,20 @@ pub fn add_manifest_leaf(tree_dir: &Path, file: &str) {
 
 // ─── record constructors ─────────────────────────────────────────────────────
 
-/// Construct a `LeafRecord` with sensible defaults for tests.
-pub fn make_leaf_record(slug: &str, file: &str) -> LeafRecord {
-    LeafRecord {
+/// Construct a `Leaf` with sensible defaults for tests.
+pub fn make_leaf_record(slug: &str, file: &str) -> Leaf {
+    Leaf {
         slug: Slug::parse(slug).expect("invalid test slug"),
         file: file.to_string(),
-        title: file.trim_end_matches(".md").to_string(),
-        url: format!("https://example.com/{slug}"),
+        title: Some(title(file.trim_end_matches(".md"))),
+        url: url(&format!("https://example.com/{slug}")),
         collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
         summary: None,
     }
 }
 
 /// Construct a `Manifest` with the given leaves and empty branches.
-pub fn make_manifest(name: &str, leaves: Vec<LeafRecord>) -> Manifest {
+pub fn make_manifest(name: &str, leaves: Vec<Leaf>) -> Manifest {
     Manifest {
         tree: TreeMeta {
             name: name.to_string(),

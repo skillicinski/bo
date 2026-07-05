@@ -10,7 +10,7 @@
 // Pure types and resolution logic live here. Filesystem I/O lives in
 // `engine::manifest` so domain stays free of I/O.
 
-use crate::domain::{Slug, Timestamp, Title, Url};
+use crate::domain::{Branch, Leaf, Slug, Timestamp};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::io;
@@ -21,9 +21,9 @@ use std::io;
 pub struct Manifest {
     pub tree: TreeMeta,
     /// All collected leaves, in collection order.
-    pub leaves: Vec<LeafRecord>,
+    pub leaves: Vec<Leaf>,
     /// All compiled branches, in compile order.
-    pub branches: Vec<BranchRecord>,
+    pub branches: Vec<Branch>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -32,31 +32,6 @@ pub struct TreeMeta {
     pub created_at: Timestamp,
     /// Set on successful compile. `None` until the first compile run.
     pub last_compiled_at: Option<Timestamp>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct LeafRecord {
-    pub slug: Slug,
-    pub file: String,
-    pub title: Title,
-    pub url: Url,
-    pub collected_at: Timestamp,
-    #[serde(default)]
-    pub summary: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct BranchRecord {
-    pub slug: Slug,
-    pub file: String,
-    pub title: Title,
-    /// First compile run that produced this branch. Preserved across recompiles.
-    pub created_at: Timestamp,
-    /// Most recent compile run that touched this branch. Updated every recompile.
-    pub updated_at: Timestamp,
-    /// Slugs of leaves assigned to this branch. Canonical direction of the
-    /// cross-reference.
-    pub leaves: Vec<Slug>,
 }
 
 // ── errors ────────────────────────────────────────────────────────────────────
@@ -97,7 +72,7 @@ impl From<serde_json::Error> for ManifestError {
 
 impl Manifest {
     /// Look up a branch by slug string (convenience).
-    pub fn branch_by_slug_str(&self, slug: &str) -> Option<&BranchRecord> {
+    pub fn branch_by_slug_str(&self, slug: &str) -> Option<&Branch> {
         self.branches.iter().find(|b| b.slug.as_str() == slug)
     }
 
@@ -105,7 +80,7 @@ impl Manifest {
     ///
     /// A leaf is uncompiled iff `tree.last_compiled_at` is `None` or
     /// `leaf.collected_at > tree.last_compiled_at`. Uses typed Ord comparison.
-    pub fn uncompiled_leaves(&self) -> Vec<&LeafRecord> {
+    pub fn uncompiled_leaves(&self) -> Vec<&Leaf> {
         match &self.tree.last_compiled_at {
             None => self.leaves.iter().collect(),
             Some(last) => self
@@ -119,7 +94,7 @@ impl Manifest {
     /// Inverse of cross-reference: which branches contain a given leaf.
     /// Computed in-memory at call time; the manifest does not persist this
     /// direction.
-    pub fn branches_for_leaf(&self, leaf_slug: &Slug) -> Vec<&BranchRecord> {
+    pub fn branches_for_leaf(&self, leaf_slug: &Slug) -> Vec<&Branch> {
         self.branches
             .iter()
             .filter(|b| b.leaves.iter().any(|s| s == leaf_slug))

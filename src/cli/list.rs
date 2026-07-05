@@ -2,8 +2,9 @@
 
 use crate::cli::json::JsonError;
 use crate::cli::resolve_leaf_path;
-use crate::domain::manifest::{self, LeafRecord, Manifest};
+use crate::domain::manifest::{self, Manifest};
 use crate::domain::tree::TreeRuntimeState;
+use crate::domain::Leaf;
 use chrono::{DateTime, FixedOffset};
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -364,15 +365,15 @@ fn terms_match_slug_title(slug: &str, title: &str, terms: &[String]) -> bool {
 fn build_row(
     tree_dir: &Path,
     canonical_tree_dir: Option<&Path>,
-    leaf: &LeafRecord,
+    leaf: &Leaf,
     manifest: &Manifest,
     index_position: usize,
 ) -> ListLeafRow {
-    let display_title = if leaf.title.as_str().trim().is_empty() {
-        filename_fallback(&leaf.file)
-    } else {
-        leaf.title.as_str().to_string()
-    };
+    let display_title = leaf
+        .title
+        .as_ref()
+        .map(|t| t.as_str().to_string())
+        .unwrap_or_else(|| filename_fallback(&leaf.file));
     let collected_at = if leaf.collected_at.to_rfc3339_millis().trim().is_empty() {
         None
     } else {

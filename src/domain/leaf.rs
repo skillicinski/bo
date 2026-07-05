@@ -1,4 +1,4 @@
-// Domain entity I/O for leaf documents.
+// Domain entity and I/O for leaf documents.
 //
 // A leaf is a collected document produced by `bo add`. It lives at
 // {output_dir}/{slug}.md and has YAML frontmatter followed by a markdown body.
@@ -12,8 +12,38 @@
 // `summary` lives only in the manifest — it is never written to leaf
 // frontmatter.
 
-use crate::domain::{Timestamp, Title, Url};
-use serde_yaml_ng::{Mapping, Value};
+use crate::domain::title::deserialize_option_title;
+use crate::domain::{Slug, Timestamp, Title, Url};
+use serde::{Deserialize, Serialize};
+
+// ── Leaf ──────────────────────────────────────────────────────────────────────
+
+/// A collected document in the knowledge graph.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Leaf {
+    pub slug: Slug,
+    pub file: String,
+    #[serde(default, deserialize_with = "deserialize_option_title")]
+    pub title: Option<Title>,
+    pub url: Url,
+    pub collected_at: Timestamp,
+    #[serde(default)]
+    pub summary: Option<String>,
+}
+
+// ── typed frontmatter ────────────────────────────────────────────────────────
+
+/// Frontmatter written to leaf .md files. Field order matches the on-disk YAML key
+/// order (title, url, collected_at).
+///
+/// `title` is String (not Option<Title>) because the on-disk format writes
+/// `title: ''` for missing titles — null/absent would change the format.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct LeafFrontmatter {
+    pub title: String,
+    pub url: Url,
+    pub collected_at: Timestamp,
+}
 
 /// Format leaf document content — frontmatter block followed by body.
 ///
@@ -26,19 +56,11 @@ pub fn format_content(
     collected_at: &Timestamp,
     body: &str,
 ) -> String {
-    let mut mapping = Mapping::new();
-    mapping.insert(
-        Value::String("title".to_string()),
-        Value::String(title.map(|t| t.as_str().to_string()).unwrap_or_default()),
-    );
-    mapping.insert(
-        Value::String("url".to_string()),
-        Value::String(url.as_str().to_string()),
-    );
-    mapping.insert(
-        Value::String("collected_at".to_string()),
-        Value::String(collected_at.to_rfc3339_millis()),
-    );
+    let fm = LeafFrontmatter {
+        title: title.map(|t| t.as_str().to_string()).unwrap_or_default(),
+        url: url.clone(),
+        collected_at: collected_at.clone(),
+    };
 
     let mut full_body = String::new();
     if let Some(t) = title {
@@ -49,7 +71,7 @@ pub fn format_content(
         full_body.push('\n');
     }
 
-    crate::domain::frontmatter::render(&mapping, &full_body)
+    crate::domain::frontmatter::render(&fm, &full_body)
         .expect("yaml serialization failure in leaf frontmatter")
 }
 

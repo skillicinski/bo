@@ -1,5 +1,5 @@
 use super::*;
-use crate::domain::{Slug, Timestamp};
+use crate::domain::{Slug, Timestamp, Title, Url};
 use std::collections::BTreeMap;
 use std::time::SystemTime;
 use tempfile::TempDir;
@@ -253,6 +253,51 @@ fn render_human_full_includes_body() {
     assert!(output.contains("complete body"), "output: {output}");
 }
 
+#[test]
+fn title_numeric_value_falls_back_to_manifest_title() {
+    let dir = TempDir::new().unwrap();
+    write_index(dir.path(), &[("leaf.md", "Manifest Title")]);
+    write_raw_file(
+        dir.path(),
+        "leaf.md",
+        "---\ntitle: 123\nurl: https://example.com\n---\n\n# Body\n",
+    );
+
+    let result = show_leaf(dir.path(), "manifest title", &ShowOptions::default()).unwrap();
+
+    assert_eq!(
+        result.title.as_str(),
+        "Manifest Title",
+        "numeric title should fall back to manifest title"
+    );
+    assert_eq!(result.url.as_deref(), Some("https://example.com"));
+}
+
+#[test]
+fn unknown_frontmatter_keys_preserved_in_result() {
+    let dir = TempDir::new().unwrap();
+    write_index(dir.path(), &[("leaf.md", "Leaf")]);
+    write_raw_file(
+        dir.path(),
+        "leaf.md",
+        "---\ntitle: Leaf\nrating: 5\ntags:\n  - rust\n  - cli\n---\n\n# Body\n",
+    );
+
+    let result = show_leaf(dir.path(), "Leaf", &ShowOptions::default()).unwrap();
+
+    assert_eq!(
+        result.frontmatter.get("rating").and_then(Value::as_i64),
+        Some(5)
+    );
+    let tags = result
+        .frontmatter
+        .get("tags")
+        .and_then(Value::as_sequence)
+        .unwrap();
+    let tag_strs: Vec<&str> = tags.iter().filter_map(Value::as_str).collect();
+    assert_eq!(tag_strs, vec!["rust", "cli"]);
+}
+
 fn fixture_result(body: Option<&str>, full: bool) -> ShowResult {
     let mut frontmatter = Mapping::new();
     frontmatter.insert(
@@ -278,16 +323,16 @@ fn fixture_result(body: Option<&str>, full: bool) -> ShowResult {
 
 fn write_index(tree: &Path, entries: &[(&str, &str)]) {
     fs::create_dir_all(tree).unwrap();
-    let leaves: Vec<crate::domain::manifest::LeafRecord> = entries
+    let leaves: Vec<crate::domain::Leaf> = entries
         .iter()
         .enumerate()
         .map(|(i, (file, title))| {
             let slug = Slug::parse(&format!("test-leaf-{}", i)).unwrap();
-            crate::domain::manifest::LeafRecord {
+            crate::domain::Leaf {
                 slug,
                 file: (*file).to_string(),
-                title: (*title).to_string(),
-                url: ("https://example.com/test").to_string(),
+                title: Title::parse(title).ok(),
+                url: Url::parse("https://example.com/test").unwrap(),
                 collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                 summary: None,
             }
