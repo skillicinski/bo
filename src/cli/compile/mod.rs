@@ -25,6 +25,7 @@ mod parse;
 mod plan;
 mod prompt;
 mod render;
+mod validation;
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
