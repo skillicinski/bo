@@ -752,6 +752,10 @@ fn main() {
         .with_target(false)
         .without_time()
         .with_level(false)
+        // stderr, not the default stdout: stdout is reserved for command output
+        // (in --json mode, a single JSON envelope) — a stray retry warning on
+        // stdout corrupts the envelope for downstream parsers.
+        .with_writer(io::stderr)
         .init();
 
     let mut stdout = io::stdout();
