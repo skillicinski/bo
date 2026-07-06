@@ -122,18 +122,23 @@ pub(super) fn map_compile_llm_error(error: LlmError) -> CompileError {
 
 // ── pending/recovery ──────────────────────────────────────────────────────────
 
-pub(super) fn recover_pending_if_needed(path: &std::path::Path) -> Result<(), CompileError> {
+pub(super) fn recover_pending_if_needed(
+    path: &std::path::Path,
+    warnings: &mut Vec<String>,
+) -> Result<(), CompileError> {
     if let Some(report) = pending::recover_or_refuse(path)? {
-        eprintln!(
+        warnings.push(format!(
             "recovered {} changes from interrupted {}",
             report.changes, report.op
-        );
+        ));
     }
     Ok(())
 }
 
 // ── execute plan ──────────────────────────────────────────────────────────────
 
+// ponytail: 8 args; collapse into an execution-context struct if it grows.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn execute_plan_with_mode_and_expected_hash(
     plan: &CompilePlan,
     cfg: &SeededConfig,
@@ -142,10 +147,11 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
     skipped_leaves: &[String],
     run_mode: CompileRunMode,
     expected_manifest_hash: &str,
+    warnings: &mut Vec<String>,
 ) -> Result<CompileSummary, CompileError> {
     let tree = cfg.tree();
     let tree_dir = tree.path();
-    recover_pending_if_needed(tree_dir)?;
+    recover_pending_if_needed(tree_dir, warnings)?;
 
     // Load current manifest. Used to preserve branch `created_at` and carry
     // leaf records / tree metadata forward into the new manifest.
@@ -206,7 +212,7 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
         .collect();
 
     for branch in &branch_results {
-        eprintln!("writing branch: {}", branch.slug);
+        warnings.push(format!("writing branch: {}", branch.slug));
     }
 
     Ok(CompileSummary {

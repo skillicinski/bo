@@ -164,6 +164,11 @@ pub struct CompileResult {
     pub leaves_skipped: Vec<String>,
     #[serde(skip)]
     pub notifications: Vec<String>,
+    /// Stderr-bound lines (title-collision warnings, pending-recovery notices,
+    /// per-branch write progress). Skipped from JSON — these are presentation,
+    /// never part of the data envelope. Populated by the entry point.
+    #[serde(skip)]
+    pub warnings: Vec<String>,
 }
 
 impl CompileResult {
@@ -182,6 +187,7 @@ impl CompileResult {
             leaves_processed: summary.leaves_processed,
             leaves_skipped: summary.leaves_skipped,
             notifications,
+            warnings: Vec::new(),
         }
     }
 
@@ -195,6 +201,28 @@ impl CompileResult {
             leaves_processed: 0,
             leaves_skipped: Vec::new(),
             notifications,
+            warnings: Vec::new(),
+        }
+    }
+}
+
+/// Outcome of a compile run: the typed result plus the stderr-bound diagnostic
+/// lines accumulated along the way. On success the lines also live on
+/// [`CompileResult::warnings`]; on failure they ride here so the CLI can render
+/// them (e.g. title-collision warnings that preceded a validation error) before
+/// the error itself. The pipeline never prints — the CLI renders post-run.
+#[derive(Debug)]
+pub struct CompileOutcome {
+    pub result: Result<CompileResult, CompileError>,
+    warnings: Vec<String>,
+}
+
+impl CompileOutcome {
+    /// Stderr-bound lines, present on both the `Ok` and `Err` paths.
+    pub fn stderr_lines(&self) -> &[String] {
+        match &self.result {
+            Ok(result) => &result.warnings,
+            Err(_) => &self.warnings,
         }
     }
 }
@@ -227,15 +255,34 @@ fn preflight_noop(
     None
 }
 
-pub fn run_compile_with_options(
+pub fn run_compile_with_options(cfg: &SeededConfig, options: CompileOptions) -> CompileOutcome {
+    let mut warnings = Vec::new();
+    let result = run_compile(cfg, options, &mut warnings);
+    match result {
+        Ok(mut result) => {
+            result.warnings = warnings;
+            CompileOutcome {
+                result: Ok(result),
+                warnings: Vec::new(),
+            }
+        }
+        Err(error) => CompileOutcome {
+            result: Err(error),
+            warnings,
+        },
+    }
+}
+
+fn run_compile(
     cfg: &SeededConfig,
     options: CompileOptions,
+    warnings: &mut Vec<String>,
 ) -> Result<CompileResult, CompileError> {
     let compile_started_at = Timestamp::now();
 
     // Stale repair runs before preflight so preflight sees repaired state.
     let tree = cfg.tree();
-    execute::recover_pending_if_needed(tree.path())?;
+    execute::recover_pending_if_needed(tree.path(), warnings)?;
     let manifest = match crate::engine::manifest::runtime_state(tree.path()) {
         Ok(TreeRuntimeState::Initialized(manifest)) => manifest,
         Ok(TreeRuntimeState::FreshSeeded) => {
@@ -255,6 +302,11 @@ pub fn run_compile_with_options(
         }
     };
     let notifications = repair::repair_stale_branches(cfg, &manifest)?;
+    // Repair notices are destructive-action reporting (e.g. "removed N stale
+    // branches"); mirror them onto the stderr channel so they reach consumers
+    // in both human and --json mode. The human-mode double-emission (stderr
+    // line + stdout `→` note) matches the prior behavior byte-for-byte.
+    warnings.extend(notifications.iter().cloned());
     let manifest = crate::engine::manifest::read(&tree::manifest_path(tree.path()))
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
 
@@ -286,10 +338,11 @@ pub fn run_compile_with_options(
         &manifest,
         &new_leaf_slugs,
         &expected_manifest_hash,
+        warnings,
     )
 }
 
-// ponytail: 9 args; collapse into a preflight struct if it grows further.
+// ponytail: 10 args; collapse into a preflight struct if it grows further.
 #[allow(clippy::too_many_arguments)]
 pub fn run_compile_with_provider_started_at(
     cfg: &SeededConfig,
@@ -301,6 +354,7 @@ pub fn run_compile_with_provider_started_at(
     manifest: &manifest::Manifest,
     new_leaf_slugs: &[String],
     expected_manifest_hash: &str,
+    warnings: &mut Vec<String>,
 ) -> Result<CompileResult, CompileError> {
     let (loaded_leaves, skipped_leaves) = plan::read_valid_leaves(cfg, &manifest.leaves);
 
@@ -369,14 +423,18 @@ pub fn run_compile_with_provider_started_at(
     // ── execute validated plan ───────────────────────────────────────────────
     let run_timestamp = compile_started_at;
     let compiled_plan = match run_mode {
-        CompileRunMode::Full => {
-            parse::parse_and_validate_with_input_size(&response, &loaded_leaves, input_body_bytes)?
-        }
+        CompileRunMode::Full => parse::parse_and_validate_with_input_size(
+            &response,
+            &loaded_leaves,
+            input_body_bytes,
+            warnings,
+        )?,
         CompileRunMode::Incremental => parse::parse_and_validate_incremental_with_input_size(
             &response,
             cfg,
             &loaded_leaves,
             input_body_bytes,
+            warnings,
         )?,
     };
 
@@ -388,6 +446,7 @@ pub fn run_compile_with_provider_started_at(
         &skipped_leaves,
         run_mode,
         expected_manifest_hash,
+        warnings,
     )?;
 
     if let Some(warning) =
@@ -451,6 +510,15 @@ pub fn render_human<W: std::io::Write>(
     tree_name: &str,
 ) -> std::io::Result<()> {
     render::render_human(result, stdout, tree_name)
+}
+
+/// Render the stderr-bound diagnostic lines collected during a compile run.
+/// Called by the CLI post-run; nothing below the entry point prints.
+pub fn render_diagnostics<W: std::io::Write>(
+    lines: &[String],
+    stderr: &mut W,
+) -> std::io::Result<()> {
+    render::render_diagnostics(lines, stderr)
 }
 
 #[cfg(test)]

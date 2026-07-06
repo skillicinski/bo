@@ -4,6 +4,16 @@ use std::io::{self, Write};
 
 use super::{CompileResult, NO_NEW_LEAVES_REASON};
 
+/// Render stderr-bound diagnostic/progress lines (title-collision warnings,
+/// pending-recovery notices, per-branch write progress) collected during the
+/// run. The pipeline never prints; the caller renders these post-run.
+pub fn render_diagnostics<W: Write>(lines: &[String], stderr: &mut W) -> io::Result<()> {
+    for line in lines {
+        writeln!(stderr, "{}", line)?;
+    }
+    Ok(())
+}
+
 fn write_notifications<W: Write>(notifications: &[String], stdout: &mut W) -> io::Result<()> {
     for note in notifications {
         writeln!(stdout, "\u{2192} {}", note)?;

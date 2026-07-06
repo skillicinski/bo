@@ -191,6 +191,7 @@ fn compile_result_notifications_skipped_from_json() {
         leaves_processed: 2,
         leaves_skipped: Vec::new(),
         notifications: vec!["pruned 3 orphan leaf records".to_string()],
+        warnings: Vec::new(),
     };
 
     let encoded = json::success_string("compile", &result, Vec::new()).unwrap();
@@ -199,6 +200,31 @@ fn compile_result_notifications_skipped_from_json() {
     assert_eq!(parsed["schema_version"], 1);
     assert_eq!(parsed["ok"], true);
     assert!(parsed["data"]["notifications"].is_null());
+}
+
+#[test]
+fn compile_result_warnings_skipped_from_json() {
+    let result = CompileResult {
+        status: "compiled".to_string(),
+        reason: None,
+        mode: Some(super::CompileRunMode::Full),
+        model: Some("gpt-4.1".to_string()),
+        branches: vec![super::BranchResult {
+            slug: "test-branch".to_string(),
+            title: "Test Branch".to_string(),
+            leaf_count: 2,
+        }],
+        leaves_processed: 2,
+        leaves_skipped: Vec::new(),
+        notifications: Vec::new(),
+        warnings: vec!["warning: title collision — shared".to_string()],
+    };
+
+    let encoded = json::success_string("compile", &result, Vec::new()).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+
+    // warnings are presentation (stderr), never part of the JSON envelope.
+    assert!(parsed["data"]["warnings"].is_null());
 }
 
 fn branch_record(slug: &str, title: &str, leaf_slugs: &[&str]) -> Branch {
@@ -312,6 +338,7 @@ fn human_output_includes_notifications() {
         notifications: vec![
             "pruned 1 orphan leaf record (file missing, not in any branch)".to_string(),
         ],
+        warnings: Vec::new(),
     };
     let mut stdout = Vec::new();
     render_human(&result, &mut stdout, "test-tree").unwrap();
@@ -510,6 +537,33 @@ fn valid_leaf_reference_map_drops_ambiguous_title_keys() {
 }
 
 #[test]
+fn collision_warnings_captured_as_data_not_printed() {
+    // Two leaves share a title → the collision is recorded as a warning string
+    // (previously eprintln'd inside validate). Validation still succeeds when a
+    // branch references the leaves by their unique slug/filename.
+    let leaves = vec![
+        loaded_leaf("gamma-one", "Shared Topic"),
+        loaded_leaf("gamma-two", "Shared Topic"),
+    ];
+    let mut warnings = Vec::new();
+    parse_and_validate_with_input_size(
+        &branch_response(&["gamma-one", "gamma-two.md"]),
+        &leaves,
+        1024,
+        &mut warnings,
+    )
+    .expect("refs by unique slug/filename must resolve despite title collision");
+
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("warning: title collision") && w.contains("Shared Topic")),
+        "expected a title-collision warning captured as data: {:?}",
+        warnings
+    );
+}
+
+#[test]
 fn parse_resolves_leaf_references_by_slug_filename_and_title() {
     let leaves = vec![
         loaded_leaf("alpha-concept", "Alpha Concept"),
@@ -521,6 +575,7 @@ fn parse_resolves_leaf_references_by_slug_filename_and_title() {
         &branch_response(&["alpha-concept", "beta-thing.md"]),
         &leaves,
         1024,
+        &mut Vec::new(),
     )
     .expect("refs by slug and filename must resolve");
     assert_eq!(
@@ -533,6 +588,7 @@ fn parse_resolves_leaf_references_by_slug_filename_and_title() {
         &branch_response(&["Alpha Concept", "Beta Thing"]),
         &leaves,
         1024,
+        &mut Vec::new(),
     )
     .expect("refs by unique title must resolve");
 }
@@ -547,6 +603,7 @@ fn parse_rejects_invented_leaf_reference() {
         &branch_response(&["alpha-concept", "invented-name"]),
         &leaves,
         1024,
+        &mut Vec::new(),
     )
     .unwrap_err();
     assert!(
@@ -567,6 +624,7 @@ fn parse_rejects_ambiguous_title_reference() {
         &branch_response(&["Shared Topic", "alpha-concept"]),
         &leaves,
         1024,
+        &mut Vec::new(),
     )
     .unwrap_err();
     assert!(
@@ -658,7 +716,7 @@ fn build_manifest_delta_allows_one_leaf_in_multiple_branches() {
 fn parse_full_rejects_empty_title() {
     let leaves = vec![loaded_leaf("a", "A"), loaded_leaf("b", "B")];
     let json = r#"{"branches":[{"title":"","body":"some body","leaves":["a","b"]}]}"#;
-    let err = parse_and_validate_with_input_size(json, &leaves, 1024).unwrap_err();
+    let err = parse_and_validate_with_input_size(json, &leaves, 1024, &mut Vec::new()).unwrap_err();
     assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("empty title")));
 }
 
@@ -666,7 +724,7 @@ fn parse_full_rejects_empty_title() {
 fn parse_full_rejects_empty_body() {
     let leaves = vec![loaded_leaf("a", "A"), loaded_leaf("b", "B")];
     let json = r#"{"branches":[{"title":"Concept","body":"","leaves":["a","b"]}]}"#;
-    let err = parse_and_validate_with_input_size(json, &leaves, 1024).unwrap_err();
+    let err = parse_and_validate_with_input_size(json, &leaves, 1024, &mut Vec::new()).unwrap_err();
     assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("empty body")));
 }
 
@@ -680,7 +738,7 @@ fn parse_full_rejects_duplicate_slug() {
     ];
     // Two branches with the same title → same slug → duplicate slug error
     let json = r#"{"branches":[{"title":"Same Thing","body":"body","leaves":["a","b"]},{"title":"Same Thing","body":"body","leaves":["c","d"]}]}"#;
-    let err = parse_and_validate_with_input_size(json, &leaves, 1024).unwrap_err();
+    let err = parse_and_validate_with_input_size(json, &leaves, 1024, &mut Vec::new()).unwrap_err();
     assert!(
         matches!(err, CompileError::Validation(ref msg) if msg.contains("duplicate branch slug"))
     );
@@ -694,7 +752,7 @@ fn parse_full_rejects_single_leaf_branch() {
         loaded_leaf("c", "C"),
     ];
     let json = r#"{"branches":[{"title":"Concept","body":"body","leaves":["a"]}]}"#;
-    let err = parse_and_validate_with_input_size(json, &leaves, 1024).unwrap_err();
+    let err = parse_and_validate_with_input_size(json, &leaves, 1024, &mut Vec::new()).unwrap_err();
     assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("at least 2 leaves")));
 }
 
@@ -783,6 +841,7 @@ fn parse_incremental_update_preserves_existing_leaves_and_adds_new() {
         &cfg,
         &loaded,
         4096,
+        &mut Vec::new(),
     )
     .unwrap();
 
@@ -806,6 +865,7 @@ fn parse_incremental_update_dropping_existing_leaf_errors() {
         &cfg,
         &loaded,
         4096,
+        &mut Vec::new(),
     )
     .unwrap_err();
     assert!(
@@ -826,6 +886,7 @@ fn parse_incremental_new_branch_without_new_leaf_is_dropped() {
         &cfg,
         &loaded,
         4096,
+        &mut Vec::new(),
     )
     .unwrap();
 
@@ -849,6 +910,7 @@ fn parse_incremental_update_unknown_branch_errors() {
         &cfg,
         &loaded,
         4096,
+        &mut Vec::new(),
     )
     .unwrap_err();
     assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("unknown branch")));
@@ -866,6 +928,7 @@ fn parse_incremental_title_change_errors() {
         &cfg,
         &loaded,
         4096,
+        &mut Vec::new(),
     )
     .unwrap_err();
     assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("changed title")));
@@ -883,6 +946,7 @@ fn parse_incremental_new_branch_empty_title_errors() {
         &cfg,
         &loaded,
         4096,
+        &mut Vec::new(),
     )
     .unwrap_err();
     assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("empty title")));
@@ -900,6 +964,7 @@ fn parse_incremental_new_branch_empty_body_errors() {
         &cfg,
         &loaded,
         4096,
+        &mut Vec::new(),
     )
     .unwrap_err();
     assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("empty body")));
@@ -918,6 +983,7 @@ fn parse_incremental_update_with_no_new_leaf_errors() {
         &cfg,
         &loaded,
         4096,
+        &mut Vec::new(),
     )
     .unwrap_err();
     assert!(
@@ -938,6 +1004,7 @@ fn parse_incremental_insufficient_leaves_errors() {
         &cfg,
         &loaded,
         4096,
+        &mut Vec::new(),
     )
     .unwrap_err();
     assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("at least 2 leaves")));

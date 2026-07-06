@@ -128,6 +128,7 @@ pub(super) fn validate_full(
     parsed: CompileResponse,
     loaded_leaves: &[plan::LoadedLeaf],
     input_body_bytes: usize,
+    warnings: &mut Vec<String>,
 ) -> Result<CompilePlan, CompileError> {
     // Empty branches is valid — means no cross-cutting concepts found.
     if parsed.branches.is_empty() {
@@ -140,7 +141,7 @@ pub(super) fn validate_full(
     let mut seen_slugs: HashSet<String> = HashSet::new();
     let lookup = leaf_resolver(loaded_leaves);
     for msg in &lookup.collisions {
-        eprintln!("warning: title collision — {}", msg);
+        warnings.push(format!("warning: title collision — {}", msg));
     }
     for (index, raw) in parsed.branches.into_iter().enumerate() {
         let branch_number = index + 1;
@@ -227,12 +228,13 @@ pub(super) fn validate_incremental(
     manifest: &Manifest,
     loaded_leaves: &[plan::LoadedLeaf],
     input_body_bytes: usize,
+    warnings: &mut Vec<String>,
 ) -> Result<CompilePlan, CompileError> {
     let new_leaf_slugs_vec = select_new_leaf_slugs(manifest)?;
     let new_leaf_slugs: HashSet<String> = new_leaf_slugs_vec.into_iter().collect();
     let lookup = leaf_resolver(loaded_leaves);
     for msg in &lookup.collisions {
-        eprintln!("warning: title collision — {}", msg);
+        warnings.push(format!("warning: title collision — {}", msg));
     }
     let mut seen_branch_slugs = HashSet::new();
     let mut seen_updated_branch_slugs = HashSet::new();
