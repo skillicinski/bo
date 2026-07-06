@@ -115,7 +115,6 @@ pub(super) fn repair_stale_branches(
 
     let mut notifications = Vec::new();
     if let Some(msg) = orphan_prune_message(&class.orphan_slugs) {
-        eprintln!("{}", msg);
         notifications.push(msg);
     }
 
@@ -123,11 +122,9 @@ pub(super) fn repair_stale_branches(
     notifications.extend(outcome.frontmatter_notes.iter().cloned());
 
     if let Some(msg) = repaired_summary_message(&outcome.repaired_branch_slugs) {
-        eprintln!("{}", msg);
         notifications.push(msg);
     }
     if let Some(msg) = removed_summary_message(&outcome.branches_removed) {
-        eprintln!("{}", msg);
         notifications.push(msg);
     }
 

@@ -115,7 +115,7 @@ fn compile_creates_branches_directory() {
     let dir = setup_fixture_collection();
     let cfg = make_config(dir.path());
 
-    let result = compile::run_compile_with_options(&cfg, Default::default());
+    let result = compile::run_compile_with_options(&cfg, Default::default()).result;
     assert!(result.is_ok(), "compile failed: {:?}", result.err());
 
     assert!(
@@ -130,7 +130,9 @@ fn compile_produces_at_least_one_branch_file() {
     let dir = setup_fixture_collection();
     let cfg = make_config(dir.path());
 
-    compile::run_compile_with_options(&cfg, Default::default()).unwrap();
+    compile::run_compile_with_options(&cfg, Default::default())
+        .result
+        .unwrap();
 
     let branches_dir = dir.path().join("branches");
     let branch_files: Vec<_> = fs::read_dir(&branches_dir)
@@ -173,7 +175,9 @@ fn compile_does_not_create_index_jsonl() {
     let dir = setup_fixture_collection();
     let cfg = make_config(dir.path());
 
-    compile::run_compile_with_options(&cfg, Default::default()).unwrap();
+    compile::run_compile_with_options(&cfg, Default::default())
+        .result
+        .unwrap();
 
     assert!(!dir.path().join(".bo/index.jsonl").exists());
 }
@@ -185,7 +189,9 @@ fn compile_rerun_preserves_created_at() {
     let cfg = make_config(dir.path());
 
     // First compile
-    compile::run_compile_with_options(&cfg, Default::default()).unwrap();
+    compile::run_compile_with_options(&cfg, Default::default())
+        .result
+        .unwrap();
 
     let branches_dir = dir.path().join("branches");
     let first_branch = fs::read_dir(&branches_dir)
@@ -207,7 +213,9 @@ fn compile_rerun_preserves_created_at() {
     std::thread::sleep(std::time::Duration::from_secs(1));
 
     // Second compile
-    compile::run_compile_with_options(&cfg, Default::default()).unwrap();
+    compile::run_compile_with_options(&cfg, Default::default())
+        .result
+        .unwrap();
 
     // Find the same branch (by slug/filename)
     let content2 = fs::read_to_string(&first_branch).unwrap();
@@ -269,7 +277,7 @@ fn crash_mid_compile_rollback_cleans_staged_files() {
 
     // Now run compile — should detect stale pending, rollback, then proceed normally
     let cfg = make_config(tree_dir);
-    let result = compile::run_compile_with_options(&cfg, Default::default());
+    let outcome = compile::run_compile_with_options(&cfg, Default::default());
 
     // The staged file should be gone (rolled back)
     assert!(
@@ -283,9 +291,19 @@ fn crash_mid_compile_rollback_cleans_staged_files() {
     );
     // Compile itself should succeed (noop or compiled depending on state)
     assert!(
-        result.is_ok(),
+        outcome.result.is_ok(),
         "compile should succeed after recovery: {:?}",
-        result.err()
+        outcome.result.err()
+    );
+    // The recovery notice is collected as a diagnostic line, not printed below
+    // the entry point.
+    assert!(
+        outcome
+            .stderr_lines()
+            .iter()
+            .any(|l| l.contains("recovered")),
+        "recovery notice should land as a diagnostic line: {:?}",
+        outcome.stderr_lines()
     );
 }
 
@@ -333,7 +351,7 @@ fn crash_mid_compile_roll_forward_applies_staged_writes() {
 
     // Run compile — should roll forward
     let cfg = make_config(tree_dir);
-    let result = compile::run_compile_with_options(&cfg, Default::default());
+    let result = compile::run_compile_with_options(&cfg, Default::default()).result;
 
     // The staged file should be renamed to final
     assert!(
@@ -483,6 +501,7 @@ fn compile_full_with_canned_response_creates_branches() {
         &bo::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap(),
         &[], // ponytail: Full mode doesn't use new_leaf_slugs
         &pending::manifest_hash(dir.path()).unwrap(),
+        &mut Vec::new(),
     );
 
     let compile_result = result.unwrap();
@@ -675,6 +694,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
         &m,
         &new_slugs,
         &manifest_hash,
+        &mut Vec::new(),
     );
 
     let compile_result = result.unwrap();
@@ -764,7 +784,7 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
     assert!(!dir.path().join("deleted.md").exists());
 
     let cfg = make_config(dir.path());
-    let result = compile::run_compile_with_options(&cfg, Default::default());
+    let result = compile::run_compile_with_options(&cfg, Default::default()).result;
     assert!(
         result.is_ok(),
         "compile should succeed after repair: {:?}",

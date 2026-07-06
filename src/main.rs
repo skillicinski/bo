@@ -301,22 +301,25 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
             }
             Err(error) => emit_cli_error("collect", json, error, stderr),
         },
-        Commands::Compile { all } => match require_seeded_config().and_then(|config| {
-            compile::run_compile_with_options(&config, CompileOptions { all })
-                .map_err(CliError::Compile)
-        }) {
-            Ok(result) if json => {
-                let warnings = compile_warnings(&result);
-                emit_json_success("compile", &result, warnings, stdout)
-            }
-            Ok(result) => {
-                let tree_name = require_seeded_config()
-                    .ok()
-                    .map(|c| c.tree().name.to_string())
-                    .unwrap_or_else(|| "bo".to_string());
-                wrote(compile::render_human(&result, stdout, &tree_name), 0)
-            }
+        Commands::Compile { all } => match require_seeded_config() {
             Err(error) => emit_cli_error("compile", json, error, stderr),
+            Ok(config) => {
+                let outcome = compile::run_compile_with_options(&config, CompileOptions { all });
+                // Render stderr-bound diagnostics (collisions, recovery, branch
+                // writes) post-run; the pipeline collects them, never prints.
+                let _ = compile::render_diagnostics(outcome.stderr_lines(), stderr);
+                match outcome.result {
+                    Ok(result) if json => {
+                        let warnings = compile_warnings(&result);
+                        emit_json_success("compile", &result, warnings, stdout)
+                    }
+                    Ok(result) => wrote(
+                        compile::render_human(&result, stdout, &config.tree().name),
+                        0,
+                    ),
+                    Err(error) => emit_cli_error("compile", json, CliError::Compile(error), stderr),
+                }
+            }
         },
         Commands::List {
             branches,
