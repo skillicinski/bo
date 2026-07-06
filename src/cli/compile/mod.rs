@@ -302,6 +302,11 @@ fn run_compile(
         }
     };
     let notifications = repair::repair_stale_branches(cfg, &manifest)?;
+    // Repair notices are destructive-action reporting (e.g. "removed N stale
+    // branches"); mirror them onto the stderr channel so they reach consumers
+    // in both human and --json mode. The human-mode double-emission (stderr
+    // line + stdout `→` note) matches the prior behavior byte-for-byte.
+    warnings.extend(notifications.iter().cloned());
     let manifest = crate::engine::manifest::read(&tree::manifest_path(tree.path()))
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
 
