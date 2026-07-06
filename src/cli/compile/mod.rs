@@ -25,6 +25,7 @@ mod parse;
 mod plan;
 mod prompt;
 mod render;
+mod repair;
 mod validation;
 
 // ── constants ─────────────────────────────────────────────────────────────────
@@ -253,7 +254,7 @@ pub fn run_compile_with_options(
             )));
         }
     };
-    let notifications = plan::repair_stale_branches(cfg, &manifest)?;
+    let notifications = repair::repair_stale_branches(cfg, &manifest)?;
     let manifest = crate::engine::manifest::read(&tree::manifest_path(tree.path()))
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
 
