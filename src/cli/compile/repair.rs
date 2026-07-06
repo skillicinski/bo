@@ -8,7 +8,7 @@ use serde_yaml_ng::Value;
 use crate::domain::frontmatter;
 use crate::domain::manifest::Manifest;
 use crate::domain::slug::Slug;
-use crate::domain::Leaf;
+use crate::domain::{Branch, Leaf};
 use crate::engine::config::SeededConfig;
 
 use super::plan::select_new_leaf_slugs;
@@ -31,7 +31,24 @@ pub(super) struct RemovedBranchResult {
     pub(super) reason: String,
 }
 
-// ── functions ─────────────────────────────────────────────────────────────────
+/// Computed deletion sets derived from leaf-file classification.
+struct DeletionClassification {
+    deleted_slugs: Vec<String>,
+    deleted_set: HashSet<String>,
+    deleted_filenames: HashSet<String>,
+    orphan_slugs: Vec<String>,
+}
+
+/// Outcome of the branch-repair pass.
+struct BranchRepairOutcome {
+    repaired_branches: Vec<Branch>,
+    branch_deletes: Vec<String>,
+    repaired_branch_slugs: Vec<String>,
+    branches_removed: Vec<RemovedBranchResult>,
+    frontmatter_notes: Vec<String>,
+}
+
+// ── public functions ──────────────────────────────────────────────────────────
 
 pub(super) fn classify_leaf_files(
     cfg: &SeededConfig,
@@ -91,24 +108,66 @@ pub(super) fn repair_stale_branches(
     cfg: &SeededConfig,
     manifest: &Manifest,
 ) -> Result<Vec<String>, CompileError> {
-    let new_leaf_slugs = select_new_leaf_slugs(manifest)?;
-    let classification = classify_leaf_files(cfg, manifest, &new_leaf_slugs)?;
-
-    if classification.deleted_leaf_slugs.is_empty() {
+    let class = classify_deletions(cfg, manifest)?;
+    if class.deleted_slugs.is_empty() {
         return Ok(Vec::new());
     }
 
-    let deleted_set: HashSet<&str> = classification
-        .deleted_leaf_slugs
-        .iter()
-        .map(String::as_str)
-        .collect();
+    let mut notifications = Vec::new();
+    if let Some(msg) = orphan_prune_message(&class.orphan_slugs) {
+        eprintln!("{}", msg);
+        notifications.push(msg);
+    }
 
-    let deleted_filenames: HashSet<&str> = manifest
+    let outcome = repair_branch_files(cfg, manifest, &class);
+    notifications.extend(outcome.frontmatter_notes.iter().cloned());
+
+    if let Some(msg) = repaired_summary_message(&outcome.repaired_branch_slugs) {
+        eprintln!("{}", msg);
+        notifications.push(msg);
+    }
+    if let Some(msg) = removed_summary_message(&outcome.branches_removed) {
+        eprintln!("{}", msg);
+        notifications.push(msg);
+    }
+
+    let repaired_manifest = assemble_repaired_manifest(manifest, &class, &outcome);
+
+    // Write repaired manifest
+    let tree = cfg.tree();
+    let manifest_path = crate::domain::tree::manifest_path(tree.path());
+    crate::engine::manifest::write(&manifest_path, &repaired_manifest)
+        .map_err(|e| CompileError::Io(format!("failed to write repaired manifest: {}", e)))?;
+
+    // Delete branch files
+    for file in &outcome.branch_deletes {
+        let path = tree.join(file);
+        if path.exists() {
+            std::fs::remove_file(&path).ok();
+        }
+    }
+
+    Ok(notifications)
+}
+
+// ── pipeline stages ───────────────────────────────────────────────────────────
+
+/// Classify deleted leaves and compute the deletion sets needed by later stages.
+fn classify_deletions(
+    cfg: &SeededConfig,
+    manifest: &Manifest,
+) -> Result<DeletionClassification, CompileError> {
+    let new_leaf_slugs = select_new_leaf_slugs(manifest)?;
+    let classification = classify_leaf_files(cfg, manifest, &new_leaf_slugs)?;
+    let deleted_slugs = classification.deleted_leaf_slugs;
+
+    let deleted_set: HashSet<String> = deleted_slugs.iter().cloned().collect();
+
+    let deleted_filenames: HashSet<String> = manifest
         .leaves
         .iter()
         .filter(|l| deleted_set.contains(l.slug.as_str()))
-        .map(|l| l.file.as_str())
+        .map(|l| l.file.clone())
         .collect();
 
     let branch_referenced_slugs: HashSet<&str> = manifest
@@ -116,37 +175,53 @@ pub(super) fn repair_stale_branches(
         .iter()
         .flat_map(|b| b.leaves.iter().map(|s| s.as_str()))
         .collect();
-    let orphan_slugs: Vec<String> = classification
-        .deleted_leaf_slugs
+    let orphan_slugs: Vec<String> = deleted_slugs
         .iter()
         .filter(|s| !branch_referenced_slugs.contains(s.as_str()))
         .cloned()
         .collect();
 
-    let mut notifications = if !orphan_slugs.is_empty() {
-        let n = orphan_slugs.len();
-        let msg = format!(
-            "pruned {} orphan leaf record{} (file{} missing, not in any branch)",
-            n,
-            if n == 1 { "" } else { "s" },
-            if n == 1 { "" } else { "s" }
-        );
-        eprintln!("{}", msg);
-        vec![msg]
-    } else {
-        Vec::new()
-    };
+    Ok(DeletionClassification {
+        deleted_slugs,
+        deleted_set,
+        deleted_filenames,
+        orphan_slugs,
+    })
+}
 
+/// Build the orphan-prune notification, if any.
+fn orphan_prune_message(orphan_slugs: &[String]) -> Option<String> {
+    if orphan_slugs.is_empty() {
+        return None;
+    }
+    let n = orphan_slugs.len();
+    Some(format!(
+        "pruned {} orphan leaf record{} (file{} missing, not in any branch)",
+        n,
+        if n == 1 { "" } else { "s" },
+        if n == 1 { "" } else { "s" }
+    ))
+}
+
+/// Repair branch files: prune deleted leaves, rewrite frontmatter, and
+/// collect branch removals. Writes to disk happen here (frontmatter rewrites
+/// only — deletes are deferred to the assembly stage).
+fn repair_branch_files(
+    cfg: &SeededConfig,
+    manifest: &Manifest,
+    class: &DeletionClassification,
+) -> BranchRepairOutcome {
     let mut branches_removed = Vec::new();
     let mut branch_deletes = Vec::new();
     let mut repaired_branches = Vec::new();
     let mut repaired_branch_slugs = Vec::new();
+    let mut frontmatter_notes = Vec::new();
 
     for branch in &manifest.branches {
         let remaining: Vec<Slug> = branch
             .leaves
             .iter()
-            .filter(|s| !deleted_set.contains(s.as_str()))
+            .filter(|s| !class.deleted_set.contains(s.as_str()))
             .cloned()
             .collect();
 
@@ -175,7 +250,7 @@ pub(super) fn repair_stale_branches(
                                 .iter()
                                 .filter(|v| {
                                     if let Value::String(filename) = v {
-                                        !deleted_filenames.contains(filename.as_str())
+                                        !class.deleted_filenames.contains(filename.as_str())
                                     } else {
                                         true
                                     }
@@ -190,7 +265,7 @@ pub(super) fn repair_stale_branches(
                                 "branch '{}' frontmatter repaired (body may reference removed leaves; recompile with --all to resynthesize)",
                                 branch.slug.as_str()
                             );
-                            notifications.push(note);
+                            frontmatter_notes.push(note);
                         }
                     }
                 }
@@ -201,64 +276,60 @@ pub(super) fn repair_stale_branches(
         }
     }
 
-    // Emit messages for branch-level repairs (separate from orphan leaf pruning above).
-    if !repaired_branch_slugs.is_empty() {
-        let names = repaired_branch_slugs.join(", ");
-        let msg = format!(
-            "repaired {} branch{} with deleted leaves: {}",
-            repaired_branch_slugs.len(),
-            if repaired_branch_slugs.len() == 1 {
-                ""
-            } else {
-                "es"
-            },
-            names,
-        );
-        eprintln!("{}", msg);
-        notifications.push(msg);
+    BranchRepairOutcome {
+        repaired_branches,
+        branch_deletes,
+        repaired_branch_slugs,
+        branches_removed,
+        frontmatter_notes,
     }
-    if !branches_removed.is_empty() {
-        let names: Vec<&str> = branches_removed.iter().map(|b| b.slug.as_str()).collect();
-        let msg = format!(
-            "removed {} stale branch{} below threshold: {}",
-            branches_removed.len(),
-            if branches_removed.len() == 1 {
-                ""
-            } else {
-                "es"
-            },
-            names.join(", "),
-        );
-        eprintln!("{}", msg);
-        notifications.push(msg);
-    }
+}
 
+/// Build the "repaired N branches" summary notification, if any.
+fn repaired_summary_message(slugs: &[String]) -> Option<String> {
+    if slugs.is_empty() {
+        return None;
+    }
+    let names = slugs.join(", ");
+    Some(format!(
+        "repaired {} branch{} with deleted leaves: {}",
+        slugs.len(),
+        if slugs.len() == 1 { "" } else { "es" },
+        names,
+    ))
+}
+
+/// Build the "removed N stale branches" summary notification, if any.
+fn removed_summary_message(removed: &[RemovedBranchResult]) -> Option<String> {
+    if removed.is_empty() {
+        return None;
+    }
+    let names: Vec<&str> = removed.iter().map(|b| b.slug.as_str()).collect();
+    Some(format!(
+        "removed {} stale branch{} below threshold: {}",
+        removed.len(),
+        if removed.len() == 1 { "" } else { "es" },
+        names.join(", "),
+    ))
+}
+
+/// Assemble the repaired manifest: filter out deleted leaf records and
+/// replace branches with the repaired set.
+fn assemble_repaired_manifest(
+    manifest: &Manifest,
+    class: &DeletionClassification,
+    outcome: &BranchRepairOutcome,
+) -> Manifest {
     let repaired_leaves: Vec<Leaf> = manifest
         .leaves
         .iter()
-        .filter(|l| !deleted_set.contains(l.slug.as_str()))
+        .filter(|l| !class.deleted_set.contains(l.slug.as_str()))
         .cloned()
         .collect();
 
-    let repaired_manifest = Manifest {
+    Manifest {
         tree: manifest.tree.clone(),
         leaves: repaired_leaves,
-        branches: repaired_branches,
-    };
-
-    // Write repaired manifest
-    let tree = cfg.tree();
-    let manifest_path = crate::domain::tree::manifest_path(tree.path());
-    crate::engine::manifest::write(&manifest_path, &repaired_manifest)
-        .map_err(|e| CompileError::Io(format!("failed to write repaired manifest: {}", e)))?;
-
-    // Delete branch files
-    for file in &branch_deletes {
-        let path = tree.join(file);
-        if path.exists() {
-            std::fs::remove_file(&path).ok();
-        }
+        branches: outcome.repaired_branches.clone(),
     }
-
-    Ok(notifications)
 }
