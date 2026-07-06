@@ -12,9 +12,9 @@ use crate::engine::llm::{
 };
 use crate::engine::pending::{self, CompileMode, OpKind, PendingWrite};
 
-use super::parse::CompilePlan;
 use super::plan::build_manifest_delta;
 use super::prompt::COMPILE_SYSTEM_PROMPT;
+use super::validation::CompilePlan;
 use super::{
     BranchResult, CompileError, CompileRunMode, CompileSummary, COMPILE_LLM_POLICY,
     COMPILE_PROMPT_OVERHEAD_TOKENS, MAX_COMPLETION_TOKENS, TOKEN_ESTIMATE_BYTES_PER_TOKEN,

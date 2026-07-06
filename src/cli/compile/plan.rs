@@ -12,7 +12,7 @@ use crate::domain::Timestamp;
 use crate::domain::{Branch, Leaf, Title};
 use crate::engine::config::SeededConfig;
 
-use super::parse::{CompilePlan, ValidatedBranch};
+use super::validation::{CompilePlan, ValidatedBranch};
 use super::{BranchResult, CompileError, CompileOptions, CompileRunMode};
 
 // ── types ─────────────────────────────────────────────────────────────────────

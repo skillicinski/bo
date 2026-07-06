@@ -421,9 +421,10 @@ fn derived_incremental_compile_schema_requires_updated_and_new_branches() {
 // ── leaf reference fidelity ───────────────────────────────────────────────
 
 use super::parse::{
-    leaf_resolver, parse_and_validate_with_input_size, CompileResponse, IncrementalCompileResponse,
+    parse_and_validate_with_input_size, CompileResponse, IncrementalCompileResponse,
 };
 use super::plan::LoadedLeaf;
+use super::validation::leaf_resolver;
 use super::CompileError;
 
 fn loaded_leaf(slug: &str, title: &str) -> LoadedLeaf {
@@ -601,8 +602,8 @@ fn derived_incremental_compile_schema_has_no_ref_or_defs_or_schema_key() {
 
 #[test]
 fn build_manifest_delta_allows_one_leaf_in_multiple_branches() {
-    use super::parse::{CompilePlan, ValidatedBranch};
     use super::plan::build_manifest_delta;
+    use super::validation::{CompilePlan, ValidatedBranch};
     use super::CompileRunMode;
 
     // One leaf participates in two cross-cutting concepts. The manifest model
