@@ -38,6 +38,8 @@ This is the single most important compile abstraction. The gate stopped three di
 
 The discipline runs both ways: don't push command-specific logic down into the engine (e.g. "branch staleness" is compile-domain knowledge, so `repair_stale_branches` lives in `cli/compile/`, not `engine/`), and don't carve the engine up per-command (the toolbox stays shared).
 
+The engine is a vocabulary of capabilities, named for what they do, never for the command that invokes them. A function moves to the engine only when its signature contains no CLI vocabulary. The CLI owns argv, stdout/stderr, and exit codes — nothing below a command's entry point touches them; workflows return typed results and the CLI renders. The public library surface is `domain` + `engine`; `cli` is a consumer, not an API.
+
 ---
 
 ## Pipeline-stage modularity
