@@ -6,7 +6,13 @@ use std::path::Path;
 use tempfile::TempDir;
 
 fn collect_html_test(url: &str, html: &str, output_dir: &Path) -> Result<Document, CollectError> {
-    collect_html_with_summarizer(url, html, output_dir, |_, _| "test summary".to_string())
+    collect_html_with_summarizer(
+        url,
+        html,
+        output_dir,
+        |_, _| "test summary".to_string(),
+        &mut Vec::new(),
+    )
 }
 
 #[test]
@@ -514,6 +520,7 @@ fn collect_appends_leaf_record_to_manifest_with_full_metadata() {
         "Substantial body about a topic.",
         dir.path(),
         "A summary of the article.".to_string(),
+        &mut Vec::new(),
     )
     .unwrap();
 
@@ -549,6 +556,7 @@ fn collect_writes_only_manifest_records() {
             &format!("Body for page {n}."),
             dir.path(),
             format!("Summary {n}"),
+            &mut Vec::new(),
         )
         .unwrap();
     }
@@ -576,6 +584,7 @@ fn collect_omits_summary_field_when_empty_string() {
         "Body.",
         dir.path(),
         String::new(),
+        &mut Vec::new(),
     )
     .unwrap();
 
@@ -622,6 +631,7 @@ fn fresh_collect_after_3b_does_not_write_index_secondary() {
         "Body.",
         dir.path(),
         "Summary".to_string(),
+        &mut Vec::new(),
     )
     .unwrap();
 
@@ -629,4 +639,47 @@ fn fresh_collect_after_3b_does_not_write_index_secondary() {
     assert_eq!(m.leaves.len(), 1);
     assert_eq!(m.leaves[0].url.as_str(), "https://example.com/page");
     assert!(!dir.path().join(".bo/index.jsonl").exists());
+}
+
+#[test]
+fn recovery_notice_lands_in_warnings_not_stderr() {
+    use crate::engine::pending;
+
+    let dir = TempDir::new().unwrap();
+    seed_for_collect(&dir, "recovery-warnings-tree");
+
+    // Stage a stale pending op (dead pid, matching manifest hash → rollback path).
+    let staged = b"rolled back";
+    fs::write(dir.path().join("stale-leaf.md.tmp"), staged).unwrap();
+    let op = pending::PendingOperation {
+        op: pending::OpKind::Collect {
+            url: "https://example.com/interrupted".to_string(),
+        },
+        started_at: "2020-01-01T00:00:00Z".to_string(),
+        pid: 99999,
+        pre_manifest_hash: pending::manifest_hash(dir.path()).unwrap(),
+        writes: vec![pending::PendingWrite {
+            path: "stale-leaf.md".to_string(),
+            content_hash: pending::content_hash(staged),
+        }],
+        deletes: vec![],
+    };
+    pending::write(&dir.path().join(".bo/pending.json"), &op).unwrap();
+
+    let mut warnings = Vec::new();
+    write_new_document_with_summary_result(
+        "https://example.com/next",
+        Some("Next"),
+        "Body.",
+        dir.path(),
+        "Summary".to_string(),
+        &mut warnings,
+    )
+    .unwrap();
+
+    assert!(
+        warnings.iter().any(|l| l.contains("recovered")),
+        "recovery notice should land in warnings: {:?}",
+        warnings
+    );
 }

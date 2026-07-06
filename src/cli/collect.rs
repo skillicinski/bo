@@ -329,8 +329,9 @@ pub fn collect_url_with_model(
     output_dir: &Path,
     model: &str,
     provider: crate::engine::llm::Provider,
+    warnings: &mut Vec<String>,
 ) -> Result<Document, CollectError> {
-    recover_pending_if_needed(output_dir)?;
+    recover_pending_if_needed(output_dir, warnings)?;
 
     // Check for an existing leaf with this URL before any network work —
     // duplicate detection must not depend on a successful fetch.
@@ -346,6 +347,7 @@ pub fn collect_url_with_model(
                 output_dir,
                 model,
                 provider,
+                warnings,
             );
         }
         YoutubeUrlMatch::Unsupported { url, reason } => {
@@ -367,7 +369,14 @@ pub fn collect_url_with_model(
         }
         Err(e) => return Err(e.into()),
     };
-    collect_html_with_model(&fetched.url, &fetched.html, output_dir, model, provider)
+    collect_html_with_model(
+        &fetched.url,
+        &fetched.html,
+        output_dir,
+        model,
+        provider,
+        warnings,
+    )
 }
 
 pub fn collect_html_with_model(
@@ -376,10 +385,15 @@ pub fn collect_html_with_model(
     output_dir: &Path,
     model: &str,
     provider: crate::engine::llm::Provider,
+    warnings: &mut Vec<String>,
 ) -> Result<Document, CollectError> {
-    collect_html_with_summarizer(url, html, output_dir, |body, title| {
-        generate_summary_with_model(body, title, model, provider)
-    })
+    collect_html_with_summarizer(
+        url,
+        html,
+        output_dir,
+        |body, title| generate_summary_with_model(body, title, model, provider),
+        warnings,
+    )
 }
 
 pub fn collect_html_with_summarizer<F>(
@@ -387,6 +401,7 @@ pub fn collect_html_with_summarizer<F>(
     html: &str,
     output_dir: &Path,
     summarize: F,
+    warnings: &mut Vec<String>,
 ) -> Result<Document, CollectError>
 where
     F: FnOnce(&str, Option<&str>) -> String,
@@ -416,6 +431,7 @@ where
         &content.body_markdown,
         output_dir,
         summary_text,
+        warnings,
     )
 }
 
@@ -727,12 +743,17 @@ pub fn duplicate_file(url: &str, output_dir: &Path) -> Result<Option<String>, Co
         .map(|l| l.file.clone()))
 }
 
-fn recover_pending_if_needed(output_dir: &Path) -> Result<(), CollectError> {
+/// Recovery notices are stderr-bound diagnostics: the pipeline collects them,
+/// the CLI renders post-run (#138 presentation-purity contract).
+fn recover_pending_if_needed(
+    output_dir: &Path,
+    warnings: &mut Vec<String>,
+) -> Result<(), CollectError> {
     if let Some(report) = pending::recover_or_refuse(output_dir)? {
-        eprintln!(
+        warnings.push(format!(
             "recovered {} changes from interrupted {}",
             report.changes, report.op
-        );
+        ));
     }
     Ok(())
 }
@@ -764,6 +785,8 @@ fn ensure_not_duplicate(url: &str, output_dir: &Path) -> Result<(), CollectError
     Ok(())
 }
 
+// ponytail: 7 args; collapse into a collect-context struct if it grows.
+#[allow(clippy::too_many_arguments)]
 fn write_new_document_with_model(
     url: &str,
     title: Option<&str>,
@@ -771,9 +794,17 @@ fn write_new_document_with_model(
     output_dir: &Path,
     model: &str,
     provider: crate::engine::llm::Provider,
+    warnings: &mut Vec<String>,
 ) -> Result<Document, CollectError> {
     let summary_text = generate_summary_with_model(body_markdown, title, model, provider);
-    write_new_document_with_summary_result(url, title, body_markdown, output_dir, summary_text)
+    write_new_document_with_summary_result(
+        url,
+        title,
+        body_markdown,
+        output_dir,
+        summary_text,
+        warnings,
+    )
 }
 
 fn generate_summary_with_model(
@@ -805,8 +836,9 @@ fn write_new_document_with_summary_result(
     body_markdown: &str,
     output_dir: &Path,
     summary_text: String,
+    warnings: &mut Vec<String>,
 ) -> Result<Document, CollectError> {
-    recover_pending_if_needed(output_dir)?;
+    recover_pending_if_needed(output_dir, warnings)?;
 
     let title_ref = title.unwrap_or("");
     let base_slug = Slug::generate(title_ref, url);
@@ -911,8 +943,9 @@ pub fn collect_batch_parallel(
     output_dir: &Path,
     model: &str,
     provider: crate::engine::llm::Provider,
+    warnings: &mut Vec<String>,
 ) -> Result<BatchCollectResult, CollectError> {
-    recover_pending_if_needed(output_dir)?;
+    recover_pending_if_needed(output_dir, warnings)?;
     let expanded = expand_collect_inputs(&inputs);
 
     // ── phase 1: dedup (sequential) ─────────────────────────────────────
