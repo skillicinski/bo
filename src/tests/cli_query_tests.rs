@@ -50,7 +50,7 @@ fn no_answer_errors_expose_codes_exit_codes_next_steps_and_details() {
 #[test]
 fn low_relevance_details_include_reason_and_matched_sources() {
     let error = QueryError::LowRelevance {
-        reason: LowRelevanceReason::GenericQuery,
+        reason: LowRelevanceReason::GenericTerms,
         matched_sources: 8,
     };
 

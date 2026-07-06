@@ -65,14 +65,14 @@ pub struct ScoredDoc {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LowRelevanceReason {
     WeakMatches,
-    GenericQuery,
+    GenericTerms,
 }
 
 impl LowRelevanceReason {
     pub fn as_str(&self) -> &'static str {
         match self {
             LowRelevanceReason::WeakMatches => "weak_matches",
-            LowRelevanceReason::GenericQuery => "generic_query",
+            LowRelevanceReason::GenericTerms => "generic_query",
         }
     }
 }
@@ -534,7 +534,7 @@ pub fn validate_relevance(terms: &[String], docs: &[RetrievedDoc]) -> Result<(),
 
     if is_mostly_generic(terms) && !docs.iter().any(|doc| is_focused_generic_match(doc, terms)) {
         return Err(RetrievalError::LowRelevance {
-            reason: LowRelevanceReason::GenericQuery,
+            reason: LowRelevanceReason::GenericTerms,
             matched_sources,
         });
     }

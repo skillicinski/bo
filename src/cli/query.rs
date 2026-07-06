@@ -135,7 +135,7 @@ impl fmt::Display for QueryError {
                     f,
                     "found matching sources, but they were not relevant enough to answer"
                 ),
-                LowRelevanceReason::GenericQuery => write!(
+                LowRelevanceReason::GenericTerms => write!(
                     f,
                     "query terms were too generic to identify relevant sources"
                 ),
@@ -187,7 +187,7 @@ impl QueryError {
                 LowRelevanceReason::WeakMatches => Some(
                     "ask a more specific question, use more specific terms, or collect sources on this topic",
                 ),
-                LowRelevanceReason::GenericQuery => {
+                LowRelevanceReason::GenericTerms => {
                     Some("ask with more specific terms from the topic you expect to find")
                 }
             },
