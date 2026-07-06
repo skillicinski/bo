@@ -696,8 +696,10 @@ where
         .effective_model()
         .map_err(|e| query::QueryError::NoProvider(e.to_string()))?;
     let tree = cfg.tree();
+    eprintln!("searching...");
     let prepared = query::prepare(tree.path(), question, &model)?;
     let provider = resolve_provider()?;
+    eprintln!("synthesizing...");
     query::run_prepared_with_provider(prepared, provider.as_ref())
 }
 

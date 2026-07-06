@@ -125,7 +125,7 @@ fn compile_validation_json_error_includes_next_action() {
 #[test]
 fn query_json_error_includes_low_relevance_details() {
     let error = query::QueryError::LowRelevance {
-        reason: query::LowRelevanceReason::GenericQuery,
+        reason: query::LowRelevanceReason::GenericTerms,
         matched_sources: 8,
     }
     .json_error();
