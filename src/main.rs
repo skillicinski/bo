@@ -286,21 +286,34 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 Err(error) => emit_cli_error("config", json, CliError::ConfigWrite(error), stderr),
             }
         }
-        Commands::Collect { inputs } => match execute_collect(inputs) {
-            Ok(CollectOutput::Single(result)) if json => {
-                emit_json_success("collect", &result, Vec::new(), stdout)
+        Commands::Collect { inputs } => {
+            let mut warnings = Vec::new();
+            let outcome = execute_collect(inputs, &mut warnings);
+            // Recovery notices are stderr-bound diagnostics collected by the
+            // pipeline; the CLI renders them post-run, on success and failure.
+            for line in &warnings {
+                let _ = writeln!(stderr, "{}", line);
             }
-            Ok(CollectOutput::Single(result)) => wrote(collect::render_human(&result, stdout), 0),
-            Ok(CollectOutput::Batch(result)) if json => emit_batch_collect_json(&result, stdout),
-            Ok(CollectOutput::Batch(result)) => {
-                let exit_code = if result.has_failures() { 1 } else { 0 };
-                match collect::render_batch_human(&result, stdout) {
-                    Ok(()) => exit_code,
-                    Err(_) => 1,
+            match outcome {
+                Ok(CollectOutput::Single(result)) if json => {
+                    emit_json_success("collect", &result, Vec::new(), stdout)
                 }
+                Ok(CollectOutput::Single(result)) => {
+                    wrote(collect::render_human(&result, stdout), 0)
+                }
+                Ok(CollectOutput::Batch(result)) if json => {
+                    emit_batch_collect_json(&result, stdout)
+                }
+                Ok(CollectOutput::Batch(result)) => {
+                    let exit_code = if result.has_failures() { 1 } else { 0 };
+                    match collect::render_batch_human(&result, stdout) {
+                        Ok(()) => exit_code,
+                        Err(_) => 1,
+                    }
+                }
+                Err(error) => emit_cli_error("collect", json, error, stderr),
             }
-            Err(error) => emit_cli_error("collect", json, error, stderr),
-        },
+        }
         Commands::Compile { all } => match require_seeded_config() {
             Err(error) => emit_cli_error("compile", json, error, stderr),
             Ok(config) => {
@@ -596,7 +609,10 @@ fn execute_raze(include_auth: bool) -> Result<raze::RazeOutput, CliError> {
     }
 }
 
-fn execute_collect(inputs: Vec<String>) -> Result<CollectOutput, CliError> {
+fn execute_collect(
+    inputs: Vec<String>,
+    warnings: &mut Vec<String>,
+) -> Result<CollectOutput, CliError> {
     let cfg = require_seeded_config()?;
     let tree = cfg.tree();
     let output_dir = tree.path().to_path_buf();
@@ -617,6 +633,7 @@ fn execute_collect(inputs: Vec<String>) -> Result<CollectOutput, CliError> {
             &output_dir,
             model.as_str(),
             cfg.config.provider,
+            warnings,
         )
         .map_err(CliError::Collect)?;
         return Ok(CollectOutput::Batch(result));
@@ -626,9 +643,14 @@ fn execute_collect(inputs: Vec<String>) -> Result<CollectOutput, CliError> {
     // collect_inputs_with_collector kept for unit tests only.
     let url = &inputs[0];
     eprintln!("fetching {}...", url);
-    let doc =
-        collect::collect_url_with_model(url, &output_dir, model.as_str(), cfg.config.provider)
-            .map_err(CliError::Collect)?;
+    let doc = collect::collect_url_with_model(
+        url,
+        &output_dir,
+        model.as_str(),
+        cfg.config.provider,
+        warnings,
+    )
+    .map_err(CliError::Collect)?;
     let path = output_dir.join(&doc.filename);
     Ok(CollectOutput::Single(collect::CollectResult {
         url: doc.url,
