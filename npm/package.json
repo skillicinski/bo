@@ -1,6 +1,6 @@
 {
   "name": "@skillicinski/bo",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Collect web pages into a local markdown knowledge tree",
   "bin": {
     "bo": "run.js"

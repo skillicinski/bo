@@ -6,9 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.0.7] - 2026-07-06
+
 ### Added
 
 - `custom` provider — point bo at any OpenAI-compatible endpoint via `bo config --provider custom --base-url <url> --model <model>`. Any non-empty model id is accepted. Auth via `CUSTOM_API_KEY` env var or `custom_api_key` in `~/.bo/auth.json`.
+
+### Changed
+
+- Compile and collect diagnostics (title-collision warnings, branch-repair notices, pending-recovery notices, per-branch write progress) now print to stderr after the run completes instead of interleaved mid-run. Content and destination unchanged — only the timing shifts.
+
+### Fixed
+
+- Tracing/diagnostic output now routes to stderr, keeping stdout clean for command output and `--json` parsing.
+
+### Architecture (non-user-facing)
+
+- The engine is now the public library surface — a vocabulary of capabilities named for what they do, never for the command that invokes them. Query's retrieval, NLP, relevance, context-assembly, and citation-validation layers moved from `cli` to `engine::retrieval` with a semantic `RetrievalError` mapped at the CLI boundary.
+- Presentation purity across all workflows: nothing below a command's entry point touches stdout/stderr; workflows return typed results and the CLI renders them. A TUI/REPL/web front-end can now compose the same primitives.
+- Compile pipeline stages completed: validation extracted into a dedicated I/O-free trust-boundary module owning `CompilePlan`, and `repair_stale_branches` decomposed into a classify → prune → repair → assemble pipeline.
 
 ## [0.0.6] - 2026-07-05
 
