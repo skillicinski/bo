@@ -108,6 +108,56 @@ fn format_content_title_with_backslash_and_quote_is_valid_yaml() {
     );
 }
 
+// ── title-heading dedup (issue #161) ─────────────────────────────────────
+
+#[test]
+fn format_content_skips_prepend_when_body_has_matching_h1() {
+    // Mirrors the byline-then-H1 shape trafilatura produces for articles like
+    // Thorsten Ball's "How to Build an Agent": the article's own H1 survives in
+    // the body but isn't the very first line.
+    let content = format_content(
+        Some(&title("How to Build an Agent")),
+        &url("https://example.com"),
+        &ts("2025-01-15T09:32:00Z"),
+        "Thorsten Ball//April 15, 2025\n\n# How to Build an Agent\n\nBody.",
+    );
+    assert_eq!(
+        content.matches("# How to Build an Agent").count(),
+        1,
+        "title heading should appear exactly once, got: {content}",
+    );
+}
+
+#[test]
+fn format_content_prepends_when_body_h1_differs_from_title() {
+    // A body heading that doesn't match the title is a real section, not a
+    // duplicate — bo's title is still prepended.
+    let content = format_content(
+        Some(&title("The Real Title")),
+        &url("https://example.com"),
+        &ts("2025-01-15T09:32:00Z"),
+        "# A Different Section\n\nBody.",
+    );
+    assert!(content.contains("# The Real Title"));
+    assert!(content.contains("# A Different Section"));
+}
+
+#[test]
+fn format_content_skips_prepend_is_case_insensitive() {
+    let content = format_content(
+        Some(&title("how to build an agent")),
+        &url("https://example.com"),
+        &ts("2025-01-15T09:32:00Z"),
+        "# How To Build An Agent\n\nBody.",
+    );
+    assert_eq!(
+        content.matches("# How To Build An Agent").count()
+            + content.matches("# how to build an agent").count(),
+        1,
+        "matching should be case-insensitive, got: {content}",
+    );
+}
+
 // ── omitted fields ────────────────────────────────────────────────────────
 
 #[test]
