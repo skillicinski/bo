@@ -683,3 +683,137 @@ fn recovery_notice_lands_in_warnings_not_stderr() {
         warnings
     );
 }
+
+// ── local markdown notes (#159) ─────────────────────────────────────────────
+
+#[test]
+fn note_synthetic_url_parses() {
+    // `bo` is a non-special scheme; url::Url must accept bo://note/<hex>.
+    assert!(Url::parse("bo://note/0123456789abcdef").is_ok());
+}
+
+#[test]
+fn is_local_note_file_requires_existing_md_without_scheme() {
+    let dir = TempDir::new().unwrap();
+    let md = dir.path().join("note.md");
+    fs::write(&md, "body").unwrap();
+
+    assert!(is_local_note_file(md.to_str().unwrap()));
+    assert!(!is_local_note_file(
+        dir.path().join("missing.md").to_str().unwrap()
+    ));
+    assert!(!is_local_note_file("https://example.com/page.md"));
+    let txt = dir.path().join("list.txt");
+    fs::write(&txt, "https://example.com").unwrap();
+    assert!(!is_local_note_file(txt.to_str().unwrap()));
+}
+
+#[test]
+fn expand_routes_existing_md_to_note() {
+    let dir = TempDir::new().unwrap();
+    let md = dir.path().join("n.md");
+    fs::write(&md, "body").unwrap();
+
+    let expanded = expand_collect_inputs(&[md.display().to_string()]);
+    assert!(matches!(expanded[0], ExpandedCollectInput::Note { .. }));
+}
+
+#[test]
+fn compute_leaf_note_strips_frontmatter_extracts_title_and_hashes_body() {
+    let dir = TempDir::new().unwrap();
+    let md = dir.path().join("note.md");
+    fs::write(
+        &md,
+        "---\ntitle: My Note\ntags: [x]\n---\n# Heading One\n\nSome body text.\n",
+    )
+    .unwrap();
+
+    let computed = compute_leaf_note(md.to_str().unwrap()).unwrap();
+    assert_eq!(computed.title.as_deref(), Some("Heading One"));
+    assert_eq!(computed.body_markdown, "Some body text.\n");
+    assert!(computed.url.starts_with("bo://note/"));
+    assert_eq!(computed.url.len(), "bo://note/".len() + 16);
+    assert!(
+        computed.note_warning.is_some(),
+        "non-empty frontmatter should warn"
+    );
+    assert!(computed.summary_text.is_empty());
+}
+
+#[test]
+fn compute_leaf_note_without_frontmatter_or_title_still_works() {
+    let dir = TempDir::new().unwrap();
+    let md = dir.path().join("plain.md");
+    fs::write(&md, "just a body, no heading").unwrap();
+
+    let computed = compute_leaf_note(md.to_str().unwrap()).unwrap();
+    assert!(computed.title.is_none());
+    assert!(computed.note_warning.is_none());
+    // Untitled note slug derives from the synthetic url → note-<hash>.
+    assert!(computed.url.starts_with("bo://note/"));
+}
+
+#[test]
+fn compute_leaf_note_rejects_empty_after_frontmatter() {
+    let dir = TempDir::new().unwrap();
+    let md = dir.path().join("empty.md");
+    fs::write(&md, "---\ntitle: x\n---\n\n").unwrap();
+
+    let err = compute_leaf_note(md.to_str().unwrap()).unwrap_err();
+    assert!(matches!(err, CollectError::Note(NoteError::Empty { .. })));
+}
+
+#[test]
+fn compute_leaf_note_identical_content_yields_same_url() {
+    let dir = TempDir::new().unwrap();
+    let a = dir.path().join("a.md");
+    let b = dir.path().join("b.md");
+    fs::write(&a, "# Same\n\nbody").unwrap();
+    fs::write(&b, "# Same\n\nbody").unwrap();
+
+    let first = compute_leaf_note(a.to_str().unwrap()).unwrap();
+    let second = compute_leaf_note(b.to_str().unwrap()).unwrap();
+    assert_eq!(
+        first.url, second.url,
+        "same content must hash to one source url"
+    );
+}
+
+#[test]
+fn collect_note_writes_leaf_with_no_summary_and_strips_frontmatter() {
+    let dir = TempDir::new().unwrap();
+    let md = dir.path().join("note.md");
+    fs::write(&md, "---\nauthor: me\n---\n# A Note\n\nhello world").unwrap();
+
+    let result =
+        collect_inputs_with_collector(vec![md.display().to_string()], dir.path(), |_url| {
+            panic!("notes must not fetch")
+        })
+        .unwrap();
+    let CollectOutput::Batch(result) = result else {
+        panic!("expected batch result, got {result:?}");
+    };
+    assert_eq!(result.summary.collected, 1);
+
+    let item = &result.items[0];
+    assert_eq!(item.status, CollectItemStatus::Collected);
+    assert!(item.url.as_deref().unwrap().starts_with("bo://note/"));
+
+    let written = fs::read_to_string(dir.path().join(item.file.as_deref().unwrap())).unwrap();
+    assert!(written.contains("# A Note"));
+    assert!(written.contains("hello world"));
+    assert!(written.contains("url: bo://note/"));
+    assert!(
+        !written.contains("author"),
+        "user frontmatter must be stripped"
+    );
+
+    // Notes skip the LLM summary: the manifest leaf carries no summary.
+    let manifest = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let leaf = manifest
+        .leaves
+        .iter()
+        .find(|l| l.url.as_str().starts_with("bo://note/"))
+        .expect("note leaf in manifest");
+    assert!(leaf.summary.is_none());
+}

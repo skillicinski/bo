@@ -62,6 +62,7 @@ pub enum CollectError {
     Io(std::io::Error),
     Manifest(manifest::ManifestError),
     Pending(pending::PendingError),
+    Note(NoteError),
 }
 
 impl fmt::Display for CollectError {
@@ -79,6 +80,7 @@ impl fmt::Display for CollectError {
             CollectError::Io(e) => write!(f, "I/O error: {}", e),
             CollectError::Manifest(e) => write!(f, "{}", e),
             CollectError::Pending(e) => write!(f, "{}", e),
+            CollectError::Note(e) => write!(f, "{}", e),
         }
     }
 }
@@ -130,6 +132,9 @@ pub fn error_code(error: &CollectError) -> &'static str {
         CollectError::Manifest(_) => "manifest_error",
         CollectError::Pending(pending::PendingError::Busy { .. }) => "tree_busy",
         CollectError::Pending(_) => "pending_error",
+        CollectError::Note(NoteError::Read { .. }) => "note_read_error",
+        CollectError::Note(NoteError::Empty { .. }) => "empty_note",
+        CollectError::Note(NoteError::MalformedFrontmatter { .. }) => "malformed_frontmatter",
     }
 }
 
@@ -150,6 +155,30 @@ impl CollectError {
         }
     }
 }
+
+// ── note errors ──────────────────────────────────────────────────────────────
+
+/// Errors specific to collecting a local markdown note.
+#[derive(Debug)]
+pub enum NoteError {
+    Read { path: String, error: std::io::Error },
+    Empty { path: String },
+    MalformedFrontmatter { path: String },
+}
+
+impl fmt::Display for NoteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NoteError::Read { path, error } => write!(f, "failed to read note {}: {}", path, error),
+            NoteError::Empty { path } => write!(f, "note {} has no content", path),
+            NoteError::MalformedFrontmatter { path } => {
+                write!(f, "note {} has malformed frontmatter", path)
+            }
+        }
+    }
+}
+
+impl std::error::Error for NoteError {}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CollectResult {
@@ -226,6 +255,10 @@ enum ExpandedCollectInput {
         url: String,
         from_file: bool,
     },
+    Note {
+        input: String,
+        path: String,
+    },
     Failure {
         item: CollectItemResult,
         from_file: bool,
@@ -236,11 +269,14 @@ enum ExpandedCollectInput {
 
 /// Output of the compute phase: everything needed to write a leaf, but no
 /// disk I/O performed yet. Safe to produce from multiple threads concurrently.
+#[derive(Debug)]
 struct ComputedLeaf {
     url: String,
     title: Option<String>,
     body_markdown: String,
     summary_text: String,
+    /// Frontmatter-strip warning for notes; `None` for fetched URLs.
+    note_warning: Option<String>,
 }
 
 // ── pipeline ─────────────────────────────────────────────────────────────────
@@ -268,6 +304,7 @@ fn compute_leaf_url(
                 title: Some(transcript.title),
                 body_markdown: transcript.body_markdown,
                 summary_text,
+                note_warning: None,
             });
         }
         YoutubeUrlMatch::Unsupported { url, reason } => {
@@ -321,7 +358,86 @@ fn compute_leaf_url(
         title: content.title,
         body_markdown: content.body_markdown,
         summary_text,
+        note_warning: None,
     })
+}
+
+/// Compute a note from a local `.md` file: read, strip user frontmatter,
+/// extract a title from the leading H1, and derive a content-addressed source
+/// URL. No fetch, no extract, no summary — notes store `summary: None`.
+///
+/// # ponytail: `bo://note/<sha256[:16]>` is a documented overload of `url` as
+/// source-id for source-less leaves. Upgrade to `Option<Url>` in the v0.1.0
+/// restructure if notes prove out.
+fn compute_leaf_note(path: &str) -> Result<ComputedLeaf, CollectError> {
+    let raw = fs::read_to_string(path).map_err(|error| {
+        CollectError::Note(NoteError::Read {
+            path: path.to_string(),
+            error,
+        })
+    })?;
+    let (body_after_frontmatter, note_warning) = strip_user_frontmatter(path, &raw)?;
+    if body_after_frontmatter.trim().is_empty() {
+        return Err(CollectError::Note(NoteError::Empty {
+            path: path.to_string(),
+        }));
+    }
+    // Hash the frontmatter-stripped body (including the H1 line) so identical
+    // notes dedup and edits mint a fresh leaf. sha256[:16] = 64 bits.
+    let url = format!(
+        "bo://note/{}",
+        &pending::content_hash(body_after_frontmatter.as_bytes())[..16]
+    );
+    let (title, body_markdown) = extract_note_title(&body_after_frontmatter);
+    Ok(ComputedLeaf {
+        url,
+        title,
+        body_markdown,
+        summary_text: String::new(),
+        note_warning,
+    })
+}
+
+/// Strip a leading YAML frontmatter block from a note. Returns the body and
+/// an optional warning when non-empty user frontmatter was removed — leaf
+/// frontmatter is bo-owned, so the shaping is always visible.
+fn strip_user_frontmatter(path: &str, raw: &str) -> Result<(String, Option<String>), CollectError> {
+    use crate::domain::frontmatter::{parse, FrontmatterError};
+    match parse(raw) {
+        Ok((mapping, body)) => {
+            let warning = if mapping.is_empty() {
+                None
+            } else {
+                Some(format!("stripped user frontmatter from {}", path))
+            };
+            Ok((body, warning))
+        }
+        Err(FrontmatterError::Missing) => Ok((raw.to_string(), None)),
+        Err(_) => Err(CollectError::Note(NoteError::MalformedFrontmatter {
+            path: path.to_string(),
+        })),
+    }
+}
+
+/// Pull a title from a leading `# ` heading and strip it from the body,
+/// mirroring fetched-page handling (`format_content` re-prepends `# title`).
+fn extract_note_title(body: &str) -> (Option<String>, String) {
+    let after_blank_lines = body.trim_start_matches('\n');
+    let Some(rest) = after_blank_lines.strip_prefix("# ") else {
+        return (None, body.to_string());
+    };
+    let (heading, remainder) = match rest.find('\n') {
+        Some(idx) => (
+            &rest[..idx],
+            rest[idx + 1..].trim_start_matches('\n').to_string(),
+        ),
+        None => (rest, String::new()),
+    };
+    let title = heading.trim();
+    if title.is_empty() {
+        return (None, body.to_string());
+    }
+    (Some(title.to_string()), remainder)
 }
 
 pub fn collect_url_with_model(
@@ -489,6 +605,12 @@ fn expand_collect_inputs(inputs: &[String]) -> Vec<ExpandedCollectInput> {
 }
 
 fn expand_collect_input(input: &str) -> Vec<ExpandedCollectInput> {
+    if is_local_note_file(input) {
+        return vec![ExpandedCollectInput::Note {
+            input: input.to_string(),
+            path: input.to_string(),
+        }];
+    }
     if !is_url_list_file(input) {
         return vec![ExpandedCollectInput::Url {
             input: input.to_string(),
@@ -563,6 +685,21 @@ fn is_url_list_file(input: &str) -> bool {
     true
 }
 
+/// A local markdown note: `.md` extension (case-insensitive), no URL scheme,
+/// and the file exists on disk. Existence naturally excludes bare domains
+/// and `https://.../x.md` URLs.
+pub fn is_local_note_file(input: &str) -> bool {
+    if input.contains("://") {
+        return false;
+    }
+    let path = Path::new(input);
+    let is_md = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
+    is_md && path.is_file()
+}
+
 // ponytail: dead from CLI, kept for unit tests via collect_inputs_with_collector.
 fn collect_batch<F>(
     expanded: Vec<ExpandedCollectInput>,
@@ -580,6 +717,72 @@ where
             ExpandedCollectInput::Url { input, url, .. } => (input, url),
             ExpandedCollectInput::Failure { item, .. } => {
                 items.push(item);
+                continue;
+            }
+            ExpandedCollectInput::Note { input, path } => {
+                let computed = match compute_leaf_note(&path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        items.push(collect_item_from_error(&input, &path, e));
+                        continue;
+                    }
+                };
+                let note_url = computed.url.clone();
+                if let Some(first_input) = seen.get(&note_url) {
+                    items.push(collect_skipped_item(
+                        &input,
+                        &note_url,
+                        "duplicate_input",
+                        format!("duplicate note first listed at {first_input}"),
+                        None,
+                    ));
+                    continue;
+                }
+                seen.insert(note_url.clone(), input.clone());
+                match duplicate_file(&note_url, output_dir) {
+                    Ok(Some(existing_file)) => {
+                        items.push(collect_skipped_item(
+                            &input,
+                            &note_url,
+                            "duplicate_url",
+                            format!("already collected → {existing_file}"),
+                            Some(existing_file),
+                        ));
+                        continue;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        items.push(collect_item_from_error(&input, &note_url, error));
+                        continue;
+                    }
+                }
+                let mut note_warnings = Vec::new();
+                if let Some(warning) = &computed.note_warning {
+                    note_warnings.push(warning.clone());
+                }
+                match write_new_document_with_summary_result(
+                    &note_url,
+                    computed.title.as_deref(),
+                    &computed.body_markdown,
+                    output_dir,
+                    computed.summary_text,
+                    &mut note_warnings,
+                ) {
+                    Ok(page) => items.push(collect_success_item(
+                        &input,
+                        collect_result_from_document(output_dir, page),
+                    )),
+                    Err(CollectError::DuplicateUrl { existing_file }) => {
+                        items.push(collect_skipped_item(
+                            &input,
+                            &note_url,
+                            "duplicate_url",
+                            format!("already collected → {existing_file}"),
+                            Some(existing_file),
+                        ))
+                    }
+                    Err(error) => items.push(collect_item_from_error(&input, &note_url, error)),
+                }
                 continue;
             }
         };
@@ -952,12 +1155,54 @@ pub fn collect_batch_parallel(
     let mut seen: HashMap<String, String> = HashMap::new();
     let mut items: Vec<CollectItemResult> = Vec::new();
     let mut to_compute: Vec<(String, String)> = Vec::new();
+    // Notes are computed inline (no fetch) and carried to phase 3 pre-computed.
+    let mut precomputed_notes: Vec<(String, ComputedLeaf)> = Vec::new();
 
     for input in expanded {
         let (input_label, url) = match input {
             ExpandedCollectInput::Url { input, url, .. } => (input, url),
             ExpandedCollectInput::Failure { item, .. } => {
                 items.push(item);
+                continue;
+            }
+            ExpandedCollectInput::Note { input, path } => {
+                let computed = match compute_leaf_note(&path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        items.push(collect_item_from_error(&input, &path, e));
+                        continue;
+                    }
+                };
+                let note_url = computed.url.clone();
+                if let Some(first_input) = seen.get(&note_url) {
+                    items.push(collect_skipped_item(
+                        &input,
+                        &note_url,
+                        "duplicate_input",
+                        format!("duplicate note first listed at {first_input}"),
+                        None,
+                    ));
+                    continue;
+                }
+                seen.insert(note_url.clone(), input.clone());
+                match duplicate_file(&note_url, output_dir) {
+                    Ok(Some(existing_file)) => {
+                        items.push(collect_skipped_item(
+                            &input,
+                            &note_url,
+                            "duplicate_url",
+                            format!("already collected → {existing_file}"),
+                            Some(existing_file),
+                        ));
+                        continue;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        items.push(collect_item_from_error(&input, &note_url, error));
+                        continue;
+                    }
+                }
+                precomputed_notes.push((input, computed));
                 continue;
             }
         };
@@ -996,51 +1241,56 @@ pub fn collect_batch_parallel(
     }
 
     // ── phase 2: parallel compute ────────────────────────────────────────
-    let compute_results: Vec<(String, String, Result<ComputedLeaf, CollectError>)> = if to_compute
-        .is_empty()
-    {
-        Vec::new()
-    } else {
-        // Chunk to limit concurrent threads — each thread is I/O-bound.
-        const CHUNK_SIZE: usize = 20;
-        let mut results = Vec::with_capacity(to_compute.len());
-        for chunk in to_compute.chunks(CHUNK_SIZE) {
-            let handles: Vec<(String, String, thread::JoinHandle<_>)> = chunk
-                .iter()
-                .map(|(input, url)| {
-                    let input = input.clone();
-                    let url = url.clone();
-                    let model = model.to_string();
-                    let url_for_thread = url.clone();
-                    let handle =
-                        thread::spawn(move || compute_leaf_url(&url_for_thread, &model, provider));
-                    (input, url, handle)
-                })
-                .collect();
-            for (input, url, handle) in handles {
-                match handle.join() {
-                    Ok(compute_result) => results.push((input, url, compute_result)),
-                    Err(panic) => {
-                        let msg = if let Some(s) = panic.downcast_ref::<&str>() {
-                            s.to_string()
-                        } else if let Some(s) = panic.downcast_ref::<String>() {
-                            s.clone()
-                        } else {
-                            format!("{panic:?}")
-                        };
-                        results.push((
-                            input,
-                            url.clone(),
-                            Err(CollectError::Fetch(fetch::FetchError::Network(format!(
-                                "compute thread panicked for {url}: {msg}"
-                            )))),
-                        ));
+    let mut compute_results: Vec<(String, String, Result<ComputedLeaf, CollectError>)> =
+        if to_compute.is_empty() {
+            Vec::new()
+        } else {
+            // Chunk to limit concurrent threads — each thread is I/O-bound.
+            const CHUNK_SIZE: usize = 20;
+            let mut results = Vec::with_capacity(to_compute.len());
+            for chunk in to_compute.chunks(CHUNK_SIZE) {
+                let handles: Vec<(String, String, thread::JoinHandle<_>)> = chunk
+                    .iter()
+                    .map(|(input, url)| {
+                        let input = input.clone();
+                        let url = url.clone();
+                        let model = model.to_string();
+                        let url_for_thread = url.clone();
+                        let handle = thread::spawn(move || {
+                            compute_leaf_url(&url_for_thread, &model, provider)
+                        });
+                        (input, url, handle)
+                    })
+                    .collect();
+                for (input, url, handle) in handles {
+                    match handle.join() {
+                        Ok(compute_result) => results.push((input, url, compute_result)),
+                        Err(panic) => {
+                            let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                                s.to_string()
+                            } else if let Some(s) = panic.downcast_ref::<String>() {
+                                s.clone()
+                            } else {
+                                format!("{panic:?}")
+                            };
+                            results.push((
+                                input,
+                                url.clone(),
+                                Err(CollectError::Fetch(fetch::FetchError::Network(format!(
+                                    "compute thread panicked for {url}: {msg}"
+                                )))),
+                            ));
+                        }
                     }
                 }
             }
-        }
-        results
-    };
+            results
+        };
+
+    // Fold pre-computed notes into the same commit stream as fetched URLs.
+    for (input, computed) in precomputed_notes {
+        compute_results.push((input, computed.url.clone(), Ok(computed)));
+    }
 
     // ── phase 3: sequential commit ───────────────────────────────────────
     let now = Timestamp::now();
@@ -1054,6 +1304,9 @@ pub fn collect_batch_parallel(
     for (input_label, url, result) in compute_results {
         match result {
             Ok(computed) => {
+                if let Some(warning) = &computed.note_warning {
+                    warnings.push(warning.clone());
+                }
                 let base_slug =
                     Slug::generate(computed.title.as_deref().unwrap_or(""), &computed.url);
                 let filename = slug::resolve_slug(&base_slug, &computed.url, &mut used_slugs);
