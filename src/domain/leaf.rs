@@ -64,7 +64,13 @@ pub fn format_content(
 
     let mut full_body = String::new();
     if let Some(t) = title {
-        full_body.push_str(&format!("# {}\n\n", t.as_str()));
+        // Don't duplicate the title when the extracted body already opens with
+        // an H1 matching it — e.g. an article that leads with a byline before
+        // its own `# Title`. The prepend exists for bodies that lost their
+        // heading during extraction.
+        if !body_has_title_h1(body, t.as_str()) {
+            full_body.push_str(&format!("# {}\n\n", t.as_str()));
+        }
     }
     full_body.push_str(body);
     if !full_body.ends_with('\n') {
@@ -73,6 +79,24 @@ pub fn format_content(
 
     crate::domain::frontmatter::render(&fm, &full_body)
         .expect("yaml serialization failure in leaf frontmatter")
+}
+
+/// True if `body`'s first H1 matches `title` (case-insensitive, trimmed), so
+/// `format_content` should not prepend its own heading. Only the first `# `
+/// line is considered — a heading deeper in the body is a section, not the
+/// title. The H1 need not be the very first line: articles often lead with a
+/// byline before the heading (issue #161).
+fn body_has_title_h1(body: &str, title: &str) -> bool {
+    let want = title.trim().to_lowercase();
+    if want.is_empty() {
+        return false;
+    }
+    for line in body.lines() {
+        if let Some(rest) = line.trim_start().strip_prefix("# ") {
+            return rest.trim().to_lowercase() == want;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
