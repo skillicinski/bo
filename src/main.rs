@@ -57,9 +57,9 @@ enum Commands {
         #[arg(long)]
         model: Option<String>,
     },
-    /// Fetch one or more URLs and collect them
+    /// Collect URLs, a URL list, or local markdown notes
     #[command(
-        after_help = "Examples:\n  bo collect https://example.com/a https://example.com/b\n  bo collect urls.txt\n\nURL list files must use .txt and contain one URL per non-empty line."
+        after_help = "Examples:\n  bo collect https://example.com/a https://example.com/b\n  bo collect urls.txt\n  bo collect ./note.md\n\nURL list files must use .txt and contain one URL per non-empty line.\nLocal .md files are collected as notes (frontmatter stripped, no fetch)."
     )]
     Collect {
         /// URL(s) or a .txt file containing URLs, one per non-empty line
@@ -625,7 +625,8 @@ fn execute_collect(
     let use_parallel = inputs.len() > 1
         || inputs
             .iter()
-            .any(|i| i.ends_with(".txt") && !i.contains("://"));
+            .any(|i| i.ends_with(".txt") && !i.contains("://"))
+        || inputs.iter().any(|i| collect::is_local_note_file(i));
 
     if use_parallel {
         let result = collect::collect_batch_parallel(
