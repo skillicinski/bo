@@ -188,6 +188,8 @@ fn query_preflight_no_answer_takes_precedence_over_missing_provider() {
         matches!(err, query::QueryError::NoResults)
     });
 
+    // With token-level scoring, "rust" no longer matches inside "Trust";
+    // the query correctly returns NoResults (preflight, no provider call).
     let weak = TempDir::new().unwrap();
     write_leaf(
         weak.path(),
@@ -204,13 +206,7 @@ fn query_preflight_no_answer_takes_precedence_over_missing_provider() {
         )],
     );
     assert_no_provider_resolver_not_called(&seeded_config(weak.path()), "rust", |err| {
-        matches!(
-            err,
-            query::QueryError::LowRelevance {
-                reason: query::LowRelevanceReason::WeakMatches,
-                ..
-            }
-        )
+        matches!(err, query::QueryError::NoResults)
     });
 }
 
