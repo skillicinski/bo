@@ -160,47 +160,53 @@ struct Scorable {
 }
 
 /// Score a stream of documents against `terms` using token-level matching
-/// with IDF weighting. Matches at the token level (not substring), weights
-/// each term by smoothed IDF: `1 + log(N/df)`. OR semantics.
+/// with IDF weighting, normalized by document length. Matches at the token
+/// level (not substring), weights each term by smoothed IDF: `1 + log(N/df)`,
+/// then divides by token count. OR semantics.
 /// Returns only docs with score > 0, unsorted (caller sorts).
 fn score_candidates(
     candidates: impl Iterator<Item = Scorable>,
     terms: &[String],
 ) -> Vec<ScoredDoc> {
-    let candidates: Vec<Scorable> = candidates.collect();
-    let n = candidates.len();
+    // Tokenize each doc once
+    let docs: Vec<(Scorable, Vec<String>)> = candidates
+        .map(|c| {
+            let searchable = format!("{} {} {}", c.title, c.summary, c.body).to_lowercase();
+            let tokens = tokenize(&searchable);
+            (c, tokens)
+        })
+        .collect();
+
+    let n = docs.len();
     if n == 0 || terms.is_empty() {
         return Vec::new();
     }
 
+    // Document frequency from pre-tokenized docs
     let df: Vec<usize> = terms
         .iter()
         .map(|term| {
-            candidates
-                .iter()
-                .filter(|c| {
-                    let searchable = format!("{} {} {}", c.title, c.summary, c.body).to_lowercase();
-                    let doc_tokens = tokenize(&searchable);
-                    count_term_hits_in_tokens(&doc_tokens, term) > 0
-                })
+            docs.iter()
+                .filter(|(_, tokens)| count_term_hits_in_tokens(tokens, term) > 0)
                 .count()
         })
         .collect();
 
-    candidates
-        .into_iter()
-        .filter_map(|c| {
-            let searchable = format!("{} {} {}", c.title, c.summary, c.body).to_lowercase();
-            let doc_tokens = tokenize(&searchable);
+    docs.into_iter()
+        .filter_map(|(c, tokens)| {
+            let token_count = tokens.len();
+            if token_count == 0 {
+                return None;
+            }
 
-            let score: f64 = terms
+            let raw_score: f64 = terms
                 .iter()
                 .zip(df.iter())
                 .map(|(term, &df)| {
                     if df == 0 {
                         return 0.0;
                     }
-                    let hits = count_term_hits_in_tokens(&doc_tokens, term);
+                    let hits = count_term_hits_in_tokens(&tokens, term);
                     if hits == 0 {
                         return 0.0;
                     }
@@ -209,9 +215,11 @@ fn score_candidates(
                 })
                 .sum();
 
-            if score == 0.0 {
+            if raw_score == 0.0 {
                 return None;
             }
+
+            let score = raw_score / token_count as f64;
 
             Some(ScoredDoc {
                 kind: c.kind,
@@ -230,11 +238,11 @@ fn score_candidates(
 
 // ── public API: corpus scoring ───────────────────────────────────────────────
 
-/// Score all leaves in a manifest against the given terms.
-///
-/// Reads leaf files from `tree_dir`. Skips missing/unreadable/malformed files.
-pub fn score_corpus(tree_dir: &Path, manifest: &Manifest, terms: &[String]) -> Vec<ScoredDoc> {
-    let candidates = manifest.leaves.iter().filter_map(|leaf| {
+fn iter_leaves<'a>(
+    tree_dir: &'a Path,
+    manifest: &'a Manifest,
+) -> impl Iterator<Item = Scorable> + 'a {
+    manifest.leaves.iter().filter_map(move |leaf| {
         let body = read_body(tree_dir, &leaf.file)?;
         let title = leaf
             .title
@@ -255,19 +263,14 @@ pub fn score_corpus(tree_dir: &Path, manifest: &Manifest, terms: &[String]) -> V
             body,
             collected_at: Some(leaf.collected_at.to_rfc3339_millis()),
         })
-    });
-    score_candidates(candidates, terms)
+    })
 }
 
-/// Score all branches in a manifest against the given terms.
-///
-/// A branch is a synthesized concept page; its body is the cross-source
-/// synthesis, so it is scored as a single searchable document. Branches have
-/// no URL (`url` empty, `collected_at` None). This makes compile's synthesized
-/// output reachable at retrieval time — without it, only raw leaves are visible
-/// and the compiled branches are invisible.
-pub fn score_branches(tree_dir: &Path, manifest: &Manifest, terms: &[String]) -> Vec<ScoredDoc> {
-    let candidates = manifest.branches.iter().filter_map(|branch| {
+fn iter_branches<'a>(
+    tree_dir: &'a Path,
+    manifest: &'a Manifest,
+) -> impl Iterator<Item = Scorable> + 'a {
+    manifest.branches.iter().filter_map(move |branch| {
         let body = read_body(tree_dir, &branch.file)?;
         let title = branch.title.as_str().to_string();
         let summary = summary::generate_fallback(&body);
@@ -281,8 +284,25 @@ pub fn score_branches(tree_dir: &Path, manifest: &Manifest, terms: &[String]) ->
             body,
             collected_at: None,
         })
-    });
-    score_candidates(candidates, terms)
+    })
+}
+
+/// Score all leaves in a manifest against the given terms.
+///
+/// Reads leaf files from `tree_dir`. Skips missing/unreadable/malformed files.
+pub fn score_corpus(tree_dir: &Path, manifest: &Manifest, terms: &[String]) -> Vec<ScoredDoc> {
+    score_candidates(iter_leaves(tree_dir, manifest), terms)
+}
+
+/// Score all branches in a manifest against the given terms.
+///
+/// A branch is a synthesized concept page; its body is the cross-source
+/// synthesis, so it is scored as a single searchable document. Branches have
+/// no URL (`url` empty, `collected_at` None). This makes compile's synthesized
+/// output reachable at retrieval time — without it, only raw leaves are visible
+/// and the compiled branches are invisible.
+pub fn score_branches(tree_dir: &Path, manifest: &Manifest, terms: &[String]) -> Vec<ScoredDoc> {
+    score_candidates(iter_branches(tree_dir, manifest), terms)
 }
 
 /// Read a file under `tree_dir` and return its post-frontmatter body, or None
@@ -508,11 +528,13 @@ pub fn retrieve_docs(
         return Err(RetrievalError::EmptyTree);
     }
 
-    let leaves = score_corpus(tree_dir, &manifest, terms);
-    let branches = score_branches(tree_dir, &manifest, terms);
-    let corpus = leaves.into_iter().chain(branches);
+    let scored = score_candidates(
+        iter_leaves(tree_dir, &manifest).chain(iter_branches(tree_dir, &manifest)),
+        terms,
+    );
 
-    let mut scored: Vec<RetrievedDoc> = corpus
+    let mut scored: Vec<RetrievedDoc> = scored
+        .into_iter()
         .map(|s| {
             let diagnostics = compute_retrieval_diagnostics(&s.title, &s.summary, &s.body, terms);
             // ponytail: field-by-field copy from ScoredDoc rather than embedding it —
