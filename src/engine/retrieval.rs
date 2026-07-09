@@ -159,36 +159,60 @@ struct Scorable {
     collected_at: Option<String>,
 }
 
-/// Score a stream of documents against `terms`.
-///
-/// // ponytail: substring density, not BM25/TF-IDF. `str::matches` counts
-/// // overlapping substring occurrences in lowercased `title summary body`,
-/// // so "rust" hits inside "trust". Good enough at bo's scale (<~1k leaves);
-/// // if relevance degrades, move to token-aware scoring. The token-aware
-/// // diagnostics path now lives in this same module (`compute_retrieval_diagnostics`
-/// // via `count_term_hits_in_tokens`); unifying the two scorers is a deferred
-/// // restructure, not this move.
-/// // OR semantics: any term hit counts. Score = total_hits * 1000 / word_count.
-/// // Returns only docs with score > 0, unsorted (caller sorts).
+/// Score a stream of documents against `terms` using token-level matching
+/// with IDF weighting. Matches at the token level (not substring), weights
+/// each term by smoothed IDF: `1 + log(N/df)`. OR semantics.
+/// Returns only docs with score > 0, unsorted (caller sorts).
 fn score_candidates(
     candidates: impl Iterator<Item = Scorable>,
     terms: &[String],
 ) -> Vec<ScoredDoc> {
+    let candidates: Vec<Scorable> = candidates.collect();
+    let n = candidates.len();
+    if n == 0 || terms.is_empty() {
+        return Vec::new();
+    }
+
+    let df: Vec<usize> = terms
+        .iter()
+        .map(|term| {
+            candidates
+                .iter()
+                .filter(|c| {
+                    let searchable = format!("{} {} {}", c.title, c.summary, c.body).to_lowercase();
+                    let doc_tokens = tokenize(&searchable);
+                    count_term_hits_in_tokens(&doc_tokens, term) > 0
+                })
+                .count()
+        })
+        .collect();
+
     candidates
+        .into_iter()
         .filter_map(|c| {
             let searchable = format!("{} {} {}", c.title, c.summary, c.body).to_lowercase();
-            let word_count = searchable.split_whitespace().count();
-            if word_count == 0 {
-                return None;
-            }
-            let total_hits: usize = terms
+            let doc_tokens = tokenize(&searchable);
+
+            let score: f64 = terms
                 .iter()
-                .map(|term| searchable.matches(term.as_str()).count())
+                .zip(df.iter())
+                .map(|(term, &df)| {
+                    if df == 0 {
+                        return 0.0;
+                    }
+                    let hits = count_term_hits_in_tokens(&doc_tokens, term);
+                    if hits == 0 {
+                        return 0.0;
+                    }
+                    let idf = 1.0 + (n as f64 / df as f64).ln();
+                    (hits as f64) * idf
+                })
                 .sum();
-            if total_hits == 0 {
+
+            if score == 0.0 {
                 return None;
             }
-            let score = (total_hits as f64 * 1000.0) / word_count as f64;
+
             Some(ScoredDoc {
                 kind: c.kind,
                 slug: c.slug,
