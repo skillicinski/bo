@@ -155,11 +155,13 @@ pub fn context_window_tokens(provider: Provider, model_id: &str) -> Option<usize
         return Some(CUSTOM_CONTEXT_TOKENS);
     }
     if provider == Provider::Google {
-        return Some(
-            find_model(provider, model_id)
-                .map(|entry| entry.context_tokens)
-                .unwrap_or(GOOGLE_CONTEXT_TOKENS),
-        );
+        return Some(google_context_tokens(model_id));
     }
     find_model(provider, model_id).map(|entry| entry.context_tokens)
+}
+
+pub(crate) fn google_context_tokens(model_id: &str) -> usize {
+    find_model(Provider::Google, model_id)
+        .map(|e| e.context_tokens)
+        .unwrap_or(GOOGLE_CONTEXT_TOKENS)
 }

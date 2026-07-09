@@ -41,24 +41,9 @@ impl Model {
     pub fn parse(id: &str, provider: Provider) -> Result<Self, UnsupportedModel> {
         let trimmed = id.trim();
         match provider {
-            Provider::Custom | Provider::Google => {
-                if trimmed.is_empty() {
-                    return Err(UnsupportedModel {
-                        id: String::new(),
-                        provider,
-                    });
-                }
-                let context_tokens = match provider {
-                    Provider::Custom => models::CUSTOM_CONTEXT_TOKENS,
-                    Provider::Google => models::find_model(provider, trimmed)
-                        .map(|entry| entry.context_tokens)
-                        .unwrap_or(models::GOOGLE_CONTEXT_TOKENS),
-                    _ => unreachable!(),
-                };
-                Ok(Self {
-                    id: trimmed.to_string(),
-                    context_tokens,
-                })
+            Provider::Custom => open_registry(trimmed, provider, models::CUSTOM_CONTEXT_TOKENS),
+            Provider::Google => {
+                open_registry(trimmed, provider, models::google_context_tokens(trimmed))
             }
             _ => {
                 let info =
@@ -89,6 +74,25 @@ impl fmt::Display for Model {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.id)
     }
+}
+
+/// Build a Model from a non-empty id for a provider with no hard registry
+/// (Custom, Google). The caller supplies the context-token count.
+fn open_registry(
+    id: &str,
+    provider: Provider,
+    context_tokens: usize,
+) -> Result<Model, UnsupportedModel> {
+    if id.is_empty() {
+        return Err(UnsupportedModel {
+            id: String::new(),
+            provider,
+        });
+    }
+    Ok(Model {
+        id: id.to_string(),
+        context_tokens,
+    })
 }
 
 #[cfg(test)]
