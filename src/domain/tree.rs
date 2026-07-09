@@ -4,8 +4,9 @@
 // branches and leaves. The hierarchy is:
 //
 //   Tree
-//    ├── branches/   (Branch files written by `bo compile`)
-//    └── *.md        (Leaf files written by `bo collect`)
+//    ├── branch/   (Branch files written by `bo compile`)
+//    ├── leaf/     (Leaf files written by `bo collect`)
+//    └── .bo/      (manifest.json + pending.json runtime state)
 //
 // The active tree's metadata lives in `~/.bo/config.json` under `tree`.
 // Runtime tree state lives in `{tree}/.bo/manifest.json` once collection starts.
@@ -66,8 +67,13 @@ impl Tree {
     }
 
     /// Path to the directory that holds branch files for this tree.
-    pub fn branches_dir(&self) -> PathBuf {
-        self.path.join("branches")
+    pub fn branch_dir(&self) -> PathBuf {
+        self.path.join("branch")
+    }
+
+    /// Path to the directory that holds leaf files for this tree.
+    pub fn leaf_dir(&self) -> PathBuf {
+        self.path.join("leaf")
     }
 }
 
@@ -80,9 +86,14 @@ pub enum TreeRuntimeState {
 
 // ── Free path helpers ──────────────────────────────────────────────────────────
 
-/// Branches directory from a bare tree directory.
-pub fn branches_dir(tree_dir: &Path) -> PathBuf {
-    tree_dir.join("branches")
+/// Branch directory from a bare tree directory.
+pub fn branch_dir(tree_dir: &Path) -> PathBuf {
+    tree_dir.join("branch")
+}
+
+/// Leaf directory from a bare tree directory.
+pub fn leaf_dir(tree_dir: &Path) -> PathBuf {
+    tree_dir.join("leaf")
 }
 
 /// Manifest path from a bare tree directory.

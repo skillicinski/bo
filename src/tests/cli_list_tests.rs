@@ -711,7 +711,7 @@ fn write_manifest(tree_dir: &Path, leaves: &[Leaf], branches: &[(&str, &[&str])]
         .iter()
         .map(|(slug, leaf_slugs)| Branch {
             slug: Slug::parse(slug).unwrap(),
-            file: format!("branches/{}.md", slug),
+            file: format!("branch/{}.md", slug),
             title: Title::parse(slug).unwrap(),
             created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             updated_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),

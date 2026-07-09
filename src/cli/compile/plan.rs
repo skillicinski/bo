@@ -202,10 +202,7 @@ fn build_branch_artifacts(
     let slug = Slug::parse(&planned.slug).unwrap_or_else(|_| Slug::generate(&planned.slug, ""));
     let (file, created_at) = match existing {
         Some(ex) => (ex.file.clone(), ex.created_at.clone()),
-        None => (
-            format!("branches/{}.md", planned.slug),
-            run_timestamp.clone(),
-        ),
+        None => (format!("branch/{}.md", planned.slug), run_timestamp.clone()),
     };
     let record = Branch {
         slug: slug.clone(),

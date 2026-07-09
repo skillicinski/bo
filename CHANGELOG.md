@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **breaking** tree layout: leaves now live in `leaf/` and branches in `branch/` (was root-level `.md` and `branches/`). Every domain entity gets its own singular directory. No migration — pre-user break.
+
 ### Fixed
 
 - Code blocks in collected articles are now preserved as fenced markdown instead of being flattened into single-line inline code spans. Multi-line `<pre>`/`<code>` blocks keep their line breaks.

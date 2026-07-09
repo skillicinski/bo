@@ -964,10 +964,13 @@ fn recover_pending_if_needed(
 /// Snapshot on-disk slug stems (filenames minus `.md`) so slug resolution
 /// can avoid collisions without probing the filesystem per slug.
 ///
+/// Existing leaf slug stems from disk, scanned from `leaf/` (leaves moved out of
+/// the tree root in the per-entity layout).
+///
 /// # ponytail: read_dir failure = empty set, matches old .exists() false-on-error semantics
 fn existing_slug_stems(output_dir: &Path) -> std::collections::HashSet<String> {
     let mut stems = std::collections::HashSet::new();
-    let entries = match std::fs::read_dir(output_dir) {
+    let entries = match std::fs::read_dir(output_dir.join("leaf")) {
         Ok(entries) => entries,
         Err(_) => return stems,
     };
@@ -1051,7 +1054,7 @@ fn write_new_document_with_summary_result(
     // ponytail: URL already validated at fetch time; panic on impossible parse error.
     let domain_url = Url::parse(url).expect("URL already validated at fetch time");
     let domain_title = title.and_then(|t| Title::parse(t).ok());
-    let leaf_file = format!("{}.md", filename);
+    let leaf_file = format!("leaf/{}.md", filename);
     let leaf_content =
         leaf::format_content(domain_title.as_ref(), &domain_url, &now, body_markdown);
     let leaf_write = PendingWrite {
@@ -1310,7 +1313,7 @@ pub fn collect_batch_parallel(
                 let base_slug =
                     Slug::generate(computed.title.as_deref().unwrap_or(""), &computed.url);
                 let filename = slug::resolve_slug(&base_slug, &computed.url, &mut used_slugs);
-                let leaf_file = format!("{}.md", filename);
+                let leaf_file = format!("leaf/{}.md", filename);
                 let domain_url =
                     Url::parse(&computed.url).expect("URL already validated at fetch time");
                 let domain_title = computed.title.as_deref().and_then(|t| Title::parse(t).ok());

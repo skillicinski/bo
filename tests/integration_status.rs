@@ -73,7 +73,9 @@ fn write_leaf(tree_dir: &Path, slug: &str, url: &str) {
     let content = format!(
         "---\ntitle: \"{slug}\"\nurl: {url}\ncollected_at: {collected_at}\nupdated_at: {collected_at}\n---\n\n# {slug}\n\nContent for {slug}.\n"
     );
-    fs::write(tree_dir.join(&filename), content).unwrap();
+    let leaf_dir = tree_dir.join("leaf");
+    fs::create_dir_all(&leaf_dir).unwrap();
+    fs::write(leaf_dir.join(&filename), content).unwrap();
 
     // Append to manifest so reads see the leaf.
     let manifest_path = tree_dir.join(".bo/manifest.json");
@@ -81,7 +83,7 @@ fn write_leaf(tree_dir: &Path, slug: &str, url: &str) {
     let mut m = bo::engine::manifest::read(&manifest_path).unwrap();
     m.leaves.push(bo::domain::Leaf {
         slug: Slug::parse(slug).unwrap(),
-        file: filename,
+        file: format!("leaf/{filename}"),
         title: Title::parse(slug).ok(),
         url: Url::parse(url).unwrap(),
         collected_at: Timestamp::parse(collected_at).unwrap(),
@@ -91,7 +93,7 @@ fn write_leaf(tree_dir: &Path, slug: &str, url: &str) {
 }
 
 fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
-    let branches_dir = tree_dir.join("branches");
+    let branches_dir = tree_dir.join("branch");
     fs::create_dir_all(&branches_dir).unwrap();
     let content = format!(
         "---\ntitle: \"{slug}\"\ncreated_at: {created_at}\nupdated_at: {created_at}\nleaves:\n  - some-leaf\n---\n\n# {slug}\n\nBranch body.\n"
@@ -104,7 +106,7 @@ fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
     let mut m = bo::engine::manifest::read(&manifest_path).unwrap();
     m.branches.push(bo::domain::Branch {
         slug: Slug::parse(slug).unwrap(),
-        file: format!("branches/{}.md", slug),
+        file: format!("branch/{}.md", slug),
         title: Title::parse(slug).unwrap(),
         created_at: Timestamp::parse(created_at).unwrap(),
         updated_at: Timestamp::parse(created_at).unwrap(),
@@ -188,7 +190,7 @@ fn status_detects_orphan_manifest_entry() {
     write_leaf(&tree_dir, "will-delete", "https://deleted.com");
 
     // Now delete the file but leave the manifest entry
-    fs::remove_file(tree_dir.join("will-delete.md")).unwrap();
+    fs::remove_file(tree_dir.join("leaf/will-delete.md")).unwrap();
 
     let out = status_json(tmp.path());
     assert!(out.status.success());
@@ -198,7 +200,7 @@ fn status_detects_orphan_manifest_entry() {
 
     let orphans = &json["data"]["health"]["orphan_index_entries"];
     assert_eq!(orphans.as_array().unwrap().len(), 1);
-    assert_eq!(orphans[0]["file"], "will-delete.md");
+    assert_eq!(orphans[0]["file"], "leaf/will-delete.md");
 }
 
 #[test]
@@ -210,7 +212,9 @@ fn status_detects_missing_from_index() {
 
     // Write a leaf file directly without going through collect (not in index)
     let content = "---\ntitle: \"stray\"\nurl: https://stray.com\ncollected_at: 2026-05-14T10:00:00Z\nupdated_at: 2026-05-14T10:00:00Z\n---\n\n# stray\n\nOrphaned leaf.\n";
-    fs::write(tree_dir.join("stray.md"), content).unwrap();
+    let leaf_dir = tree_dir.join("leaf");
+    fs::create_dir_all(&leaf_dir).unwrap();
+    fs::write(leaf_dir.join("stray.md"), content).unwrap();
 
     let out = status_json(tmp.path());
     assert!(out.status.success());

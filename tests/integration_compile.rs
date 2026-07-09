@@ -119,8 +119,8 @@ fn compile_creates_branches_directory() {
     assert!(result.is_ok(), "compile failed: {:?}", result.err());
 
     assert!(
-        dir.path().join("branches").exists(),
-        "branches/ directory was not created"
+        dir.path().join("branch").exists(),
+        "branch/ directory was not created"
     );
 }
 
@@ -134,7 +134,7 @@ fn compile_produces_at_least_one_branch_file() {
         .result
         .unwrap();
 
-    let branches_dir = dir.path().join("branches");
+    let branches_dir = dir.path().join("branch");
     let branch_files: Vec<_> = fs::read_dir(&branches_dir)
         .unwrap()
         .filter_map(|e| e.ok())
@@ -193,7 +193,7 @@ fn compile_rerun_preserves_created_at() {
         .result
         .unwrap();
 
-    let branches_dir = dir.path().join("branches");
+    let branches_dir = dir.path().join("branch");
     let first_branch = fs::read_dir(&branches_dir)
         .unwrap()
         .filter_map(|e| e.ok())
@@ -253,9 +253,9 @@ fn crash_mid_compile_rollback_cleans_staged_files() {
     let manifest_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
 
     // Write a staged .tmp file (simulating a branch about to be written)
-    fs::create_dir_all(tree_dir.join("branches")).unwrap();
+    fs::create_dir_all(tree_dir.join("branch")).unwrap();
     let staged_content = b"# Fake Branch\n\nThis should be rolled back.\n";
-    let staged_path = tree_dir.join("branches/fake-branch.md.tmp");
+    let staged_path = tree_dir.join("branch/fake-branch.md.tmp");
     fs::write(&staged_path, staged_content).unwrap();
 
     // Write pending.json with a dead PID and old timestamp (not a live lock)
@@ -267,7 +267,7 @@ fn crash_mid_compile_rollback_cleans_staged_files() {
         pid: 99999,
         pre_manifest_hash: manifest_hash,
         writes: vec![bo::engine::pending::PendingWrite {
-            path: "branches/fake-branch.md".to_string(),
+            path: "branch/fake-branch.md".to_string(),
             content_hash: bo::engine::pending::content_hash(staged_content),
         }],
         deletes: vec![],
@@ -323,11 +323,11 @@ fn crash_mid_compile_roll_forward_applies_staged_writes() {
     bo::engine::manifest::write(&manifest_path, &m).unwrap();
 
     // Write a staged .tmp file
-    fs::create_dir_all(tree_dir.join("branches")).unwrap();
+    fs::create_dir_all(tree_dir.join("branch")).unwrap();
     let branch_content =
         b"---\ntitle: Recovered Branch\n---\n\n# Recovered Branch\n\nThis was recovered.\n";
-    let staged_path = tree_dir.join("branches/recovered-branch.md.tmp");
-    let final_path = tree_dir.join("branches/recovered-branch.md");
+    let staged_path = tree_dir.join("branch/recovered-branch.md.tmp");
+    let final_path = tree_dir.join("branch/recovered-branch.md");
     fs::write(&staged_path, branch_content).unwrap();
 
     // Use a DIFFERENT hash than current manifest (simulating that manifest was already committed)
@@ -341,7 +341,7 @@ fn crash_mid_compile_roll_forward_applies_staged_writes() {
         pid: 99999,
         pre_manifest_hash: fake_pre_hash,
         writes: vec![bo::engine::pending::PendingWrite {
-            path: "branches/recovered-branch.md".to_string(),
+            path: "branch/recovered-branch.md".to_string(),
             content_hash: bo::engine::pending::content_hash(branch_content),
         }],
         deletes: vec![],
@@ -509,7 +509,7 @@ fn compile_full_with_canned_response_creates_branches() {
     assert_eq!(compile_result.branches.len(), 2);
 
     // Verify branch files were written to disk
-    let branches_dir = dir.path().join("branches");
+    let branches_dir = dir.path().join("branch");
     assert!(branches_dir.exists());
 
     let branch_a = branches_dir.join("rust-memory-safety.md");
@@ -537,7 +537,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
     let dir = tempfile::TempDir::new().unwrap();
     let bo_dir = dir.path().join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    fs::create_dir_all(dir.path().join("branches")).unwrap();
+    fs::create_dir_all(dir.path().join("branch")).unwrap();
 
     let ts_old = Timestamp::parse("2025-06-01T10:00:00Z").unwrap();
     let ts_last_compile = Timestamp::parse("2025-06-02T00:00:00Z").unwrap();
@@ -583,7 +583,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
 
     // Write existing branch file on disk (needed for incremental prompt)
     fs::write(
-        dir.path().join("branches/memory-model.md"),
+        dir.path().join("branch/memory-model.md"),
         "---\ntitle: Memory Model\ncreated_at: 2025-06-02T00:00:00Z\nupdated_at: 2025-06-02T00:00:00Z\nleaves:\n  - ownership\n  - borrowing\n---\n\n# Memory Model\n\nOriginal body.\n",
     )
     .unwrap();
@@ -632,7 +632,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
             ],
             branches: vec![Branch {
                 slug: bo::domain::Slug::parse("memory-model").unwrap(),
-                file: "branches/memory-model.md".to_string(),
+                file: "branch/memory-model.md".to_string(),
                 title: Title::parse("Memory Model").unwrap(),
                 created_at: ts_last_compile.clone(),
                 updated_at: ts_last_compile.clone(),
@@ -701,7 +701,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
     assert_eq!(compile_result.status, "compiled");
 
     // Both branches should exist on disk
-    let branches_dir = dir.path().join("branches");
+    let branches_dir = dir.path().join("branch");
     assert!(branches_dir.join("memory-model.md").exists());
     assert!(branches_dir.join("type-system.md").exists());
 
@@ -721,7 +721,7 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
     let dir = tempfile::TempDir::new().unwrap();
     let bo_dir = dir.path().join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    fs::create_dir_all(dir.path().join("branches")).unwrap();
+    fs::create_dir_all(dir.path().join("branch")).unwrap();
 
     let ts = Timestamp::parse("2025-06-01T10:00:00Z").unwrap();
 
@@ -734,7 +734,7 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
 
     // Write branch file that references both survivor and missing leaf
     fs::write(
-        dir.path().join("branches/mixed-branch.md"),
+        dir.path().join("branch/mixed-branch.md"),
         "---\ntitle: Mixed Branch\n---\n\n# Mixed Branch\n\nBody.\n",
     )
     .unwrap();
@@ -767,7 +767,7 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
             ],
             branches: vec![Branch {
                 slug: bo::domain::Slug::parse("mixed-branch").unwrap(),
-                file: "branches/mixed-branch.md".to_string(),
+                file: "branch/mixed-branch.md".to_string(),
                 title: Title::parse("Mixed Branch").unwrap(),
                 created_at: ts.clone(),
                 updated_at: ts.clone(),
@@ -808,5 +808,5 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
         "branch should be removed after leaf deletion"
     );
     // Branch file deleted from disk
-    assert!(!dir.path().join("branches/mixed-branch.md").exists());
+    assert!(!dir.path().join("branch/mixed-branch.md").exists());
 }

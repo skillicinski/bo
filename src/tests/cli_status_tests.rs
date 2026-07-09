@@ -35,7 +35,7 @@ fn write_manifest(
 fn leaf(slug: &str, url: &str, collected_at: &str) -> Leaf {
     Leaf {
         slug: Slug::parse(slug).unwrap(),
-        file: format!("{}.md", slug),
+        file: format!("leaf/{}.md", slug),
         title: Title::parse(slug).ok(),
         url: Url::parse(url).unwrap(),
         collected_at: Timestamp::parse(collected_at).unwrap(),
@@ -46,7 +46,7 @@ fn leaf(slug: &str, url: &str, collected_at: &str) -> Leaf {
 fn branch_record(slug: &str, ts: &str, leaf_slugs: &[&str]) -> Branch {
     Branch {
         slug: Slug::parse(slug).unwrap(),
-        file: format!("branches/{}.md", slug),
+        file: format!("branch/{}.md", slug),
         title: Title::parse(slug).unwrap(),
         created_at: Timestamp::parse(ts).unwrap(),
         updated_at: Timestamp::parse(ts).unwrap(),
@@ -60,7 +60,9 @@ fn write_leaf_file(dir: &Path, filename: &str, url: &str) {
         filename.trim_end_matches(".md"),
         url
     );
-    fs::write(dir.join(filename), content).unwrap();
+    let leaf_dir = dir.join("leaf");
+    fs::create_dir_all(&leaf_dir).unwrap();
+    fs::write(leaf_dir.join(filename), content).unwrap();
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -176,7 +178,7 @@ fn orphan_manifest_entry_detected() {
     let result = compute_status(dir.path(), "test", None).unwrap();
 
     assert_eq!(result.health.orphan_index_entries.len(), 1);
-    assert_eq!(result.health.orphan_index_entries[0].file, "gone.md");
+    assert_eq!(result.health.orphan_index_entries[0].file, "leaf/gone.md");
     assert!(result.hints.iter().any(|h| h.contains("missing files")));
 }
 
@@ -221,7 +223,9 @@ fn size_computed_correctly() {
     write_manifest(dir.path(), &[], &[], None);
 
     let content = "x".repeat(400);
-    fs::write(dir.path().join("test.md"), &content).unwrap();
+    let leaf_dir = dir.path().join("leaf");
+    fs::create_dir_all(&leaf_dir).unwrap();
+    fs::write(leaf_dir.join("test.md"), &content).unwrap();
 
     let result = compute_status(dir.path(), "test", None).unwrap();
 

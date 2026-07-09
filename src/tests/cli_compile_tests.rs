@@ -230,7 +230,7 @@ fn compile_result_warnings_skipped_from_json() {
 fn branch_record(slug: &str, title: &str, leaf_slugs: &[&str]) -> Branch {
     Branch {
         slug: Slug::generate(slug, ""),
-        file: format!("branches/{}.md", slug),
+        file: format!("branch/{}.md", slug),
         title: Title::parse(title).unwrap(),
         created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         updated_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
@@ -372,7 +372,7 @@ fn select_run_mode_incremental_only_with_branches_and_no_all() {
     let mut manifest = fresh_manifest("t", "2026-01-01T00:00:00Z", Some("2026-01-02T00:00:00Z"));
     manifest.branches.push(Branch {
         slug: Slug::generate("existing", ""),
-        file: "branches/existing.md".to_string(),
+        file: "branch/existing.md".to_string(),
         title: Title::parse("existing").unwrap(),
         created_at: Timestamp::parse("2026-01-02T00:00:00Z").unwrap(),
         updated_at: Timestamp::parse("2026-01-02T00:00:00Z").unwrap(),
@@ -809,9 +809,9 @@ fn setup_incremental_tree(dir: &Path) -> (SeededConfig, Manifest, Vec<LoadedLeaf
     write_leaf(dir, "leaf-c.md", "---\ntitle: Leaf C\n---\n\nbody c\n");
     write_leaf(dir, "leaf-d.md", "---\ntitle: Leaf D\n---\n\nbody d\n");
 
-    std::fs::create_dir_all(dir.join("branches")).unwrap();
+    std::fs::create_dir_all(dir.join("branch")).unwrap();
     std::fs::write(
-        dir.join("branches/existing.md"),
+        dir.join("branch/existing.md"),
         "---\ntitle: Existing Branch\n---\n\n# Existing Branch\n\nbody\n",
     )
     .unwrap();
@@ -1057,9 +1057,9 @@ fn repair_stale_branches_fixes_branch_frontmatter() {
     );
 
     // Write branch file with 3 leaves in frontmatter
-    std::fs::create_dir_all(dir.path().join("branches")).unwrap();
+    std::fs::create_dir_all(dir.path().join("branch")).unwrap();
     let branch_content = "---\ntitle: Test Branch\ncreated_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\nleaves:\n- leaf-a.md\n- leaf-b.md\n- leaf-c.md\n---\n\n# Test Branch\n\nBody text with reference to Leaf A\n";
-    std::fs::write(dir.path().join("branches/test-branch.md"), branch_content).unwrap();
+    std::fs::write(dir.path().join("branch/test-branch.md"), branch_content).unwrap();
 
     write_manifest(dir.path(), &manifest);
 
@@ -1078,7 +1078,7 @@ fn repair_stale_branches_fixes_branch_frontmatter() {
 
     // Branch file frontmatter leaves: should have 2 entries (leaf-b, leaf-c),
     // not 3.
-    let repaired = std::fs::read_to_string(dir.path().join("branches/test-branch.md")).unwrap();
+    let repaired = std::fs::read_to_string(dir.path().join("branch/test-branch.md")).unwrap();
     assert!(repaired.contains("- leaf-b.md"));
     assert!(repaired.contains("- leaf-c.md"));
     assert!(!repaired.contains("- leaf-a.md"));
