@@ -97,8 +97,8 @@ impl fmt::Display for SeedError {
                 ALL_PROVIDERS.join(", ")
             ),
             SeedError::UnsupportedModel { model, provider } => {
-                if *provider == Provider::Custom {
-                    return write!(f, "custom provider requires a non-empty model");
+                if *provider == Provider::Custom || *provider == Provider::Google {
+                    return write!(f, "{provider} provider requires a non-empty model");
                 }
                 let supported = models_for(*provider)
                     .iter()
@@ -173,17 +173,21 @@ impl SeedPrompt for StdioSeedPrompt {
 
     fn prompt_model(&mut self, provider: Provider) -> Result<String, SeedError> {
         require_terminal("model", "--model <model>")?;
-        let supported = supported_models(provider).join(", ");
         loop {
-            let input = read_prompt(&format!("Model for {provider} ({supported}): "))?;
+            let input = read_prompt(&prompt_model_label(provider))?;
             let model = input.trim().to_string();
             if is_supported_model(provider, &model) {
                 return Ok(model);
             }
-            eprintln!(
-                "unsupported model for {provider}; supported models: {}",
-                supported
-            );
+            if provider == Provider::Custom || provider == Provider::Google {
+                eprintln!("requires a non-empty model");
+            } else {
+                let supported = supported_models(provider).join(", ");
+                eprintln!(
+                    "unsupported model for {provider}; supported models: {}",
+                    supported
+                );
+            }
         }
     }
 }
@@ -454,6 +458,18 @@ fn non_empty_or_default(value: String, default: &str) -> String {
 
 fn supported_models(provider: Provider) -> Vec<&'static str> {
     models_for(provider).iter().map(|model| model.id).collect()
+}
+
+fn prompt_model_label(provider: Provider) -> String {
+    if provider == Provider::Google {
+        let known = supported_models(provider).join(", ");
+        format!("Model for {provider} (any Gemini model id; known: {known}): ")
+    } else if provider == Provider::Custom {
+        format!("Model for {provider} (any non-empty model id): ")
+    } else {
+        let supported = supported_models(provider).join(", ");
+        format!("Model for {provider} ({supported}): ")
+    }
 }
 
 fn require_terminal(field: &'static str, flag: &'static str) -> Result<(), SeedError> {

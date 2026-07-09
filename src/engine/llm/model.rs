@@ -35,20 +35,23 @@ impl std::error::Error for UnsupportedModel {}
 
 impl Model {
     /// Parse and validate a model identifier against the provider's supported
-    /// set. The custom provider has no registry: any non-empty id is valid and
-    /// gets the conservative default context window.
+    /// set. The custom and Google providers have no hard registry: any non-empty
+    /// id is valid and gets the provider's default context window unless the
+    /// known-model table has an entry for it.
     pub fn parse(id: &str, provider: Provider) -> Result<Self, UnsupportedModel> {
         let trimmed = id.trim();
-        if provider == Provider::Custom {
+        if provider == Provider::Custom || provider == Provider::Google {
             if trimmed.is_empty() {
                 return Err(UnsupportedModel {
                     id: String::new(),
                     provider,
                 });
             }
+            let context_tokens = models::context_window_tokens(provider, trimmed)
+                .expect("context_window_tokens never returns None for Custom or Google");
             return Ok(Self {
                 id: trimmed.to_string(),
-                context_tokens: models::CUSTOM_CONTEXT_TOKENS,
+                context_tokens,
             });
         }
         let info = models::find_model(provider, trimmed).ok_or_else(|| UnsupportedModel {

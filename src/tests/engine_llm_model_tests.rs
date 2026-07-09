@@ -16,9 +16,23 @@ fn parse_valid_deepseek_model() {
 
 #[test]
 fn parse_valid_google_model() {
-    let m = Model::parse("gemini-2.5-flash", Provider::Google).unwrap();
-    assert_eq!(m.as_str(), "gemini-2.5-flash");
+    let m = Model::parse("gemini-3.5-flash", Provider::Google).unwrap();
+    assert_eq!(m.as_str(), "gemini-3.5-flash");
     assert_eq!(m.context_tokens(), 1_048_576);
+}
+
+#[test]
+fn parse_unknown_google_model_falls_back() {
+    let m = Model::parse("gemini-4-future", Provider::Google).unwrap();
+    assert_eq!(m.as_str(), "gemini-4-future");
+    assert_eq!(m.context_tokens(), models::GOOGLE_CONTEXT_TOKENS);
+}
+
+#[test]
+fn parse_google_rejects_empty_model() {
+    let err = Model::parse("   ", Provider::Google).unwrap_err();
+    assert_eq!(err.id, "");
+    assert_eq!(err.provider, Provider::Google);
 }
 
 #[test]
@@ -53,8 +67,8 @@ fn parse_openai_model_with_deepseek_provider_fails() {
 
 #[test]
 fn parse_google_model_with_openai_provider_fails() {
-    let err = Model::parse("gemini-2.5-flash", Provider::OpenAI).unwrap_err();
-    assert_eq!(err.id, "gemini-2.5-flash");
+    let err = Model::parse("gemini-3.5-flash", Provider::OpenAI).unwrap_err();
+    assert_eq!(err.id, "gemini-3.5-flash");
     assert_eq!(err.provider, Provider::OpenAI);
     assert!(err.to_string().contains("unsupported model"));
     assert!(err.to_string().contains("openai"));
