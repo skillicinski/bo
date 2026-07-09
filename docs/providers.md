@@ -59,16 +59,26 @@ bo targets the Z.ai **GLM Coding Plan** (subscription) endpoint, not the pay-per
 
 ## Google (Gemini)
 
+bo accepts any non-empty Gemini model id. The known-model table below provides
+context-window metadata for common models; unknown ids assume a 1,048,576-token
+window. Google retires Developer-API models faster than bo cuts releases — the
+API's own 404 is the authoritative error for retired models.
+
 | Model | Notes |
 |---|---|
-| `gemini-2.5-flash-lite` | Cheapest, fastest. Good for simple queries. |
-| `gemini-2.5-flash` | Default Google model. Best cost/performance balance. |
-| `gemini-2.5-pro` | Higher quality for large or complex trees. |
+| `gemini-flash-latest` | Floating alias. Always resolves to the latest stable flash model — can't 404 on retirement. |
+| `gemini-pro-latest` | Floating alias. Always resolves to the latest stable pro model. |
+| `gemini-3.5-flash` | Current-generation flash. |
+| `gemini-3.1-pro-preview` | Current-generation pro preview. |
+| `gemini-2.5-flash-lite` | Retired 2026-07-09 on the Developer API. Kept for metadata reference. |
+| `gemini-2.5-flash` | Retired 2026-07-09 on the Developer API. |
+| `gemini-2.5-pro` | Retired 2026-07-09 on the Developer API. |
 
 ### Notes
 
 - **Native API** — bo uses the Gemini native `generateContent` endpoint, not the OpenAI compatibility layer. Auth goes via `x-goog-api-key` header.
 - **Structured output** — Gemini supports `responseSchema` with `responseMimeType: application/json`. bo uses this for compile responses.
+- **Thinking** — Gemini models think by default and thoughts count against `maxOutputTokens`. Ensure `--model` and `--compile-model` selections have enough token budget to accommodate both thoughts and output.
 - **System instructions** — System messages are mapped to Gemini's `systemInstruction` field rather than inserted as conversation turns.
 - **Auth** — set `GEMINI_API_KEY` or store `google_api_key` in `~/.bo/auth.json`.
 
