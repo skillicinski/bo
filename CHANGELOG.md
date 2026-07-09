@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Code blocks in collected articles are now preserved as fenced markdown instead of being flattened into single-line inline code spans. Multi-line `<pre>`/`<code>` blocks keep their line breaks.
+
 ## [0.0.7] - 2026-07-06
 
 ### Added

@@ -31,7 +31,13 @@ const MIN_CONTENT_LENGTH: usize = 50;
 /// Returns markdown body with links stripped to plain text.
 pub fn extract_content(html: &str) -> Result<ExtractedContent, ExtractError> {
     let opts = Options::default();
-    let result = extract(html, &opts).map_err(|e| ExtractError::ExtractionFailed(e.to_string()))?;
+    let mut result =
+        extract(html, &opts).map_err(|e| ExtractError::ExtractionFailed(e.to_string()))?;
+
+    // trafilatura flattens <pre>/<code> blocks into bare inline <code> in its
+    // content HTML; html2markdown then collapses them to single-line inline
+    // code spans. Restore them as block-level <pre> before markdown conversion.
+    result.content_html = restore_code_blocks(&result.content_html);
 
     let mut body = result.content_markdown();
     let title = choose_title(
@@ -119,9 +125,35 @@ fn is_clearly_chrome_title(title: &str) -> bool {
         == "keyboard shortcuts"
 }
 
-/// Strip markdown links [text](url) to just text.
-/// Handles nested brackets conservatively.
+/// Strip markdown links `[text](url)` to just `text`, leaving fenced code blocks
+/// verbatim. Code frequently contains `[x](y)`-shaped syntax (callbacks, regex,
+/// config) that must not be mistaken for links once restored to a fenced block.
 fn strip_markdown_links(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut in_fence = false;
+    for line in input.split_inclusive('\n') {
+        if is_fence_line(line) {
+            in_fence = !in_fence;
+            out.push_str(line);
+        } else if in_fence {
+            out.push_str(line);
+        } else {
+            out.push_str(&strip_md_links_text(line));
+        }
+    }
+    out
+}
+
+/// A line that opens or closes a fenced code block: up to three leading spaces
+/// followed by three or more backticks or tildes.
+fn is_fence_line(line: &str) -> bool {
+    let trimmed = line.trim_start_matches(' ');
+    trimmed.starts_with("```") || trimmed.starts_with("~~~")
+}
+
+/// Strip markdown links `[text](url)` → text from a prose fragment.
+/// Handles nested brackets conservatively.
+fn strip_md_links_text(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
     let chars: Vec<char> = input.chars().collect();
     let mut i = 0;
@@ -140,6 +172,73 @@ fn strip_markdown_links(input: &str) -> String {
     }
 
     result
+}
+
+/// Wrap block-level `<code>` elements in `<pre>` so the markdown backend emits
+/// fenced code blocks instead of collapsing them to single-line inline code.
+///
+/// trafilatura detects `<pre><code>` / `<pre lang>` blocks and re-emits them as
+/// bare `<code>` in `content_html` (newlines intact). html2markdown renders a
+/// bare `<code>` as *inline* code, which drops the newlines. A `<code>` is
+/// treated as block-level when it spans multiple lines or is double-wrapped
+/// (`<code><code>…`, the `<pre><code>` case); genuine inline code stays inline.
+// ponytail: matches trafilatura's bare `<code>` output literally; if it ever
+// emits `<code class=...>` those would pass through unchanged (rendered inline).
+fn restore_code_blocks(html: &str) -> String {
+    let lower = html.to_ascii_lowercase();
+    let mut out = String::with_capacity(html.len());
+    let mut cursor = 0usize;
+    while let Some(rel) = lower[cursor..].find("<code>") {
+        let start = cursor + rel;
+        out.push_str(&html[cursor..start]);
+        let inner_start = start + "<code>".len();
+        match find_code_close(&lower, inner_start) {
+            None => {
+                out.push_str(&html[start..inner_start]);
+                cursor = inner_start;
+            }
+            Some(close) => {
+                let inner = &html[inner_start..close];
+                if is_block_code(inner) {
+                    out.push_str("<pre><code>");
+                    out.push_str(inner);
+                    out.push_str("</code></pre>");
+                } else {
+                    out.push_str(&html[start..close + "</code>".len()]);
+                }
+                cursor = close + "</code>".len();
+            }
+        }
+    }
+    out.push_str(&html[cursor..]);
+    out
+}
+
+/// Byte index (in `lower`) of the `<` of the `</code>` that closes the `<code>`
+/// opened before `from`, accounting for nested `<code>` (trafilatura emits
+/// `<code><code>…</code></code>` for `<pre><code>`).
+fn find_code_close(lower: &str, from: usize) -> Option<usize> {
+    let mut depth = 1usize;
+    let mut i = from;
+    while i < lower.len() {
+        if lower[i..].starts_with("<code>") {
+            depth += 1;
+            i += "<code>".len();
+        } else if lower[i..].starts_with("</code>") {
+            depth -= 1;
+            if depth == 0 {
+                return Some(i);
+            }
+            i += "</code>".len();
+        } else {
+            i += lower[i..].chars().next().map(char::len_utf8).unwrap_or(1);
+        }
+    }
+    None
+}
+
+fn is_block_code(inner: &str) -> bool {
+    inner.contains('\n') || inner.trim_start().starts_with("<code>")
 }
 
 fn parse_md_link(chars: &[char], start: usize) -> Option<(String, usize)> {
