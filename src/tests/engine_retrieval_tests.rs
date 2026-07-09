@@ -793,3 +793,156 @@ fn exhausted_budget_returns_error() {
 
     assert!(matches!(err, RetrievalError::ContextBudgetExhausted { .. }));
 }
+
+// ── token+IDF scorer tests ──────────────────────────────────────────
+
+#[test]
+fn scorer_token_matching_does_not_match_substrings() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    write_leaf(dir, "trust.md", "Trust", "trust building exercise");
+    write_leaf(dir, "rust.md", "Rust", "rust programming language");
+    write_leaf(dir, "cooking.md", "Cooking", "recipe");
+
+    let leaves = vec![
+        leaf_record("trust", "Trust", "http://x.com/1", Some("trust")),
+        leaf_record("rust", "Rust", "http://x.com/2", Some("rust")),
+        leaf_record("cooking", "Cooking", "http://x.com/3", Some("cooking")),
+    ];
+    let manifest = manifest_record(leaves);
+
+    let terms = vec!["rust".to_string()];
+    let results = score_corpus(dir, &manifest, &terms);
+
+    // only rust.md should match; trust.md must NOT match
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].slug, "rust");
+}
+
+#[test]
+fn scorer_idf_rare_term_outranks_common_term_at_equal_hits() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    // "async" appears in one doc; "rust" appears in many
+    write_leaf(dir, "async-only.md", "Async", "async runtime");
+    write_leaf(dir, "rust-a.md", "Rust A", "rust basics");
+    write_leaf(dir, "rust-b.md", "Rust B", "rust advanced");
+    write_leaf(dir, "rust-c.md", "Rust C", "rust ecosystem");
+    write_leaf(dir, "rust-d.md", "Rust D", "rust tooling");
+
+    let leaves = vec![
+        leaf_record("async-only", "Async", "http://x.com/1", Some("async")),
+        leaf_record("rust-a", "Rust A", "http://x.com/2", Some("rust")),
+        leaf_record("rust-b", "Rust B", "http://x.com/3", Some("rust")),
+        leaf_record("rust-c", "Rust C", "http://x.com/4", Some("rust")),
+        leaf_record("rust-d", "Rust D", "http://x.com/5", Some("rust")),
+    ];
+    let manifest = manifest_record(leaves);
+
+    let terms = vec!["async".to_string(), "rust".to_string()];
+    let results = score_corpus(dir, &manifest, &terms);
+
+    assert!(!results.is_empty());
+    assert_eq!(results[0].slug, "async-only");
+}
+
+#[test]
+fn scorer_leaf_and_branch_equal_scores_for_identical_content() {
+    let dir = TempDir::new().unwrap();
+    let tree = dir.path();
+
+    // Identical content as leaf and branch
+    make_leaf(
+        tree,
+        "topic.md",
+        "Topic",
+        "https://x.com/topic",
+        None,
+        "lorem ipsum dolor sit amet",
+    );
+    fs::create_dir_all(tree.join("branch")).unwrap();
+    fs::write(
+        tree.join("branch/topic.md"),
+        "---\ntitle: \"Topic\"\ncreated_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-01T00:00:00Z\nleaves: []\n---\n\nlorem ipsum dolor sit amet\n",
+    )
+    .unwrap();
+
+    let manifest = Manifest {
+        tree: TreeMeta {
+            name: "test".to_string(),
+            created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+            last_compiled_at: Some(Timestamp::parse("2025-01-01T00:00:00Z").unwrap()),
+        },
+        leaves: vec![Leaf {
+            slug: Slug::generate("topic", ""),
+            file: "leaves/topic.md".to_string(),
+            title: Some(Title::parse("Topic").unwrap()),
+            url: Url::parse("https://x.com/topic").unwrap(),
+            collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+            summary: None,
+        }],
+        branches: vec![Branch {
+            slug: Slug::generate("Topic", ""),
+            file: "branch/topic.md".to_string(),
+            title: Title::parse("Topic").unwrap(),
+            created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+            updated_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+            leaves: Vec::new(),
+        }],
+    };
+    let bo_dir = tree.join(".bo");
+    fs::create_dir_all(&bo_dir).unwrap();
+    crate::engine::manifest::write(&bo_dir.join("manifest.json"), &manifest).unwrap();
+
+    let terms = vec!["lorem".to_string()];
+    let results = retrieve_docs(tree, &terms).unwrap();
+
+    // Both leaf and branch should match, with equal scores (identical content
+    // in a single combined corpus → same IDF, same token count, same hits).
+    assert_eq!(results.len(), 2);
+    let leaf_score = results
+        .iter()
+        .find(|r| r.kind == DocKind::Leaf)
+        .unwrap()
+        .score;
+    let branch_score = results
+        .iter()
+        .find(|r| r.kind == DocKind::Branch)
+        .unwrap()
+        .score;
+    assert!(
+        (leaf_score - branch_score).abs() < f64::EPSILON,
+        "leaf {} vs branch {}",
+        leaf_score,
+        branch_score
+    );
+}
+
+#[test]
+fn scorer_short_focused_doc_outranks_long_sparse_doc() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    // Short doc: "rust" appears in 2 of 3 tokens
+    write_leaf(dir, "short.md", "Rust", "rust is safe");
+    // Long doc: "rust" appears once in many tokens
+    let filler = "filler ".repeat(100);
+    let long_body = format!("rust {}", filler);
+    write_leaf(dir, "long.md", "Rust Long", &long_body);
+
+    let leaves = vec![
+        leaf_record("short", "Rust", "http://x.com/1", Some("short")),
+        leaf_record("long", "Rust Long", "http://x.com/2", Some("long")),
+    ];
+    let manifest = manifest_record(leaves);
+
+    let terms = vec!["rust".to_string()];
+    let results = score_corpus(dir, &manifest, &terms);
+
+    // Short doc has higher density → higher normalized score
+    assert_eq!(results.len(), 2);
+    assert!(results[0].score > results[1].score);
+    assert_eq!(results[0].slug, "short");
+}
