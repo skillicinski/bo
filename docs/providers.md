@@ -78,7 +78,7 @@ API's own 404 is the authoritative error for retired models.
 
 - **Native API** — bo uses the Gemini native `generateContent` endpoint, not the OpenAI compatibility layer. Auth goes via `x-goog-api-key` header.
 - **Structured output** — Gemini supports `responseSchema` with `responseMimeType: application/json`. bo uses this for compile responses.
-- **Thinking** — Gemini models think by default and thoughts count against `maxOutputTokens`. Pin a model with `--model` or configure `--compile-model` with enough token budget. Pass `reasoning_disabled: true` to suppress thinking.
+- **Thinking** — Gemini models think by default and thoughts count against `maxOutputTokens`. Ensure `--model` and `--compile-model` selections have enough token budget to accommodate both thoughts and output.
 - **System instructions** — System messages are mapped to Gemini's `systemInstruction` field rather than inserted as conversation turns.
 - **Auth** — set `GEMINI_API_KEY` or store `google_api_key` in `~/.bo/auth.json`.
 
