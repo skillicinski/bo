@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-07-09
+
+### Fixed
+
+- The Google provider no longer rejects unknown model ids — any non-empty id is accepted (matching the custom provider), with the known-model table retained for context-window metadata and a 1M-token assumed window for unknown ids. Google retired the gemini-2.5 models on the Developer API with the hardcoded allowlist still pointing at them, leaving every google-provider configuration unusable. Known table now includes `gemini-3.5-flash`, `gemini-3.1-pro-preview`, and the floating `gemini-flash-latest` / `gemini-pro-latest` aliases.
+
 ## [0.0.8] - 2026-07-09
 
 ### Added
