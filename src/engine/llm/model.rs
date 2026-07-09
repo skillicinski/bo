@@ -40,28 +40,38 @@ impl Model {
     /// known-model table has an entry for it.
     pub fn parse(id: &str, provider: Provider) -> Result<Self, UnsupportedModel> {
         let trimmed = id.trim();
-        if provider == Provider::Custom || provider == Provider::Google {
-            if trimmed.is_empty() {
-                return Err(UnsupportedModel {
-                    id: String::new(),
-                    provider,
-                });
+        match provider {
+            Provider::Custom | Provider::Google => {
+                if trimmed.is_empty() {
+                    return Err(UnsupportedModel {
+                        id: String::new(),
+                        provider,
+                    });
+                }
+                let context_tokens = match provider {
+                    Provider::Custom => models::CUSTOM_CONTEXT_TOKENS,
+                    Provider::Google => models::find_model(provider, trimmed)
+                        .map(|entry| entry.context_tokens)
+                        .unwrap_or(models::GOOGLE_CONTEXT_TOKENS),
+                    _ => unreachable!(),
+                };
+                Ok(Self {
+                    id: trimmed.to_string(),
+                    context_tokens,
+                })
             }
-            let context_tokens = models::context_window_tokens(provider, trimmed)
-                .expect("context_window_tokens never returns None for Custom or Google");
-            return Ok(Self {
-                id: trimmed.to_string(),
-                context_tokens,
-            });
+            _ => {
+                let info =
+                    models::find_model(provider, trimmed).ok_or_else(|| UnsupportedModel {
+                        id: trimmed.to_string(),
+                        provider,
+                    })?;
+                Ok(Self {
+                    id: info.id.to_string(),
+                    context_tokens: info.context_tokens,
+                })
+            }
         }
-        let info = models::find_model(provider, trimmed).ok_or_else(|| UnsupportedModel {
-            id: trimmed.to_string(),
-            provider,
-        })?;
-        Ok(Self {
-            id: info.id.to_string(),
-            context_tokens: info.context_tokens,
-        })
     }
 
     /// The raw model identifier string.
