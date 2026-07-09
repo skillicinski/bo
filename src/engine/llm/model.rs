@@ -35,30 +35,28 @@ impl std::error::Error for UnsupportedModel {}
 
 impl Model {
     /// Parse and validate a model identifier against the provider's supported
-    /// set. The custom provider has no registry: any non-empty id is valid and
-    /// gets the conservative default context window.
+    /// set. The custom and Google providers have no hard registry: any non-empty
+    /// id is valid and gets the provider's default context window unless the
+    /// known-model table has an entry for it.
     pub fn parse(id: &str, provider: Provider) -> Result<Self, UnsupportedModel> {
         let trimmed = id.trim();
-        if provider == Provider::Custom {
-            if trimmed.is_empty() {
-                return Err(UnsupportedModel {
-                    id: String::new(),
-                    provider,
-                });
+        match provider {
+            Provider::Custom => open_registry(trimmed, provider, models::CUSTOM_CONTEXT_TOKENS),
+            Provider::Google => {
+                open_registry(trimmed, provider, models::google_context_tokens(trimmed))
             }
-            return Ok(Self {
-                id: trimmed.to_string(),
-                context_tokens: models::CUSTOM_CONTEXT_TOKENS,
-            });
+            _ => {
+                let info =
+                    models::find_model(provider, trimmed).ok_or_else(|| UnsupportedModel {
+                        id: trimmed.to_string(),
+                        provider,
+                    })?;
+                Ok(Self {
+                    id: info.id.to_string(),
+                    context_tokens: info.context_tokens,
+                })
+            }
         }
-        let info = models::find_model(provider, trimmed).ok_or_else(|| UnsupportedModel {
-            id: trimmed.to_string(),
-            provider,
-        })?;
-        Ok(Self {
-            id: info.id.to_string(),
-            context_tokens: info.context_tokens,
-        })
     }
 
     /// The raw model identifier string.
@@ -76,6 +74,25 @@ impl fmt::Display for Model {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.id)
     }
+}
+
+/// Build a Model from a non-empty id for a provider with no hard registry
+/// (Custom, Google). The caller supplies the context-token count.
+fn open_registry(
+    id: &str,
+    provider: Provider,
+    context_tokens: usize,
+) -> Result<Model, UnsupportedModel> {
+    if id.is_empty() {
+        return Err(UnsupportedModel {
+            id: String::new(),
+            provider,
+        });
+    }
+    Ok(Model {
+        id: id.to_string(),
+        context_tokens,
+    })
 }
 
 #[cfg(test)]

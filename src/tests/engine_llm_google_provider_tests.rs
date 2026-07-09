@@ -143,7 +143,7 @@ async fn google_provider_smoke_text_only() {
     ];
 
     let result = provider
-        .complete(&messages, "gemini-2.5-flash", 100, None, false)
+        .complete(&messages, "gemini-flash-latest", 2000, None, false)
         .await;
 
     match result {
@@ -151,6 +151,12 @@ async fn google_provider_smoke_text_only() {
             assert!(
                 !response.content.is_empty(),
                 "expected non-empty response from Gemini"
+            );
+            assert_eq!(
+                response.finish_reason,
+                FinishReason::Stop,
+                "expected STOP, got {:?}",
+                response.finish_reason
             );
         }
         Err(e) => panic!("Gemini API call failed: {:?}", e),
@@ -181,11 +187,23 @@ async fn google_provider_smoke_structured_output() {
 
     let normalized = provider.map_response_schema(&schema).unwrap();
     let result = provider
-        .complete(&messages, "gemini-2.5-flash", 200, Some(&normalized), false)
+        .complete(
+            &messages,
+            "gemini-flash-latest",
+            2000,
+            Some(&normalized),
+            false,
+        )
         .await;
 
     match result {
         Ok(response) => {
+            assert_eq!(
+                response.finish_reason,
+                FinishReason::Stop,
+                "expected STOP, got {:?}",
+                response.finish_reason
+            );
             let parsed: serde_json::Value =
                 serde_json::from_str(&response.content).expect("response should be valid JSON");
             assert!(parsed.get("answer").is_some(), "missing 'answer' field");

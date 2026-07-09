@@ -77,7 +77,15 @@ pub const ZAI_MODELS: &[ModelInfo] = &[
     },
 ];
 
+// Known models provide context-window metadata. Google retires Developer-API
+// models faster than bo cuts releases, so the Google provider also accepts any
+// non-empty model id (see is_supported_model). Unknown ids get the assumed
+// window below; add new models here as metadata becomes available.
+pub const GOOGLE_CONTEXT_TOKENS: usize = 1_048_576;
+
 pub const GOOGLE_MODELS: &[ModelInfo] = &[
+    // gemini-2.5 family — shut down on the Developer API 2026-07-09;
+    // kept in the table so context-window metadata doesn't require a release.
     ModelInfo {
         id: "gemini-2.5-flash-lite",
         context_tokens: 1_048_576,
@@ -88,6 +96,24 @@ pub const GOOGLE_MODELS: &[ModelInfo] = &[
     },
     ModelInfo {
         id: "gemini-2.5-pro",
+        context_tokens: 1_048_576,
+    },
+    ModelInfo {
+        id: "gemini-3.5-flash",
+        context_tokens: 1_048_576,
+    },
+    ModelInfo {
+        id: "gemini-3.1-pro-preview",
+        context_tokens: 1_048_576,
+    },
+    // Floating aliases that track the latest stable release — can't 404 on
+    // retirement, always resolve to a living model.
+    ModelInfo {
+        id: "gemini-flash-latest",
+        context_tokens: 1_048_576,
+    },
+    ModelInfo {
+        id: "gemini-pro-latest",
         context_tokens: 1_048_576,
     },
 ];
@@ -115,7 +141,10 @@ pub(crate) fn find_model(provider: Provider, model_id: &str) -> Option<&'static 
 }
 
 pub fn is_supported_model(provider: Provider, model_id: &str) -> bool {
-    if provider == Provider::Custom {
+    // ponytail: Google retires models faster than we cut releases — accept any
+    // non-empty id like Custom, so users can configure living models without a
+    // bo update.
+    if provider == Provider::Custom || provider == Provider::Google {
         return !model_id.trim().is_empty();
     }
     find_model(provider, model_id).is_some()
@@ -125,5 +154,14 @@ pub fn context_window_tokens(provider: Provider, model_id: &str) -> Option<usize
     if provider == Provider::Custom {
         return Some(CUSTOM_CONTEXT_TOKENS);
     }
+    if provider == Provider::Google {
+        return Some(google_context_tokens(model_id));
+    }
     find_model(provider, model_id).map(|entry| entry.context_tokens)
+}
+
+pub(crate) fn google_context_tokens(model_id: &str) -> usize {
+    find_model(Provider::Google, model_id)
+        .map(|e| e.context_tokens)
+        .unwrap_or(GOOGLE_CONTEXT_TOKENS)
 }
