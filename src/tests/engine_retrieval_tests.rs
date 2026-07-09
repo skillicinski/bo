@@ -422,9 +422,9 @@ fn retrieve_returns_compiled_branch_when_no_leaf_matches() {
 
     // A compiled branch synthesizing the concept the user asks about. Its body
     // mentions the query terms; no individual leaf does.
-    fs::create_dir_all(tree.join("branches")).unwrap();
+    fs::create_dir_all(tree.join("branch")).unwrap();
     fs::write(
-        tree.join("branches/rust-ownership.md"),
+        tree.join("branch/rust-ownership.md"),
         "---\n\
          title: \"Rust Ownership\"\n\
          created_at: 2025-01-01T00:00:00Z\n\
@@ -463,7 +463,7 @@ fn retrieve_returns_compiled_branch_when_no_leaf_matches() {
         ],
         branches: vec![Branch {
             slug: Slug::generate("Rust Ownership", ""),
-            file: "branches/rust-ownership.md".to_string(),
+            file: "branch/rust-ownership.md".to_string(),
             title: Title::parse("Rust Ownership").unwrap(),
             created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             updated_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
@@ -491,7 +491,7 @@ fn retrieve_returns_compiled_branch_when_no_leaf_matches() {
         slug: "rust-ownership".to_string(),
         title: "Rust Ownership".to_string(),
         url: String::new(),
-        file: "branches/rust-ownership.md".to_string(),
+        file: "branch/rust-ownership.md".to_string(),
         summary: "summary".to_string(),
         body: "body".to_string(),
         score: 1.0,

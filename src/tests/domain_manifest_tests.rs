@@ -45,7 +45,7 @@ fn resolution_fixture() -> Manifest {
         branches: vec![
             Branch {
                 slug: Slug::parse("topic-x").unwrap(),
-                file: "branches/topic-x.md".to_string(),
+                file: "branch/topic-x.md".to_string(),
                 title: title("Topic X"),
                 created_at: Timestamp::parse("2026-05-19T15:00:00Z").unwrap(),
                 updated_at: Timestamp::parse("2026-05-19T15:00:00Z").unwrap(),
@@ -53,7 +53,7 @@ fn resolution_fixture() -> Manifest {
             },
             Branch {
                 slug: Slug::parse("topic-y").unwrap(),
-                file: "branches/topic-y.md".to_string(),
+                file: "branch/topic-y.md".to_string(),
                 title: title("Topic Y"),
                 created_at: Timestamp::parse("2026-05-19T15:00:00Z").unwrap(),
                 updated_at: Timestamp::parse("2026-05-19T15:00:00Z").unwrap(),

@@ -350,8 +350,8 @@ fn slug_collision_disambiguated() {
     assert!(dir.path().join(&page1.filename).exists());
     assert!(dir.path().join(&page2.filename).exists());
     assert_ne!(page1.filename, page2.filename);
-    assert!(page1.filename.starts_with("introduction"));
-    assert!(page2.filename.starts_with("introduction"));
+    assert!(page1.filename.starts_with("leaf/introduction"));
+    assert!(page2.filename.starts_with("leaf/introduction"));
     assert!(
         page2.filename.contains('-') && page2.filename.len() > page1.filename.len(),
         "second file should have hash suffix: {} vs {}",
@@ -437,7 +437,7 @@ fn mdbook_page_with_bad_ui_title_and_substantive_body_is_accepted() {
     assert!(result.is_ok(), "mdBook page should be accepted: {result:?}");
     let page = result.unwrap();
     assert!(
-        page.filename.starts_with("understanding-ownership"),
+        page.filename.starts_with("leaf/understanding-ownership"),
         "expected slug from content title, got {}",
         page.filename
     );
@@ -528,7 +528,14 @@ fn collect_appends_leaf_record_to_manifest_with_full_metadata() {
     let m = crate::engine::manifest::read(&manifest_path).unwrap();
     assert_eq!(m.leaves.len(), 1);
     let rec = &m.leaves[0];
-    assert_eq!(rec.slug.as_str(), doc.filename.strip_suffix(".md").unwrap());
+    assert_eq!(
+        rec.slug.as_str(),
+        doc.filename
+            .strip_prefix("leaf/")
+            .unwrap()
+            .strip_suffix(".md")
+            .unwrap()
+    );
     assert_eq!(rec.file, doc.filename);
     assert_eq!(rec.title.as_ref().unwrap().as_str(), "Test Article");
     assert_eq!(rec.url.as_str(), "https://example.com/article");
@@ -567,7 +574,7 @@ fn collect_writes_only_manifest_records() {
     assert!(!dir.path().join(".bo/index.jsonl").exists());
     for (n, rec) in m.leaves.iter().enumerate() {
         let n = n + 1;
-        assert_eq!(rec.file, format!("page-{n}.md"));
+        assert_eq!(rec.file, format!("leaf/page-{n}.md"));
         assert_eq!(rec.url.as_str(), &format!("https://example.com/page{n}"));
         assert_eq!(rec.title.as_ref().unwrap().as_str(), format!("Page {n}"));
     }

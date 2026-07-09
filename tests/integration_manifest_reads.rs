@@ -67,7 +67,7 @@ fn stage_tree(home: &Path) -> std::path::PathBuf {
     }
 
     // Branch .md file
-    let branches_dir = tree_dir.join("branches");
+    let branches_dir = tree_dir.join("branch");
     fs::create_dir_all(&branches_dir).unwrap();
     let branch_content = "---\ntitle: \"topic-x\"\ncreated_at: 2026-01-02T10:00:00Z\nupdated_at: 2026-01-02T10:00:00Z\nleaves:\n  - alpha.md\n  - beta.md\n---\n\n# topic-x\n\nBranch body.\n";
     fs::write(branches_dir.join("topic-x.md"), branch_content).unwrap();
@@ -93,7 +93,7 @@ fn stage_tree(home: &Path) -> std::path::PathBuf {
             .collect(),
         branches: vec![bo::domain::Branch {
             slug: Slug::parse("topic-x").unwrap(),
-            file: "branches/topic-x.md".to_string(),
+            file: "branch/topic-x.md".to_string(),
             title: Title::parse("topic-x").unwrap(),
             created_at: Timestamp::parse("2026-01-02T10:00:00Z").unwrap(),
             updated_at: Timestamp::parse("2026-01-02T10:00:00Z").unwrap(),

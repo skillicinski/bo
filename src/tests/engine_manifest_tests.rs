@@ -25,7 +25,7 @@ fn sample_manifest() -> Manifest {
         }],
         branches: vec![Branch {
             slug: Slug::parse("memory-safety").unwrap(),
-            file: "branches/memory-safety.md".to_string(),
+            file: "branch/memory-safety.md".to_string(),
             title: Title::parse("Memory Safety").unwrap(),
             created_at: Timestamp::parse("2026-05-19T14:32:11.000Z").unwrap(),
             updated_at: Timestamp::parse("2026-05-19T14:32:11.000Z").unwrap(),

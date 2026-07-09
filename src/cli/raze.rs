@@ -120,8 +120,11 @@ pub fn raze_with_auth(
         .filter(|relative| output_dir.join(relative).is_file())
         .count();
 
-    if output_dir.join("branches").exists() {
-        deletes.push("branches".to_string());
+    if output_dir.join("branch").exists() {
+        deletes.push("branch".to_string());
+    }
+    if output_dir.join("leaf").exists() {
+        deletes.push("leaf".to_string());
     }
     deletes.push(".bo".to_string());
 

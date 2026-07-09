@@ -100,7 +100,8 @@ pub fn compute_status(
     tree_name: &str,
     config: Option<&Config>,
 ) -> Result<StatusResult, StatusError> {
-    let branches_dir = tree::branches_dir(tree_dir);
+    let branch_dir = tree::branch_dir(tree_dir);
+    let leaf_dir = tree::leaf_dir(tree_dir);
 
     let manifest = match crate::engine::manifest::runtime_state(tree_dir) {
         Ok(TreeRuntimeState::Initialized(manifest)) => manifest,
@@ -144,7 +145,7 @@ pub fn compute_status(
     };
 
     // Filesystem scan only for size — the one metric the manifest doesn't track.
-    let size = compute_size(tree_dir, &branches_dir);
+    let size = compute_size(&leaf_dir, &branch_dir);
 
     let health = compute_health(tree_dir, &manifest);
     let hints = generate_hints(&leaves, &branches, &health);
@@ -227,10 +228,10 @@ pub fn config_only_status(config: Option<&Config>) -> StatusResult {
     }
 }
 
-fn compute_size(tree_dir: &Path, branches_dir: &Path) -> SizeStatus {
+fn compute_size(leaf_dir: &Path, branch_dir: &Path) -> SizeStatus {
     let mut total_bytes: u64 = 0;
 
-    for dir in [tree_dir, branches_dir] {
+    for dir in [leaf_dir, branch_dir] {
         if let Ok(entries) = fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -278,14 +279,17 @@ fn compute_health(tree_dir: &Path, manifest: &manifest::Manifest) -> HealthRepor
 
 fn scan_missing_from_index(tree_dir: &Path, manifest_files: &HashSet<&str>) -> Vec<String> {
     let mut missing: Vec<String> = Vec::new();
-    if let Ok(dir_entries) = fs::read_dir(tree_dir) {
+    let leaf_dir = tree_dir.join("leaf");
+    if let Ok(dir_entries) = fs::read_dir(&leaf_dir) {
         for entry in dir_entries.flatten() {
             let path = entry.path();
             if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("md") {
                 continue;
             }
             let filename = entry.file_name().to_string_lossy().into_owned();
-            if manifest_files.contains(filename.as_str()) {
+            // Manifest stores leaf paths as `leaf/{file}`; the on-disk entry is bare `{file}`.
+            let relative = format!("leaf/{filename}");
+            if manifest_files.contains(relative.as_str()) {
                 continue;
             }
             if is_leaf_file(&path) {

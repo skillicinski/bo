@@ -72,7 +72,11 @@ pub fn auth_path_for_config(config_path: &Path) -> PathBuf {
 /// Add a leaf file (`.md`) and a corresponding manifest entry.
 pub fn add_leaf(tree_dir: &Path, file: &str) {
     add_manifest_leaf(tree_dir, file);
-    fs::write(tree_dir.join(file), "# content\n").unwrap();
+    let path = tree_dir.join(file);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, "# content\n").unwrap();
 }
 
 /// Add a manifest entry for a leaf without creating the file on disk.

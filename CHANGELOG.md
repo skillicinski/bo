@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **breaking** tree layout: leaves now live in `leaf/` and branches in `branch/` (was root-level `.md` and `branches/`). Every domain entity gets its own singular directory. No migration — pre-user break.
+
 ### Fixed
 
 - Leaf bodies no longer duplicate the title heading when the article's own H1 survives extraction (e.g. a page that leads with a byline before `# Title`). bo's prepended heading is skipped when the body already opens with a matching H1.

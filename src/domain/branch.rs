@@ -1,7 +1,7 @@
 // Domain entity and I/O for branch documents.
 //
 // A branch is a synthesised concept file written by `bo compile`.
-// It lives at {output_dir}/branches/{slug}.md and has YAML frontmatter
+// It lives at {output_dir}/branch/{slug}.md and has YAML frontmatter
 // followed by a markdown body beginning with a heading matching the title.
 
 use crate::domain::{Slug, Timestamp, Title};
