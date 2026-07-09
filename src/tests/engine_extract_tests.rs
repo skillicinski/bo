@@ -90,6 +90,67 @@ fn article_content_and_title_are_both_extracted() {
     );
 }
 
+const ARTICLE_WITH_CODE_BLOCK: &str = r#"<html><head><title>Code Post</title></head>
+<body><main><article>
+<h1>Code Post</h1>
+<p>This is a long introductory paragraph with enough substance to be considered
+main content by the extraction heuristics used for quality filtering of
+collected pages during the collection workflow.</p>
+<h2>Setup</h2>
+<p>Run these commands to scaffold the project:</p>
+<pre><code class="language-bash">mkdir code-editing-agent
+cd code-editing-agent
+go mod init agent</code></pre>
+<p>Then write the skeleton using the <code>fmt.Println</code> function.</p>
+</article></main></body></html>"#;
+
+#[test]
+fn code_blocks_are_preserved_as_fenced_markdown() {
+    let result = extract_content(ARTICLE_WITH_CODE_BLOCK).unwrap();
+    assert!(
+        result.body_markdown.contains("```"),
+        "code block should be rendered as a fenced block, got: {}",
+        result.body_markdown
+    );
+    assert!(
+        result
+            .body_markdown
+            .contains("mkdir code-editing-agent\ncd code-editing-agent"),
+        "line breaks inside the code block must be preserved, got: {}",
+        result.body_markdown
+    );
+    assert!(
+        result.body_markdown.contains("`fmt.Println`"),
+        "genuine inline code should remain an inline span, got: {}",
+        result.body_markdown
+    );
+}
+
+#[test]
+fn link_like_text_inside_code_blocks_is_preserved() {
+    // Code containing `[x](y)` must survive link-stripping once restored to a
+    // fenced block (regression guard for issue #162). The article is sized so
+    // trafilatura extracts the <pre><code> as a real block rather than inlining
+    // it as plain text.
+    let html = r#"<html><head><title>Callbacks</title></head><body><main><article>
+<h1>Callbacks</h1>
+<p>This is a long introductory paragraph explaining how dispatch tables work in
+practice, with enough substance for the extraction heuristics to treat it as
+the main content of the page rather than boilerplate or navigation chrome.</p>
+<p>A second paragraph adds further architectural context about registering
+handlers and invoking them by index from a lookup table at runtime.</p>
+<h2>Example</h2>
+<p>Register and invoke a handler by index:</p>
+<pre><code>let x = handlers[0](cb);</code></pre>
+</article></main></body></html>"#;
+    let result = extract_content(html).unwrap();
+    assert!(
+        result.body_markdown.contains("handlers[0](cb)"),
+        "link-like syntax inside a code block must be preserved, got: {}",
+        result.body_markdown
+    );
+}
+
 // ── kept: public API scenarios already meeting the standard ────────────
 
 #[test]
