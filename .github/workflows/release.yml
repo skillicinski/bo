@@ -112,8 +112,11 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Upgrade npm (OIDC requires >= 11.5.1)
-        run: npm install -g npm@latest
+      # OIDC needs npm >= 11.5.1. Pinned to the 11.x line, NOT @latest:
+      # npm 12.0.0 (2026-07) ships `stage publish` with a missing bundled
+      # sigstore module — unpinned @latest broke the v0.0.8 publish.
+      - name: Upgrade npm
+        run: npm install -g npm@11
 
       - name: Stage publish to npm (requires maintainer approval)
         run: cd npm && npm stage publish --access public
