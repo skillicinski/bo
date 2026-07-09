@@ -844,9 +844,6 @@ fn scorer_idf_rare_term_outranks_common_term_at_equal_hits() {
     let terms = vec!["async".to_string(), "rust".to_string()];
     let results = score_corpus(dir, &manifest, &terms);
 
-    // async-only (1 hit) nests under a rare term (df=1) → higher per-hit weight
-    // than rust-* docs which match a common term (df=4). With length normalization
-    // and idf weighting, the async-only doc should outrank rust docs.
     assert!(!results.is_empty());
     assert_eq!(results[0].slug, "async-only");
 }
