@@ -269,10 +269,14 @@ fn tool_call(id: &str, name: &str, arguments: &str) -> bo::engine::llm::ToolCall
 }
 
 fn tool_response(id: &str, name: &str, arguments: &str) -> bo::engine::llm::AgentResponse {
+    tool_response_many(vec![tool_call(id, name, arguments)])
+}
+
+fn tool_response_many(calls: Vec<bo::engine::llm::ToolCall>) -> bo::engine::llm::AgentResponse {
     bo::engine::llm::AgentResponse {
         content: None,
         reasoning_content: None,
-        tool_calls: vec![tool_call(id, name, arguments)],
+        tool_calls: calls,
         finish_reason: bo::engine::llm::FinishReason::Other("tool_calls".into()),
         usage: None,
     }
@@ -710,7 +714,7 @@ fn agent_dry_run_unsupported_provider_errors_with_actionable_message() {
         .result
         .expect_err("expected an error for an unsupported provider");
     assert!(
-        matches!(err, compile::CompileError::AgentFailed(_)),
+        matches!(err, compile::CompileError::AgentFailed { .. }),
         "expected AgentFailed, got {err:?}"
     );
     let msg = err.to_string();
@@ -725,4 +729,63 @@ fn agent_dry_run_unsupported_provider_errors_with_actionable_message() {
         before, after,
         "tree was modified on the unsupported-provider path"
     );
+}
+
+#[test]
+fn agent_dry_run_limit_failure_surfaces_diagnostics_in_json() {
+    // 8 list_leaves calls per turn × 6 turns = 48 = MAX_TOTAL_TOOL_CALLS. The
+    // agent hits the total-tool-call limit. The error envelope must carry the
+    // same resource diagnostics as a success envelope: turns, tool_calls,
+    // usage, and last_error (the last tool-result error).
+    let dir = setup_fixture_collection();
+    let cfg = make_config(dir.path());
+    let model = compile_model();
+    let tree_dir = dir.path();
+
+    let before = snapshot_tree(tree_dir);
+
+    let script: Vec<bo::engine::llm::AgentResponse> = (0..6)
+        .map(|t| {
+            let calls: Vec<bo::engine::llm::ToolCall> = (0..8)
+                .map(|j| tool_call(&format!("c{t}_{j}"), "list_leaves", "{}"))
+                .collect();
+            tool_response_many(calls)
+        })
+        .collect();
+    let provider = ScriptedAgentProvider::new(script);
+
+    let outcome = compile::run_compile_dry_run_with_provider(
+        &cfg,
+        compile::CompileOptions {
+            all: false,
+            agent: true,
+            dry_run: true,
+        },
+        &provider,
+        &model,
+    );
+
+    let err = outcome.result.expect_err("expected a limit-failure error");
+    let json = err.json_error();
+    assert_eq!(json.code, "agent_error", "unexpected error code: {json:?}");
+    let details = &json.details;
+    for key in ["turns", "tool_calls", "usage", "last_error"] {
+        assert!(
+            details.get(key).is_some(),
+            "agent_error details missing `{key}`: {details}"
+        );
+    }
+    assert_eq!(
+        details["turns"].as_u64(),
+        Some(6),
+        "expected 6 turns, got: {details}"
+    );
+    assert_eq!(
+        details["tool_calls"].as_u64(),
+        Some(48),
+        "expected 48 tool calls, got: {details}"
+    );
+
+    let after = snapshot_tree(tree_dir);
+    assert_eq!(before, after, "limit-failure path wrote bytes");
 }

@@ -461,42 +461,11 @@ pub(super) fn run_agent_dry_run(
     };
 
     let outcome = agent::run_agent(run);
-    let stats = match &outcome {
-        AgentOutcome::Completed {
-            turns,
-            tool_calls,
-            usage,
-            ..
-        }
-        | AgentOutcome::Incomplete {
-            turns,
-            tool_calls,
-            usage,
-            ..
-        } => AgentRunStats {
-            turns: *turns,
-            tool_calls: *tool_calls,
-            usage: usage.clone(),
-        },
-        AgentOutcome::LimitExceeded {
-            turns, tool_calls, ..
-        } => AgentRunStats {
-            turns: *turns,
-            tool_calls: *tool_calls,
-            usage: None,
-        },
-        AgentOutcome::Truncated { turns } | AgentOutcome::ContextOverflow { turns } => {
-            AgentRunStats {
-                turns: *turns,
-                tool_calls: 0,
-                usage: None,
-            }
-        }
-        AgentOutcome::ProviderError { turns, .. } => AgentRunStats {
-            turns: *turns,
-            tool_calls: 0,
-            usage: None,
-        },
+    let diag = outcome.diag().clone();
+    let stats = AgentRunStats {
+        turns: diag.turns,
+        tool_calls: diag.tool_calls,
+        usage: diag.usage.clone(),
     };
 
     match outcome {
@@ -506,26 +475,41 @@ pub(super) fn run_agent_dry_run(
                 .expect("plan slot poisoned")
                 .take()
                 .ok_or_else(|| {
-                    CompileError::AgentFailed(
-                        "agent reported completion but no plan was submitted".to_string(),
-                    )
+                    agent_failed("agent reported completion but no plan was submitted", &diag)
                 })?;
             Ok((plan, stats, validation_warnings))
         }
-        AgentOutcome::Incomplete { reason, .. } => Err(CompileError::AgentFailed(format!(
-            "agent did not submit a compile plan: {reason}"
-        ))),
-        AgentOutcome::LimitExceeded { reason, .. } => Err(CompileError::AgentFailed(format!(
-            "agent hit a resource limit: {reason}"
-        ))),
-        AgentOutcome::Truncated { .. } => Err(CompileError::AgentFailed(
-            "agent response was truncated; no tool calls executed".to_string(),
+        AgentOutcome::Incomplete { reason, .. } => Err(agent_failed(
+            &format!("agent did not submit a compile plan: {reason}"),
+            &diag,
         )),
-        AgentOutcome::ContextOverflow { .. } => Err(CompileError::AgentFailed(
-            "agent transcript exceeded the context ceiling".to_string(),
+        AgentOutcome::LimitExceeded { reason, .. } => Err(agent_failed(
+            &format!("agent hit a resource limit: {reason}"),
+            &diag,
         )),
-        AgentOutcome::ProviderError { message, .. } => Err(CompileError::AgentFailed(format!(
-            "agent provider error: {message}"
-        ))),
+        AgentOutcome::Truncated { .. } => Err(agent_failed(
+            "agent response was truncated; no tool calls executed",
+            &diag,
+        )),
+        AgentOutcome::ContextOverflow { .. } => Err(agent_failed(
+            "agent transcript exceeded the context ceiling",
+            &diag,
+        )),
+        AgentOutcome::ProviderError { message, .. } => Err(agent_failed(
+            &format!("agent provider error: {message}"),
+            &diag,
+        )),
+    }
+}
+
+/// Build an `AgentFailed` error carrying the run's resource diagnostics so the
+/// error envelope matches the success envelope's telemetry.
+fn agent_failed(message: &str, diag: &agent::AgentDiagnostics) -> CompileError {
+    CompileError::AgentFailed {
+        message: message.to_string(),
+        turns: diag.turns,
+        tool_calls: diag.tool_calls,
+        usage: diag.usage.clone(),
+        last_error: diag.last_error.clone(),
     }
 }

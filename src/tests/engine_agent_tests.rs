@@ -3,8 +3,9 @@
 //! These exercise the public agent entry point (`run_agent`) against a
 //! deterministic provider that returns a scripted sequence of `AgentResponse`s.
 //! Covers termination, unknown/malformed tools, validation feedback, output
-//! truncation, context preflight, the hard turn limit, reasoning replay, usage
-//! accumulation, and the no-mixed-terminal rule.
+//! truncation, context preflight, the hard turn limit, the total-tool-call
+//! limit, reasoning replay, usage accumulation, last-error surfacing, and the
+//! no-mixed-terminal rule.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -16,7 +17,10 @@ use crate::engine::llm::{
     ToolSchema, Usage,
 };
 
-use super::{run_agent, AgentOutcome, AgentRun, Tool, ToolError, ToolOutcome, MAX_TURNS};
+use super::{
+    run_agent, AgentDiagnostics, AgentOutcome, AgentRun, Tool, ToolError, ToolOutcome,
+    MAX_TOTAL_TOOL_CALLS, MAX_TURNS,
+};
 
 // ── scripted provider ────────────────────────────────────────────────────────
 
@@ -224,6 +228,20 @@ fn boxed<T: Tool + 'static>(tool: T) -> Box<dyn Tool> {
     Box::new(tool)
 }
 
+fn assert_completed(outcome: &AgentOutcome, turns: usize, tool_calls: usize) {
+    assert!(
+        matches!(outcome, AgentOutcome::Completed { .. }),
+        "expected Completed, got {outcome:?}"
+    );
+    let diag: &AgentDiagnostics = outcome.diag();
+    assert_eq!(diag.turns, turns, "turns: got {}", diag.turns);
+    assert_eq!(
+        diag.tool_calls, tool_calls,
+        "tool_calls: got {}",
+        diag.tool_calls
+    );
+}
+
 // ── tests ────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -235,17 +253,7 @@ fn valid_terminal_submission_completes() {
         vec![boxed(TerminalTool::new(submit_calls.clone()))],
     );
 
-    assert!(
-        matches!(
-            outcome,
-            AgentOutcome::Completed {
-                turns: 1,
-                tool_calls: 1,
-                ..
-            }
-        ),
-        "expected Completed, got {outcome:?}"
-    );
+    assert_completed(&outcome, 1, 1);
     assert_eq!(provider.call_count(), 1);
     assert_eq!(submit_calls.load(Ordering::SeqCst), 1);
 }
@@ -258,17 +266,7 @@ fn unknown_tool_returns_error_result_and_consumes_a_turn() {
     ]);
     let outcome = run(&provider, vec![boxed(TerminalTool::new(new_counter()))]);
 
-    assert!(
-        matches!(
-            outcome,
-            AgentOutcome::Completed {
-                turns: 2,
-                tool_calls: 2,
-                ..
-            }
-        ),
-        "expected Completed after feedback, got {outcome:?}"
-    );
+    assert_completed(&outcome, 2, 2);
     // The unknown-tool error was fed back as a tool result keyed by call id.
     let messages = provider.last_messages();
     let tool_results: Vec<&AgentMessage> = messages
@@ -298,17 +296,7 @@ fn malformed_tool_arguments_return_error_result() {
         ],
     );
 
-    assert!(
-        matches!(
-            outcome,
-            AgentOutcome::Completed {
-                turns: 2,
-                tool_calls: 2,
-                ..
-            }
-        ),
-        "expected Completed after malformed-args feedback, got {outcome:?}"
-    );
+    assert_completed(&outcome, 2, 2);
     let messages = provider.last_messages();
     if let AgentMessage::Tool(result) = messages
         .iter()
@@ -327,17 +315,7 @@ fn validation_failure_feeds_back_then_succeeds() {
     ]);
     let outcome = run(&provider, vec![boxed(TerminalTool::new(new_counter()))]);
 
-    assert!(
-        matches!(
-            outcome,
-            AgentOutcome::Completed {
-                turns: 2,
-                tool_calls: 2,
-                ..
-            }
-        ),
-        "expected Completed after validation feedback, got {outcome:?}"
-    );
+    assert_completed(&outcome, 2, 2);
 }
 
 #[test]
@@ -352,9 +330,10 @@ fn truncated_response_never_executes_tool_calls() {
     );
 
     assert!(
-        matches!(outcome, AgentOutcome::Truncated { turns: 1 }),
+        matches!(outcome, AgentOutcome::Truncated { .. }),
         "expected Truncated, got {outcome:?}"
     );
+    assert_eq!(outcome.diag().turns, 1);
     assert_eq!(
         echo_calls.load(Ordering::SeqCst),
         0,
@@ -375,11 +354,74 @@ fn plain_text_without_submission_ends_incomplete_at_turn_limit() {
     );
 
     match outcome {
-        AgentOutcome::Incomplete {
-            turns, tool_calls, ..
-        } => {
-            assert_eq!(turns, MAX_TURNS, "should exhaust all turns");
-            assert_eq!(tool_calls, MAX_TURNS);
+        AgentOutcome::Incomplete { diag, .. } => {
+            assert_eq!(diag.turns, MAX_TURNS, "should exhaust all turns");
+            assert_eq!(diag.tool_calls, MAX_TURNS);
+        }
+        other => panic!("expected Incomplete, got {other:?}"),
+    }
+}
+
+#[test]
+fn limit_exceeded_via_total_tool_calls() {
+    // 8 tool calls per response × 6 turns = 48 = MAX_TOTAL_TOOL_CALLS. This is
+    // the path two live runs hit on a 66-leaf tree: the model keeps calling
+    // inspection tools without submitting. The loop must stop at the
+    // total-tool-call limit, not run unbounded.
+    let echo = EchoTool::new("echo", "ok", new_counter());
+    let responses: Vec<AgentResponse> = (0..6)
+        .map(|t| {
+            let calls: Vec<ToolCall> = (0..8)
+                .map(|j| tool_call(&format!("c{t}_{j}"), "echo", "{}"))
+                .collect();
+            with_tools(calls)
+        })
+        .collect();
+    let provider = ScriptedProvider::new(responses);
+    let outcome = run(&provider, vec![boxed(echo)]);
+
+    match outcome {
+        AgentOutcome::LimitExceeded { diag, .. } => {
+            assert_eq!(
+                diag.turns, 6,
+                "should hit the total-tool-call limit on turn 6"
+            );
+            assert_eq!(diag.tool_calls, MAX_TOTAL_TOOL_CALLS);
+        }
+        other => panic!("expected LimitExceeded, got {other:?}"),
+    }
+}
+
+#[test]
+fn error_outcome_carries_last_tool_result_error() {
+    // Turn 1: terminal tool fails validation (sets last_error). Then plain-text
+    // turns run the loop to the turn limit. The Incomplete outcome must surface
+    // the last validation message in its diagnostics.
+    let provider = ScriptedProvider::new(vec![
+        with_tools(vec![tool_call("c1", "submit", r#"{"plan":"fail"}"#)]),
+        // Remaining turns: plain text (no tool calls) until MAX_TURNS.
+        plain_text("thinking"),
+        plain_text("thinking"),
+        plain_text("thinking"),
+        plain_text("thinking"),
+        plain_text("thinking"),
+        plain_text("thinking"),
+        plain_text("thinking"),
+    ]);
+    let outcome = run(&provider, vec![boxed(TerminalTool::new(new_counter()))]);
+
+    match outcome {
+        AgentOutcome::Incomplete { diag, .. } => {
+            assert_eq!(diag.turns, MAX_TURNS);
+            assert_eq!(diag.tool_calls, 1);
+            let last_error = diag
+                .last_error
+                .as_ref()
+                .expect("expected the last validation message to be surfaced");
+            assert!(
+                last_error.contains("validation failed"),
+                "expected validation message, got: {last_error}"
+            );
         }
         other => panic!("expected Incomplete, got {other:?}"),
     }
@@ -425,10 +467,7 @@ fn mixing_terminal_with_other_tools_is_rejected() {
         ],
     );
 
-    assert!(
-        matches!(outcome, AgentOutcome::Completed { turns: 2, .. }),
-        "expected Completed after rejecting the mixed turn, got {outcome:?}"
-    );
+    assert_completed(&outcome, 2, 3);
     // The rejected turn fed back an error tool result for every call id, so the
     // transcript the second provider call received carries both c1 and c2.
     let messages = provider.last_messages();
@@ -508,16 +547,24 @@ fn usage_is_accumulated_across_turns() {
         ],
     );
 
-    if let AgentOutcome::Completed {
-        usage: Some(usage),
-        turns: 2,
-        ..
-    } = outcome
-    {
-        assert_eq!(usage.prompt_tokens, 300);
-        assert_eq!(usage.completion_tokens, 30);
-        assert_eq!(usage.total_tokens, 330);
-    } else {
-        panic!("expected Completed with accumulated usage, got {outcome:?}");
+    match outcome {
+        AgentOutcome::Completed { diag } => {
+            assert_eq!(diag.turns, 2);
+            let usage = diag.usage.expect("expected accumulated usage");
+            assert_eq!(usage.prompt_tokens, 300);
+            assert_eq!(usage.completion_tokens, 30);
+            assert_eq!(usage.total_tokens, 330);
+        }
+        other => panic!("expected Completed with accumulated usage, got {other:?}"),
+    }
+}
+
+fn plain_text(text: &str) -> AgentResponse {
+    AgentResponse {
+        content: Some(text.to_string()),
+        reasoning_content: None,
+        tool_calls: Vec::new(),
+        finish_reason: FinishReason::Stop,
+        usage: None,
     }
 }

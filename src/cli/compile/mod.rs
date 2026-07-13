@@ -77,7 +77,15 @@ pub enum CompileError {
     DryRunBlocked(String),
     /// The agent loop failed to produce a valid plan (limit, truncation,
     /// context overflow, provider error, or no submission). Zero bytes written.
-    AgentFailed(String),
+    /// Carries the same resource diagnostics as a success envelope so error
+    /// JSON carries turns/tool_calls/usage/last_error.
+    AgentFailed {
+        message: String,
+        turns: usize,
+        tool_calls: usize,
+        usage: Option<Usage>,
+        last_error: Option<String>,
+    },
 }
 
 impl std::fmt::Display for CompileError {
@@ -99,7 +107,7 @@ impl std::fmt::Display for CompileError {
             CompileError::Busy(msg) => write!(f, "{}", msg),
             CompileError::Validation(msg) => write!(f, "{}\n{}", msg, VALIDATION_NEXT_STEP),
             CompileError::DryRunBlocked(msg) => write!(f, "{}", msg),
-            CompileError::AgentFailed(msg) => write!(f, "{}", msg),
+            CompileError::AgentFailed { message, .. } => write!(f, "{}", message),
         }
     }
 }
@@ -149,10 +157,22 @@ impl CompileError {
                 message.clone(),
                 json!({ "files_changed": false }),
             ),
-            CompileError::AgentFailed(message) => JsonError::with_details(
+            CompileError::AgentFailed {
+                message,
+                turns,
+                tool_calls,
+                usage,
+                last_error,
+            } => JsonError::with_details(
                 "agent_error",
                 message.clone(),
-                json!({ "files_changed": false }),
+                json!({
+                    "files_changed": false,
+                    "turns": turns,
+                    "tool_calls": tool_calls,
+                    "usage": usage,
+                    "last_error": last_error,
+                }),
             ),
         }
     }

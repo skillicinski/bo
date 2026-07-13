@@ -82,34 +82,72 @@ pub(crate) struct ToolError(pub String);
 
 // ── run outcome ──────────────────────────────────────────────────────────────
 
+/// Resource diagnostics tracked across every agent run and surfaced on both
+/// success and error outcomes so error envelopes carry the same telemetry as
+/// success envelopes. `last_error` is the most recent tool-result error (e.g.
+/// the last validation message), or `None` when no tool errored.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AgentDiagnostics {
+    pub turns: usize,
+    pub tool_calls: usize,
+    pub usage: Option<Usage>,
+    pub last_error: Option<String>,
+}
+
 #[derive(Debug)]
 pub(crate) enum AgentOutcome {
     /// A terminal tool completed successfully.
-    Completed {
-        turns: usize,
-        tool_calls: usize,
-        usage: Option<Usage>,
-    },
+    Completed { diag: AgentDiagnostics },
     /// The loop ended without a valid terminal submission (plain text, no call).
     Incomplete {
         reason: String,
-        turns: usize,
-        tool_calls: usize,
-        usage: Option<Usage>,
+        diag: AgentDiagnostics,
     },
     /// A hard limit (turns or total tool calls) was hit.
     LimitExceeded {
         reason: String,
-        turns: usize,
-        tool_calls: usize,
+        diag: AgentDiagnostics,
     },
     /// The provider truncated the response (finish_reason: length). Tool calls
     /// from a truncated response are never executed.
-    Truncated { turns: usize },
+    Truncated { diag: AgentDiagnostics },
     /// The serialized transcript exceeded the context ceiling.
-    ContextOverflow { turns: usize },
+    ContextOverflow { diag: AgentDiagnostics },
     /// The provider call failed after retries.
-    ProviderError { message: String, turns: usize },
+    ProviderError {
+        message: String,
+        diag: AgentDiagnostics,
+    },
+}
+
+impl AgentOutcome {
+    /// The resource diagnostics for this outcome (turns, tool calls, usage,
+    /// last tool-result error). Present on every variant.
+    pub(crate) fn diag(&self) -> &AgentDiagnostics {
+        match self {
+            Self::Completed { diag }
+            | Self::Incomplete { diag, .. }
+            | Self::LimitExceeded { diag, .. }
+            | Self::Truncated { diag }
+            | Self::ContextOverflow { diag }
+            | Self::ProviderError { diag, .. } => diag,
+        }
+    }
+}
+
+/// Snapshot the current resource counters into diagnostics.
+fn diagnostics(
+    turns: usize,
+    tool_calls: usize,
+    usage: &Option<Usage>,
+    last_error: &Option<String>,
+) -> AgentDiagnostics {
+    AgentDiagnostics {
+        turns,
+        tool_calls,
+        usage: usage.clone(),
+        last_error: last_error.clone(),
+    }
 }
 
 /// Inputs for a single agent run.
@@ -139,20 +177,21 @@ async fn run_agent_async(run: AgentRun<'_>) -> AgentOutcome {
     let mut turns = 0usize;
     let mut total_tool_calls = 0usize;
     let mut usage: Option<Usage> = None;
+    let mut last_error: Option<String> = None;
 
     loop {
         if turns >= MAX_TURNS {
             return AgentOutcome::Incomplete {
                 reason: format!("reached the {MAX_TURNS}-turn limit without submitting"),
-                turns,
-                tool_calls: total_tool_calls,
-                usage,
+                diag: diagnostics(turns, total_tool_calls, &usage, &last_error),
             };
         }
 
         let context_bytes = transcript_byte_estimate(&transcript);
         if context_bytes > MAX_CONTEXT_BYTES {
-            return AgentOutcome::ContextOverflow { turns };
+            return AgentOutcome::ContextOverflow {
+                diag: diagnostics(turns, total_tool_calls, &usage, &last_error),
+            };
         }
 
         turns += 1;
@@ -168,16 +207,19 @@ async fn run_agent_async(run: AgentRun<'_>) -> AgentOutcome {
         .await
         {
             Ok(response) => response,
-            Err(LlmError::RetryExhausted { last_error, .. }) => {
+            Err(LlmError::RetryExhausted {
+                last_error: llm_error,
+                ..
+            }) => {
                 return AgentOutcome::ProviderError {
-                    message: last_error.to_string(),
-                    turns,
+                    message: llm_error.to_string(),
+                    diag: diagnostics(turns, total_tool_calls, &usage, &last_error),
                 }
             }
             Err(error) => {
                 return AgentOutcome::ProviderError {
                     message: error.to_string(),
-                    turns,
+                    diag: diagnostics(turns, total_tool_calls, &usage, &last_error),
                 }
             }
         };
@@ -186,7 +228,9 @@ async fn run_agent_async(run: AgentRun<'_>) -> AgentOutcome {
 
         // Never execute tool calls from a length-truncated response.
         if matches!(response.finish_reason, FinishReason::Length) {
-            return AgentOutcome::Truncated { turns };
+            return AgentOutcome::Truncated {
+                diag: diagnostics(turns, total_tool_calls, &usage, &last_error),
+            };
         }
 
         if response.tool_calls.is_empty() {
@@ -211,14 +255,15 @@ async fn run_agent_async(run: AgentRun<'_>) -> AgentOutcome {
             transcript.push(assistant_message(&response));
             for tc in &response.tool_calls {
                 total_tool_calls += 1;
-                push_tool_result(
+                push_error_result(
                     &mut transcript,
+                    &mut last_error,
                     tc,
-                    json!({"error": "a terminal tool must be the only tool call in a turn"})
-                        .to_string(),
+                    "a terminal tool must be the only tool call in a turn".to_string(),
                 );
             }
-            if let Some(stop) = total_tool_call_limit(total_tool_calls, turns) {
+            if let Some(stop) = total_tool_call_limit(total_tool_calls, turns, &usage, &last_error)
+            {
                 return stop;
             }
             continue;
@@ -227,22 +272,17 @@ async fn run_agent_async(run: AgentRun<'_>) -> AgentOutcome {
         // Reject a response with too many tool calls.
         if response.tool_calls.len() > MAX_TOOL_CALLS_PER_RESPONSE {
             transcript.push(assistant_message(&response));
+            let message = format!(
+                "too many tool calls in one response ({}); limit is {}",
+                response.tool_calls.len(),
+                MAX_TOOL_CALLS_PER_RESPONSE
+            );
             for tc in &response.tool_calls {
                 total_tool_calls += 1;
-                push_tool_result(
-                    &mut transcript,
-                    tc,
-                    json!({
-                        "error": format!(
-                            "too many tool calls in one response ({}); limit is {}",
-                            response.tool_calls.len(),
-                            MAX_TOOL_CALLS_PER_RESPONSE
-                        )
-                    })
-                    .to_string(),
-                );
+                push_error_result(&mut transcript, &mut last_error, tc, message.clone());
             }
-            if let Some(stop) = total_tool_call_limit(total_tool_calls, turns) {
+            if let Some(stop) = total_tool_call_limit(total_tool_calls, turns, &usage, &last_error)
+            {
                 return stop;
             }
             continue;
@@ -266,19 +306,18 @@ async fn run_agent_async(run: AgentRun<'_>) -> AgentOutcome {
                     break;
                 }
                 Err(ToolError(message)) => {
-                    push_tool_result(&mut transcript, tc, json!({"error": message}).to_string());
+                    push_error_result(&mut transcript, &mut last_error, tc, message);
                 }
             }
-            if let Some(stop) = total_tool_call_limit(total_tool_calls, turns) {
+            if let Some(stop) = total_tool_call_limit(total_tool_calls, turns, &usage, &last_error)
+            {
                 return stop;
             }
         }
 
         if terminated {
             return AgentOutcome::Completed {
-                turns,
-                tool_calls: total_tool_calls,
-                usage,
+                diag: diagnostics(turns, total_tool_calls, &usage, &last_error),
             };
         }
     }
@@ -309,13 +348,34 @@ fn push_tool_result(transcript: &mut Vec<AgentMessage>, call: &ToolCall, content
     }));
 }
 
+/// Push an error tool result: record the message as the last tool-result error
+/// and route the JSON-wrapped content through the same byte cap as content
+/// results so error payloads cannot blow up the transcript unbounded.
+fn push_error_result(
+    transcript: &mut Vec<AgentMessage>,
+    last_error: &mut Option<String>,
+    call: &ToolCall,
+    message: String,
+) {
+    *last_error = Some(message.clone());
+    let content = bound_result_bytes(json!({"error": message}).to_string());
+    transcript.push(AgentMessage::Tool(crate::engine::llm::ToolResult {
+        tool_call_id: call.id.clone(),
+        content,
+    }));
+}
+
 /// Returns a `LimitExceeded` outcome if the total tool-call budget is exhausted.
-fn total_tool_call_limit(total_tool_calls: usize, turns: usize) -> Option<AgentOutcome> {
+fn total_tool_call_limit(
+    total_tool_calls: usize,
+    turns: usize,
+    usage: &Option<Usage>,
+    last_error: &Option<String>,
+) -> Option<AgentOutcome> {
     if total_tool_calls >= MAX_TOTAL_TOOL_CALLS {
         Some(AgentOutcome::LimitExceeded {
             reason: format!("reached the {MAX_TOTAL_TOOL_CALLS} total tool-call limit"),
-            turns,
-            tool_calls: total_tool_calls,
+            diag: diagnostics(turns, total_tool_calls, usage, last_error),
         })
     } else {
         None
