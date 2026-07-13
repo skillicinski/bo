@@ -217,6 +217,9 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
 
     Ok(CompileSummary {
         branches: branch_results,
+        branches_created: delta.branches_created,
+        branches_updated: delta.branches_updated,
+        branch_deletes: delta.branch_deletes,
         leaves_processed,
         leaves_skipped: skipped_leaves.to_vec(),
     })

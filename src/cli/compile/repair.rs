@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::fs;
 
+use serde::Serialize;
 use serde_yaml_ng::Value;
 
 use crate::domain::frontmatter;
@@ -23,7 +24,7 @@ pub(super) struct LeafFileClassification {
     pub(super) skipped_leaf_slugs: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct RemovedBranchResult {
     pub(super) slug: String,
     pub(super) title: String,
@@ -46,6 +47,26 @@ struct BranchRepairOutcome {
     repaired_branch_slugs: Vec<String>,
     branches_removed: Vec<RemovedBranchResult>,
     frontmatter_notes: Vec<String>,
+}
+
+/// Structured outcome of the repair pass, for journaling. `notifications`
+/// carries the human-facing summary strings; the typed fields carry the
+/// "what was pruned and why" detail.
+#[derive(Debug, Clone, Default)]
+pub(super) struct RepairReport {
+    pub(super) notifications: Vec<String>,
+    pub(super) orphan_leaf_slugs: Vec<String>,
+    pub(super) repaired_branch_slugs: Vec<String>,
+    pub(super) removed_branches: Vec<RemovedBranchResult>,
+}
+
+impl RepairReport {
+    /// True when repair pruned or rewrote nothing.
+    pub(super) fn is_empty(&self) -> bool {
+        self.orphan_leaf_slugs.is_empty()
+            && self.repaired_branch_slugs.is_empty()
+            && self.removed_branches.is_empty()
+    }
 }
 
 // ── public functions ──────────────────────────────────────────────────────────
@@ -118,10 +139,10 @@ pub(super) fn requires_repair(
 pub(super) fn repair_stale_branches(
     cfg: &SeededConfig,
     manifest: &Manifest,
-) -> Result<Vec<String>, CompileError> {
+) -> Result<RepairReport, CompileError> {
     let class = classify_deletions(cfg, manifest)?;
     if class.deleted_slugs.is_empty() {
-        return Ok(Vec::new());
+        return Ok(RepairReport::default());
     }
 
     let mut notifications = Vec::new();
@@ -155,7 +176,12 @@ pub(super) fn repair_stale_branches(
         }
     }
 
-    Ok(notifications)
+    Ok(RepairReport {
+        notifications,
+        orphan_leaf_slugs: class.orphan_slugs,
+        repaired_branch_slugs: outcome.repaired_branch_slugs,
+        removed_branches: outcome.branches_removed,
+    })
 }
 
 // ── pipeline stages ───────────────────────────────────────────────────────────

@@ -3,6 +3,7 @@ pub mod auth;
 pub mod config;
 pub mod extract;
 pub mod fetch;
+pub mod journal;
 pub mod llm;
 pub mod manifest;
 pub mod pending;

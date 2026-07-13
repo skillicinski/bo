@@ -90,8 +90,9 @@ fn missing_unbranched_new_leaf_is_pruned_not_error() {
     write_manifest(dir.path(), &manifest);
 
     let cfg = seeded_config(dir.path());
-    let notifications =
-        repair::repair_stale_branches(&cfg, &manifest).expect("repair should succeed");
+    let notifications = repair::repair_stale_branches(&cfg, &manifest)
+        .expect("repair should succeed")
+        .notifications;
 
     assert_eq!(notifications.len(), 1);
     assert!(notifications[0].contains("pruned 1 orphan"));
@@ -121,8 +122,9 @@ fn missing_unbranched_leaf_never_compiled_is_pruned() {
     write_manifest(dir.path(), &manifest);
 
     let cfg = seeded_config(dir.path());
-    let notifications =
-        repair::repair_stale_branches(&cfg, &manifest).expect("repair should succeed");
+    let notifications = repair::repair_stale_branches(&cfg, &manifest)
+        .expect("repair should succeed")
+        .notifications;
 
     assert_eq!(notifications.len(), 1);
     assert!(notifications[0].contains("pruned 1 orphan"));
@@ -143,8 +145,9 @@ fn repair_with_no_missing_files_has_empty_notifications() {
     write_manifest(dir.path(), &manifest);
 
     let cfg = seeded_config(dir.path());
-    let notifications =
-        repair::repair_stale_branches(&cfg, &manifest).expect("repair should succeed");
+    let notifications = repair::repair_stale_branches(&cfg, &manifest)
+        .expect("repair should succeed")
+        .notifications;
 
     assert!(notifications.is_empty());
 }
@@ -168,8 +171,9 @@ fn all_leaves_deleted_manifest_repaired_to_empty() {
     write_manifest(dir.path(), &manifest);
 
     let cfg = seeded_config(dir.path());
-    let notifications =
-        repair::repair_stale_branches(&cfg, &manifest).expect("repair should succeed");
+    let notifications = repair::repair_stale_branches(&cfg, &manifest)
+        .expect("repair should succeed")
+        .notifications;
 
     assert_eq!(notifications.len(), 1);
     assert!(notifications[0].contains("pruned 2 orphan"));
@@ -294,8 +298,9 @@ fn repair_notifications_include_branch_repair_and_removal_messages() {
     write_manifest(dir.path(), &manifest);
 
     let cfg = seeded_config(dir.path());
-    let notifications =
-        repair::repair_stale_branches(&cfg, &manifest).expect("repair should succeed");
+    let notifications = repair::repair_stale_branches(&cfg, &manifest)
+        .expect("repair should succeed")
+        .notifications;
 
     // Messages should include branch repair and removal, not just prune.
     let notification_set: HashSet<&str> = notifications.iter().map(String::as_str).collect();
@@ -1082,8 +1087,9 @@ fn repair_stale_branches_fixes_branch_frontmatter() {
     write_manifest(dir.path(), &manifest);
 
     let cfg = seeded_config(dir.path());
-    let notifications =
-        repair::repair_stale_branches(&cfg, &manifest).expect("repair should succeed");
+    let notifications = repair::repair_stale_branches(&cfg, &manifest)
+        .expect("repair should succeed")
+        .notifications;
 
     // Notification should mention frontmatter repair
     assert!(

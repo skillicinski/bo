@@ -17,6 +17,7 @@ use crate::domain::tree::{self, TreeRuntimeState};
 use crate::domain::{manifest, Timestamp};
 use crate::engine::auth;
 use crate::engine::config::SeededConfig;
+use crate::engine::journal;
 use crate::engine::llm::{LlmCallPolicy, LlmProvider, Model, Usage};
 use crate::engine::pending;
 
@@ -325,6 +326,9 @@ impl CompileDryRunOutcome {
 
 pub struct CompileSummary {
     pub branches: Vec<BranchResult>,
+    pub branches_created: Vec<BranchResult>,
+    pub branches_updated: Vec<BranchResult>,
+    pub branch_deletes: Vec<String>,
     pub leaves_processed: usize,
     pub leaves_skipped: Vec<String>,
 }
@@ -334,6 +338,72 @@ pub struct BranchResult {
     pub slug: String,
     pub title: String,
     pub leaf_count: usize,
+}
+
+// ── journal payloads ─────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct CompileJournalPayload<'a> {
+    mode: CompileRunMode,
+    new_leaf_slugs: &'a [String],
+    branches_created: &'a [BranchResult],
+    branches_updated: &'a [BranchResult],
+    branches_deleted: &'a [String],
+    validation_failures: Vec<String>,
+    duration_ms: u128,
+}
+
+fn compile_payload<'a>(
+    summary: &'a CompileSummary,
+    mode: CompileRunMode,
+    new_leaf_slugs: &'a [String],
+    duration: Duration,
+) -> CompileJournalPayload<'a> {
+    CompileJournalPayload {
+        mode,
+        new_leaf_slugs,
+        branches_created: &summary.branches_created,
+        branches_updated: &summary.branches_updated,
+        branches_deleted: &summary.branch_deletes,
+        validation_failures: Vec::new(),
+        duration_ms: duration.as_millis(),
+    }
+}
+
+fn compile_failure_payload<'a>(
+    mode: CompileRunMode,
+    new_leaf_slugs: &'a [String],
+    error: &CompileError,
+    duration: Duration,
+) -> CompileJournalPayload<'a> {
+    let validation_failures = match error {
+        CompileError::Validation(msg) => vec![msg.clone()],
+        _ => Vec::new(),
+    };
+    CompileJournalPayload {
+        mode,
+        new_leaf_slugs,
+        branches_created: &[],
+        branches_updated: &[],
+        branches_deleted: &[],
+        validation_failures,
+        duration_ms: duration.as_millis(),
+    }
+}
+
+#[derive(Serialize)]
+struct RepairJournalPayload<'a> {
+    orphan_leaf_slugs: &'a [String],
+    repaired_branch_slugs: &'a [String],
+    removed_branches: &'a [repair::RemovedBranchResult],
+}
+
+fn repair_journal_payload(report: &repair::RepairReport) -> RepairJournalPayload<'_> {
+    RepairJournalPayload {
+        orphan_leaf_slugs: &report.orphan_leaf_slugs,
+        repaired_branch_slugs: &report.repaired_branch_slugs,
+        removed_branches: &report.removed_branches,
+    }
 }
 
 fn preflight_noop(
@@ -792,12 +862,21 @@ fn run_compile(
             )));
         }
     };
-    let notifications = repair::repair_stale_branches(cfg, &manifest)?;
+    let repair_report = repair::repair_stale_branches(cfg, &manifest)?;
     // Repair notices are destructive-action reporting (e.g. "removed N stale
     // branches"); mirror them onto the stderr channel so they reach consumers
     // in both human and --json mode. The human-mode double-emission (stderr
     // line + stdout `→` note) matches the prior behavior byte-for-byte.
-    warnings.extend(notifications.iter().cloned());
+    warnings.extend(repair_report.notifications.iter().cloned());
+    if !repair_report.is_empty() {
+        journal::append_payload(
+            tree.path(),
+            journal::Op::Repair,
+            None,
+            &repair_journal_payload(&repair_report),
+        );
+    }
+    let notifications = repair_report.notifications;
     let manifest = crate::engine::manifest::read(&tree::manifest_path(tree.path()))
         .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
 
@@ -855,6 +934,9 @@ pub fn run_compile_with_provider_started_at(
         }
         return Ok(CompileResult::noop("single_leaf", notifications));
     }
+
+    let tree = cfg.tree();
+    let started = std::time::Instant::now();
 
     // ── build prompt and schema ─────────────────────────────────────────────
     // Each run mode has exactly one coherent prompt and schema. Incremental
@@ -919,14 +1001,28 @@ pub fn run_compile_with_provider_started_at(
             &loaded_leaves,
             input_body_bytes,
             warnings,
-        )?,
+        ),
         CompileRunMode::Incremental => parse::parse_and_validate_incremental_with_input_size(
             &response,
             cfg,
             &loaded_leaves,
             input_body_bytes,
             warnings,
-        )?,
+        ),
+    };
+    let compiled_plan = match compiled_plan {
+        Ok(plan) => plan,
+        Err(error) => {
+            if matches!(error, CompileError::Validation(_)) {
+                journal::append_payload(
+                    tree.path(),
+                    journal::Op::Compile,
+                    Some(model.to_string()),
+                    &compile_failure_payload(run_mode, new_leaf_slugs, &error, started.elapsed()),
+                );
+            }
+            return Err(error);
+        }
     };
 
     let summary = execute::execute_plan_with_mode_and_expected_hash(
@@ -945,6 +1041,13 @@ pub fn run_compile_with_provider_started_at(
     {
         notifications.push(warning);
     }
+
+    journal::append_payload(
+        tree.path(),
+        journal::Op::Compile,
+        Some(model.to_string()),
+        &compile_payload(&summary, run_mode, new_leaf_slugs, started.elapsed()),
+    );
 
     Ok(CompileResult::compiled(
         summary,
