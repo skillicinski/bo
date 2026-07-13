@@ -121,8 +121,11 @@ fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    file.write_all(line.as_bytes())?;
-    file.write_all(b"\n")?;
+    // One write, not two: O_APPEND atomicity is per-write, and query appends
+    // without the tree lock. Joining line+newline into a single write_all
+    // closes the window where a concurrent append could land between them and
+    // corrupt two events.
+    file.write_all(format!("{line}\n").as_bytes())?;
     Ok(())
 }
 

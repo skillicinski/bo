@@ -75,6 +75,46 @@ fn torn_final_line_is_tolerated() {
 }
 
 #[test]
+fn concurrent_appends_do_not_interleave() {
+    use std::sync::Arc;
+    use std::thread;
+
+    // O_APPEND atomicity is per-write, and query appends without the tree
+    // lock. Each event must be one intact line: a concurrent append landing
+    // between a line and its newline would merge two events into one
+    // unparseable line. Asserting every append survives as a parseable event
+    // guards the single-write contract in append_line.
+    let dir = Arc::new(tree_dir());
+    const THREADS: usize = 8;
+    const PER_THREAD: usize = 50;
+
+    let mut handles = Vec::new();
+    for t in 0..THREADS {
+        let dir = Arc::clone(&dir);
+        handles.push(thread::spawn(move || {
+            for i in 0..PER_THREAD {
+                append(
+                    dir.path(),
+                    &Event::system(Op::Collect, None, serde_json::json!({"t": t, "i": i})),
+                );
+            }
+        }));
+    }
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    let events = read_recent(dir.path(), THREADS * PER_THREAD + 10);
+    assert_eq!(
+        events.len(),
+        THREADS * PER_THREAD,
+        "expected {} intact events, got {}; some appends interleaved",
+        THREADS * PER_THREAD,
+        events.len(),
+    );
+}
+
+#[test]
 fn append_creates_missing_infra_dir() {
     let dir = tree_dir();
     assert!(!dir.path().join(".bo").exists());
