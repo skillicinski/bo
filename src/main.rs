@@ -1,5 +1,5 @@
 use bo::cli::collect::{self, BatchCollectResult, CollectError, CollectOutput};
-use bo::cli::compile::{self, CompileError, CompileOptions, CompileResult};
+use bo::cli::compile::{self, CompileError, CompileOptions, CompilePreview, CompileResult};
 use bo::cli::config as cli_config;
 use bo::cli::json::{self as json_output, JsonError, JsonWarning};
 use bo::cli::list::{self};
@@ -88,6 +88,12 @@ enum Commands {
         /// organization each run
         #[arg(long)]
         all: bool,
+        /// Use the iterative agent loop (requires --dry-run in this milestone)
+        #[arg(long, requires = "dry_run")]
+        agent: bool,
+        /// Show a validated preview and write nothing to the tree
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Inspect branches and leaves in the current tree
     #[command(
@@ -315,23 +321,50 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 Err(error) => emit_cli_error("collect", json, error, stderr),
             }
         }
-        Commands::Compile { all } => match require_seeded_config() {
+        Commands::Compile {
+            all,
+            agent,
+            dry_run,
+        } => match require_seeded_config() {
             Err(error) => emit_cli_error("compile", json, error, stderr),
             Ok(config) => {
-                let outcome = compile::run_compile_with_options(&config, CompileOptions { all });
-                // Render stderr-bound diagnostics (collisions, recovery, branch
-                // writes) post-run; the pipeline collects them, never prints.
-                let _ = compile::render_diagnostics(outcome.stderr_lines(), stderr);
-                match outcome.result {
-                    Ok(result) if json => {
-                        let warnings = compile_warnings(&result);
-                        emit_json_success("compile", &result, warnings, stdout)
+                let options = CompileOptions {
+                    all,
+                    agent,
+                    dry_run,
+                };
+                if dry_run {
+                    let outcome = compile::run_compile_dry_run(&config, options);
+                    let _ = compile::render_diagnostics(outcome.stderr_lines(), stderr);
+                    match outcome.result {
+                        Ok(preview) if json => {
+                            let warnings = compile_preview_warnings(&preview);
+                            emit_json_success("compile", &preview, warnings, stdout)
+                        }
+                        Ok(preview) => wrote(
+                            compile::render_preview_human(&preview, stdout, &config.tree().name),
+                            0,
+                        ),
+                        Err(error) => {
+                            emit_cli_error("compile", json, CliError::Compile(error), stderr)
+                        }
                     }
-                    Ok(result) => wrote(
-                        compile::render_human(&result, stdout, &config.tree().name),
-                        0,
-                    ),
-                    Err(error) => emit_cli_error("compile", json, CliError::Compile(error), stderr),
+                } else {
+                    let outcome = compile::run_compile_with_options(&config, options);
+                    let _ = compile::render_diagnostics(outcome.stderr_lines(), stderr);
+                    match outcome.result {
+                        Ok(result) if json => {
+                            let warnings = compile_warnings(&result);
+                            emit_json_success("compile", &result, warnings, stdout)
+                        }
+                        Ok(result) => wrote(
+                            compile::render_human(&result, stdout, &config.tree().name),
+                            0,
+                        ),
+                        Err(error) => {
+                            emit_cli_error("compile", json, CliError::Compile(error), stderr)
+                        }
+                    }
                 }
             }
         },
@@ -767,6 +800,21 @@ fn compile_warnings(result: &CompileResult) -> Vec<JsonWarning> {
         warnings.push(JsonWarning::new("degenerate_result", msg));
     }
 
+    warnings
+}
+
+fn compile_preview_warnings(preview: &CompilePreview) -> Vec<JsonWarning> {
+    let mut warnings = Vec::new();
+    if !preview.leaves_skipped.is_empty() {
+        warnings.push(JsonWarning::with_details(
+            "skipped_leaves",
+            format!(
+                "skipped {} leaves with unparseable frontmatter",
+                preview.leaves_skipped.len()
+            ),
+            json!({ "files": preview.leaves_skipped }),
+        ));
+    }
     warnings
 }
 

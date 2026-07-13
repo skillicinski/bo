@@ -289,6 +289,69 @@ fn retry_delay(initial_backoff: Duration, completed_attempt: usize) -> Duration 
     initial_backoff.saturating_mul(multiplier)
 }
 
+/// Retry-wrapped tool-calling completion. Mirrors `complete_with_policy`:
+/// transient errors are retried with exponential backoff; the final error is
+/// `RetryExhausted`. Tool schemas are passed through unchanged — the provider
+/// serializes them into its native tool format. The agent loop bounds total
+/// requests via its turn limit and this per-turn attempt count.
+#[tracing::instrument(skip(provider, messages, tools), fields(model = %model))]
+pub(crate) async fn complete_with_tools_with_policy(
+    provider: &dyn LlmProvider,
+    messages: &[AgentMessage],
+    model: &str,
+    max_tokens: u32,
+    tools: &[ToolSchema],
+    reasoning_disabled: bool,
+    policy: LlmCallPolicy,
+) -> Result<AgentResponse, LlmError> {
+    if policy.max_attempts == 0 {
+        return Err(LlmError::Api(
+            "invalid LLM call policy: max_attempts must be at least 1".to_string(),
+        ));
+    }
+
+    let mut last_error: Option<LlmError> = None;
+
+    for attempt in 1..=policy.max_attempts {
+        let result = tokio::time::timeout(
+            policy.timeout,
+            provider.complete_with_tools(messages, model, max_tokens, tools, reasoning_disabled),
+        )
+        .await;
+
+        match result {
+            Ok(Ok(response)) => return Ok(response),
+            Ok(Err(error)) => {
+                if !is_transient_error(&error) {
+                    return Err(error);
+                }
+                tracing::warn!(attempt, %error, "transient tool-call failure");
+                last_error = Some(error);
+            }
+            Err(_) => {
+                last_error = Some(LlmError::Timeout {
+                    timeout: policy.timeout,
+                });
+            }
+        }
+
+        if attempt < policy.max_attempts {
+            let delay = retry_delay(policy.initial_backoff, attempt);
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+        }
+    }
+
+    let last_error = last_error
+        .unwrap_or_else(|| LlmError::Api("LLM request failed without an error".to_string()));
+    tracing::warn!(attempts = policy.max_attempts, %last_error, "tool-call retry exhausted");
+    Err(LlmError::RetryExhausted {
+        attempts: policy.max_attempts,
+        last_error: Box::new(last_error),
+    })
+}
+
 // ── Message types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -335,6 +398,76 @@ pub struct LlmResponse {
     pub finish_reason: FinishReason,
 }
 
+// ── Tool-calling extension ───────────────────────────────────────────────────
+//
+// Agent turn-loop message/response types. These extend LlmProvider for
+// providers that support OpenAI-style function/tool calling. Providers that
+// do not support tools leave the default `complete_with_tools`, which returns
+// an explicit unsupported error so the agent loop never silently degrades.
+
+/// A single tool call requested by the model.
+#[derive(Debug, Clone)]
+pub struct ToolCall {
+    /// Provider-assigned call id; must be echoed on the matching tool result.
+    pub id: String,
+    pub name: String,
+    /// Raw JSON arguments string. Validated/deserialized into typed structs at
+    /// the tool boundary — never trusted as-is.
+    pub arguments: String,
+}
+
+/// A tool result fed back to the model, keyed by the call id it answers.
+#[derive(Debug, Clone)]
+pub struct ToolResult {
+    pub tool_call_id: String,
+    pub content: String,
+}
+
+/// Agent transcript message. Extends the simple `Message` with assistant
+/// tool-call turns and tool-result turns required for multi-turn tool loops.
+#[derive(Debug, Clone)]
+pub enum AgentMessage {
+    System(String),
+    User(String),
+    Assistant {
+        content: Option<String>,
+        /// DeepSeek returns `reasoning_content` in thinking mode and rejects
+        /// the next request (HTTP 400) if it is omitted from the replayed
+        /// assistant message. Stored here so the provider replays it verbatim.
+        reasoning_content: Option<String>,
+        tool_calls: Vec<ToolCall>,
+    },
+    Tool(ToolResult),
+}
+
+/// A provider response that may carry tool calls.
+#[derive(Debug, Clone)]
+pub struct AgentResponse {
+    pub content: Option<String>,
+    pub reasoning_content: Option<String>,
+    pub tool_calls: Vec<ToolCall>,
+    pub finish_reason: FinishReason,
+    pub usage: Option<Usage>,
+}
+
+/// Token usage reported by the provider, captured for evaluation. Not enforced
+/// as a budget in v0.0.10 — recorded only.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Usage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+}
+
+/// A tool's name, description, and JSON-Schema parameters, ready for the
+/// provider's native tool format.
+#[derive(Debug, Clone)]
+pub struct ToolSchema {
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
+}
+
 // ── LlmProvider trait ─────────────────────────────────────────────────────────
 
 /// An LLM backend that can produce structured responses.
@@ -362,6 +495,23 @@ pub trait LlmProvider: Send + Sync {
         response_schema: Option<&NormalizedSchema>,
         reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError>;
+
+    /// Complete with tool-calling support. Providers that do not support
+    /// OpenAI-style tool calls leave this default, which fails explicitly so
+    /// the agent loop surfaces an actionable error rather than silently
+    /// degrading. The agent loop never calls `complete` for tool turns.
+    async fn complete_with_tools(
+        &self,
+        _messages: &[AgentMessage],
+        _model: &str,
+        _max_tokens: u32,
+        _tools: &[ToolSchema],
+        _reasoning_disabled: bool,
+    ) -> Result<AgentResponse, LlmError> {
+        Err(LlmError::Api(
+            "this provider does not support tool calls".to_string(),
+        ))
+    }
 }
 
 #[cfg(test)]

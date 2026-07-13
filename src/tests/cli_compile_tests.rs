@@ -358,7 +358,13 @@ fn select_run_mode_forces_full_when_no_branches_exist() {
     // response schema, so the LLM cannot produce valid updated_branches.
     let manifest = fresh_manifest("t", "2026-01-01T00:00:00Z", None);
     assert_eq!(
-        plan::select_run_mode(CompileOptions { all: false }, &manifest),
+        plan::select_run_mode(
+            CompileOptions {
+                all: false,
+                ..Default::default()
+            },
+            &manifest
+        ),
         CompileRunMode::Full,
         "fresh tree with no branches must compile full even without --all"
     );
@@ -380,12 +386,24 @@ fn select_run_mode_incremental_only_with_branches_and_no_all() {
     });
 
     assert_eq!(
-        plan::select_run_mode(CompileOptions { all: false }, &manifest),
+        plan::select_run_mode(
+            CompileOptions {
+                all: false,
+                ..Default::default()
+            },
+            &manifest
+        ),
         CompileRunMode::Incremental,
         "tree with branches and no --all runs incremental"
     );
     assert_eq!(
-        plan::select_run_mode(CompileOptions { all: true }, &manifest),
+        plan::select_run_mode(
+            CompileOptions {
+                all: true,
+                ..Default::default()
+            },
+            &manifest
+        ),
         CompileRunMode::Full,
         "--all always forces full"
     );

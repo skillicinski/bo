@@ -28,7 +28,7 @@ fn compile_flags_parse() {
     let cli = Cli::try_parse_from(["bo", "compile", "--all"]).unwrap();
 
     match cli.command {
-        Commands::Compile { all } => {
+        Commands::Compile { all, .. } => {
             assert!(all);
         }
         other => panic!("expected compile command, got {other:?}"),
@@ -40,7 +40,7 @@ fn compile_flags_default_false() {
     let cli = Cli::try_parse_from(["bo", "compile"]).unwrap();
 
     match cli.command {
-        Commands::Compile { all } => {
+        Commands::Compile { all, .. } => {
             assert!(!all);
         }
         other => panic!("expected compile command, got {other:?}"),
