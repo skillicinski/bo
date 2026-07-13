@@ -265,6 +265,77 @@ enum ExpandedCollectInput {
     },
 }
 
+// ── journal ───────────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct CollectJournalItem<'a> {
+    input: &'a str,
+    status: CollectItemStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: &'a Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file: &'a Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: &'a Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: &'a Option<String>,
+}
+
+impl<'a> From<&'a CollectItemResult> for CollectJournalItem<'a> {
+    fn from(item: &'a CollectItemResult) -> Self {
+        Self {
+            input: &item.input,
+            status: item.status,
+            url: &item.url,
+            file: &item.file,
+            code: &item.code,
+            message: &item.message,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct CollectJournalPayload<'a> {
+    items: Vec<CollectJournalItem<'a>>,
+}
+
+/// Record a collect operation in the tree's journal. Best-effort: a journal
+/// failure never fails the command. `model` is included only when at least one
+/// real (non-note) URL was processed — notes collect no LLM summary.
+pub fn journal(tree_dir: &Path, model: &str, items: &[CollectItemResult]) {
+    let involved = items
+        .iter()
+        .any(|i| i.url.as_deref().is_some_and(|u| !u.starts_with("bo://")));
+    let payload = CollectJournalPayload {
+        items: items.iter().map(CollectJournalItem::from).collect(),
+    };
+    crate::engine::journal::append_payload(
+        tree_dir,
+        crate::engine::journal::Op::Collect,
+        if involved {
+            Some(model.to_string())
+        } else {
+            None
+        },
+        &payload,
+    );
+}
+
+/// Build a collected-item result for a single successful URL collect.
+pub fn collected_item(input: &str, url: &str, file: &str) -> CollectItemResult {
+    CollectItemResult {
+        input: input.to_string(),
+        status: CollectItemStatus::Collected,
+        url: Some(url.to_string()),
+        file: Some(file.to_string()),
+        path: None,
+        code: None,
+        message: None,
+        existing_file: None,
+        reason: None,
+    }
+}
+
 // ── data for parallel batch compute ──────────────────────────────────────────
 
 /// Output of the compute phase: everything needed to write a leaf, but no

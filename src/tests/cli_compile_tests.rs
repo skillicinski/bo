@@ -1,6 +1,6 @@
 use super::{
-    degenerate_result_warning, plan, render_human, repair, CompileOptions, CompileResult,
-    CompileRunMode,
+    compile_error_payload, degenerate_result_warning, plan, render_human, repair, CompileOptions,
+    CompileResult, CompileRunMode,
 };
 use crate::cli::json;
 use crate::domain::manifest::{Manifest, TreeMeta};
@@ -90,8 +90,9 @@ fn missing_unbranched_new_leaf_is_pruned_not_error() {
     write_manifest(dir.path(), &manifest);
 
     let cfg = seeded_config(dir.path());
-    let notifications =
-        repair::repair_stale_branches(&cfg, &manifest).expect("repair should succeed");
+    let notifications = repair::repair_stale_branches(&cfg, &manifest)
+        .expect("repair should succeed")
+        .notifications;
 
     assert_eq!(notifications.len(), 1);
     assert!(notifications[0].contains("pruned 1 orphan"));
@@ -121,8 +122,9 @@ fn missing_unbranched_leaf_never_compiled_is_pruned() {
     write_manifest(dir.path(), &manifest);
 
     let cfg = seeded_config(dir.path());
-    let notifications =
-        repair::repair_stale_branches(&cfg, &manifest).expect("repair should succeed");
+    let notifications = repair::repair_stale_branches(&cfg, &manifest)
+        .expect("repair should succeed")
+        .notifications;
 
     assert_eq!(notifications.len(), 1);
     assert!(notifications[0].contains("pruned 1 orphan"));
@@ -143,8 +145,9 @@ fn repair_with_no_missing_files_has_empty_notifications() {
     write_manifest(dir.path(), &manifest);
 
     let cfg = seeded_config(dir.path());
-    let notifications =
-        repair::repair_stale_branches(&cfg, &manifest).expect("repair should succeed");
+    let notifications = repair::repair_stale_branches(&cfg, &manifest)
+        .expect("repair should succeed")
+        .notifications;
 
     assert!(notifications.is_empty());
 }
@@ -168,8 +171,9 @@ fn all_leaves_deleted_manifest_repaired_to_empty() {
     write_manifest(dir.path(), &manifest);
 
     let cfg = seeded_config(dir.path());
-    let notifications =
-        repair::repair_stale_branches(&cfg, &manifest).expect("repair should succeed");
+    let notifications = repair::repair_stale_branches(&cfg, &manifest)
+        .expect("repair should succeed")
+        .notifications;
 
     assert_eq!(notifications.len(), 1);
     assert!(notifications[0].contains("pruned 2 orphan"));
@@ -294,8 +298,9 @@ fn repair_notifications_include_branch_repair_and_removal_messages() {
     write_manifest(dir.path(), &manifest);
 
     let cfg = seeded_config(dir.path());
-    let notifications =
-        repair::repair_stale_branches(&cfg, &manifest).expect("repair should succeed");
+    let notifications = repair::repair_stale_branches(&cfg, &manifest)
+        .expect("repair should succeed")
+        .notifications;
 
     // Messages should include branch repair and removal, not just prune.
     let notification_set: HashSet<&str> = notifications.iter().map(String::as_str).collect();
@@ -1082,8 +1087,9 @@ fn repair_stale_branches_fixes_branch_frontmatter() {
     write_manifest(dir.path(), &manifest);
 
     let cfg = seeded_config(dir.path());
-    let notifications =
-        repair::repair_stale_branches(&cfg, &manifest).expect("repair should succeed");
+    let notifications = repair::repair_stale_branches(&cfg, &manifest)
+        .expect("repair should succeed")
+        .notifications;
 
     // Notification should mention frontmatter repair
     assert!(
@@ -1249,4 +1255,65 @@ fn degenerate_warning_unbranched_regression() {
         30,
     );
     assert!(warning.is_some());
+}
+
+#[test]
+fn compile_error_payload_routes_terminal_errors() {
+    use std::time::Duration;
+    let slugs: &[String] = &[];
+    let duration = Duration::from_millis(10);
+
+    // Validation keeps its own shape: validation_failures, no error field.
+    let payload = compile_error_payload(
+        CompileRunMode::Full,
+        slugs,
+        &CompileError::Validation("branch #1 has empty title".to_string()),
+        duration,
+    )
+    .expect("validation is journaled");
+    assert_eq!(
+        payload.validation_failures,
+        vec!["branch #1 has empty title".to_string()]
+    );
+    assert!(payload.error.is_none());
+
+    // LLM/provider failures: error field, empty deltas.
+    let llm_errors = [
+        CompileError::Truncated,
+        CompileError::ContentFilter,
+        CompileError::Llm("upstream timeout".to_string()),
+        CompileError::ContextOverflow {
+            model: "gpt-4.1".to_string(),
+            estimated_tokens: Some(200_000),
+            context_tokens: Some(128_000),
+        },
+    ];
+    for error in &llm_errors {
+        let payload = compile_error_payload(CompileRunMode::Full, slugs, error, duration)
+            .expect("LLM/provider error is journaled");
+        assert!(payload.validation_failures.is_empty());
+        let err = payload.error.expect("error field present");
+        assert!(!err.code.is_empty());
+        assert!(!err.message.is_empty());
+    }
+
+    // Infrastructure / dry-run / agent failures are not compile verdicts.
+    for error in [
+        CompileError::Io("disk full".to_string()),
+        CompileError::Busy("locked".to_string()),
+        CompileError::DryRunBlocked("stale".to_string()),
+        CompileError::AgentFailed {
+            message: "limit".to_string(),
+            turns: 0,
+            tool_calls: 0,
+            usage: None,
+            last_error: None,
+        },
+    ] {
+        assert!(
+            compile_error_payload(CompileRunMode::Full, slugs, &error, duration).is_none(),
+            "{:?} should not be journaled",
+            error
+        );
+    }
 }

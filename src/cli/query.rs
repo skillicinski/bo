@@ -412,6 +412,33 @@ pub fn render_error_human<E: std::io::Write>(
     exit_code
 }
 
+// ── journal ───────────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct QueryJournalPayload<'a> {
+    question: &'a str,
+    answer: &'a str,
+    citations: &'a [Citation],
+    leaves_consulted: usize,
+}
+
+/// Record a query in the tree's journal. Best-effort: a journal failure never
+/// fails the command.
+pub fn journal(tree_dir: &Path, question: &str, result: &QueryResult) {
+    let payload = QueryJournalPayload {
+        question,
+        answer: &result.answer,
+        citations: &result.citations,
+        leaves_consulted: result.leaves_consulted,
+    };
+    crate::engine::journal::append_payload(
+        tree_dir,
+        crate::engine::journal::Op::Query,
+        Some(result.model.clone()),
+        &payload,
+    );
+}
+
 // ── tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

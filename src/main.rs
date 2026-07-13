@@ -1,6 +1,7 @@
 use bo::cli::collect::{self, BatchCollectResult, CollectError, CollectOutput};
 use bo::cli::compile::{self, CompileError, CompileOptions, CompilePreview, CompileResult};
 use bo::cli::config as cli_config;
+use bo::cli::journal;
 use bo::cli::json::{self as json_output, JsonError, JsonWarning};
 use bo::cli::list::{self};
 use bo::cli::query;
@@ -22,7 +23,7 @@ use std::process;
 
 const NOT_SEEDED_MSG: &str = "bo hasn't been seeded yet — run: bo seed --path <path>";
 const KNOWN_COMMANDS: &[&str] = &[
-    "seed", "config", "collect", "compile", "list", "show", "query", "status", "raze",
+    "seed", "config", "collect", "compile", "journal", "list", "show", "query", "status", "raze",
 ];
 
 #[derive(Parser, Debug)]
@@ -141,6 +142,12 @@ enum Commands {
     },
     /// Show tree health and compile readiness
     Status,
+    /// Read the tree's operation journal (append-only log of collects, compiles, queries)
+    Journal {
+        /// Maximum number of recent events to show (newest last)
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
 }
 
 // ── JSON payloads ────────────────────────────────────────────────────────────
@@ -421,6 +428,11 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
             Ok(result) => wrote(write!(stdout, "{}", status::render_human(&result)), 0),
             Err(error) => emit_cli_error("status", json, error, stderr),
         },
+        Commands::Journal { limit } => match execute_journal(limit) {
+            Ok(result) if json => emit_json_success("journal", &result, Vec::new(), stdout),
+            Ok(result) => wrote(write!(stdout, "{}", journal::render_human(&result)), 0),
+            Err(error) => emit_cli_error("journal", json, error, stderr),
+        },
     }
 }
 
@@ -604,6 +616,12 @@ fn execute_status() -> Result<status::StatusResult, CliError> {
     status::compute_status(tree.path(), &tree.name, config.as_ref()).map_err(CliError::Status)
 }
 
+fn execute_journal(limit: usize) -> Result<journal::JournalResult, CliError> {
+    let cfg = require_seeded_config()?;
+    let tree = cfg.tree();
+    Ok(journal::read(tree.path(), limit))
+}
+
 fn execute_raze(include_auth: bool) -> Result<raze::RazeOutput, CliError> {
     let config_path = config::config_path();
     let auth_path = auth::auth_path();
@@ -671,6 +689,7 @@ fn execute_collect(
             warnings,
         )
         .map_err(CliError::Collect)?;
+        collect::journal(&output_dir, model.as_str(), &result.items);
         return Ok(CollectOutput::Batch(result));
     }
 
@@ -687,6 +706,8 @@ fn execute_collect(
     )
     .map_err(CliError::Collect)?;
     let path = output_dir.join(&doc.filename);
+    let item = collect::collected_item(url, &doc.url, &doc.filename);
+    collect::journal(&output_dir, model.as_str(), std::slice::from_ref(&item));
     Ok(CollectOutput::Single(collect::CollectResult {
         url: doc.url,
         file: doc.filename,
@@ -760,7 +781,9 @@ where
     let prepared = query::prepare(tree.path(), question, &model)?;
     let provider = resolve_provider()?;
     eprintln!("synthesizing...");
-    query::run_prepared_with_provider(prepared, provider.as_ref())
+    let result = query::run_prepared_with_provider(prepared, provider.as_ref())?;
+    query::journal(tree.path(), question, &result);
+    Ok(result)
 }
 
 fn list_warnings(result: &list::ListResult) -> Vec<JsonWarning> {

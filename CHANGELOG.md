@@ -13,11 +13,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `bo compile --dry-run`: a read-only validated preview that writes zero bytes — no pending recovery, no stale-branch repair, no commit. Captures the manifest hash at start and aborts if the tree changes before the preview is accepted.
 - `bo compile --agent --dry-run`: the agent loop drives the compile preview through `list_leaves`, `list_branches`, `read_leaf`, `search_corpus`, and `submit_compile` tools, emitting the same preview contract with turn/tool-call/usage telemetry. `--agent` without `--dry-run` is rejected in this milestone.
 - `--json` dry-run output includes provider/model, run mode, starting manifest hash, turns, tool-call count, optional provider token usage, and the full validated plan.
+- Operation journal: `collect`, `compile`, `repair`, and `query` now append a best-effort event to `{tree}/.bo/journal.jsonl` (one JSON line per operation). `bo journal [--limit N]` reads the tail (newest last) in human or `--json` form. The journal is optional tier-3 state outside the manifest and write-lock transaction — a missing file is an empty journal and a journal failure never fails a command.
 
 ### Changed
 
 - `CompileOptions` gained orthogonal `agent` and `dry_run` flags; `bo compile` without the new flags is unchanged.
-
 ## [0.0.9] - 2026-07-09
 
 ### Fixed
