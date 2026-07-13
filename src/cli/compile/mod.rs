@@ -1,10 +1,9 @@
-// bo compile — deterministic pipeline with a single structured LLM call.
+// bo compile — validated deterministic and agent-assisted pipelines.
 //
-// Pipeline: read leaves → build prompt → LLM call → parse/validate → write → summary
-//
-// No agent loop, no tool dispatch. The LLM receives all leaf content and returns
-// a structured JSON response with identified concepts (branches) and their
-// leaf associations.
+// Default: read leaves → LLM call(s) → parse/validate → write. With
+// `--agent --dry-run`: bounded tool loop → validated plan → read-only preview.
+// Both paths reject an invalid plan before mutation; the agent path is currently
+// preview-only.
 
 use std::collections::HashSet;
 use std::time::Duration;
