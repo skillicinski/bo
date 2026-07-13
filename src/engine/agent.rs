@@ -257,6 +257,15 @@ async fn run_agent_async(run: AgentRun<'_>) -> AgentOutcome {
                 reasoning_content: response.reasoning_content,
                 tool_calls: Vec::new(),
             });
+            check_and_send_signal(
+                &mut transcript,
+                turns,
+                total_tool_calls,
+                &mut soft_signal_sent,
+                &mut final_signal_sent,
+                &mut signals_sent,
+                terminal_tool_name,
+            );
             continue;
         }
 

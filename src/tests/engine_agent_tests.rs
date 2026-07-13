@@ -679,22 +679,42 @@ fn final_signal_at_90_percent_of_tool_calls() {
 
 #[test]
 fn each_signal_at_most_once() {
-    // 10 echo calls per response: crosses 75% and 90% in the same turn's tool
-    // execution loop, but each fires only once. Rejected by per-turn cap.
-    let calls: Vec<ToolCall> = (0..10)
-        .map(|j| tool_call(&format!("c{j}"), "echo", "{}"))
+    // After soft fires at total=36, subsequent calls in later turns should
+    // not fire it again. 5 turns with 8 echo calls + 1 submit = soft only.
+    let mut responses: Vec<AgentResponse> = (0..5)
+        .map(|t| {
+            let calls: Vec<ToolCall> = (0..8)
+                .map(|j| tool_call(&format!("c{t}_{j}"), "echo", "{}"))
+                .collect();
+            with_tools(calls)
+        })
         .collect();
-    let provider = ScriptedProvider::new(vec![with_tools(calls)]);
-    let outcome = run(
-        &provider,
-        vec![boxed(EchoTool::new("echo", "ok", new_counter()))],
-    );
+    // After soft fires at 36 in turn 5, the final turn submits.
+    responses.push(with_tools(vec![tool_call("c_final", "submit", "{}")]));
+    let provider = ScriptedProvider::new(responses);
+    let outcome = run(&provider, vec![boxed(TerminalTool::new(new_counter()))]);
 
-    let diag = outcome.diag();
     assert!(
-        diag.signals_sent <= 2,
-        "at most 2 signals, got {}",
-        diag.signals_sent
+        matches!(outcome, AgentOutcome::Completed { .. }),
+        "expected Completed, got {outcome:?}"
+    );
+    // Exactly one soft signal, no duplicates.
+    assert_eq!(outcome.diag().signals_sent, 1);
+}
+
+#[test]
+fn signal_fires_on_plain_text_turns() {
+    // Pure plain-text turns (no tool calls) consume turns and should still
+    // cross the turn-based thresholds. 6 plain-text turns cross 75% of 8.
+    let responses: Vec<AgentResponse> = (0..6).map(|_| plain_text("thinking")).collect();
+    let provider = ScriptedProvider::new(responses);
+    let outcome = run(&provider, vec![boxed(TerminalTool::new(new_counter()))]);
+
+    // Provider exhausted at turn 7; soft fires at turn 6 (6/8 = 0.75).
+    assert_eq!(
+        outcome.diag().signals_sent,
+        1,
+        "expected soft signal on plain-text turns"
     );
 }
 
