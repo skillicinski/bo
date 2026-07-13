@@ -1,7 +1,8 @@
-// Provider-agnostic LLM calling infrastructure.
+// Provider-agnostic LLM transport and protocol types.
 //
-// No agent or tool-calling concepts. This module provides a trait for sending
-// messages to an LLM and receiving structured responses.
+// Owns provider calls, retry policy, structured responses, and tool-calling
+// messages. The bounded turn loop lives in `engine::agent`; command-specific
+// tools live in the CLI layer.
 
 pub mod model;
 pub mod models;

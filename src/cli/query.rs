@@ -21,8 +21,8 @@ use std::fmt;
 use std::path::Path;
 use std::time::Duration;
 
-// Re-export the capability types this command surfaces, so `query::Citation`
-// and `query::LowRelevanceReason` remain stable addresses for callers/tests.
+// Preserve existing `query::...` call sites and tests after these types moved
+// to `engine::retrieval`; this does not declare a stable external Rust API.
 pub use crate::engine::retrieval::{Citation, LowRelevanceReason};
 
 pub const QUERY_LLM_POLICY: LlmCallPolicy = LlmCallPolicy {
