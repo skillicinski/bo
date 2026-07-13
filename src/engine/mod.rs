@@ -1,3 +1,4 @@
+pub(crate) mod agent;
 pub mod auth;
 pub mod config;
 pub mod extract;

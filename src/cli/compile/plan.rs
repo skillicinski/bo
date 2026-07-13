@@ -16,6 +16,7 @@ use super::{BranchResult, CompileError, CompileOptions, CompileRunMode};
 // ── types ─────────────────────────────────────────────────────────────────────
 
 /// A leaf with its full content loaded for prompt assembly.
+#[derive(Clone)]
 pub(super) struct LoadedLeaf {
     pub(super) slug: String,
     pub(super) filename: String,
