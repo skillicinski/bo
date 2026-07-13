@@ -84,7 +84,8 @@ enum Commands {
     },
     /// Compile collected documents into a linked knowledge graph
     Compile {
-        /// Recompile the full corpus and allow complete branch graph rewrite
+        /// Recompile the full corpus from scratch — produces a new branch
+        /// organization each run
         #[arg(long)]
         all: bool,
         /// Use the iterative agent loop (requires --dry-run in this milestone)
