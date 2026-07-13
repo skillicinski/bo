@@ -1317,3 +1317,64 @@ fn compile_error_payload_routes_terminal_errors() {
         );
     }
 }
+
+// ── resource envelope ────────────────────────────────────────────────────────
+
+#[test]
+fn resource_limit_constants_have_expected_values() {
+    assert_eq!(crate::engine::agent::MAX_TURNS, 8);
+    assert_eq!(crate::engine::agent::MAX_TOOL_CALLS_PER_RESPONSE, 8);
+    assert_eq!(crate::engine::agent::MAX_TOTAL_TOOL_CALLS, 48);
+}
+
+// ── branch-slug leaf-reference hint ───────────────────────────────────────────
+
+#[test]
+fn unknown_leaf_error_with_branch_slug_is_annotated() {
+    // Mirrors the post-processing in SubmitCompileTool::execute: when a
+    // validation error mentions an "unknown leaf" identifier that matches a
+    // known branch slug, the error message is augmented with a teaching hint.
+    fn annotate_unknown_leaf_error(message: &str, branch_slugs: &[&str]) -> String {
+        let mut message = message.to_string();
+        if message.contains("unknown leaf") {
+            if let Some(start) = message.rfind("unknown leaf '") {
+                let prefix_len = "unknown leaf '".len();
+                let rest = &message[start + prefix_len..];
+                if let Some(end) = rest.find('\'') {
+                    let identifier = &rest[..end];
+                    if branch_slugs.iter().any(|s| s == &identifier) {
+                        message.push_str(&format!(
+                            ": {identifier} is a branch slug, not a leaf; leaf lists may only contain leaf slugs (see list_leaves)"
+                        ));
+                    }
+                }
+            }
+        }
+        message
+    }
+
+    // When the unknown identifier is a branch slug, the hint is appended.
+    let msg =
+        "invalid compile response: branch 'Concept' references unknown leaf 'programming-concepts'";
+    let branch_slugs = vec!["existing-branch", "programming-concepts"];
+    let result = annotate_unknown_leaf_error(msg, &branch_slugs);
+    assert!(
+        result.contains("is a branch slug, not a leaf"),
+        "expected teaching hint: {result}"
+    );
+    assert!(result.contains("programming-concepts"));
+
+    // When the identifier is NOT a branch slug, the message is unchanged.
+    let msg2 =
+        "invalid compile response: branch 'Concept' references unknown leaf 'nonexistent-leaf'";
+    let result2 = annotate_unknown_leaf_error(msg2, &branch_slugs);
+    assert!(
+        !result2.contains("is a branch slug, not a leaf"),
+        "unrelated unknown leaf should not get a branch-slug hint: {result2}"
+    );
+
+    // When the message doesn't contain "unknown leaf", no annotation.
+    let msg3 = "some other validation error";
+    let result3 = annotate_unknown_leaf_error(msg3, &branch_slugs);
+    assert_eq!(result3, msg3);
+}

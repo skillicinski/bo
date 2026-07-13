@@ -15,7 +15,10 @@ use serde_json::{json, Value};
 
 use crate::domain::frontmatter;
 use crate::domain::manifest::Manifest;
-use crate::engine::agent::{self, AgentOutcome, AgentRun, Tool, ToolError, ToolOutcome};
+use crate::engine::agent::{
+    self, AgentOutcome, AgentRun, Tool, ToolError, ToolOutcome, MAX_TOOL_CALLS_PER_RESPONSE,
+    MAX_TOTAL_TOOL_CALLS, MAX_TURNS,
+};
 use crate::engine::config::SeededConfig;
 use crate::engine::llm::{LlmProvider, Model, Provider, ToolSchema, Usage};
 use crate::engine::retrieval;
@@ -201,7 +204,7 @@ impl Tool for ListBranchesTool {
             .take(count)
             .map(|b| {
                 json!({
-                    "slug": b.slug.as_str(),
+                    "slug": format!("branch/{}", b.slug.as_str()),
                     "title": b.title.as_str(),
                     "leaf_count": b.leaves.len(),
                 })
@@ -326,7 +329,10 @@ impl Tool for SearchCorpusTool {
             .take(limit)
             .map(|d| {
                 json!({
-                    "slug": d.slug,
+                    "slug": match d.kind {
+                        retrieval::DocKind::Branch => format!("branch/{}", d.slug),
+                        retrieval::DocKind::Leaf => d.slug.clone(),
+                    },
                     "title": d.title,
                     "file": d.file,
                     "kind": match d.kind { retrieval::DocKind::Leaf => "leaf", retrieval::DocKind::Branch => "branch" },
@@ -345,6 +351,7 @@ struct SubmitCompileTool {
     loaded_leaves: Vec<LoadedLeaf>,
     input_body_bytes: usize,
     slot: PlanSlot,
+    branch_slugs: Vec<String>,
 }
 
 impl Tool for SubmitCompileTool {
@@ -356,14 +363,18 @@ impl Tool for SubmitCompileTool {
             CompileRunMode::Full => (
                 serde_json::to_value(inline_schema_for::<parse::CompileResponse>()).unwrap(),
                 "Submit the full compile plan: branches with title, body, and leaf references. \
-                 Must be the only tool call in its turn. A valid submission ends the run."
+                 Must be the only tool call in its turn. A valid submission ends the run. \
+                 Leaf references in leaves[] must be bare leaf slugs/filenames from list_leaves, \
+                 not branch identifiers (which are prefixed branch/)."
                     .to_string(),
             ),
             CompileRunMode::Incremental => (
                 serde_json::to_value(inline_schema_for::<parse::IncrementalCompileResponse>())
                     .unwrap(),
                 "Submit the incremental compile plan: updated_branches and new_branches. Must be \
-                 the only tool call in its turn. A valid submission ends the run."
+                 the only tool call in its turn. A valid submission ends the run. \
+                 Leaf references in leaves[] must be bare leaf slugs/filenames from list_leaves, \
+                 not branch identifiers (which are prefixed branch/)."
                     .to_string(),
             ),
         };
@@ -400,7 +411,26 @@ impl Tool for SubmitCompileTool {
                     "compile plan submitted and validated".to_string(),
                 ))
             }
-            Err(CompileError::Validation(message)) => Err(ToolError(message)),
+            Err(CompileError::Validation(message)) => {
+                let mut message = message;
+                if message.contains("unknown leaf") {
+                    // Extract the identifier from messages like
+                    // "... references unknown leaf 'X'" and check if X is a branch slug.
+                    if let Some(start) = message.rfind("unknown leaf '") {
+                        let prefix_len = "unknown leaf '".len();
+                        let rest = &message[start + prefix_len..];
+                        if let Some(end) = rest.find('\'') {
+                            let identifier = &rest[..end];
+                            if self.branch_slugs.iter().any(|s| s == identifier) {
+                                message.push_str(&format!(
+                                    ": {identifier} is a branch slug, not a leaf; leaf lists may only contain leaf slugs (see list_leaves)"
+                                ));
+                            }
+                        }
+                    }
+                }
+                Err(ToolError(message))
+            }
             Err(other) => Err(ToolError(format!("compile submission failed: {other}"))),
         }
     }
@@ -448,13 +478,21 @@ pub(super) fn run_agent_dry_run(
             loaded_leaves: loaded_leaves.to_vec(),
             input_body_bytes,
             slot: slot.clone(),
+            branch_slugs: manifest
+                .branches
+                .iter()
+                .map(|b| b.slug.to_string())
+                .collect(),
         }),
     ];
 
     let run = AgentRun {
         provider,
         model: model.as_str(),
-        system_prompt: AGENT_SYSTEM_PROMPT.to_string(),
+        system_prompt: format!(
+            "{}\n\nResource limits: {} turns, {} tool calls per turn, {} total tool calls.",
+            AGENT_SYSTEM_PROMPT, MAX_TURNS, MAX_TOOL_CALLS_PER_RESPONSE, MAX_TOTAL_TOOL_CALLS
+        ),
         user_message: build_agent_user_message(manifest, run_mode),
         tools,
         reasoning_disabled: agent_reasoning_disabled(model, cfg.config.provider),

@@ -273,7 +273,7 @@ async fn run_agent_async(run: AgentRun<'_>) -> AgentOutcome {
         if response.tool_calls.len() > MAX_TOOL_CALLS_PER_RESPONSE {
             transcript.push(assistant_message(&response));
             let message = format!(
-                "too many tool calls in one response ({}); limit is {}",
+                "too many tool calls in one response ({}); limit is {} per turn — split your tool calls across multiple turns",
                 response.tool_calls.len(),
                 MAX_TOOL_CALLS_PER_RESPONSE
             );

@@ -19,7 +19,7 @@ use crate::engine::llm::{
 
 use super::{
     run_agent, AgentDiagnostics, AgentOutcome, AgentRun, Tool, ToolError, ToolOutcome,
-    MAX_TOTAL_TOOL_CALLS, MAX_TURNS,
+    MAX_TOOL_CALLS_PER_RESPONSE, MAX_TOTAL_TOOL_CALLS, MAX_TURNS,
 };
 
 // ── scripted provider ────────────────────────────────────────────────────────
@@ -557,6 +557,45 @@ fn usage_is_accumulated_across_turns() {
         }
         other => panic!("expected Completed with accumulated usage, got {other:?}"),
     }
+}
+
+#[test]
+fn per_turn_cap_rejection_message() {
+    // A response with > MAX_TOOL_CALLS_PER_RESPONSE tool calls feeds back an
+    // error message containing "split your tool calls across multiple turns".
+    let too_many = MAX_TOOL_CALLS_PER_RESPONSE + 1;
+    let calls: Vec<ToolCall> = (0..too_many)
+        .map(|i| tool_call(&format!("c{i}"), "echo", "{}"))
+        .collect();
+    let provider = ScriptedProvider::new(vec![
+        with_tools(calls),
+        with_tools(vec![tool_call("clast", "submit", "{}")]),
+    ]);
+    let outcome = run(
+        &provider,
+        vec![
+            boxed(EchoTool::new("echo", "ok", new_counter())),
+            boxed(TerminalTool::new(new_counter())),
+        ],
+    );
+
+    // Second turn's submit should complete the run.
+    assert_completed(&outcome, 2, too_many + 1);
+
+    // The transcript sent on the second provider call includes the error
+    // results from the rejected first turn.
+    let messages = provider.last_messages();
+    let has_cap_message = messages
+        .iter()
+        .filter_map(|m| match m {
+            AgentMessage::Tool(r) => Some(r.content.as_str()),
+            _ => None,
+        })
+        .any(|content| content.contains("split your tool calls across multiple turns"));
+    assert!(
+        has_cap_message,
+        "expected tool result to contain the per-turn cap message"
+    );
 }
 
 fn plain_text(text: &str) -> AgentResponse {
