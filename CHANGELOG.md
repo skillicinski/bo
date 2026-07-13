@@ -4,10 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.0.10] - 2026-07-13
 
 ### Added
 
+- Two-stage compile for large corpora: above a leaf-count threshold (40 leaves in full mode, 15 new leaves in incremental mode) compile runs a cluster pass over titles and summaries — seeded by deterministic term-similarity candidate groupings — followed by one bounded synthesis call per cluster. Structural violations in the cluster response (duplicate assignments, unknown refs) are repaired in code with warnings instead of failing the run; a failed synthesis call retries once and is then dropped with a warning; all results commit as a single transaction. Below the threshold, single-pass compile is unchanged.
+- `gpt-5.5` and `gpt-5.4` in the OpenAI model list (1,050,000-token context).
+- Agent compile tools hardened: new `read_branch` tool (branch body + members), branch identifiers rendered distinctly as `branch/<slug>` and round-tripped on submission, teaching rejection messages ("X is a branch slug, not a leaf"), and the resource envelope stated in the system prompt.
+- Budget-pressure signals in the agent loop: synthetic messages at 75% and 90% consumption telling the model to stop gathering and submit; `signals_sent` joins the diagnostics.
+- Agent failure envelopes now carry full diagnostics: turns, tool calls, token usage, and the last tool/validation error.
+- Journal records terminal compile errors (truncation, content filter, provider errors, context overflow) as `error: {code, message}` events, and two-stage runs record their stage counts.
 - Agent engine: a provider-neutral, bounded multi-turn tool-calling loop in `engine::agent` with a typed tool contract, fixed resource envelope (turns, tool calls per response, total tool calls, per-call output tokens, context preflight, wall-clock), and explicit handling of truncation, context overflow, and the hard turn limit. Tool arguments are deserialized into typed structs at the tool boundary; `submit_compile` reuses the existing Full/Incremental validation gate and a valid submission terminates the loop. Provider quirks (tool_calls/tool_call_id preservation, `reasoning_content` replay after thinking-mode tool calls) are isolated in the OpenAI-compat adapter; the generic loop stays provider-neutral.
 - `LlmProvider::complete_with_tools` extension with an explicit unsupported default; only the OpenAI-compat adapter (DeepSeek conformance target) implements it.
 - `bo compile --dry-run`: a read-only validated preview that writes zero bytes — no pending recovery, no stale-branch repair, no commit. Captures the manifest hash at start and aborts if the tree changes before the preview is accepted.
@@ -18,6 +24,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - `CompileOptions` gained orthogonal `agent` and `dry_run` flags; `bo compile` without the new flags is unchanged.
+- `bo compile --all` help and docs now state that a full recompile produces a new branch organization each run (a reroll, not a refresh).
+- `docs/providers.md` gains compile-model guidance: cluster quality varies sharply by model; pin `--compile-model` to a validated model for corpora beyond the two-stage threshold.
+
 ## [0.0.9] - 2026-07-09
 
 ### Fixed
