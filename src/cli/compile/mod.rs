@@ -22,6 +22,7 @@ use crate::engine::llm::{LlmCallPolicy, LlmProvider, Model, Usage};
 use crate::engine::pending;
 
 mod agent;
+mod cluster;
 mod execute;
 mod parse;
 mod plan;
@@ -50,6 +51,17 @@ const COMPILE_LLM_POLICY: LlmCallPolicy = LlmCallPolicy {
     max_attempts: 3,
     initial_backoff: Duration::from_secs(2),
 };
+
+/// Leaf count threshold above which Full mode switches to two-stage compile.
+/// Below this, the single-pass path is reliable and unchanged.
+/// ponytail: calibrated against the 57-leaf mixed full success and 232-leaf
+/// tommys failure; tune with eval harness data.
+pub(super) const TWO_STAGE_FULL_THRESHOLD: usize = 40;
+
+/// New-leaf count threshold above which Incremental mode switches to two-stage.
+/// The 2026-07-12 rebuild-diff eval showed 15+-leaf one-shot deltas fail
+/// across model families (gemini and deepseek).
+pub(super) const TWO_STAGE_INCREMENTAL_THRESHOLD: usize = 15;
 
 // ── errors ────────────────────────────────────────────────────────────────────
 
@@ -340,6 +352,13 @@ pub struct BranchResult {
     pub leaf_count: usize,
 }
 
+/// Two-stage compile telemetry, journaled in the compile event payload.
+#[derive(Debug, Clone, Serialize)]
+struct CompileStages {
+    stage1_clusters: usize,
+    stage2_calls: usize,
+}
+
 // ── journal payloads ─────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -358,6 +377,8 @@ struct CompileJournalPayload<'a> {
     validation_failures: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<CompileJournalError>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stages: Option<CompileStages>,
     duration_ms: u128,
 }
 
@@ -366,6 +387,7 @@ fn compile_payload<'a>(
     mode: CompileRunMode,
     new_leaf_slugs: &'a [String],
     duration: Duration,
+    stages: Option<CompileStages>,
 ) -> CompileJournalPayload<'a> {
     CompileJournalPayload {
         mode,
@@ -375,6 +397,7 @@ fn compile_payload<'a>(
         branches_deleted: &summary.branch_deletes,
         validation_failures: Vec::new(),
         error: None,
+        stages,
         duration_ms: duration.as_millis(),
     }
 }
@@ -416,6 +439,7 @@ fn compile_error_payload<'a>(
         branches_deleted: &[],
         validation_failures,
         error: error_field,
+        stages: None,
         duration_ms: duration.as_millis(),
     })
 }
@@ -765,6 +789,38 @@ fn run_one_shot_dry_run(
     run_mode: CompileRunMode,
     warnings: &mut Vec<String>,
 ) -> Result<(validation::CompilePlan, agent::AgentRunStats), CompileError> {
+    // Threshold check: two-stage for large corpora.
+    let should_use_two_stage = match run_mode {
+        CompileRunMode::Full => loaded_leaves.len() >= TWO_STAGE_FULL_THRESHOLD,
+        CompileRunMode::Incremental => new_leaf_slugs.len() >= TWO_STAGE_INCREMENTAL_THRESHOLD,
+    };
+
+    if should_use_two_stage {
+        let (plan, stages) = match run_mode {
+            CompileRunMode::Full => {
+                run_two_stage_full(cfg, provider, model, loaded_leaves, warnings)?
+            }
+            CompileRunMode::Incremental => run_two_stage_incremental(
+                cfg,
+                provider,
+                model,
+                manifest,
+                loaded_leaves,
+                new_leaf_slugs,
+                warnings,
+            )?,
+        };
+        return Ok((
+            plan,
+            agent::AgentRunStats {
+                turns: 1 + stages.stage2_calls,
+                tool_calls: 0,
+                usage: None,
+            },
+        ));
+    }
+
+    // Single-pass path (unchanged).
     let (user_message, prompt_tokens, schema) = match run_mode {
         CompileRunMode::Full => {
             let msg = prompt::build_user_message(loaded_leaves);
@@ -941,6 +997,104 @@ fn run_compile(
     )
 }
 
+// ── two-stage helpers ────────────────────────────────────────────────────────
+
+/// Run two-stage compile for Full mode: cluster → per-cluster synthesize → plan.
+fn run_two_stage_full(
+    _cfg: &SeededConfig,
+    provider: &dyn LlmProvider,
+    model: &Model,
+    loaded_leaves: &[plan::LoadedLeaf],
+    warnings: &mut Vec<String>,
+) -> Result<(validation::CompilePlan, CompileStages), CompileError> {
+    // Stage 1: Cluster pass (titles + summaries, one LLM call).
+    let cluster_user_message = cluster::build_cluster_user_message(loaded_leaves);
+    let cluster_tokens = execute::estimate_compile_prompt_tokens(
+        cluster::CLUSTER_SYSTEM_PROMPT
+            .len()
+            .saturating_add(cluster_user_message.len()),
+    );
+    execute::ensure_compile_context_fits(model, cluster_tokens)?;
+    let cluster_schema = serde_json::to_value(crate::engine::schema::inline_schema_for::<
+        cluster::ClusterResponse,
+    >())
+    .unwrap();
+    let cluster_response =
+        execute::call_llm_blocking(provider, model, &cluster_user_message, &cluster_schema)?;
+    let parsed: cluster::ClusterResponse = serde_json::from_str(&cluster_response)
+        .map_err(|e| CompileError::Validation(format!("invalid cluster response shape: {}", e)))?;
+    let stage1 = cluster::validate_clusters(&parsed, loaded_leaves, warnings)?;
+    let cluster_count = stage1.clusters.len();
+
+    // Stage 2: Per-cluster synthesize (one LLM call each).
+    let branches =
+        cluster::run_stage2_synthesize(provider, model, &stage1, loaded_leaves, warnings)?;
+
+    let plan = validation::CompilePlan { branches };
+    let stages = CompileStages {
+        stage1_clusters: cluster_count,
+        stage2_calls: cluster_count, // ponytail: one call per cluster, always matches cluster_count
+    };
+    Ok((plan, stages))
+}
+
+/// Run two-stage compile for Incremental mode: cluster new leaves against
+/// existing branches → per-cluster synthesize (updates + new) → plan.
+fn run_two_stage_incremental(
+    cfg: &SeededConfig,
+    provider: &dyn LlmProvider,
+    model: &Model,
+    manifest: &manifest::Manifest,
+    loaded_leaves: &[plan::LoadedLeaf],
+    new_leaf_slugs: &[String],
+    warnings: &mut Vec<String>,
+) -> Result<(validation::CompilePlan, CompileStages), CompileError> {
+    // Stage 1: Cluster new leaves against existing branch titles + summaries.
+    let cluster_user_message = cluster::build_incremental_cluster_user_message(
+        cfg,
+        manifest,
+        loaded_leaves,
+        new_leaf_slugs,
+    );
+    let cluster_tokens = execute::estimate_compile_prompt_tokens(
+        cluster::INCREMENTAL_CLUSTER_SYSTEM_PROMPT
+            .len()
+            .saturating_add(cluster_user_message.len()),
+    );
+    execute::ensure_compile_context_fits(model, cluster_tokens)?;
+    let cluster_schema = serde_json::to_value(crate::engine::schema::inline_schema_for::<
+        cluster::IncrementalClusterResponse,
+    >())
+    .unwrap();
+    let cluster_response =
+        execute::call_llm_blocking(provider, model, &cluster_user_message, &cluster_schema)?;
+    let parsed: cluster::IncrementalClusterResponse = serde_json::from_str(&cluster_response)
+        .map_err(|e| {
+            CompileError::Validation(format!("invalid incremental cluster response shape: {}", e))
+        })?;
+    let stage1 =
+        cluster::validate_incremental_clusters(&parsed, manifest, loaded_leaves, warnings)?;
+    let cluster_count = stage1.clusters.len();
+
+    // Stage 2: Per-cluster synthesize (updates for existing branches, fresh for new).
+    let (updated, new) = cluster::run_stage2_synthesize_incremental(
+        cfg,
+        provider,
+        model,
+        &stage1,
+        manifest,
+        loaded_leaves,
+        warnings,
+    )?;
+
+    let plan = cluster::plan_from_stage2(updated, new);
+    let stages = CompileStages {
+        stage1_clusters: cluster_count,
+        stage2_calls: cluster_count, // ponytail: one call per cluster, always matches cluster_count
+    };
+    Ok((plan, stages))
+}
+
 // ponytail: 10 args; collapse into a preflight struct if it grows further.
 #[allow(clippy::too_many_arguments)]
 pub fn run_compile_with_provider_started_at(
@@ -967,79 +1121,103 @@ pub fn run_compile_with_provider_started_at(
     let tree = cfg.tree();
     let started = std::time::Instant::now();
 
-    // ── build prompt and schema ─────────────────────────────────────────────
-    // Each run mode has exactly one coherent prompt and schema. Incremental
-    // mode is only chosen when branches exist (see select_run_mode) and always
-    // sends the existing branch graph; Full mode sends all leaf bodies.
+    // ── build prompt and schema; threshold dispatch ────────────────────────
+    // Threshold check: two-stage when leaf count exceeds the threshold.
+    // Below threshold: single-pass path is unchanged and byte-for-byte identical.
     let run_mode = plan::select_run_mode(options, manifest);
-
-    let (user_message, prompt_tokens, response_schema) = match run_mode {
-        CompileRunMode::Full => {
-            let msg = prompt::build_user_message(&loaded_leaves);
-            let tokens = execute::estimate_compile_prompt_tokens(
-                prompt::COMPILE_SYSTEM_PROMPT
-                    .len()
-                    .saturating_add(msg.len()),
-            );
-            (
-                msg,
-                tokens,
-                serde_json::to_value(crate::engine::schema::inline_schema_for::<
-                    parse::CompileResponse,
-                >())
-                .unwrap(),
-            )
-        }
-        CompileRunMode::Incremental => {
-            let msg = prompt::build_incremental_user_message(
-                cfg,
-                manifest,
-                &loaded_leaves,
-                new_leaf_slugs,
-            );
-            let tokens = execute::estimate_compile_prompt_tokens(
-                prompt::COMPILE_SYSTEM_PROMPT
-                    .len()
-                    .saturating_add(msg.len()),
-            );
-            (
-                msg,
-                tokens,
-                serde_json::to_value(crate::engine::schema::inline_schema_for::<
-                    parse::IncrementalCompileResponse,
-                >())
-                .unwrap(),
-            )
-        }
+    let should_use_two_stage = match run_mode {
+        CompileRunMode::Full => loaded_leaves.len() >= TWO_STAGE_FULL_THRESHOLD,
+        CompileRunMode::Incremental => new_leaf_slugs.len() >= TWO_STAGE_INCREMENTAL_THRESHOLD,
     };
-    // ── LLM call, parse, and execute ─────────────────────────────────────────
-    // Wrapped in a closure so a single match journals every terminal
-    // write-path outcome: success, validation failure, or an LLM/provider
-    // error. Noops and the dry-run/agent paths never reach here; Io/Busy are
-    // infrastructure failures and are not journaled.
+
+    // ── LLM call(s), parse, and execute ─────────────────────────────────────
     let valid_filenames: HashSet<String> =
         loaded_leaves.iter().map(|l| l.filename.clone()).collect();
     let input_body_bytes = loaded_leaves.iter().map(|l| l.body.len()).sum();
     let run_timestamp = compile_started_at;
 
+    // stagger: two-stage path accumulates stages telemetry outside the closure.
+    let mut compile_stages: Option<CompileStages> = None;
+
     let outcome = (|| -> Result<CompileSummary, CompileError> {
-        execute::ensure_compile_context_fits(model, prompt_tokens)?;
-        let response =
-            execute::call_llm_blocking(provider, model, &user_message, &response_schema)?;
-        let compiled_plan = match run_mode {
-            CompileRunMode::Full => parse::parse_and_validate_with_input_size(
-                &response,
-                &loaded_leaves,
-                input_body_bytes,
-                warnings,
-            )?,
-            CompileRunMode::Incremental => parse::parse_and_validate_incremental_with_input_size(
-                &response,
-                cfg,
-                &loaded_leaves,
-                input_body_bytes,
-                warnings,
-            )?,
+        let compiled_plan = if should_use_two_stage {
+            let (plan, stages) = match run_mode {
+                CompileRunMode::Full => {
+                    run_two_stage_full(cfg, provider, model, &loaded_leaves, warnings)?
+                }
+                CompileRunMode::Incremental => run_two_stage_incremental(
+                    cfg,
+                    provider,
+                    model,
+                    manifest,
+                    &loaded_leaves,
+                    new_leaf_slugs,
+                    warnings,
+                )?,
+            };
+            compile_stages = Some(stages);
+            plan
+        } else {
+            // Single-pass path (unchanged from prior behaviour).
+            let (user_message, prompt_tokens, response_schema) = match run_mode {
+                CompileRunMode::Full => {
+                    let msg = prompt::build_user_message(&loaded_leaves);
+                    let tokens = execute::estimate_compile_prompt_tokens(
+                        prompt::COMPILE_SYSTEM_PROMPT
+                            .len()
+                            .saturating_add(msg.len()),
+                    );
+                    (
+                        msg,
+                        tokens,
+                        serde_json::to_value(crate::engine::schema::inline_schema_for::<
+                            parse::CompileResponse,
+                        >())
+                        .unwrap(),
+                    )
+                }
+                CompileRunMode::Incremental => {
+                    let msg = prompt::build_incremental_user_message(
+                        cfg,
+                        manifest,
+                        &loaded_leaves,
+                        new_leaf_slugs,
+                    );
+                    let tokens = execute::estimate_compile_prompt_tokens(
+                        prompt::COMPILE_SYSTEM_PROMPT
+                            .len()
+                            .saturating_add(msg.len()),
+                    );
+                    (
+                        msg,
+                        tokens,
+                        serde_json::to_value(crate::engine::schema::inline_schema_for::<
+                            parse::IncrementalCompileResponse,
+                        >())
+                        .unwrap(),
+                    )
+                }
+            };
+            execute::ensure_compile_context_fits(model, prompt_tokens)?;
+            let response =
+                execute::call_llm_blocking(provider, model, &user_message, &response_schema)?;
+            match run_mode {
+                CompileRunMode::Full => parse::parse_and_validate_with_input_size(
+                    &response,
+                    &loaded_leaves,
+                    input_body_bytes,
+                    warnings,
+                )?,
+                CompileRunMode::Incremental => {
+                    parse::parse_and_validate_incremental_with_input_size(
+                        &response,
+                        cfg,
+                        &loaded_leaves,
+                        input_body_bytes,
+                        warnings,
+                    )?
+                }
+            }
         };
         execute::execute_plan_with_mode_and_expected_hash(
             &compiled_plan,
@@ -1066,7 +1244,13 @@ pub fn run_compile_with_provider_started_at(
                 tree.path(),
                 journal::Op::Compile,
                 Some(model.to_string()),
-                &compile_payload(&summary, run_mode, new_leaf_slugs, started.elapsed()),
+                &compile_payload(
+                    &summary,
+                    run_mode,
+                    new_leaf_slugs,
+                    started.elapsed(),
+                    compile_stages,
+                ),
             );
             Ok(CompileResult::compiled(
                 summary,

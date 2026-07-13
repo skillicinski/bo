@@ -365,7 +365,7 @@ fn strip_possessive(word: &str) -> String {
     word.to_string()
 }
 
-fn tokenize(input: &str) -> Vec<String> {
+pub(crate) fn tokenize(input: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
 
