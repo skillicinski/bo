@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Agent engine: a provider-neutral, bounded multi-turn tool-calling loop in `engine::agent` with a typed tool contract, fixed resource envelope (turns, tool calls per response, total tool calls, per-call output tokens, context preflight, wall-clock), and explicit handling of truncation, context overflow, and the hard turn limit. Tool arguments are deserialized into typed structs at the tool boundary; `submit_compile` reuses the existing Full/Incremental validation gate and a valid submission terminates the loop. Provider quirks (tool_calls/tool_call_id preservation, `reasoning_content` replay after thinking-mode tool calls) are isolated in the OpenAI-compat adapter; the generic loop stays provider-neutral.
+- `LlmProvider::complete_with_tools` extension with an explicit unsupported default; only the OpenAI-compat adapter (DeepSeek conformance target) implements it.
+- `bo compile --dry-run`: a read-only validated preview that writes zero bytes — no pending recovery, no stale-branch repair, no commit. Captures the manifest hash at start and aborts if the tree changes before the preview is accepted.
+- `bo compile --agent --dry-run`: the agent loop drives the compile preview through `list_leaves`, `list_branches`, `read_leaf`, `search_corpus`, and `submit_compile` tools, emitting the same preview contract with turn/tool-call/usage telemetry. `--agent` without `--dry-run` is rejected in this milestone.
+- `--json` dry-run output includes provider/model, run mode, starting manifest hash, turns, tool-call count, optional provider token usage, and the full validated plan.
+
+### Changed
+
+- `CompileOptions` gained orthogonal `agent` and `dry_run` flags; `bo compile` without the new flags is unchanged.
+
 ## [0.0.9] - 2026-07-09
 
 ### Fixed

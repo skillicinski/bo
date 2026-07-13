@@ -101,6 +101,17 @@ pub(super) fn classify_leaf_files(
     })
 }
 
+/// Read-only check: are there deleted leaf files whose absence would require
+/// stale-branch repair? Dry-run paths use this to fail with an actionable
+/// diagnostic instead of writing the repaired manifest/branches.
+pub(super) fn requires_repair(
+    cfg: &SeededConfig,
+    manifest: &Manifest,
+) -> Result<bool, CompileError> {
+    let class = classify_deletions(cfg, manifest)?;
+    Ok(!class.deleted_slugs.is_empty())
+}
+
 /// Deterministic pre-pass: detect deleted leaves, remove them from branches,
 /// drop branches below 2-leaf minimum, purge orphan leaf records.
 /// Writes the repaired manifest if changes were made.
