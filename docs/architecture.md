@@ -1,49 +1,115 @@
 # Architecture
 
-bo's architecture is guided by one tenet: **code that a human can trace top-to-bottom, and a machine can enforce with types.** Like an agent skill, each layer discloses what it needs for the reader to understand the next — no holding context in your head, no external map.
+> **Canonical status:** this is the sole source of truth for bo's architecture. Other comments, agent instructions, and tests may link to or enforce this document; they must not define a competing layer model. Change this document and its enforcement in the same commit when the policy changes.
 
-`src/AGENTS.md` captures the *rules* this philosophy implies. This file captures the *decisions* — the shape of the code distilled into a few paragraphs.
+bo favors code that a human can trace top-to-bottom and a machine can constrain with types. It uses a small inward dependency order rather than a named architecture framework.
 
----
+## Current topology
 
-## Manifest as single source of truth
+bo is one Cargo package with separate library and binary crates. The current production code has these direct top-level dependencies:
 
-The manifest (`{tree}/.bo/manifest.json`) is the one topology record. Branches reference their leaves by slug; there is no inverse persisted. `Manifest::branches_for_leaf` computes the inverse in-memory on demand rather than storing redundant state. This avoids bidirectional-write consistency problems: only branches list their leaves, so adding a leaf to a branch touches one record.
+```text
+main ───────→ cli
+  └────────→ engine
 
----
+cli ───────→ adapters
+ ├─────────→ engine
+ └─────────→ domain
 
-## Tree, branch, leaf — the metaphor is typed
+engine ────→ domain
+adapters ──→ no bo layer
+domain ────→ no bo layer
+```
 
-The tree/branch/leaf vocabulary is backed by real types, not metaphor-in-comment. `Leaf` and `Branch` are the domain entities, co-located with their disk I/O in `src/domain/leaf.rs` and `src/domain/branch.rs`. The manifest records ARE the entities — deliberately no parallel record/entity split. The type that lives in `manifest.json` is the same type the rest of the system operates on.
+This is an inventory, not the policy. In particular, direct dependencies may skip layers: the CLI uses domain types directly, and `main.rs` composes engine capabilities directly.
 
-`Title` and `Url` are validated newtypes, not bare `String` aliases. `Title` is non-empty after trimming; an untitled leaf is `Option<Title>` — absence is a real state, not an empty string masquerading as one. `Url` is parse-validated via `url::Url::parse` but stored as the collected string, never normalized. Silent normalization would rewrite manifests and break duplicate detection, which compares collected URLs by exact string equality. Untitled leaves emit `title: null` in JSON output (`show`/`status`/`query --json`) and in the manifest — no more empty-string lies.
+The layers are not a pure-I/O sandwich. Command-specific filesystem work exists in `cli`; reusable filesystem and network capabilities exist in `engine`; source-specific network translation exists in `adapters`. The boundary is ownership and reuse, not whether a function performs I/O.
 
-Frontmatter is written from typed structs (`LeafFrontmatter`/`BranchFrontmatter`), replacing hand-built `serde_yaml::Mapping` insert chains. The on-disk `.md` file format is golden-tested byte-stable: the migration is field-for-field identical. `bo show` reads into a typed `ShowFrontmatter` with per-field tolerant extraction — a mistyped scalar (e.g. `title: 123`) degrades gracefully rather than erroring, because an inspect command must never get stricter than what it inspects. Unknown frontmatter keys remain visible in the JSON envelope, preserving user-added metadata.
+## Target dependency policy
 
-A shared `TreeIdentity { name, created_at }` core for `TreeConfig`, `Tree`, and `TreeMeta` was evaluated and rejected. Three structs sharing two coincident fields is not a domain concept — no call site uses the pair in isolation, and the indirection cost at every construction and read site outweighs the deduplication. Instead, round-trip tests guard the `config.json` and `manifest.json` on-disk shapes directly, catching drift without premature abstraction.
+The canonical inward order is:
 
----
+```text
+main → cli → adapters → engine → domain
+```
 
-## Deterministic validation gate (never trust the LLM)
+This is an ordering, not a required call chain. A layer may depend on any layer to its right, including skipping intermediate layers. It must not depend on a layer to its left.
 
-Every structured LLM response is deserialized, validated against the known set of leaves and branches, and **rejected without writing anything** on a single failure. The tree is never partially corrupted by a bad model output.
+| Layer | May depend on |
+|---|---|
+| `main` | `cli`, `adapters`, `engine`, `domain` |
+| `cli` | `adapters`, `engine`, `domain` |
+| `adapters` | `engine`, `domain` |
+| `engine` | `domain` |
+| `domain` | no other bo layer |
 
-This is the single most important compile abstraction. The gate stopped three different failure modes during dogfooding — invented filenames (Gemini), malformed JSON (DeepSeek), ambiguous title refs — every time refusing to write. Without it, one bad response would have silently corrupted the manifest.
+Dependencies within one layer are allowed, but cycles should be removed when they obscure ownership. Cross-layer paths in the library use explicit `crate::<layer>` paths; grouped crate-root imports and relative paths that can climb into another top-level layer are avoided so the architecture test can inspect every reference.
 
-## Engine vs CLI boundary
+### Layer ownership
 
-`src/engine/` holds reusable primitives shared across all commands: `fetch`, `extract`, `llm`, `pending`, `retrieval`, `quality`, `summary`. These know nothing about specific commands — they are the toolbox.
+- **`main.rs` — process shell and composition root.** Owns argument parsing, process-wide tracing, stdout/stderr, exit codes, and construction of command dependencies. Keep domain policy out of it.
+- **`cli` — command application layer.** Owns command-specific orchestration, policy, intermediate stage contracts, and human/JSON rendering. "A stale branch must be repaired during compile" belongs here. Command-specific I/O may remain here.
+- **`adapters` — source-specific integrations.** Translates external protocols that do not belong to a generic engine capability. The current top-level adapter is YouTube ingestion, selected by `cli::collect`. It has no bo-layer dependencies today.
+- **`engine` — reusable capabilities.** Owns command-neutral fetching, extraction, persistence, retrieval, LLM transport, retry policy, and other shared operations. A function belongs here only when its name and signature contain no command-specific vocabulary. Engine never imports CLI or top-level adapters.
+- **`domain` — side-effect-free model and format contracts.** Owns entities, validated values, topology rules, serialization shapes, path naming, and document formatting. It performs no filesystem, network, or process I/O and imports no outer bo layer.
 
-`src/cli/<cmd>/*` holds command-specific orchestration. A command whose work is a multi-stage pipeline with non-trivial intermediate contracts is split into one module per stage, each owning its stage's types. The type system then enforces the contracts: a validated `CompilePlan` is a different type than a raw deserialized response, so it's impossible to execute an unvalidated plan.
+Provider implementations under `engine::llm::providers` are part of the LLM capability: they implement the engine-owned `LlmProvider` contract. Top-level `adapters` are instead ingestion-source integrations. Do not move either merely to make all external HTTP code share one directory.
 
-The discipline runs both ways: don't push command-specific logic down into the engine (e.g. "branch staleness" is compile-domain knowledge, so `repair_stale_branches` lives in `cli/compile/`, not `engine/`), and don't carve the engine up per-command (the toolbox stays shared).
+Use traits only at a real interchangeable or testable boundary. Do not add ports, repositories, or per-layer crates solely to make the diagram look purer.
 
-The engine is a vocabulary of capabilities, named for what they do, never for the command that invokes them. A function moves to the engine only when its signature contains no CLI vocabulary. The CLI owns argv, stdout/stderr, and exit codes — nothing below a command's entry point touches them; workflows return typed results and the CLI renders. The public library surface is `domain` + `engine`; `cli` is a consumer, not an API.
+## Process I/O and diagnostics
 
----
+`main` owns process streams. CLI renderers may produce human or JSON output, and interactive CLI code may prompt or diagnose. Engine, adapters, and domain return values, warnings, or errors instead of printing directly; this keeps reusable capabilities composable by another front end.
 
-## Pipeline-stage modularity
+Known departures are recorded rather than hidden:
 
-Commands that are multi-stage transformations are split into named modules per stage. Compile is the exemplar: `plan` (what to do), `prompt` (build LLM input), `parse` (deserialize), `validation` (enforce the contract), `execute` (commit), `schema` (the shape the LLM sees), `repair` (self-heal), `render` (output). Query and collect follow the same pattern.
+- `engine::fetch` and `engine::summary` currently write fallback/retry diagnostics to stderr. Return or trace those diagnostics when those paths are next changed.
+- `engine::llm::create_provider` reads custom-provider configuration while `engine::config` imports LLM types. Move configuration resolution to the composition call site if this sibling dependency starts obstructing reuse or tests.
 
-A single-stage command stays as one file. The transfer test: "does this command have ≥2 stages with a contract between them that could be violated?" If yes, split. If no, one module.
+These are bounded cleanup targets, not reasons for a broad layer rewrite.
+
+## Public surfaces and visibility
+
+The supported product interface is the executable: command behavior, machine-readable JSON envelopes, and documented on-disk formats.
+
+Cargo compiles `lib.rs`, `main.rs`, and integration tests as separate crates. Consequently, `main` and tests can only reach public library items, and `src/lib.rs` currently exposes `adapters`, `cli`, `domain`, and `engine`. `cli` is therefore objectively public Rust visibility; it must not be described as private.
+
+Reusable library code should live in `domain` and `engine`, but bo does not yet promise a stable Rust library API distinct from the CLI product. If real external Rust consumers require one, introduce a deliberate facade and move binary-only implementation behind it. Until then, do not add crate splits or re-export scaffolding for a hypothetical consumer.
+
+Within a layer, use the narrowest practical visibility. Compile stages use `pub(super)` for command-internal contracts; engine internals use `pub(crate)` when the binary does not need them.
+
+## State and format decisions
+
+### Manifest is the topology source of truth
+
+`{tree}/.bo/manifest.json` is the only topology record. Branches store leaf slugs; `Manifest::branches_for_leaf` computes the inverse in memory. `pending.json` is transaction recovery state and `journal.jsonl` is an operational log, not a second topology model.
+
+### The domain vocabulary is typed
+
+`Tree`, `Branch`, and `Leaf` are the serialized entities used by the rest of the system; there is no parallel record/entity hierarchy. Values with invariants use validated types such as `Slug`, `Title`, `Timestamp`, and `Url`. Domain modules format serialized content but do not read or write it; persistence belongs to the owning engine or CLI operation.
+
+On-disk format behavior is guarded by round-trip or byte-level tests. Do not add abstraction solely to deduplicate coincident fields or serialization code.
+
+## LLM trust and tool boundaries
+
+Every structured LLM response is deserialized and validated against known domain state before mutation. A single validation failure rejects the whole change; no partial write is allowed.
+
+The tool-calling split is intentional:
+
+- `engine::llm` owns provider-neutral transport messages, tool-call protocol types, provider serialization, timeout, and retry behavior.
+- `engine::agent` owns the bounded provider-neutral turn loop and generic tool contract.
+- `cli::compile::agent` owns compile-specific tools and orchestration.
+
+Tool arguments are untrusted input and become typed, validated values at the tool boundary.
+
+## Command pipelines
+
+Split a command into stage modules when an intermediate contract is independently meaningful and the split makes the workflow easier to trace. Compile is the exemplar: planning, prompting, parsing, validation, execution, repair, and rendering have distinct contracts.
+
+Stage count alone is not a rule. A command may stay in one file while its stages remain clear; split it when a contract needs isolated ownership or work in the file has become difficult to trace. Do not scaffold folders for expected future complexity.
+
+## Enforcement and escalation
+
+`tests/architecture.rs` is the executable backstop for the dependency order. It scans every Rust file under `src/domain`, `src/engine`, `src/adapters`, and `src/cli`, not only `use` declarations, and enforces an unambiguous cross-layer path style so fully qualified calls are covered and common relative or aliased paths cannot bypass the check. Compiler visibility (`pub(super)`, `pub(crate)`) remains the first choice for narrower boundaries.
+
+The source scan is a guardrail, not semantic proof. Separate crates are the hard Rust boundary, but a workspace split is not justified for one product and one implementation team. Reconsider it only when a layer has an independent consumer/release lifecycle or repeated real violations show that the lightweight check is insufficient.

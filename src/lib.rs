@@ -1,12 +1,6 @@
-//! # bo — engine library
+//! # bo
 //!
-//! Layered architecture:
-//!
-//! ```text
-//! main.rs → cli/ → engine/ → adapters/
-//!                      ↓
-//!                 domain/ (pure types, depends on nothing)
-//! ```
+//! Canonical architecture and dependency policy: `docs/architecture.md`.
 
 pub mod adapters;
 pub mod cli;
