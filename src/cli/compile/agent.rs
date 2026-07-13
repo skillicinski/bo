@@ -373,6 +373,8 @@ impl Tool for SubmitCompileTool {
                     .unwrap(),
                 "Submit the incremental compile plan: updated_branches and new_branches. Must be \
                  the only tool call in its turn. A valid submission ends the run. \
+                 updated_branches[].slug takes the branch/<slug> identifier shown by \
+                 list_branches; branch/ is stripped and bare slugs also work. \
                  Leaf references in leaves[] must be bare leaf slugs/filenames from list_leaves, \
                  not branch identifiers (which are prefixed branch/)."
                     .to_string(),
@@ -396,13 +398,27 @@ impl Tool for SubmitCompileTool {
                 self.input_body_bytes,
                 &mut warnings,
             ),
-            CompileRunMode::Incremental => parse::parse_and_validate_incremental_with_input_size(
-                arguments,
-                &self.cfg,
-                &self.loaded_leaves,
-                self.input_body_bytes,
-                &mut warnings,
-            ),
+            CompileRunMode::Incremental => {
+                parse::parse_incremental_response(arguments).and_then(|mut parsed| {
+                    for branch in &mut parsed.updated_branches {
+                        if let Some(slug) = branch
+                            .slug
+                            .strip_prefix("branch/")
+                            .filter(|slug| !slug.is_empty())
+                            .map(str::to_owned)
+                        {
+                            branch.slug = slug;
+                        }
+                    }
+                    parse::validate_incremental_response_with_input_size(
+                        parsed,
+                        &self.cfg,
+                        &self.loaded_leaves,
+                        self.input_body_bytes,
+                        &mut warnings,
+                    )
+                })
+            }
         };
         match plan {
             Ok(plan) => {
@@ -412,28 +428,33 @@ impl Tool for SubmitCompileTool {
                 ))
             }
             Err(CompileError::Validation(message)) => {
-                let mut message = message;
-                if message.contains("unknown leaf") {
-                    // Extract the identifier from messages like
-                    // "... references unknown leaf 'X'" and check if X is a branch slug.
-                    if let Some(start) = message.rfind("unknown leaf '") {
-                        let prefix_len = "unknown leaf '".len();
-                        let rest = &message[start + prefix_len..];
-                        if let Some(end) = rest.find('\'') {
-                            let identifier = &rest[..end];
-                            if self.branch_slugs.iter().any(|s| s == identifier) {
-                                message.push_str(&format!(
-                                    ": {identifier} is a branch slug, not a leaf; leaf lists may only contain leaf slugs (see list_leaves)"
-                                ));
-                            }
-                        }
-                    }
-                }
+                let message = annotate_unknown_leaf_error(&message, &self.branch_slugs);
                 Err(ToolError(message))
             }
             Err(other) => Err(ToolError(format!("compile submission failed: {other}"))),
         }
     }
+}
+
+fn annotate_unknown_leaf_error(message: &str, branch_slugs: &[String]) -> String {
+    let mut annotated = message.to_string();
+    let Some(start) = annotated.rfind("unknown leaf '") else {
+        return annotated;
+    };
+    let rest = &annotated[start + "unknown leaf '".len()..];
+    let Some(end) = rest.find('\'') else {
+        return annotated;
+    };
+    let identifier = rest[..end].to_string();
+    let is_branch = branch_slugs.iter().any(|slug| {
+        identifier == *slug || identifier.strip_prefix("branch/") == Some(slug.as_str())
+    });
+    if is_branch {
+        annotated.push_str(&format!(
+            ": {identifier} is a branch slug, not a leaf; leaf lists may only contain leaf slugs (see list_leaves)"
+        ));
+    }
+    annotated
 }
 
 fn parse_args<'a, T: Deserialize<'a>>(arguments: &'a str) -> Result<T, ToolError> {

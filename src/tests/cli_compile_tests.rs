@@ -7,8 +7,11 @@ use crate::domain::manifest::{Manifest, TreeMeta};
 use crate::domain::{Branch, Leaf, Title, Url};
 use crate::domain::{Slug, Timestamp};
 use crate::engine::config::SeededConfig;
+use async_trait::async_trait;
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 use tempfile::TempDir;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -66,6 +69,88 @@ fn write_leaf(dir: &Path, file: &str, content: &str) {
         std::fs::create_dir_all(parent).unwrap();
     }
     std::fs::write(&path, content).unwrap();
+}
+
+struct ScriptedAgentProvider {
+    responses: Vec<crate::engine::llm::AgentResponse>,
+    calls: AtomicUsize,
+    messages: Mutex<Vec<Vec<crate::engine::llm::AgentMessage>>>,
+}
+
+impl ScriptedAgentProvider {
+    fn new(responses: Vec<crate::engine::llm::AgentResponse>) -> Self {
+        Self {
+            responses,
+            calls: AtomicUsize::new(0),
+            messages: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn messages(&self) -> Vec<Vec<crate::engine::llm::AgentMessage>> {
+        self.messages
+            .lock()
+            .expect("scripted messages poisoned")
+            .clone()
+    }
+}
+
+#[async_trait]
+impl crate::engine::llm::LlmProvider for ScriptedAgentProvider {
+    async fn complete(
+        &self,
+        _: &[crate::engine::llm::Message],
+        _: &str,
+        _: u32,
+        _: Option<&crate::engine::llm::NormalizedSchema>,
+        _: bool,
+    ) -> Result<crate::engine::llm::LlmResponse, crate::engine::llm::LlmError> {
+        unreachable!("agent compile tests only use complete_with_tools")
+    }
+
+    async fn complete_with_tools(
+        &self,
+        messages: &[crate::engine::llm::AgentMessage],
+        _: &str,
+        _: u32,
+        _: &[crate::engine::llm::ToolSchema],
+        _: bool,
+    ) -> Result<crate::engine::llm::AgentResponse, crate::engine::llm::LlmError> {
+        self.messages
+            .lock()
+            .expect("scripted messages poisoned")
+            .push(messages.to_vec());
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(self
+            .responses
+            .get(call)
+            .cloned()
+            .unwrap_or_else(|| crate::engine::llm::AgentResponse {
+                content: Some(String::new()),
+                reasoning_content: None,
+                tool_calls: Vec::new(),
+                finish_reason: crate::engine::llm::FinishReason::Stop,
+                usage: None,
+            }))
+    }
+}
+
+fn agent_tool_response(id: &str, name: &str, arguments: &str) -> crate::engine::llm::AgentResponse {
+    crate::engine::llm::AgentResponse {
+        content: None,
+        reasoning_content: None,
+        tool_calls: vec![crate::engine::llm::ToolCall {
+            id: id.to_string(),
+            name: name.to_string(),
+            arguments: arguments.to_string(),
+        }],
+        finish_reason: crate::engine::llm::FinishReason::Other("tool_calls".to_string()),
+        usage: None,
+    }
+}
+
+fn agent_model() -> crate::engine::llm::Model {
+    crate::engine::llm::Model::parse("deepseek-v4-flash", crate::engine::llm::Provider::Deepseek)
+        .unwrap()
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -851,6 +936,151 @@ fn setup_incremental_tree(dir: &Path) -> (SeededConfig, Manifest, Vec<LoadedLeaf
     (cfg, manifest, loaded)
 }
 
+fn incremental_update_submission(slug: &str, leaves: &[&str]) -> String {
+    serde_json::json!({
+        "updated_branches": [{
+            "slug": slug,
+            "title": "Existing Branch",
+            "body": "updated body",
+            "leaves": leaves,
+        }],
+        "new_branches": [],
+    })
+    .to_string()
+}
+
+#[test]
+fn agent_incremental_branch_identifier_round_trips_from_list_branches() {
+    let dir = TempDir::new().unwrap();
+    let (cfg, manifest, loaded) = setup_incremental_tree(dir.path());
+    let submission =
+        incremental_update_submission("branch/existing", &["leaf-c", "leaf-d", "leaf-a"]);
+    let provider = ScriptedAgentProvider::new(vec![
+        agent_tool_response("list_branches", "list_branches", "{}"),
+        agent_tool_response("submit", "submit_compile", &submission),
+    ]);
+    let model = agent_model();
+
+    let (plan, stats, _) = super::agent::run_agent_dry_run(
+        &cfg,
+        &provider,
+        &model,
+        &manifest,
+        &loaded,
+        CompileRunMode::Incremental,
+    )
+    .expect("branch/<slug> submission should validate");
+
+    assert_eq!(plan.branches[0].slug, "existing");
+    assert_eq!(stats.turns, 2);
+    let messages = provider.messages();
+    let list_result = messages[1]
+        .iter()
+        .find_map(|message| match message {
+            crate::engine::llm::AgentMessage::Tool(result)
+                if result.tool_call_id == "list_branches" =>
+            {
+                Some(result.content.as_str())
+            }
+            _ => None,
+        })
+        .expect("second turn should receive list_branches output");
+    let listed: serde_json::Value = serde_json::from_str(list_result).unwrap();
+    assert_eq!(listed["branches"][0]["slug"], "branch/existing");
+}
+
+#[test]
+fn agent_incremental_bare_branch_slug_still_validates() {
+    let dir = TempDir::new().unwrap();
+    let (cfg, manifest, loaded) = setup_incremental_tree(dir.path());
+    let submission = incremental_update_submission("existing", &["leaf-c", "leaf-d", "leaf-a"]);
+    let provider = ScriptedAgentProvider::new(vec![agent_tool_response(
+        "submit",
+        "submit_compile",
+        &submission,
+    )]);
+    let model = agent_model();
+
+    let (plan, _, _) = super::agent::run_agent_dry_run(
+        &cfg,
+        &provider,
+        &model,
+        &manifest,
+        &loaded,
+        CompileRunMode::Incremental,
+    )
+    .expect("bare branch slug submission should validate");
+
+    assert_eq!(plan.branches[0].slug, "existing");
+}
+
+#[test]
+fn one_shot_incremental_rejects_branch_identifier_prefix() {
+    let dir = TempDir::new().unwrap();
+    let (cfg, _, loaded) = setup_incremental_tree(dir.path());
+    let submission =
+        incremental_update_submission("branch/existing", &["leaf-c", "leaf-d", "leaf-a"]);
+
+    let err = parse_and_validate_incremental_with_input_size(
+        &submission,
+        &cfg,
+        &loaded,
+        4096,
+        &mut Vec::new(),
+    )
+    .expect_err("one-shot incremental validation must retain bare branch slugs");
+
+    assert!(
+        matches!(err, CompileError::Validation(ref message) if message.contains("unknown branch 'branch/existing'")),
+        "expected bare-slug validation failure, got: {err:?}"
+    );
+}
+
+#[test]
+fn agent_rejects_branch_identifiers_in_leaf_lists_with_teaching_hint() {
+    for identifier in ["branch/existing", "existing"] {
+        let dir = TempDir::new().unwrap();
+        let (cfg, manifest, loaded) = setup_incremental_tree(dir.path());
+        let submission =
+            incremental_update_submission("existing", &["leaf-c", "leaf-d", identifier]);
+        let provider = ScriptedAgentProvider::new(vec![agent_tool_response(
+            "submit",
+            "submit_compile",
+            &submission,
+        )]);
+        let model = agent_model();
+
+        let err = super::agent::run_agent_dry_run(
+            &cfg,
+            &provider,
+            &model,
+            &manifest,
+            &loaded,
+            CompileRunMode::Incremental,
+        )
+        .expect_err("branch identifiers must not resolve as leaves");
+
+        match err {
+            CompileError::AgentFailed {
+                last_error: Some(message),
+                ..
+            } => {
+                assert!(
+                    message.contains(&format!("unknown leaf '{identifier}'")),
+                    "expected unknown-leaf error, got: {message}"
+                );
+                assert!(
+                    message.contains(&format!(
+                        ": {identifier} is a branch slug, not a leaf; leaf lists may only contain leaf slugs (see list_leaves)"
+                    )),
+                    "expected teaching hint, got: {message}"
+                );
+            }
+            other => panic!("expected AgentFailed with teaching hint, got: {other:?}"),
+        }
+    }
+}
+
 #[test]
 fn parse_incremental_update_preserves_existing_leaves_and_adds_new() {
     let dir = TempDir::new().unwrap();
@@ -1325,56 +1555,4 @@ fn resource_limit_constants_have_expected_values() {
     assert_eq!(crate::engine::agent::MAX_TURNS, 8);
     assert_eq!(crate::engine::agent::MAX_TOOL_CALLS_PER_RESPONSE, 8);
     assert_eq!(crate::engine::agent::MAX_TOTAL_TOOL_CALLS, 48);
-}
-
-// ── branch-slug leaf-reference hint ───────────────────────────────────────────
-
-#[test]
-fn unknown_leaf_error_with_branch_slug_is_annotated() {
-    // Mirrors the post-processing in SubmitCompileTool::execute: when a
-    // validation error mentions an "unknown leaf" identifier that matches a
-    // known branch slug, the error message is augmented with a teaching hint.
-    fn annotate_unknown_leaf_error(message: &str, branch_slugs: &[&str]) -> String {
-        let mut message = message.to_string();
-        if message.contains("unknown leaf") {
-            if let Some(start) = message.rfind("unknown leaf '") {
-                let prefix_len = "unknown leaf '".len();
-                let rest = &message[start + prefix_len..];
-                if let Some(end) = rest.find('\'') {
-                    let identifier = &rest[..end];
-                    if branch_slugs.iter().any(|s| s == &identifier) {
-                        message.push_str(&format!(
-                            ": {identifier} is a branch slug, not a leaf; leaf lists may only contain leaf slugs (see list_leaves)"
-                        ));
-                    }
-                }
-            }
-        }
-        message
-    }
-
-    // When the unknown identifier is a branch slug, the hint is appended.
-    let msg =
-        "invalid compile response: branch 'Concept' references unknown leaf 'programming-concepts'";
-    let branch_slugs = vec!["existing-branch", "programming-concepts"];
-    let result = annotate_unknown_leaf_error(msg, &branch_slugs);
-    assert!(
-        result.contains("is a branch slug, not a leaf"),
-        "expected teaching hint: {result}"
-    );
-    assert!(result.contains("programming-concepts"));
-
-    // When the identifier is NOT a branch slug, the message is unchanged.
-    let msg2 =
-        "invalid compile response: branch 'Concept' references unknown leaf 'nonexistent-leaf'";
-    let result2 = annotate_unknown_leaf_error(msg2, &branch_slugs);
-    assert!(
-        !result2.contains("is a branch slug, not a leaf"),
-        "unrelated unknown leaf should not get a branch-slug hint: {result2}"
-    );
-
-    // When the message doesn't contain "unknown leaf", no annotation.
-    let msg3 = "some other validation error";
-    let result3 = annotate_unknown_leaf_error(msg3, &branch_slugs);
-    assert_eq!(result3, msg3);
 }
