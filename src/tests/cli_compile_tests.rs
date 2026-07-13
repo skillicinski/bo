@@ -2245,4 +2245,123 @@ mod cluster_tests {
         assert_eq!(super::super::TWO_STAGE_FULL_THRESHOLD, 40);
         assert_eq!(super::super::TWO_STAGE_INCREMENTAL_THRESHOLD, 15);
     }
+
+    // ── stage-2 body-only schema ────────────────────────────────────────
+
+    #[test]
+    fn parse_stage2_response_valid_constructs_branch() {
+        let response = Ok(r#"{"title": "Concept Name", "body": "Synthesized body."}"#.to_string());
+        let leaf_files = vec!["a.md".to_string(), "b.md".to_string()];
+        let mut warnings = Vec::new();
+        let branch = super::super::cluster::parse_stage2_response(
+            &response,
+            "test-cluster",
+            &leaf_files,
+            &mut warnings,
+        )
+        .expect("valid response should parse");
+        assert_eq!(branch.title, "Concept Name");
+        assert_eq!(branch.body, "Synthesized body.");
+        // Membership comes from cluster, not from the response.
+        assert_eq!(branch.leaves, leaf_files);
+    }
+
+    #[test]
+    fn parse_stage2_response_rejects_malformed_json() {
+        let response = Ok("not json".to_string());
+        let leaf_files = vec!["a.md".to_string(), "b.md".to_string()];
+        let mut warnings = Vec::new();
+        let result = super::super::cluster::parse_stage2_response(
+            &response,
+            "test-cluster",
+            &leaf_files,
+            &mut warnings,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("invalid stage-2"),
+            "expected parse error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn parse_stage2_response_rejects_empty_title() {
+        let response = Ok(r#"{"title": "  ", "body": "Some body."}"#.to_string());
+        let leaf_files = vec!["a.md".to_string(), "b.md".to_string()];
+        let mut warnings = Vec::new();
+        let result = super::super::cluster::parse_stage2_response(
+            &response,
+            "test-cluster",
+            &leaf_files,
+            &mut warnings,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("empty title"),
+            "expected empty title error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn parse_stage2_response_rejects_empty_body() {
+        let response = Ok(r#"{"title": "Title", "body": "  "}"#.to_string());
+        let leaf_files = vec!["a.md".to_string(), "b.md".to_string()];
+        let mut warnings = Vec::new();
+        let result = super::super::cluster::parse_stage2_response(
+            &response,
+            "test-cluster",
+            &leaf_files,
+            &mut warnings,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("empty body"),
+            "expected empty body error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn parse_stage2_response_membership_from_cluster_not_response() {
+        // Response includes "leaves" field but it is ignored (deny_unknown_fields
+        // would reject it — so this tests the schema rejects extra fields).
+        let response =
+            Ok(r#"{"title": "Concept", "body": "Body.", "leaves": ["hacked.md"]}"#.to_string());
+        let leaf_files = vec!["a.md".to_string(), "b.md".to_string()];
+        let mut warnings = Vec::new();
+        let result = super::super::cluster::parse_stage2_response(
+            &response,
+            "test-cluster",
+            &leaf_files,
+            &mut warnings,
+        );
+        // deny_unknown_fields should reject the extra "leaves" field.
+        assert!(result.is_err(), "should reject unknown fields");
+    }
+
+    #[test]
+    fn parse_stage2_response_llm_error_propagates() {
+        let response: Result<String, super::super::CompileError> =
+            Err(super::super::CompileError::Truncated);
+        let leaf_files = vec!["a.md".to_string(), "b.md".to_string()];
+        let mut warnings = Vec::new();
+        let result = super::super::cluster::parse_stage2_response(
+            &response,
+            "test-cluster",
+            &leaf_files,
+            &mut warnings,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("truncated") || err.contains("LLM call failed"),
+            "expected LLM error propagation, got: {}",
+            err
+        );
+    }
 }
