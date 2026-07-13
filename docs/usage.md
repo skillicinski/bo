@@ -114,6 +114,14 @@ branches exist.
 bo compile --all
 ```
 
+**Not a refresh — a reroll** — `--all` rebuilds the corpus from scratch, so
+each run produces a *new organization of the same content*. Branch names,
+boundaries, and prose do not reproduce between runs (consecutive rebuilds on
+identical corpora shared zero branch titles). Useful as recovery or for a
+fresh perspective; destructive of familiarity. Routine growth should use
+plain `bo compile`, which preserves existing branches and fits new leaves to
+them.
+
 **Validation gate** — if the LLM response is malformed (missing fields, phantom
 leaf references, empty branches), bo rejects it and writes nothing. No partial
 state.
