@@ -56,6 +56,28 @@ pub(super) fn parse_and_validate_with_input_size(
     validation::validate_full(parsed, loaded_leaves, input_body_bytes, warnings)
 }
 
+pub(super) fn parse_incremental_response(
+    response: &str,
+) -> Result<IncrementalCompileResponse, CompileError> {
+    serde_json::from_str(response).map_err(|e| {
+        CompileError::Validation(format!("invalid incremental compile response shape: {}", e))
+    })
+}
+
+pub(super) fn validate_incremental_response_with_input_size(
+    parsed: IncrementalCompileResponse,
+    cfg: &SeededConfig,
+    loaded_leaves: &[plan::LoadedLeaf],
+    input_body_bytes: usize,
+    warnings: &mut Vec<String>,
+) -> Result<validation::CompilePlan, CompileError> {
+    let tree = cfg.tree();
+    let manifest_path = crate::domain::tree::manifest_path(tree.path());
+    let manifest = crate::engine::manifest::read(&manifest_path)
+        .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
+    validation::validate_incremental(parsed, &manifest, loaded_leaves, input_body_bytes, warnings)
+}
+
 pub(super) fn parse_and_validate_incremental_with_input_size(
     response: &str,
     cfg: &SeededConfig,
@@ -63,12 +85,11 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
     input_body_bytes: usize,
     warnings: &mut Vec<String>,
 ) -> Result<validation::CompilePlan, CompileError> {
-    let parsed: IncrementalCompileResponse = serde_json::from_str(response).map_err(|e| {
-        CompileError::Validation(format!("invalid incremental compile response shape: {}", e))
-    })?;
-    let tree = cfg.tree();
-    let manifest_path = crate::domain::tree::manifest_path(tree.path());
-    let manifest = crate::engine::manifest::read(&manifest_path)
-        .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
-    validation::validate_incremental(parsed, &manifest, loaded_leaves, input_body_bytes, warnings)
+    validate_incremental_response_with_input_size(
+        parse_incremental_response(response)?,
+        cfg,
+        loaded_leaves,
+        input_body_bytes,
+        warnings,
+    )
 }
