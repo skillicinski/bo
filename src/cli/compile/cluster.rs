@@ -5,7 +5,7 @@
 // and names clusters. Stage 2 (synthesize) reuses the existing per-branch
 // parse/validate/execute path — this module handles both stages.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -381,6 +381,13 @@ pub(super) fn build_synthesize_update_user_message(
 // ── validation ───────────────────────────────────────────────────────────────
 
 /// Validate a Full-mode cluster response.
+///
+/// Repairs (warn, don't reject):
+/// - Unknown leaf ref → dropped from cluster; cluster dropped if it falls below 2.
+/// - Leaf in multiple clusters → kept in first, dropped from later clusters.
+///
+/// Hard rejections: empty title, duplicate title, empty leaf reference,
+/// every cluster repaired away to nothing.
 pub(super) fn validate_clusters(
     response: &ClusterResponse,
     loaded_leaves: &[LoadedLeaf],
@@ -392,7 +399,7 @@ pub(super) fn validate_clusters(
     }
 
     let mut seen_titles: HashSet<String> = HashSet::new();
-    let mut assigned_leaves: HashSet<String> = HashSet::new();
+    let mut assigned_leaves: HashMap<String, String> = HashMap::new(); // filename → cluster title
     let mut validated = Vec::new();
 
     for (i, cluster) in response.clusters.iter().enumerate() {
@@ -412,6 +419,7 @@ pub(super) fn validate_clusters(
 
         let mut leaf_files = Vec::new();
         let mut seen_in_cluster: HashSet<String> = HashSet::new();
+        let mut dropped_unknown = false;
         for raw_leaf in &cluster.leaf_slugs {
             let key = raw_leaf.trim().to_string();
             if key.is_empty() {
@@ -421,13 +429,25 @@ pub(super) fn validate_clusters(
                 )));
             }
             let Some(normalized) = lookup.map.get(&key.to_lowercase()) else {
-                return Err(CompileError::Validation(format!(
-                    "invalid cluster response: cluster '{}' references unknown leaf '{}'",
+                dropped_unknown = true;
+                warnings.push(format!(
+                    "warning: cluster '{}' references unknown leaf '{}' — dropped",
                     title, key
-                )));
+                ));
+                continue;
             };
             if seen_in_cluster.insert(normalized.clone()) {
                 leaf_files.push(normalized.clone());
+            }
+        }
+        if dropped_unknown {
+            // Re-check leaf count: unknown refs were dropped, cluster may have shrunk.
+            if leaf_files.len() < 2 {
+                warnings.push(format!(
+                    "warning: cluster '{}' dropped below 2 leaves after removing unknown refs — cluster dropped",
+                    title
+                ));
+                continue;
             }
         }
 
@@ -439,16 +459,35 @@ pub(super) fn validate_clusters(
             )));
         }
 
-        for f in &leaf_files {
-            if !assigned_leaves.insert(f.clone()) {
-                return Err(CompileError::Validation(format!(
-                    "invalid cluster response: leaf '{}' assigned to multiple clusters",
-                    f
-                )));
+        // Cross-cluster duplicate: keep in first cluster, drop from later ones.
+        let mut deduped_files = Vec::new();
+        for f in leaf_files {
+            if let Some(prev_cluster) = assigned_leaves.get(&f) {
+                warnings.push(format!(
+                    "warning: leaf '{}' assigned to multiple clusters; kept in '{}', dropped from '{}'",
+                    f, prev_cluster, title
+                ));
+            } else {
+                assigned_leaves.insert(f.clone(), title.clone());
+                deduped_files.push(f);
             }
         }
+        if deduped_files.len() < 2 {
+            warnings.push(format!(
+                "warning: cluster '{}' dropped below 2 leaves after cross-cluster dedup — cluster dropped",
+                title
+            ));
+            continue;
+        }
 
-        validated.push(ValidatedCluster::new(title, leaf_files));
+        validated.push(ValidatedCluster::new(title, deduped_files));
+    }
+
+    if validated.is_empty() {
+        return Err(CompileError::Validation(
+            "invalid cluster response: every cluster was repaired away — no valid clusters remain"
+                .to_string(),
+        ));
     }
 
     Ok(ValidatedClusters {
@@ -457,6 +496,14 @@ pub(super) fn validate_clusters(
 }
 
 /// Validate an Incremental-mode cluster response.
+///
+/// Repairs (warn, don't reject):
+/// - Unknown leaf ref → dropped; cluster/assignment dropped if it falls below minimum.
+/// - Leaf in multiple clusters → kept in first, dropped from later.
+/// - Assignment to unknown branch slug → assignment dropped.
+///
+/// Hard rejections: empty/duplicate cluster titles, title collision with
+/// existing branch, empty leaf reference, every cluster repaired away.
 pub(super) fn validate_incremental_clusters(
     response: &IncrementalClusterResponse,
     manifest: &Manifest,
@@ -474,21 +521,72 @@ pub(super) fn validate_incremental_clusters(
         .map(|b| b.title.as_str().to_lowercase())
         .collect();
 
-    let mut assigned_leaves: HashSet<String> = HashSet::new();
+    let mut assigned_leaves: HashMap<String, String> = HashMap::new(); // filename → cluster title
     let mut seen_assignment_slugs: HashSet<String> = HashSet::new();
     let mut seen_new_titles: HashSet<String> = HashSet::new();
     let mut validated = Vec::new();
 
+    // Repair-resolve leaf refs (shared between assignments and new clusters).
+    // Returns (leaf_files, had_unknown_drops).
+    let resolve_leaves = |raw_leaves: &[String],
+                          cluster_label: &str,
+                          lookup: &super::validation::LeafLookup,
+                          warnings: &mut Vec<String>|
+     -> (Vec<String>, bool) {
+        let mut files = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut dropped = false;
+        for raw_leaf in raw_leaves {
+            let key = raw_leaf.trim().to_string();
+            if key.is_empty() {
+                continue;
+            }
+            let Some(normalized) = lookup.map.get(&key.to_lowercase()) else {
+                dropped = true;
+                warnings.push(format!(
+                    "warning: {} references unknown leaf '{}' — dropped",
+                    cluster_label, key
+                ));
+                continue;
+            };
+            if seen.insert(normalized.clone()) {
+                files.push(normalized.clone());
+            }
+        }
+        (files, dropped)
+    };
+
+    // Cross-cluster dedup helper.
+    let cross_dedup = |files: Vec<String>,
+                       title: &str,
+                       assigned_leaves: &mut HashMap<String, String>,
+                       warnings: &mut Vec<String>|
+     -> Vec<String> {
+        let mut deduped = Vec::new();
+        for f in files {
+            if let Some(prev) = assigned_leaves.get(&f) {
+                warnings.push(format!(
+                        "warning: leaf '{}' assigned to multiple clusters; kept in '{}', dropped from '{}'",
+                        f, prev, title
+                    ));
+            } else {
+                assigned_leaves.insert(f.clone(), title.to_string());
+                deduped.push(f);
+            }
+        }
+        deduped
+    };
+
     // Validate assignments (existing branches).
     for assignment in &response.assignments {
-        let branch = manifest
-            .branch_by_slug_str(&assignment.branch_slug)
-            .ok_or_else(|| {
-                CompileError::Validation(format!(
-                    "invalid cluster response: assignment references unknown branch '{}'",
-                    assignment.branch_slug
-                ))
-            })?;
+        // Unknown branch slug → drop assignment, warn.
+        let Some(branch) = manifest.branch_by_slug_str(&assignment.branch_slug) else {
+            warnings.push(format!(
+                "warning: assignment references unknown branch '{}' — assignment dropped",
+                assignment.branch_slug
+            ));
+            continue;
+        };
 
         if !seen_assignment_slugs.insert(assignment.branch_slug.clone()) {
             return Err(CompileError::Validation(format!(
@@ -497,46 +595,33 @@ pub(super) fn validate_incremental_clusters(
             )));
         }
 
-        let mut leaf_files = Vec::new();
-        let mut seen_in_assignment: HashSet<String> = HashSet::new();
-        for raw_leaf in &assignment.leaf_slugs {
-            let key = raw_leaf.trim().to_string();
-            if key.is_empty() {
-                return Err(CompileError::Validation(format!(
-                    "invalid cluster response: assignment to '{}' has an empty leaf reference",
-                    assignment.branch_slug
-                )));
-            }
-            let Some(normalized) = lookup.map.get(&key.to_lowercase()) else {
-                return Err(CompileError::Validation(format!(
-                    "invalid cluster response: assignment to '{}' references unknown leaf '{}'",
-                    assignment.branch_slug, key
-                )));
-            };
-            if seen_in_assignment.insert(normalized.clone()) {
-                leaf_files.push(normalized.clone());
-            }
-        }
-
+        let label = format!("assignment to '{}'", assignment.branch_slug);
+        let (leaf_files, had_unknown) =
+            resolve_leaves(&assignment.leaf_slugs, &label, &lookup, warnings);
         if leaf_files.is_empty() {
-            return Err(CompileError::Validation(format!(
-                "invalid cluster response: assignment to '{}' has no leaves",
-                assignment.branch_slug
-            )));
+            if had_unknown {
+                warnings.push(format!(
+                    "warning: assignment to '{}' has no valid leaves after removing unknown refs — assignment dropped",
+                    assignment.branch_slug
+                ));
+            }
+            continue;
         }
 
-        for f in &leaf_files {
-            if !assigned_leaves.insert(f.clone()) {
-                return Err(CompileError::Validation(format!(
-                    "invalid cluster response: leaf '{}' assigned to multiple clusters",
-                    f
-                )));
-            }
+        // Cross-cluster dedup.
+        let branch_title = branch.title.as_str().to_string();
+        let deduped = cross_dedup(leaf_files, &branch_title, &mut assigned_leaves, warnings);
+        if deduped.is_empty() {
+            warnings.push(format!(
+                "warning: assignment to '{}' has no leaves after dedup — assignment dropped",
+                assignment.branch_slug
+            ));
+            continue;
         }
 
         validated.push(ValidatedCluster {
-            title: branch.title.as_str().to_string(),
-            leaf_files,
+            title: branch_title,
+            leaf_files: deduped,
             existing_branch_slug: branch.slug.as_str().to_string(),
         });
     }
@@ -564,25 +649,24 @@ pub(super) fn validate_incremental_clusters(
             )));
         }
 
-        let mut leaf_files = Vec::new();
-        let mut seen_in_cluster: HashSet<String> = HashSet::new();
-        for raw_leaf in &cluster.leaf_slugs {
-            let key = raw_leaf.trim().to_string();
-            if key.is_empty() {
-                return Err(CompileError::Validation(format!(
-                    "invalid cluster response: new cluster '{}' has an empty leaf reference",
-                    title
-                )));
-            }
-            let Some(normalized) = lookup.map.get(&key.to_lowercase()) else {
-                return Err(CompileError::Validation(format!(
-                    "invalid cluster response: new cluster '{}' references unknown leaf '{}'",
-                    title, key
-                )));
-            };
-            if seen_in_cluster.insert(normalized.clone()) {
-                leaf_files.push(normalized.clone());
-            }
+        let label = format!("new cluster '{}'", title);
+        let (leaf_files, had_unknown) =
+            resolve_leaves(&cluster.leaf_slugs, &label, &lookup, warnings);
+
+        // Check for empty leaf refs (hard reject — LLM output garbage).
+        if cluster.leaf_slugs.iter().any(|s| s.trim().is_empty()) {
+            return Err(CompileError::Validation(format!(
+                "invalid cluster response: new cluster '{}' has an empty leaf reference",
+                title
+            )));
+        }
+
+        if had_unknown && leaf_files.len() < 2 {
+            warnings.push(format!(
+                "warning: new cluster '{}' dropped below 2 leaves after removing unknown refs — cluster dropped",
+                title
+            ));
+            continue;
         }
 
         if leaf_files.len() < 2 {
@@ -593,16 +677,23 @@ pub(super) fn validate_incremental_clusters(
             )));
         }
 
-        for f in &leaf_files {
-            if !assigned_leaves.insert(f.clone()) {
-                return Err(CompileError::Validation(format!(
-                    "invalid cluster response: leaf '{}' assigned to multiple clusters",
-                    f
-                )));
-            }
+        let deduped = cross_dedup(leaf_files, &title, &mut assigned_leaves, warnings);
+        if deduped.len() < 2 {
+            warnings.push(format!(
+                "warning: new cluster '{}' dropped below 2 leaves after dedup — cluster dropped",
+                title
+            ));
+            continue;
         }
 
-        validated.push(ValidatedCluster::new(title, leaf_files));
+        validated.push(ValidatedCluster::new(title, deduped));
+    }
+
+    if validated.is_empty() {
+        return Err(CompileError::Validation(
+            "invalid cluster response: every cluster was repaired away — no valid clusters remain"
+                .to_string(),
+        ));
     }
 
     Ok(ValidatedClusters {

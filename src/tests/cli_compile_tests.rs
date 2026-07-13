@@ -1997,7 +1997,7 @@ mod cluster_tests {
     }
 
     #[test]
-    fn validate_clusters_rejects_unknown_leaf() {
+    fn validate_clusters_repairs_unknown_leaf_and_drops_cluster_if_below_2() {
         let leaves = vec![loaded_leaf("a", "A"), loaded_leaf("b", "B")];
         let response = ClusterResponse {
             clusters: vec![ClusterAssignment {
@@ -2007,17 +2007,49 @@ mod cluster_tests {
         };
         let mut warnings = Vec::new();
         let result = cluster::validate_clusters(&response, &leaves, &mut warnings);
+        // Unknown leaf ref dropped → cluster has 1 leaf → cluster dropped → no clusters → error.
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("unknown"),
-            "expected unknown leaf error, got: {}",
+            err.contains("repaired away"),
+            "expected repaired-away error, got: {}",
             err
+        );
+        // Should have warned about the unknown ref and the cluster drop.
+        assert!(
+            warnings.iter().any(|w| w.contains("unknown leaf")),
+            "should warn about unknown leaf"
         );
     }
 
     #[test]
-    fn validate_clusters_rejects_cross_cluster_duplicate() {
+    fn validate_clusters_repairs_unknown_leaf_keeps_cluster_if_still_valid() {
+        let leaves = vec![
+            loaded_leaf("a", "A"),
+            loaded_leaf("b", "B"),
+            loaded_leaf("c", "C"),
+        ];
+        let response = ClusterResponse {
+            clusters: vec![ClusterAssignment {
+                title: "Concept".to_string(),
+                leaf_slugs: vec!["a".to_string(), "b".to_string(), "nonexistent".to_string()],
+            }],
+        };
+        let mut warnings = Vec::new();
+        let result = cluster::validate_clusters(&response, &leaves, &mut warnings);
+        // Unknown dropped, 2 remain → cluster survives.
+        assert!(result.is_ok());
+        let validated = result.unwrap();
+        assert_eq!(validated.clusters.len(), 1);
+        assert_eq!(validated.clusters[0].leaf_files.len(), 2);
+        assert!(
+            warnings.iter().any(|w| w.contains("unknown leaf")),
+            "should warn about unknown leaf"
+        );
+    }
+
+    #[test]
+    fn validate_clusters_repairs_cross_cluster_duplicate() {
         let leaves = vec![
             loaded_leaf("a", "A"),
             loaded_leaf("b", "B"),
@@ -2037,12 +2069,16 @@ mod cluster_tests {
         };
         let mut warnings = Vec::new();
         let result = cluster::validate_clusters(&response, &leaves, &mut warnings);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
+        // "b" kept in first cluster ("One"), dropped from second. Second has only "c" → below 2 → dropped.
+        // First cluster survives with a,b.
+        assert!(result.is_ok());
+        let validated = result.unwrap();
+        assert_eq!(validated.clusters.len(), 1);
+        assert_eq!(validated.clusters[0].title, "One");
+        assert_eq!(validated.clusters[0].leaf_files.len(), 2);
         assert!(
-            err.contains("multiple clusters"),
-            "expected cross-cluster error, got: {}",
-            err
+            warnings.iter().any(|w| w.contains("multiple clusters")),
+            "should warn about cross-cluster duplicate"
         );
     }
 
@@ -2115,8 +2151,7 @@ mod cluster_tests {
     }
 
     #[test]
-    fn validate_incremental_clusters_rejects_unknown_branch() {
-        use super::super::*;
+    fn validate_incremental_clusters_repairs_unknown_branch() {
         let manifest = Manifest {
             tree: TreeMeta {
                 name: "test".to_string(),
@@ -2143,12 +2178,17 @@ mod cluster_tests {
         let mut warnings = Vec::new();
         let result =
             cluster::validate_incremental_clusters(&response, &manifest, &leaves, &mut warnings);
+        // Unknown branch → assignment dropped. No clusters remain → error.
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("unknown branch"),
-            "expected unknown branch error, got: {}",
+            err.contains("repaired away"),
+            "expected repaired-away error, got: {}",
             err
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("unknown branch")),
+            "should warn about unknown branch"
         );
     }
 
