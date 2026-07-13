@@ -32,7 +32,7 @@ cargo install --git https://github.com/skillicinski/bo --tag v0.0.2
 
 ```bash
 # Seed a tree and choose the provider/model
-bo seed --path ~/bo-tree --name bo-tree --provider openai --model gpt-4.1-mini
+bo seed --path ~/bo-tree --name bo-tree --provider openai --model gpt-5.4
 
 # Make your API key available (either env var or ~/.bo/auth.json — see below)
 export OPENAI_API_KEY=sk-...

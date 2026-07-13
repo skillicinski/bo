@@ -2,14 +2,37 @@
 
 bo supports OpenAI-compatible providers. Each built-in provider enumerates a fixed set of models; the `custom` provider accepts any OpenAI-compatible endpoint and model.
 
+## Choosing a compile model
+
+Compile — especially the cluster pass that two-stage compile runs on large corpora — is the highest-leverage LLM call bo makes: it decides the topic structure every later compile anchors to. Measured cluster quality varies sharply by model under an identical prompt (66-document full compile, share of documents organized into branches):
+
+| Model | Coverage |
+|---|---|
+| `gpt-5.5` | 98% |
+| `deepseek-v4-flash` | 98% |
+| `gpt-5.4` | 83% |
+| `gemini-flash-latest` | 82% |
+| `gpt-4.1` | 30% — over-conservative micro-clusters |
+| `gpt-4.1-mini` | 17% — collapses to a single catch-all branch |
+
+For corpora beyond ~40 documents, pin a validated model for the compile step and keep a cheap model for everything else:
+
+```bash
+bo config --compile-model gpt-5.5
+```
+
+The `gpt-4.1` family is not recommended for compile at scale. bo warns (`degenerate_result`) when a compile produces implausibly few branches, but the better tree is the one that never needed the warning.
+
 ---
 
 ## OpenAI
 
 | Model | Notes |
 |---|---|
-| `gpt-4.1-mini` | Default. Best cost/performance balance for most trees. |
-| `gpt-4.1` | Higher compile quality for large or complex trees. |
+| `gpt-5.5` | Frontier. Best measured compile quality; use as `--compile-model`. |
+| `gpt-5.4` | Strong all-round choice, compile included. |
+| `gpt-4.1-mini` | Cheap default for collect/query. Not recommended for compile at scale (see above). |
+| `gpt-4.1` | Not recommended for compile at scale (see above). |
 | `gpt-4.1-nano` | Smallest context window. Fast but hits compile limits sooner. |
 | `gpt-4o` | Legacy. Prefer `gpt-4.1`. |
 | `gpt-4o-mini` | Legacy. Prefer `gpt-4.1-mini` or `gpt-4.1-nano`. |
