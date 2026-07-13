@@ -257,15 +257,16 @@ async fn run_agent_async(run: AgentRun<'_>) -> AgentOutcome {
                 reasoning_content: response.reasoning_content,
                 tool_calls: Vec::new(),
             });
-            check_and_send_signal(
-                &mut transcript,
+            if let Some(msg) = check_signal_thresholds(
                 turns,
                 total_tool_calls,
                 &mut soft_signal_sent,
                 &mut final_signal_sent,
                 &mut signals_sent,
                 terminal_tool_name,
-            );
+            ) {
+                transcript.push(AgentMessage::User(msg));
+            }
             continue;
         }
 
@@ -291,15 +292,16 @@ async fn run_agent_async(run: AgentRun<'_>) -> AgentOutcome {
             {
                 return stop;
             }
-            check_and_send_signal(
-                &mut transcript,
+            if let Some(msg) = check_signal_thresholds(
                 turns,
                 total_tool_calls,
                 &mut soft_signal_sent,
                 &mut final_signal_sent,
                 &mut signals_sent,
                 terminal_tool_name,
-            );
+            ) {
+                transcript.push(AgentMessage::User(msg));
+            }
             continue;
         }
 
@@ -320,15 +322,16 @@ async fn run_agent_async(run: AgentRun<'_>) -> AgentOutcome {
             {
                 return stop;
             }
-            check_and_send_signal(
-                &mut transcript,
+            if let Some(msg) = check_signal_thresholds(
                 turns,
                 total_tool_calls,
                 &mut soft_signal_sent,
                 &mut final_signal_sent,
                 &mut signals_sent,
                 terminal_tool_name,
-            );
+            ) {
+                transcript.push(AgentMessage::User(msg));
+            }
             continue;
         }
 
@@ -338,6 +341,7 @@ async fn run_agent_async(run: AgentRun<'_>) -> AgentOutcome {
 
         // Execute tools sequentially. A valid terminal submission stops immediately.
         let mut terminated = false;
+        let mut signal_text: Option<String> = None;
         for tc in &response.tool_calls {
             total_tool_calls += 1;
             match execute_tool(&tool_map, tc) {
@@ -353,19 +357,33 @@ async fn run_agent_async(run: AgentRun<'_>) -> AgentOutcome {
                     push_error_result(&mut transcript, &mut last_error, tc, message);
                 }
             }
-            check_and_send_signal(
-                &mut transcript,
-                turns,
-                total_tool_calls,
-                &mut soft_signal_sent,
-                &mut final_signal_sent,
-                &mut signals_sent,
-                terminal_tool_name,
-            );
+            // Detect threshold crossings; queue the message for injection after
+            // the full tool-result block to keep transcript ordering valid.
+            if signal_text.is_none() {
+                signal_text = check_signal_thresholds(
+                    turns,
+                    total_tool_calls,
+                    &mut soft_signal_sent,
+                    &mut final_signal_sent,
+                    &mut signals_sent,
+                    terminal_tool_name,
+                );
+            }
             if let Some(stop) =
                 total_tool_call_limit(total_tool_calls, turns, &usage, &last_error, signals_sent)
             {
+                if let Some(msg) = signal_text {
+                    transcript.push(AgentMessage::User(msg));
+                }
                 return stop;
+            }
+        }
+
+        // Inject any queued signal after the complete tool-result block so the
+        // transcript ordering is valid: Assistant{tool_calls} → Tool{results} → User{signal}.
+        if !terminated {
+            if let Some(msg) = signal_text {
+                transcript.push(AgentMessage::User(msg));
             }
         }
 
@@ -437,18 +455,19 @@ fn total_tool_call_limit(
     }
 }
 
-/// Inject a budget-pressure signal when consumption crosses a threshold.
-/// Each threshold fires at most once per run. The message names the registered
-/// terminal tool (if any) so the model knows what to call.
-fn check_and_send_signal(
-    transcript: &mut Vec<AgentMessage>,
+/// Compute a budget-pressure signal when consumption crosses a threshold.
+/// Each threshold fires at most once per run. Returns `Some(message)` the
+/// first time a threshold is crossed, or `None` otherwise. Callers must push
+/// the message into the transcript at a position that keeps tool-result
+/// ordering valid (i.e. after the turn's complete tool-result block).
+fn check_signal_thresholds(
     turns: usize,
     total_tool_calls: usize,
     soft_sent: &mut bool,
     final_sent: &mut bool,
     signals_sent: &mut usize,
     terminal_tool_name: Option<&str>,
-) {
+) -> Option<String> {
     let fraction = (turns as f64 / MAX_TURNS as f64)
         .max(total_tool_calls as f64 / MAX_TOTAL_TOOL_CALLS as f64);
 
@@ -460,10 +479,10 @@ fn check_and_send_signal(
         *signals_sent += 1;
         let remaining_turns = MAX_TURNS.saturating_sub(turns);
         let remaining_calls = MAX_TOTAL_TOOL_CALLS.saturating_sub(total_tool_calls);
-        transcript.push(AgentMessage::User(format!(
+        return Some(format!(
             "Budget: {remaining_turns} turns remaining, {remaining_calls} tool calls remaining. \
              Stop gathering. Produce your terminal submission with {tool_label} from what you have."
-        )));
+        ));
     }
 
     if !*final_sent && fraction >= BUDGET_SIGNAL_FINAL {
@@ -471,11 +490,13 @@ fn check_and_send_signal(
         *signals_sent += 1;
         let remaining_turns = MAX_TURNS.saturating_sub(turns);
         let remaining_calls = MAX_TOTAL_TOOL_CALLS.saturating_sub(total_tool_calls);
-        transcript.push(AgentMessage::User(format!(
+        return Some(format!(
             "Budget nearly exhausted: {remaining_turns} turns remaining, {remaining_calls} tool calls remaining. \
              You must submit on your next turn with only the {tool_label} tool call."
-        )));
+        ));
     }
+
+    None
 }
 
 /// Truncate a tool result to the byte cap, appending a notice when trimmed.

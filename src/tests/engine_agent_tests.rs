@@ -212,6 +212,49 @@ impl Tool for TerminalTool {
     }
 }
 
+/// Transcript-ordering conformance: every Assistant message with tool_calls
+/// must be immediately followed by Tool messages matching each tool_call_id
+/// before any message of another role (User, System, or another Assistant).
+fn assert_transcript_ordering(messages: &[AgentMessage]) {
+    let mut i = 0;
+    while i < messages.len() {
+        let tool_call_ids: Vec<&str> = match &messages[i] {
+            AgentMessage::Assistant { tool_calls, .. } if !tool_calls.is_empty() => {
+                tool_calls.iter().map(|tc| tc.id.as_str()).collect()
+            }
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        let mut found = std::collections::HashSet::new();
+        i += 1;
+        while i < messages.len() {
+            match &messages[i] {
+                AgentMessage::Tool(result) => {
+                    if tool_call_ids.contains(&result.tool_call_id.as_str()) {
+                        found.insert(result.tool_call_id.as_str());
+                    } else {
+                        panic!(
+                            "unexpected tool result id {} after Assistant with tool_calls {:?}",
+                            result.tool_call_id, tool_call_ids
+                        );
+                    }
+                    i += 1;
+                }
+                _ => break, // non-Tool: done with this assistant's block
+            }
+        }
+        let expected: std::collections::HashSet<&str> = tool_call_ids.iter().copied().collect();
+        assert_eq!(
+            found, expected,
+            "Assistant tool_calls {:?} not followed by matching Tool messages before next non-Tool; got {:?}",
+            tool_call_ids, found
+        );
+        // i already advanced past the Tool messages by the inner loop
+    }
+}
+
 fn run(provider: &ScriptedProvider, tools: Vec<Box<dyn Tool>>) -> AgentOutcome {
     let run = AgentRun {
         provider,
@@ -221,7 +264,9 @@ fn run(provider: &ScriptedProvider, tools: Vec<Box<dyn Tool>>) -> AgentOutcome {
         tools,
         reasoning_disabled: false,
     };
-    run_agent(run)
+    let outcome = run_agent(run);
+    assert_transcript_ordering(&provider.last_messages());
+    outcome
 }
 
 fn boxed<T: Tool + 'static>(tool: T) -> Box<dyn Tool> {
@@ -443,6 +488,7 @@ fn context_preflight_fails_cleanly_on_overflow() {
     };
     let outcome = run_agent(run);
 
+    assert_transcript_ordering(&provider.last_messages());
     assert!(
         matches!(outcome, AgentOutcome::ContextOverflow { .. }),
         "expected ContextOverflow, got {outcome:?}"
