@@ -102,6 +102,15 @@ fn render_compile(payload: &Value) -> String {
             return format!("{mode}  validation failed: {prefix}");
         }
     }
+    if let Some(error) = payload.get("error") {
+        let code = error
+            .get("code")
+            .and_then(|v| v.as_str())
+            .unwrap_or("error");
+        let message = error.get("message").and_then(|v| v.as_str()).unwrap_or("");
+        let prefix: String = message.chars().take(80).collect();
+        return format!("{mode}  error: {code}: {prefix}");
+    }
     let len = |key: &str| {
         payload
             .get(key)

@@ -343,6 +343,12 @@ pub struct BranchResult {
 // ── journal payloads ─────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
+struct CompileJournalError {
+    code: String,
+    message: String,
+}
+
+#[derive(Serialize)]
 struct CompileJournalPayload<'a> {
     mode: CompileRunMode,
     new_leaf_slugs: &'a [String],
@@ -350,6 +356,8 @@ struct CompileJournalPayload<'a> {
     branches_updated: &'a [BranchResult],
     branches_deleted: &'a [String],
     validation_failures: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<CompileJournalError>,
     duration_ms: u128,
 }
 
@@ -366,29 +374,50 @@ fn compile_payload<'a>(
         branches_updated: &summary.branches_updated,
         branches_deleted: &summary.branch_deletes,
         validation_failures: Vec::new(),
+        error: None,
         duration_ms: duration.as_millis(),
     }
 }
 
-fn compile_failure_payload<'a>(
+/// Build a compile journal event for a terminal write-path error, or `None`
+/// when the error is not a compile outcome worth journaling (infrastructure
+/// failures like Io/Busy, or the dry-run/agent paths which write zero bytes).
+/// Validation keeps its own shape (`validation_failures`); LLM/provider
+/// failures use `error: {code, message}` with empty deltas.
+fn compile_error_payload<'a>(
     mode: CompileRunMode,
     new_leaf_slugs: &'a [String],
     error: &CompileError,
     duration: Duration,
-) -> CompileJournalPayload<'a> {
-    let validation_failures = match error {
-        CompileError::Validation(msg) => vec![msg.clone()],
-        _ => Vec::new(),
+) -> Option<CompileJournalPayload<'a>> {
+    let (validation_failures, error_field) = match error {
+        CompileError::Validation(msg) => (vec![msg.clone()], None),
+        CompileError::Truncated
+        | CompileError::ContentFilter
+        | CompileError::Llm(_)
+        | CompileError::ContextOverflow { .. } => {
+            let json_error = error.json_error();
+            (
+                Vec::new(),
+                Some(CompileJournalError {
+                    code: json_error.code,
+                    message: json_error.message,
+                }),
+            )
+        }
+        // Io/Busy/DryRunBlocked/AgentFailed: not compile verdicts.
+        _ => return None,
     };
-    CompileJournalPayload {
+    Some(CompileJournalPayload {
         mode,
         new_leaf_slugs,
         branches_created: &[],
         branches_updated: &[],
         branches_deleted: &[],
         validation_failures,
+        error: error_field,
         duration_ms: duration.as_millis(),
-    }
+    })
 }
 
 #[derive(Serialize)]
@@ -983,78 +1012,83 @@ pub fn run_compile_with_provider_started_at(
             )
         }
     };
-    execute::ensure_compile_context_fits(model, prompt_tokens)?;
-
-    // ── LLM call ─────────────────────────────────────────────────────────────
-    let response = execute::call_llm_blocking(provider, model, &user_message, &response_schema)?;
-
-    // ── parse and validate ───────────────────────────────────────────────────
+    // ── LLM call, parse, and execute ─────────────────────────────────────────
+    // Wrapped in a closure so a single match journals every terminal
+    // write-path outcome: success, validation failure, or an LLM/provider
+    // error. Noops and the dry-run/agent paths never reach here; Io/Busy are
+    // infrastructure failures and are not journaled.
     let valid_filenames: HashSet<String> =
         loaded_leaves.iter().map(|l| l.filename.clone()).collect();
     let input_body_bytes = loaded_leaves.iter().map(|l| l.body.len()).sum();
-
-    // ── execute validated plan ───────────────────────────────────────────────
     let run_timestamp = compile_started_at;
-    let compiled_plan = match run_mode {
-        CompileRunMode::Full => parse::parse_and_validate_with_input_size(
-            &response,
-            &loaded_leaves,
-            input_body_bytes,
-            warnings,
-        ),
-        CompileRunMode::Incremental => parse::parse_and_validate_incremental_with_input_size(
-            &response,
+
+    let outcome = (|| -> Result<CompileSummary, CompileError> {
+        execute::ensure_compile_context_fits(model, prompt_tokens)?;
+        let response =
+            execute::call_llm_blocking(provider, model, &user_message, &response_schema)?;
+        let compiled_plan = match run_mode {
+            CompileRunMode::Full => parse::parse_and_validate_with_input_size(
+                &response,
+                &loaded_leaves,
+                input_body_bytes,
+                warnings,
+            )?,
+            CompileRunMode::Incremental => parse::parse_and_validate_incremental_with_input_size(
+                &response,
+                cfg,
+                &loaded_leaves,
+                input_body_bytes,
+                warnings,
+            )?,
+        };
+        execute::execute_plan_with_mode_and_expected_hash(
+            &compiled_plan,
             cfg,
-            &loaded_leaves,
-            input_body_bytes,
+            &valid_filenames,
+            run_timestamp,
+            &skipped_leaves,
+            run_mode,
+            expected_manifest_hash,
             warnings,
-        ),
-    };
-    let compiled_plan = match compiled_plan {
-        Ok(plan) => plan,
+        )
+    })();
+
+    match outcome {
+        Ok(summary) => {
+            if let Some(warning) = degenerate_result_warning(
+                Some(run_mode),
+                &summary.branches,
+                summary.leaves_processed,
+            ) {
+                notifications.push(warning);
+            }
+            journal::append_payload(
+                tree.path(),
+                journal::Op::Compile,
+                Some(model.to_string()),
+                &compile_payload(&summary, run_mode, new_leaf_slugs, started.elapsed()),
+            );
+            Ok(CompileResult::compiled(
+                summary,
+                run_mode,
+                model,
+                notifications,
+            ))
+        }
         Err(error) => {
-            if matches!(error, CompileError::Validation(_)) {
+            if let Some(payload) =
+                compile_error_payload(run_mode, new_leaf_slugs, &error, started.elapsed())
+            {
                 journal::append_payload(
                     tree.path(),
                     journal::Op::Compile,
                     Some(model.to_string()),
-                    &compile_failure_payload(run_mode, new_leaf_slugs, &error, started.elapsed()),
+                    &payload,
                 );
             }
-            return Err(error);
+            Err(error)
         }
-    };
-
-    let summary = execute::execute_plan_with_mode_and_expected_hash(
-        &compiled_plan,
-        cfg,
-        &valid_filenames,
-        run_timestamp,
-        &skipped_leaves,
-        run_mode,
-        expected_manifest_hash,
-        warnings,
-    )?;
-
-    if let Some(warning) =
-        degenerate_result_warning(Some(run_mode), &summary.branches, summary.leaves_processed)
-    {
-        notifications.push(warning);
     }
-
-    journal::append_payload(
-        tree.path(),
-        journal::Op::Compile,
-        Some(model.to_string()),
-        &compile_payload(&summary, run_mode, new_leaf_slugs, started.elapsed()),
-    );
-
-    Ok(CompileResult::compiled(
-        summary,
-        run_mode,
-        model,
-        notifications,
-    ))
 }
 
 /// Check for a degenerate Full compile result (quality collapse):

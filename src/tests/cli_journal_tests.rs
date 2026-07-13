@@ -79,6 +79,26 @@ fn compile_failure_renders_validation_message() {
 }
 
 #[test]
+fn compile_error_renders_code_and_message() {
+    let e = event(
+        Op::Compile,
+        Some("gpt-4.1"),
+        json!({
+            "mode": "full",
+            "new_leaf_slugs": [],
+            "branches_created": [],
+            "branches_updated": [],
+            "branches_deleted": [],
+            "validation_failures": [],
+            "error": {"code": "truncated", "message": "compile output was truncated"},
+            "duration_ms": 5000
+        }),
+    );
+    let out = render_human(&JournalResult { events: vec![e] });
+    assert!(out.contains("full  error: truncated: compile output was truncated"));
+}
+
+#[test]
 fn repair_renders_prune_counts_and_omits_model() {
     let e = event(
         Op::Repair,
