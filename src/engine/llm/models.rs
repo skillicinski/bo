@@ -13,6 +13,14 @@ pub struct ModelInfo {
 
 pub const OPENAI_MODELS: &[ModelInfo] = &[
     ModelInfo {
+        id: "gpt-5.5",
+        context_tokens: 1_050_000,
+    },
+    ModelInfo {
+        id: "gpt-5.4",
+        context_tokens: 1_050_000,
+    },
+    ModelInfo {
         id: "gpt-4o",
         context_tokens: 128_000,
     },
