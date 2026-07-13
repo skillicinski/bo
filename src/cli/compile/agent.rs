@@ -654,5 +654,6 @@ fn agent_failed(message: &str, diag: &agent::AgentDiagnostics) -> CompileError {
         tool_calls: diag.tool_calls,
         usage: diag.usage.clone(),
         last_error: diag.last_error.clone(),
+        signals_sent: diag.signals_sent,
     }
 }

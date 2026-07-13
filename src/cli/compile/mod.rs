@@ -90,13 +90,14 @@ pub enum CompileError {
     /// The agent loop failed to produce a valid plan (limit, truncation,
     /// context overflow, provider error, or no submission). Zero bytes written.
     /// Carries the same resource diagnostics as a success envelope so error
-    /// JSON carries turns/tool_calls/usage/last_error.
+    /// JSON carries turns/tool_calls/usage/last_error/signals_sent.
     AgentFailed {
         message: String,
         turns: usize,
         tool_calls: usize,
         usage: Option<Usage>,
         last_error: Option<String>,
+        signals_sent: usize,
     },
 }
 
@@ -175,6 +176,7 @@ impl CompileError {
                 tool_calls,
                 usage,
                 last_error,
+                signals_sent,
             } => JsonError::with_details(
                 "agent_error",
                 message.clone(),
@@ -182,6 +184,7 @@ impl CompileError {
                     "files_changed": false,
                     "turns": turns,
                     "tool_calls": tool_calls,
+                    "signals_sent": signals_sent,
                     "usage": usage,
                     "last_error": last_error,
                 }),
