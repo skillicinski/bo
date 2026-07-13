@@ -1553,6 +1553,7 @@ fn compile_error_payload_routes_terminal_errors() {
             turns: 0,
             tool_calls: 0,
             usage: None,
+            signals_sent: 0,
             last_error: None,
         },
     ] {

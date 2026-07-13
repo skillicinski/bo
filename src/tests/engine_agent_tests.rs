@@ -607,3 +607,198 @@ fn plain_text(text: &str) -> AgentResponse {
         usage: None,
     }
 }
+
+// ── budget signal tests ─────────────────────────────────────────────────────
+
+#[test]
+fn soft_signal_at_75_percent_of_tool_calls() {
+    // 5 turns of 8 echo calls (40 total). Soft fires at 36 (75%).
+    // Turn 6 submits, completing the run with signals_sent=1.
+    let mut responses: Vec<AgentResponse> = (0..5)
+        .map(|t| {
+            let calls: Vec<ToolCall> = (0..8)
+                .map(|j| tool_call(&format!("c{t}_{j}"), "echo", "{}"))
+                .collect();
+            with_tools(calls)
+        })
+        .collect();
+    responses.push(with_tools(vec![tool_call("c_final", "submit", "{}")]));
+    let provider = ScriptedProvider::new(responses);
+    let outcome = run(&provider, vec![boxed(TerminalTool::new(new_counter()))]);
+
+    assert!(
+        matches!(outcome, AgentOutcome::Completed { .. }),
+        "expected Completed, got {outcome:?}"
+    );
+    assert_eq!(outcome.diag().signals_sent, 1, "expected soft signal only");
+
+    // The submit turn's provider call carries the soft signal in its transcript.
+    let messages = provider.last_messages();
+    let has_soft = messages.iter().any(|m| match m {
+        AgentMessage::User(content) => content.contains("Stop gathering"),
+        _ => false,
+    });
+    assert!(has_soft, "expected soft signal in transcript");
+}
+
+#[test]
+fn final_signal_at_90_percent_of_tool_calls() {
+    // 5 turns of 7 echo calls = 35. Turn 6: 7 calls = 42 (soft at 36).
+    // Turn 7: 7 calls, final fires at 44, limit at 48. signals_sent=2.
+    let responses: Vec<AgentResponse> = (0..8)
+        .map(|t| {
+            let calls: Vec<ToolCall> = (0..7)
+                .map(|j| tool_call(&format!("c{t}_{j}"), "echo", "{}"))
+                .collect();
+            with_tools(calls)
+        })
+        .collect();
+    let provider = ScriptedProvider::new(responses);
+    let outcome = run(
+        &provider,
+        vec![boxed(EchoTool::new("echo", "ok", new_counter()))],
+    );
+
+    assert!(
+        matches!(outcome, AgentOutcome::LimitExceeded { .. }),
+        "expected LimitExceeded, got {outcome:?}"
+    );
+    assert_eq!(
+        outcome.diag().signals_sent,
+        2,
+        "expected both soft and final signals"
+    );
+    // The last provider call transcript carries at least the soft signal.
+    let messages = provider.last_messages();
+    let has_soft = messages.iter().any(|m| match m {
+        AgentMessage::User(content) => content.contains("Stop gathering"),
+        _ => false,
+    });
+    assert!(has_soft, "expected soft signal in last provider transcript");
+}
+
+#[test]
+fn each_signal_at_most_once() {
+    // 10 echo calls per response: crosses 75% and 90% in the same turn's tool
+    // execution loop, but each fires only once. Rejected by per-turn cap.
+    let calls: Vec<ToolCall> = (0..10)
+        .map(|j| tool_call(&format!("c{j}"), "echo", "{}"))
+        .collect();
+    let provider = ScriptedProvider::new(vec![with_tools(calls)]);
+    let outcome = run(
+        &provider,
+        vec![boxed(EchoTool::new("echo", "ok", new_counter()))],
+    );
+
+    let diag = outcome.diag();
+    assert!(
+        diag.signals_sent <= 2,
+        "at most 2 signals, got {}",
+        diag.signals_sent
+    );
+}
+
+#[test]
+fn submits_after_signal_completes() {
+    // Turn 1-4: 8 echo calls each (32 total). Turn 5: 8 echo calls (40 total),
+    // soft signal fires at call 36. Turn 6: submit completes.
+    let responses: Vec<AgentResponse> = vec![
+        with_tools(
+            (0..8)
+                .map(|j| tool_call(&format!("c0_{j}"), "echo", "{}"))
+                .collect(),
+        ),
+        with_tools(
+            (0..8)
+                .map(|j| tool_call(&format!("c1_{j}"), "echo", "{}"))
+                .collect(),
+        ),
+        with_tools(
+            (0..8)
+                .map(|j| tool_call(&format!("c2_{j}"), "echo", "{}"))
+                .collect(),
+        ),
+        with_tools(
+            (0..8)
+                .map(|j| tool_call(&format!("c3_{j}"), "echo", "{}"))
+                .collect(),
+        ),
+        with_tools(
+            (0..8)
+                .map(|j| tool_call(&format!("c4_{j}"), "echo", "{}"))
+                .collect(),
+        ),
+        with_tools(vec![tool_call("c_final", "submit", "{}")]),
+    ];
+    let provider = ScriptedProvider::new(responses);
+    let outcome = run(&provider, vec![boxed(TerminalTool::new(new_counter()))]);
+
+    assert!(
+        matches!(outcome, AgentOutcome::Completed { .. }),
+        "expected Completed, got {outcome:?}"
+    );
+    assert_eq!(outcome.diag().signals_sent, 1, "expected soft signal");
+}
+
+#[test]
+fn no_signal_in_short_runs() {
+    // A short run below thresholds: 1 echo call, then submit.
+    let provider = ScriptedProvider::new(vec![
+        with_tools(vec![tool_call("c1", "echo", "{}")]),
+        with_tools(vec![tool_call("c2", "submit", "{}")]),
+    ]);
+    let outcome = run(
+        &provider,
+        vec![
+            boxed(EchoTool::new("echo", "ok", new_counter())),
+            boxed(TerminalTool::new(new_counter())),
+        ],
+    );
+
+    assert!(
+        matches!(outcome, AgentOutcome::Completed { .. }),
+        "expected Completed, got {outcome:?}"
+    );
+    assert_eq!(outcome.diag().turns, 2);
+    assert_eq!(outcome.diag().tool_calls, 2);
+    assert_eq!(outcome.diag().signals_sent, 0, "no signals in short runs");
+}
+
+#[test]
+fn signal_names_terminal_tool() {
+    // Run up to the soft threshold and submit on the next turn, so the
+    // signal appears in the submit turn's transcript.
+    let mut responses: Vec<AgentResponse> = (0..5)
+        .map(|t| {
+            let calls: Vec<ToolCall> = (0..8)
+                .map(|j| tool_call(&format!("c{t}_{j}"), "echo", "{}"))
+                .collect();
+            with_tools(calls)
+        })
+        .collect();
+    responses.push(with_tools(vec![tool_call("c_final", "submit", "{}")]));
+    let provider = ScriptedProvider::new(responses);
+    let outcome = run(
+        &provider,
+        vec![
+            boxed(EchoTool::new("echo", "ok", new_counter())),
+            boxed(TerminalTool::new(new_counter())),
+        ],
+    );
+
+    assert!(
+        matches!(outcome, AgentOutcome::Completed { .. }),
+        "expected Completed, got {outcome:?}"
+    );
+    assert_eq!(outcome.diag().signals_sent, 1);
+
+    let messages = provider.last_messages();
+    let has_named_tool = messages.iter().any(|m| match m {
+        AgentMessage::User(content) => content.contains("`submit`"),
+        _ => false,
+    });
+    assert!(
+        has_named_tool,
+        "expected signal to name the terminal tool `submit`"
+    );
+}

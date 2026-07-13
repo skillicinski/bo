@@ -34,6 +34,10 @@ pub(crate) const MAX_TURNS: usize = 8;
 pub(crate) const MAX_TOOL_CALLS_PER_RESPONSE: usize = 8;
 /// Maximum total tool calls across the whole run.
 pub(crate) const MAX_TOTAL_TOOL_CALLS: usize = 48;
+/// Fraction of tool calls or turns at which the first budget-pressure signal triggers.
+const BUDGET_SIGNAL_SOFT: f64 = 0.75;
+/// Fraction of tool calls or turns at which the final budget-pressure signal triggers.
+const BUDGET_SIGNAL_FINAL: f64 = 0.90;
 /// Per-call output token budget.
 const PER_CALL_MAX_TOKENS: u32 = 8192;
 /// Transcript byte ceiling; the loop fails cleanly on overflow (no compaction).
@@ -92,6 +96,8 @@ pub(crate) struct AgentDiagnostics {
     pub tool_calls: usize,
     pub usage: Option<Usage>,
     pub last_error: Option<String>,
+    /// Number of budget-pressure signals injected into the transcript.
+    pub signals_sent: usize,
 }
 
 #[derive(Debug)]
@@ -141,12 +147,14 @@ fn diagnostics(
     tool_calls: usize,
     usage: &Option<Usage>,
     last_error: &Option<String>,
+    signals_sent: usize,
 ) -> AgentDiagnostics {
     AgentDiagnostics {
         turns,
         tool_calls,
         usage: usage.clone(),
         last_error: last_error.clone(),
+        signals_sent,
     }
 }
 
@@ -178,19 +186,26 @@ async fn run_agent_async(run: AgentRun<'_>) -> AgentOutcome {
     let mut total_tool_calls = 0usize;
     let mut usage: Option<Usage> = None;
     let mut last_error: Option<String> = None;
+    let mut signals_sent = 0usize;
+    let mut soft_signal_sent = false;
+    let mut final_signal_sent = false;
+    let terminal_tool_name = tool_map
+        .values()
+        .find(|t| t.is_terminal())
+        .map(|t| t.name());
 
     loop {
         if turns >= MAX_TURNS {
             return AgentOutcome::Incomplete {
                 reason: format!("reached the {MAX_TURNS}-turn limit without submitting"),
-                diag: diagnostics(turns, total_tool_calls, &usage, &last_error),
+                diag: diagnostics(turns, total_tool_calls, &usage, &last_error, signals_sent),
             };
         }
 
         let context_bytes = transcript_byte_estimate(&transcript);
         if context_bytes > MAX_CONTEXT_BYTES {
             return AgentOutcome::ContextOverflow {
-                diag: diagnostics(turns, total_tool_calls, &usage, &last_error),
+                diag: diagnostics(turns, total_tool_calls, &usage, &last_error, signals_sent),
             };
         }
 
@@ -213,13 +228,13 @@ async fn run_agent_async(run: AgentRun<'_>) -> AgentOutcome {
             }) => {
                 return AgentOutcome::ProviderError {
                     message: llm_error.to_string(),
-                    diag: diagnostics(turns, total_tool_calls, &usage, &last_error),
+                    diag: diagnostics(turns, total_tool_calls, &usage, &last_error, signals_sent),
                 }
             }
             Err(error) => {
                 return AgentOutcome::ProviderError {
                     message: error.to_string(),
-                    diag: diagnostics(turns, total_tool_calls, &usage, &last_error),
+                    diag: diagnostics(turns, total_tool_calls, &usage, &last_error, signals_sent),
                 }
             }
         };
@@ -229,7 +244,7 @@ async fn run_agent_async(run: AgentRun<'_>) -> AgentOutcome {
         // Never execute tool calls from a length-truncated response.
         if matches!(response.finish_reason, FinishReason::Length) {
             return AgentOutcome::Truncated {
-                diag: diagnostics(turns, total_tool_calls, &usage, &last_error),
+                diag: diagnostics(turns, total_tool_calls, &usage, &last_error, signals_sent),
             };
         }
 
@@ -262,10 +277,20 @@ async fn run_agent_async(run: AgentRun<'_>) -> AgentOutcome {
                     "a terminal tool must be the only tool call in a turn".to_string(),
                 );
             }
-            if let Some(stop) = total_tool_call_limit(total_tool_calls, turns, &usage, &last_error)
+            if let Some(stop) =
+                total_tool_call_limit(total_tool_calls, turns, &usage, &last_error, signals_sent)
             {
                 return stop;
             }
+            check_and_send_signal(
+                &mut transcript,
+                turns,
+                total_tool_calls,
+                &mut soft_signal_sent,
+                &mut final_signal_sent,
+                &mut signals_sent,
+                terminal_tool_name,
+            );
             continue;
         }
 
@@ -281,10 +306,20 @@ async fn run_agent_async(run: AgentRun<'_>) -> AgentOutcome {
                 total_tool_calls += 1;
                 push_error_result(&mut transcript, &mut last_error, tc, message.clone());
             }
-            if let Some(stop) = total_tool_call_limit(total_tool_calls, turns, &usage, &last_error)
+            if let Some(stop) =
+                total_tool_call_limit(total_tool_calls, turns, &usage, &last_error, signals_sent)
             {
                 return stop;
             }
+            check_and_send_signal(
+                &mut transcript,
+                turns,
+                total_tool_calls,
+                &mut soft_signal_sent,
+                &mut final_signal_sent,
+                &mut signals_sent,
+                terminal_tool_name,
+            );
             continue;
         }
 
@@ -309,7 +344,17 @@ async fn run_agent_async(run: AgentRun<'_>) -> AgentOutcome {
                     push_error_result(&mut transcript, &mut last_error, tc, message);
                 }
             }
-            if let Some(stop) = total_tool_call_limit(total_tool_calls, turns, &usage, &last_error)
+            check_and_send_signal(
+                &mut transcript,
+                turns,
+                total_tool_calls,
+                &mut soft_signal_sent,
+                &mut final_signal_sent,
+                &mut signals_sent,
+                terminal_tool_name,
+            );
+            if let Some(stop) =
+                total_tool_call_limit(total_tool_calls, turns, &usage, &last_error, signals_sent)
             {
                 return stop;
             }
@@ -317,7 +362,7 @@ async fn run_agent_async(run: AgentRun<'_>) -> AgentOutcome {
 
         if terminated {
             return AgentOutcome::Completed {
-                diag: diagnostics(turns, total_tool_calls, &usage, &last_error),
+                diag: diagnostics(turns, total_tool_calls, &usage, &last_error, signals_sent),
             };
         }
     }
@@ -371,14 +416,56 @@ fn total_tool_call_limit(
     turns: usize,
     usage: &Option<Usage>,
     last_error: &Option<String>,
+    signals_sent: usize,
 ) -> Option<AgentOutcome> {
     if total_tool_calls >= MAX_TOTAL_TOOL_CALLS {
         Some(AgentOutcome::LimitExceeded {
             reason: format!("reached the {MAX_TOTAL_TOOL_CALLS} total tool-call limit"),
-            diag: diagnostics(turns, total_tool_calls, usage, last_error),
+            diag: diagnostics(turns, total_tool_calls, usage, last_error, signals_sent),
         })
     } else {
         None
+    }
+}
+
+/// Inject a budget-pressure signal when consumption crosses a threshold.
+/// Each threshold fires at most once per run. The message names the registered
+/// terminal tool (if any) so the model knows what to call.
+fn check_and_send_signal(
+    transcript: &mut Vec<AgentMessage>,
+    turns: usize,
+    total_tool_calls: usize,
+    soft_sent: &mut bool,
+    final_sent: &mut bool,
+    signals_sent: &mut usize,
+    terminal_tool_name: Option<&str>,
+) {
+    let fraction = (turns as f64 / MAX_TURNS as f64)
+        .max(total_tool_calls as f64 / MAX_TOTAL_TOOL_CALLS as f64);
+
+    let tool_label =
+        terminal_tool_name.map_or_else(|| "the terminal tool".to_string(), |n| format!("`{n}`"));
+
+    if !*soft_sent && fraction >= BUDGET_SIGNAL_SOFT {
+        *soft_sent = true;
+        *signals_sent += 1;
+        let remaining_turns = MAX_TURNS.saturating_sub(turns);
+        let remaining_calls = MAX_TOTAL_TOOL_CALLS.saturating_sub(total_tool_calls);
+        transcript.push(AgentMessage::User(format!(
+            "Budget: {remaining_turns} turns remaining, {remaining_calls} tool calls remaining. \
+             Stop gathering. Produce your terminal submission with {tool_label} from what you have."
+        )));
+    }
+
+    if !*final_sent && fraction >= BUDGET_SIGNAL_FINAL {
+        *final_sent = true;
+        *signals_sent += 1;
+        let remaining_turns = MAX_TURNS.saturating_sub(turns);
+        let remaining_calls = MAX_TOTAL_TOOL_CALLS.saturating_sub(total_tool_calls);
+        transcript.push(AgentMessage::User(format!(
+            "Budget nearly exhausted: {remaining_turns} turns remaining, {remaining_calls} tool calls remaining. \
+             You must submit on your next turn with only the {tool_label} tool call."
+        )));
     }
 }
 
