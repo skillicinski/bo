@@ -1028,9 +1028,10 @@ fn single_url_duplicate_errors_without_journaling() {
     )
     .unwrap();
 
-    // A single bare URL that is already collected must propagate the raw error
-    // (exit 1) and, per the single-result contract, leave no journal entry —
-    // not become a batch skip (which would exit 0 and journal).
+    // A single bare URL that is already collected must propagate the raw
+    // DuplicateUrl error (exit 1) and, per the single-result contract, leave
+    // no journal entry — not become a batch skip (which would exit 0 and
+    // journal).
     let result = collect_with_compute(
         vec!["https://example.com/article".to_string()],
         dir.path(),
@@ -1038,7 +1039,10 @@ fn single_url_duplicate_errors_without_journaling() {
         &mut Vec::new(),
         move |_| panic!("duplicate URL should not be computed"),
     );
-    assert!(result.is_err());
+    assert!(
+        matches!(result, Err(CollectError::DuplicateUrl { .. })),
+        "single duplicate must propagate DuplicateUrl, got {result:?}"
+    );
 
     let events = crate::engine::journal::read_recent(dir.path(), 10);
     assert!(

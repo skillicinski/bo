@@ -647,13 +647,11 @@ pub fn is_local_note_file(input: &str) -> bool {
     is_md && path.is_file()
 }
 
-/// True when the inputs describe a single bare URL (not a note, not a URL
-/// list). Drives `CollectOutput::Single` vs `CollectOutput::Batch` output
-/// policy.
 /// Whether `inputs` selects the single-result output contract. Mirrors the
 /// pre-unification routing: a lone argument that is not a URL list (`.txt`
 /// without a scheme) and not an existing local note is collected as a single
-/// URL. The `.txt` suffix check is intentionally broader than
+/// URL, selecting `CollectOutput::Single`; every other input shape returns a
+/// batch. The `.txt` suffix check is intentionally broader than
 /// `is_url_list_file` so bare `urls.txt`-style arguments keep their prior
 /// batch routing (where expansion then treats them as URLs).
 pub fn is_single_bare_url(inputs: &[String]) -> bool {
