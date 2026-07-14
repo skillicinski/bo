@@ -52,6 +52,22 @@ If rebase conflicts occur:
 
 See CONTRIBUTING.md for the contributor gate.
 
+### Solving issues
+
+- Read the issue body and comments, linked or blocking issues, canonical project documentation, and the milestone description when the issue is assigned to one. Confirm required predecessor work has merged.
+- Revalidate the issue against current `main`. Line numbers, proposed module boundaries, and implementation sketches are evidence, not immutable specifications.
+- If the premise is stale, duplicated, blocked, or conflicts with current architecture, update or close the issue before changing code.
+- Treat acceptance criteria and existing observable behavior as the contract unless the issue explicitly permits a breaking change. Do not add unspecified backward compatibility.
+- Prefer the smallest complete change. Do not expand scope or introduce abstractions without a concrete need in the current issue.
+- Do not reopen settled architectural decisions without new concrete evidence.
+- An issue is not solved when implementation ends. After required checks pass, audit the completed diff against the issue's acceptance criteria before declaring it done.
+- For non-trivial completed work, delegate a read-only review after the builder finishes, never in the same parallel batch:
+  - use `reviewer` for the default focused review;
+  - use `reviewer-ensemble` for significant multi-file changes needing independent cross-vendor review;
+  - use `adversarial-reviewer` for architecture, security, state consistency, migration, or other cross-cutting risks.
+- Treat delegated findings as review assertions until their evidence is verified. Do not discard an evidence-backed finding by majority vote.
+- Review findings cite `file:line` evidence and are classified as blockers, requested changes, or notes.
+
 ### Pull requests
 
 When posting issue/PR comments:
