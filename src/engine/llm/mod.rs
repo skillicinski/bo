@@ -27,11 +27,10 @@ pub(crate) fn sanitize_provider_error_message(message: &str) -> String {
         .join(" ")
 }
 
-/// Error creating a provider: the custom provider needs a base URL from config.
+/// Error creating a provider: the custom provider needs a base URL.
 #[derive(Debug)]
 pub enum ProviderInitError {
     MissingBaseUrl,
-    ConfigRead(String),
 }
 
 impl fmt::Display for ProviderInitError {
@@ -41,9 +40,6 @@ impl fmt::Display for ProviderInitError {
                 f,
                 "custom provider requires a base URL — run: bo config --provider custom --base-url <url>"
             ),
-            ProviderInitError::ConfigRead(message) => {
-                write!(f, "failed to read config for custom provider: {}", message)
-            }
         }
     }
 }
@@ -52,11 +48,14 @@ impl std::error::Error for ProviderInitError {}
 
 /// Create the correct LlmProvider for a given provider with the API key.
 ///
-/// For `Provider::Custom` the base URL is resolved from `~/.bo/config.json`,
-/// mirroring how `auth::resolve_api_key` reads `~/.bo/auth.json`.
+/// `custom_base_url` is required only for `Provider::Custom`; the caller
+/// (the composition call site) resolves it from local config. It is never
+/// read here. Other providers ignore it. API-key lookup stays at the call
+/// site.
 pub fn create_provider(
     provider: Provider,
     api_key: &str,
+    custom_base_url: Option<&str>,
 ) -> Result<Box<dyn LlmProvider>, ProviderInitError> {
     match provider {
         Provider::OpenAI => Ok(Box::new(OpenAiProvider::new(api_key))),
@@ -64,11 +63,8 @@ pub fn create_provider(
         Provider::Google => Ok(Box::new(GoogleProvider::new(api_key))),
         Provider::Zai => Ok(Box::new(OpenAiCompatProvider::zai(api_key))),
         Provider::Custom => {
-            let base_url =
-                crate::engine::config::custom_base_url(&crate::engine::config::config_path())
-                    .map_err(|e| ProviderInitError::ConfigRead(e.to_string()))?
-                    .ok_or(ProviderInitError::MissingBaseUrl)?;
-            Ok(Box::new(OpenAiCompatProvider::custom(api_key, &base_url)))
+            let base_url = custom_base_url.ok_or(ProviderInitError::MissingBaseUrl)?;
+            Ok(Box::new(OpenAiCompatProvider::custom(api_key, base_url)))
         }
     }
 }

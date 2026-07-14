@@ -289,22 +289,3 @@ fn base_url_roundtrip_and_omitted_when_none() {
         Some("https://api.example.com/v1")
     );
 }
-
-#[test]
-fn custom_base_url_reads_config_value() {
-    let dir = TempDir::new().unwrap();
-    let path = temp_config_path(&dir);
-
-    assert_eq!(custom_base_url(&path).unwrap(), None);
-
-    let config = Config {
-        base_url: Some("https://api.example.com/v1".to_string()),
-        ..Config::default()
-    };
-    write_config(&config, &path).unwrap();
-
-    assert_eq!(
-        custom_base_url(&path).unwrap().as_deref(),
-        Some("https://api.example.com/v1")
-    );
-}

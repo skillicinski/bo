@@ -192,7 +192,7 @@ fn flash_non_thinking_completes_two_tool_turns() {
         return;
     };
     let model_id = "deepseek-v4-flash";
-    let provider = llm::create_provider(Provider::Deepseek, &api_key)
+    let provider = llm::create_provider(Provider::Deepseek, &api_key, None)
         .expect("failed to create DeepSeek provider");
     let model = Model::parse(model_id, Provider::Deepseek).expect("failed to parse model");
 
@@ -207,7 +207,7 @@ fn pro_thinking_completes_two_tool_turns() {
         return;
     };
     let model_id = "deepseek-v4-pro";
-    let provider = llm::create_provider(Provider::Deepseek, &api_key)
+    let provider = llm::create_provider(Provider::Deepseek, &api_key, None)
         .expect("failed to create DeepSeek provider");
     let model = Model::parse(model_id, Provider::Deepseek).expect("failed to parse model");
 

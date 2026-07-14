@@ -130,16 +130,6 @@ pub fn config_path() -> PathBuf {
     PathBuf::from(home).join(".bo").join("config.json")
 }
 
-/// Read the configured custom-provider base URL, if any.
-/// A missing config file means no base URL, not an error.
-pub fn custom_base_url(path: &Path) -> Result<Option<String>, ConfigError> {
-    match read_config(path) {
-        Ok(config) => Ok(config.base_url),
-        Err(ConfigError::NotFound) => Ok(None),
-        Err(error) => Err(error),
-    }
-}
-
 /// Read and deserialise the config from `path`.
 /// Returns ConfigError::NotFound if the file does not exist.
 pub fn read_config(path: &Path) -> Result<Config, ConfigError> {

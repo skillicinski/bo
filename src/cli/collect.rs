@@ -350,6 +350,7 @@ fn compute_leaf_url(
     url: &str,
     model: &str,
     provider: crate::engine::llm::Provider,
+    base_url: Option<&str>,
 ) -> Result<ComputedLeaf, CollectError> {
     // YouTube path — fetch transcript, summarize, return.
     match youtube::classify_url(url) {
@@ -360,6 +361,7 @@ fn compute_leaf_url(
                 Some(&transcript.title),
                 model,
                 provider,
+                base_url,
             );
             return Ok(ComputedLeaf {
                 url: transcript.url,
@@ -413,6 +415,7 @@ fn compute_leaf_url(
         content.title.as_deref(),
         model,
         provider,
+        base_url,
     );
 
     Ok(ComputedLeaf {
@@ -507,6 +510,7 @@ pub fn collect_url_with_model(
     output_dir: &Path,
     model: &str,
     provider: crate::engine::llm::Provider,
+    base_url: Option<&str>,
     warnings: &mut Vec<String>,
 ) -> Result<Document, CollectError> {
     recover_pending_if_needed(output_dir, warnings)?;
@@ -525,6 +529,7 @@ pub fn collect_url_with_model(
                 output_dir,
                 model,
                 provider,
+                base_url,
                 warnings,
             );
         }
@@ -553,6 +558,7 @@ pub fn collect_url_with_model(
         output_dir,
         model,
         provider,
+        base_url,
         warnings,
     )
 }
@@ -563,13 +569,14 @@ pub fn collect_html_with_model(
     output_dir: &Path,
     model: &str,
     provider: crate::engine::llm::Provider,
+    base_url: Option<&str>,
     warnings: &mut Vec<String>,
 ) -> Result<Document, CollectError> {
     collect_html_with_summarizer(
         url,
         html,
         output_dir,
-        |body, title| generate_summary_with_model(body, title, model, provider),
+        |body, title| generate_summary_with_model(body, title, model, provider, base_url),
         warnings,
     )
 }
@@ -866,9 +873,10 @@ fn write_new_document_with_model(
     output_dir: &Path,
     model: &str,
     provider: crate::engine::llm::Provider,
+    base_url: Option<&str>,
     warnings: &mut Vec<String>,
 ) -> Result<Document, CollectError> {
-    let summary_text = generate_summary_with_model(body_markdown, title, model, provider);
+    let summary_text = generate_summary_with_model(body_markdown, title, model, provider, base_url);
     write_new_document_with_summary_result(
         url,
         title,
@@ -884,12 +892,13 @@ fn generate_summary_with_model(
     title: Option<&str>,
     model: &str,
     provider: crate::engine::llm::Provider,
+    base_url: Option<&str>,
 ) -> String {
     let api_key = match auth::resolve_api_key(provider) {
         Ok(key) => key,
         Err(_) => return summary::generate_fallback(body),
     };
-    let provider = match crate::engine::llm::create_provider(provider, &api_key) {
+    let provider = match crate::engine::llm::create_provider(provider, &api_key, base_url) {
         Ok(provider) => provider,
         Err(_) => return summary::generate_fallback(body),
     };
@@ -1267,11 +1276,13 @@ pub fn collect_batch_parallel(
     output_dir: &Path,
     model: &str,
     provider: crate::engine::llm::Provider,
+    base_url: Option<&str>,
     warnings: &mut Vec<String>,
 ) -> Result<BatchCollectResult, CollectError> {
     let model = model.to_string();
+    let base_url = base_url.map(str::to_string);
     collect_batch_parallel_with_compute(inputs, output_dir, warnings, move |url| {
-        compute_leaf_url(url, &model, provider)
+        compute_leaf_url(url, &model, provider, base_url.as_deref())
     })
 }
 

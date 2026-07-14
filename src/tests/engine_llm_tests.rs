@@ -288,29 +288,19 @@ fn model_catalog_accepts_any_non_empty_model_for_custom() {
 }
 
 #[test]
-#[serial_test::serial]
-fn create_provider_custom_requires_base_url_in_config() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let original_home = std::env::var("HOME").ok();
-    std::env::set_var("HOME", dir.path());
+fn create_provider_custom_requires_base_url() {
+    assert!(matches!(
+        create_provider(Provider::Custom, "sk-test", None),
+        Err(ProviderInitError::MissingBaseUrl)
+    ));
+}
 
-    match create_provider(Provider::Custom, "sk-test") {
-        Err(ProviderInitError::MissingBaseUrl) => {}
-        Err(other) => panic!("expected MissingBaseUrl, got: {}", other),
-        Ok(_) => panic!("expected MissingBaseUrl, got a provider"),
-    }
-
-    let config_dir = dir.path().join(".bo");
-    std::fs::create_dir_all(&config_dir).unwrap();
-    std::fs::write(
-        config_dir.join("config.json"),
-        r#"{"provider":"custom","model":"m","base_url":"https://api.example.com/v1"}"#,
+#[test]
+fn create_provider_custom_uses_explicit_base_url() {
+    assert!(create_provider(
+        Provider::Custom,
+        "sk-test",
+        Some("https://api.example.com/v1")
     )
-    .unwrap();
-    assert!(create_provider(Provider::Custom, "sk-test").is_ok());
-
-    match original_home {
-        Some(home) => std::env::set_var("HOME", home),
-        None => std::env::remove_var("HOME"),
-    }
+    .is_ok());
 }

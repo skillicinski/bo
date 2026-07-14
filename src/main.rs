@@ -686,6 +686,7 @@ fn execute_collect(
             &output_dir,
             model.as_str(),
             cfg.config.provider,
+            cfg.config.base_url.as_deref(),
             warnings,
         )
         .map_err(CliError::Collect)?;
@@ -701,6 +702,7 @@ fn execute_collect(
         &output_dir,
         model.as_str(),
         cfg.config.provider,
+        cfg.config.base_url.as_deref(),
         warnings,
     )
     .map_err(CliError::Collect)?;
@@ -758,8 +760,12 @@ fn execute_query(question: &str) -> Result<query::QueryResult, query::QueryError
     execute_query_with_provider_resolver(&cfg, question, || {
         let api_key = auth::resolve_api_key(cfg.config.provider)
             .map_err(|e| query::QueryError::NoProvider(e.to_string()))?;
-        llm::create_provider(cfg.config.provider, &api_key)
-            .map_err(|e| query::QueryError::NoProvider(e.to_string()))
+        llm::create_provider(
+            cfg.config.provider,
+            &api_key,
+            cfg.config.base_url.as_deref(),
+        )
+        .map_err(|e| query::QueryError::NoProvider(e.to_string()))
     })
 }
 

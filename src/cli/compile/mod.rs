@@ -539,8 +539,12 @@ pub fn run_compile_dry_run(cfg: &SeededConfig, options: CompileOptions) -> Compi
     let result = (|| -> Result<CompilePreview, CompileError> {
         let api_key = auth::resolve_api_key(cfg.config.provider)
             .map_err(|e| CompileError::Llm(e.to_string()))?;
-        let provider = crate::engine::llm::create_provider(cfg.config.provider, &api_key)
-            .map_err(|e| CompileError::Llm(e.to_string()))?;
+        let provider = crate::engine::llm::create_provider(
+            cfg.config.provider,
+            &api_key,
+            cfg.config.base_url.as_deref(),
+        )
+        .map_err(|e| CompileError::Llm(e.to_string()))?;
         let model = cfg
             .config
             .effective_compile_model()
@@ -979,8 +983,12 @@ fn run_compile(
 
     let api_key =
         auth::resolve_api_key(cfg.config.provider).map_err(|e| CompileError::Llm(e.to_string()))?;
-    let provider = crate::engine::llm::create_provider(cfg.config.provider, &api_key)
-        .map_err(|e| CompileError::Llm(e.to_string()))?;
+    let provider = crate::engine::llm::create_provider(
+        cfg.config.provider,
+        &api_key,
+        cfg.config.base_url.as_deref(),
+    )
+    .map_err(|e| CompileError::Llm(e.to_string()))?;
     let compile_model = cfg
         .config
         .effective_compile_model()

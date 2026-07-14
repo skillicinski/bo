@@ -222,7 +222,7 @@ fn compute_leaf_url_rejects_blocked_http_status() {
     });
 
     let url = format!("http://127.0.0.1:{port}/blocked");
-    let err = compute_leaf_url(&url, "", crate::engine::llm::Provider::OpenAI).unwrap_err();
+    let err = compute_leaf_url(&url, "", crate::engine::llm::Provider::OpenAI, None).unwrap_err();
     match err {
         CollectError::Rejected { url: u, reason } => {
             assert_eq!(u, url);
