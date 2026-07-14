@@ -1178,6 +1178,23 @@ where
                 if let Some(warning) = &computed.note_warning {
                     warnings.push(warning.clone());
                 }
+                // Same-batch duplicate: two inputs that fetched the same canonical
+                // URL. Skip before reserving a slug, reporting the already-written
+                // leaf's file rather than a freshly-resolved (and never-written) one.
+                if let Some(existing) = manifest
+                    .leaves
+                    .iter()
+                    .find(|l| l.url.as_str() == computed.url)
+                {
+                    items.push(collect_skipped_item(
+                        &input_label,
+                        &computed.url,
+                        "duplicate_url",
+                        format!("already collected → {}", existing.file),
+                        Some(existing.file.clone()),
+                    ));
+                    continue;
+                }
                 let base_slug =
                     Slug::generate(computed.title.as_deref().unwrap_or(""), &computed.url);
                 let filename = slug::resolve_slug(&base_slug, &computed.url, &mut used_slugs);
@@ -1196,22 +1213,6 @@ where
                     path: leaf_file.clone(),
                     content_hash: pending::content_hash(&leaf_bytes),
                 };
-
-                // Check duplicate against in-memory manifest (catches same-batch duplicates).
-                if manifest
-                    .leaves
-                    .iter()
-                    .any(|l| l.url.as_str() == computed.url)
-                {
-                    items.push(collect_skipped_item(
-                        &input_label,
-                        &computed.url,
-                        "duplicate_url",
-                        format!("already collected → {leaf_file}"),
-                        Some(leaf_file),
-                    ));
-                    continue;
-                }
 
                 manifest.leaves.push(Leaf {
                     slug: filename.clone(),
