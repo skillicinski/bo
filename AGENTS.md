@@ -18,8 +18,8 @@
 
 ## Commands
 
-- After code changes (not docs): npm run check (full output, no tail). Fix all errors, warnings, and infos before committing. Does not run tests.
-- Never run npm run build or npm test unless requested by the user.
+- After code changes (not docs), run `cargo fmt --check` and `cargo clippy --all-targets --all-features -- -D warnings` with full output. Fix all errors and warnings before committing.
+- Before opening a PR, also run `cargo test` as required by `CONTRIBUTING.md`.
 
 ## Dependency and Install Security
 
