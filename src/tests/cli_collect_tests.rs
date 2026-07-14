@@ -186,6 +186,12 @@ fn batch_collect_skips_same_batch_url_collapse() {
         result.items[1].url.as_deref(),
         Some("https://example.com/canonical")
     );
+    // existing_file must name the already-written leaf, not the
+    // freshly-resolved (and never-written) filename for the duplicate.
+    assert_eq!(
+        result.items[1].existing_file.as_deref(),
+        Some("leaf/canonical.md")
+    );
 
     // Exactly one leaf committed despite two computes.
     let manifest = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
