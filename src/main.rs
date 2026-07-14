@@ -694,7 +694,6 @@ fn execute_collect(
     }
 
     // ponytail: single URL — call collect_url_with_model directly.
-    // collect_inputs_with_collector kept for unit tests only.
     let url = &inputs[0];
     eprintln!("fetching {}...", url);
     let doc = collect::collect_url_with_model(

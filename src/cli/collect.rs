@@ -20,6 +20,7 @@ use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
+use std::sync::Arc;
 use std::thread;
 
 use crate::adapters::youtube::{self, YoutubeError, YoutubeUrlMatch};
@@ -250,19 +251,9 @@ pub enum CollectOutput {
 
 #[derive(Debug, Clone)]
 enum ExpandedCollectInput {
-    Url {
-        input: String,
-        url: String,
-        from_file: bool,
-    },
-    Note {
-        input: String,
-        path: String,
-    },
-    Failure {
-        item: CollectItemResult,
-        from_file: bool,
-    },
+    Url { input: String, url: String },
+    Note { input: String, path: String },
+    Failure { item: CollectItemResult },
 }
 
 // ── journal ───────────────────────────────────────────────────────────────────
@@ -622,52 +613,6 @@ where
     )
 }
 
-// ponytail: dead from CLI (main inlined the single-URL path), kept for unit tests.
-pub fn collect_inputs_with_collector<F>(
-    inputs: Vec<String>,
-    output_dir: &Path,
-    mut collector: F,
-) -> Result<CollectOutput, CollectError>
-where
-    F: FnMut(&str) -> Result<Document, CollectError>,
-{
-    let expanded = expand_collect_inputs(&inputs);
-    let batch_mode = inputs.len() > 1
-        || expanded.iter().any(|input| {
-            matches!(
-                input,
-                ExpandedCollectInput::Url {
-                    from_file: true,
-                    ..
-                } | ExpandedCollectInput::Failure {
-                    from_file: true,
-                    ..
-                }
-            )
-        });
-
-    if !batch_mode {
-        let Some(ExpandedCollectInput::Url { url, .. }) = expanded.first() else {
-            return Ok(CollectOutput::Batch(collect_batch(
-                expanded,
-                output_dir,
-                &mut collector,
-            )));
-        };
-        ensure_not_duplicate(url, output_dir)?;
-        let page = collector(url)?;
-        return Ok(CollectOutput::Single(collect_result_from_document(
-            output_dir, page,
-        )));
-    }
-
-    Ok(CollectOutput::Batch(collect_batch(
-        expanded,
-        output_dir,
-        &mut collector,
-    )))
-}
-
 fn expand_collect_inputs(inputs: &[String]) -> Vec<ExpandedCollectInput> {
     inputs
         .iter()
@@ -686,7 +631,6 @@ fn expand_collect_input(input: &str) -> Vec<ExpandedCollectInput> {
         return vec![ExpandedCollectInput::Url {
             input: input.to_string(),
             url: input.to_string(),
-            from_file: false,
         }];
     }
 
@@ -700,7 +644,6 @@ fn expand_collect_input(input: &str) -> Vec<ExpandedCollectInput> {
                     "url_list_read_error",
                     format!("failed to read URL list: {error}"),
                 ),
-                from_file: true,
             }]
         }
     };
@@ -714,7 +657,6 @@ fn expand_collect_input(input: &str) -> Vec<ExpandedCollectInput> {
         urls.push(ExpandedCollectInput::Url {
             input: format!("{}:{}", input, line_index + 1),
             url: url.to_string(),
-            from_file: true,
         });
     }
 
@@ -726,7 +668,6 @@ fn expand_collect_input(input: &str) -> Vec<ExpandedCollectInput> {
                 "empty_url_list",
                 "URL list file contains no URLs",
             ),
-            from_file: true,
         });
     }
 
@@ -769,152 +710,6 @@ pub fn is_local_note_file(input: &str) -> bool {
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
     is_md && path.is_file()
-}
-
-// ponytail: dead from CLI, kept for unit tests via collect_inputs_with_collector.
-fn collect_batch<F>(
-    expanded: Vec<ExpandedCollectInput>,
-    output_dir: &Path,
-    collector: &mut F,
-) -> BatchCollectResult
-where
-    F: FnMut(&str) -> Result<Document, CollectError>,
-{
-    let mut items = Vec::new();
-    let mut seen: HashMap<String, String> = HashMap::new();
-
-    for input in expanded {
-        let (input, url) = match input {
-            ExpandedCollectInput::Url { input, url, .. } => (input, url),
-            ExpandedCollectInput::Failure { item, .. } => {
-                items.push(item);
-                continue;
-            }
-            ExpandedCollectInput::Note { input, path } => {
-                let computed = match compute_leaf_note(&path) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        items.push(collect_item_from_error(&input, &path, e));
-                        continue;
-                    }
-                };
-                let note_url = computed.url.clone();
-                if let Some(first_input) = seen.get(&note_url) {
-                    items.push(collect_skipped_item(
-                        &input,
-                        &note_url,
-                        "duplicate_input",
-                        format!("duplicate note first listed at {first_input}"),
-                        None,
-                    ));
-                    continue;
-                }
-                seen.insert(note_url.clone(), input.clone());
-                match duplicate_file(&note_url, output_dir) {
-                    Ok(Some(existing_file)) => {
-                        items.push(collect_skipped_item(
-                            &input,
-                            &note_url,
-                            "duplicate_url",
-                            format!("already collected → {existing_file}"),
-                            Some(existing_file),
-                        ));
-                        continue;
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        items.push(collect_item_from_error(&input, &note_url, error));
-                        continue;
-                    }
-                }
-                let mut note_warnings = Vec::new();
-                if let Some(warning) = &computed.note_warning {
-                    note_warnings.push(warning.clone());
-                }
-                match write_new_document_with_summary_result(
-                    &note_url,
-                    computed.title.as_deref(),
-                    &computed.body_markdown,
-                    output_dir,
-                    computed.summary_text,
-                    &mut note_warnings,
-                ) {
-                    Ok(page) => items.push(collect_success_item(
-                        &input,
-                        collect_result_from_document(output_dir, page),
-                    )),
-                    Err(CollectError::DuplicateUrl { existing_file }) => {
-                        items.push(collect_skipped_item(
-                            &input,
-                            &note_url,
-                            "duplicate_url",
-                            format!("already collected → {existing_file}"),
-                            Some(existing_file),
-                        ))
-                    }
-                    Err(error) => items.push(collect_item_from_error(&input, &note_url, error)),
-                }
-                continue;
-            }
-        };
-
-        if let Some(first_input) = seen.get(&url) {
-            items.push(collect_skipped_item(
-                &input,
-                &url,
-                "duplicate_input",
-                format!("duplicate input URL first listed at {first_input}"),
-                None,
-            ));
-            continue;
-        }
-        seen.insert(url.clone(), input.clone());
-
-        match duplicate_file(&url, output_dir) {
-            Ok(Some(existing_file)) => {
-                items.push(collect_skipped_item(
-                    &input,
-                    &url,
-                    "duplicate_url",
-                    format!("already collected → {existing_file}"),
-                    Some(existing_file),
-                ));
-                continue;
-            }
-            Ok(None) => {}
-            Err(error) => {
-                items.push(collect_item_from_error(&input, &url, error));
-                continue;
-            }
-        }
-
-        match collector(&url) {
-            Ok(page) => items.push(collect_success_item(
-                &input,
-                collect_result_from_document(output_dir, page),
-            )),
-            Err(CollectError::DuplicateUrl { existing_file }) => items.push(collect_skipped_item(
-                &input,
-                &url,
-                "duplicate_url",
-                format!("already collected → {existing_file}"),
-                Some(existing_file),
-            )),
-            Err(error) => items.push(collect_item_from_error(&input, &url, error)),
-        }
-    }
-
-    let summary = summarize_collect_items(&items);
-    BatchCollectResult { summary, items }
-}
-
-fn collect_result_from_document(output_dir: &Path, page: Document) -> CollectResult {
-    let path = output_dir.join(&page.filename);
-    CollectResult {
-        url: page.url,
-        file: page.filename,
-        path: path.display().to_string(),
-    }
 }
 
 fn collect_success_item(input: &str, result: CollectResult) -> CollectItemResult {
@@ -1213,15 +1008,18 @@ fn commit_manifest_and_writes(
 /// Collect a batch of URLs using parallel fetch+extract+summarize, then
 /// commit all writes in a single manifest operation.
 ///
-/// Falls back to sequential `collect_batch` behavior when there is only one
-/// URL to collect (single thread overhead isn't worth it).
-pub fn collect_batch_parallel(
+/// The `compute` closure is called from spawned threads to produce a
+/// `ComputedLeaf` for each URL. Notes are pre-computed inline and never
+/// pass through `compute`.
+fn collect_batch_parallel_with_compute<F>(
     inputs: Vec<String>,
     output_dir: &Path,
-    model: &str,
-    provider: crate::engine::llm::Provider,
     warnings: &mut Vec<String>,
-) -> Result<BatchCollectResult, CollectError> {
+    compute: F,
+) -> Result<BatchCollectResult, CollectError>
+where
+    F: Fn(&str) -> Result<ComputedLeaf, CollectError> + Send + Sync + 'static,
+{
     recover_pending_if_needed(output_dir, warnings)?;
     let expanded = expand_collect_inputs(&inputs);
 
@@ -1315,6 +1113,7 @@ pub fn collect_batch_parallel(
     }
 
     // ── phase 2: parallel compute ────────────────────────────────────────
+    let compute = Arc::new(compute);
     let mut compute_results: Vec<(String, String, Result<ComputedLeaf, CollectError>)> =
         if to_compute.is_empty() {
             Vec::new()
@@ -1328,11 +1127,9 @@ pub fn collect_batch_parallel(
                     .map(|(input, url)| {
                         let input = input.clone();
                         let url = url.clone();
-                        let model = model.to_string();
+                        let compute = Arc::clone(&compute);
                         let url_for_thread = url.clone();
-                        let handle = thread::spawn(move || {
-                            compute_leaf_url(&url_for_thread, &model, provider)
-                        });
+                        let handle = thread::spawn(move || compute(&url_for_thread));
                         (input, url, handle)
                     })
                     .collect();
@@ -1460,6 +1257,21 @@ pub fn collect_batch_parallel(
 
     let summary = summarize_collect_items(&items);
     Ok(BatchCollectResult { summary, items })
+}
+
+/// Collect a batch of URLs using parallel fetch+extract+summarize, then
+/// commit all writes in a single manifest operation.
+pub fn collect_batch_parallel(
+    inputs: Vec<String>,
+    output_dir: &Path,
+    model: &str,
+    provider: crate::engine::llm::Provider,
+    warnings: &mut Vec<String>,
+) -> Result<BatchCollectResult, CollectError> {
+    let model = model.to_string();
+    collect_batch_parallel_with_compute(inputs, output_dir, warnings, move |url| {
+        compute_leaf_url(url, &model, provider)
+    })
 }
 
 #[cfg(test)]

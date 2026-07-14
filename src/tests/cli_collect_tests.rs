@@ -3,6 +3,10 @@ use crate::domain::manifest;
 use crate::domain::{Slug, Timestamp};
 use std::fs;
 use std::path::Path;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use tempfile::TempDir;
 
 fn collect_html_test(url: &str, html: &str, output_dir: &Path) -> Result<Document, CollectError> {
@@ -29,14 +33,9 @@ fn collect_input_expands_txt_url_list() {
 
     assert_eq!(expanded.len(), 2);
     match &expanded[0] {
-        ExpandedCollectInput::Url {
-            input,
-            url,
-            from_file,
-        } => {
+        ExpandedCollectInput::Url { input, url, .. } => {
             assert!(input.ends_with("urls.txt:1"), "input was {input}");
             assert_eq!(url, "https://example.com/one");
-            assert!(*from_file);
         }
         other => panic!("unexpected expanded input: {other:?}"),
     }
@@ -58,8 +57,7 @@ fn collect_input_treats_missing_local_txt_as_url_list_error() {
 
     assert_eq!(expanded.len(), 1);
     match &expanded[0] {
-        ExpandedCollectInput::Failure { item, from_file } => {
-            assert!(*from_file);
+        ExpandedCollectInput::Failure { item, .. } => {
             assert_eq!(item.status, CollectItemStatus::Failed);
             assert_eq!(item.code.as_deref(), Some("url_list_read_error"));
         }
@@ -70,31 +68,37 @@ fn collect_input_treats_missing_local_txt_as_url_list_error() {
 #[test]
 fn batch_collect_deduplicates_repeated_input_urls() {
     let dir = TempDir::new().unwrap();
-    let mut calls = 0;
+    let calls = Arc::new(AtomicUsize::new(0));
     let url = "https://example.com/article".to_string();
 
-    let result = collect_inputs_with_collector(
+    let result = collect_batch_parallel_with_compute(
         vec![url.clone(), url.clone()],
         dir.path(),
-        |collected_url| {
-            calls += 1;
-            Ok(Document {
-                url: collected_url.to_string(),
-                filename: format!("article-{calls}.md"),
-            })
+        &mut Vec::new(),
+        {
+            let calls = Arc::clone(&calls);
+            move |url| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(ComputedLeaf {
+                    url: url.to_string(),
+                    title: Some("Article".to_string()),
+                    body_markdown: "body".to_string(),
+                    summary_text: "summary".to_string(),
+                    note_warning: None,
+                })
+            }
         },
     )
     .unwrap();
 
-    let CollectOutput::Batch(result) = result else {
-        panic!("expected batch result");
-    };
-    assert_eq!(calls, 1);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(result.summary.collected, 1);
     assert_eq!(result.summary.skipped, 1);
     assert_eq!(result.summary.failed, 0);
-    assert_eq!(result.items[1].status, CollectItemStatus::Skipped);
-    assert_eq!(result.items[1].code.as_deref(), Some("duplicate_input"));
+    // Two-phase batch: phase-1 skips precede phase-3 successes, so the
+    // duplicate (listed second) is items[0].
+    assert_eq!(result.items[0].status, CollectItemStatus::Skipped);
+    assert_eq!(result.items[0].code.as_deref(), Some("duplicate_input"));
 }
 
 #[test]
@@ -125,15 +129,14 @@ fn batch_collect_skips_existing_manifest_duplicates_without_fetching() {
         },
     )
     .unwrap();
-    let result =
-        collect_inputs_with_collector(vec![url.to_string(), url.to_string()], dir.path(), |_url| {
-            panic!("duplicate URL should not be fetched")
-        })
-        .unwrap();
+    let result = collect_batch_parallel_with_compute(
+        vec![url.to_string(), url.to_string()],
+        dir.path(),
+        &mut Vec::new(),
+        move |_url| panic!("duplicate URL should not be fetched"),
+    )
+    .unwrap();
 
-    let CollectOutput::Batch(result) = result else {
-        panic!("expected batch result");
-    };
     assert_eq!(result.summary.collected, 0);
     assert_eq!(result.summary.skipped, 2);
     assert_eq!(result.summary.failed, 0);
@@ -792,14 +795,13 @@ fn collect_note_writes_leaf_with_no_summary_and_strips_frontmatter() {
     let md = dir.path().join("note.md");
     fs::write(&md, "---\nauthor: me\n---\n# A Note\n\nhello world").unwrap();
 
-    let result =
-        collect_inputs_with_collector(vec![md.display().to_string()], dir.path(), |_url| {
-            panic!("notes must not fetch")
-        })
-        .unwrap();
-    let CollectOutput::Batch(result) = result else {
-        panic!("expected batch result, got {result:?}");
-    };
+    let result = collect_batch_parallel_with_compute(
+        vec![md.display().to_string()],
+        dir.path(),
+        &mut Vec::new(),
+        move |_url| panic!("notes must not fetch"),
+    )
+    .unwrap();
     assert_eq!(result.summary.collected, 1);
 
     let item = &result.items[0];
