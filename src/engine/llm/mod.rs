@@ -48,10 +48,9 @@ impl std::error::Error for ProviderInitError {}
 
 /// Create the correct LlmProvider for a given provider with the API key.
 ///
-/// `custom_base_url` is required only for `Provider::Custom`; the caller
-/// (the composition call site) resolves it from local config. It is never
-/// read here. Other providers ignore it. API-key lookup stays at the call
-/// site.
+/// The caller supplies the custom base URL; non-custom providers ignore
+/// it. Provider construction performs no config-file reads or API-key
+/// lookup — those stay at the composition call site.
 pub fn create_provider(
     provider: Provider,
     api_key: &str,
@@ -105,7 +104,7 @@ pub enum Provider {
     Google,
     #[serde(rename = "zai")]
     Zai,
-    /// Any OpenAI-compatible endpoint; base URL comes from config.
+    /// Any OpenAI-compatible endpoint; the caller supplies its base URL.
     #[serde(rename = "custom")]
     Custom,
 }

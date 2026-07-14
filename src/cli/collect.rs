@@ -864,7 +864,7 @@ fn ensure_not_duplicate(url: &str, output_dir: &Path) -> Result<(), CollectError
     Ok(())
 }
 
-// ponytail: 7 args; collapse into a collect-context struct if it grows.
+// ponytail: 8 args; collapse into a collect-context struct if it grows.
 #[allow(clippy::too_many_arguments)]
 fn write_new_document_with_model(
     url: &str,
