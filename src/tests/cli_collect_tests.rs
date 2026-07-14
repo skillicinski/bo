@@ -145,6 +145,87 @@ fn batch_collect_skips_existing_manifest_duplicates_without_fetching() {
     assert_eq!(result.items[1].code.as_deref(), Some("duplicate_input"));
 }
 
+#[test]
+fn batch_collect_skips_same_batch_url_collapse() {
+    let dir = TempDir::new().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    // Two distinct input URLs that compute resolves to the same fetched URL
+    // (e.g. both redirect to one canonical page). Phase-1 dedup keys on the
+    // input URL, so both reach compute; phase-3 must catch the collision
+    // against the in-memory manifest and skip the second without a second commit.
+    let result = collect_batch_parallel_with_compute(
+        vec![
+            "https://example.com/a".to_string(),
+            "https://example.com/b".to_string(),
+        ],
+        dir.path(),
+        &mut Vec::new(),
+        {
+            let calls = Arc::clone(&calls);
+            move |_url| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(ComputedLeaf {
+                    url: "https://example.com/canonical".to_string(),
+                    title: Some("Canonical".to_string()),
+                    body_markdown: "body".to_string(),
+                    summary_text: "summary".to_string(),
+                    note_warning: None,
+                })
+            }
+        },
+    )
+    .unwrap();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(result.summary.collected, 1);
+    assert_eq!(result.summary.skipped, 1);
+    assert_eq!(result.summary.failed, 0);
+    assert_eq!(result.items[1].status, CollectItemStatus::Skipped);
+    assert_eq!(result.items[1].code.as_deref(), Some("duplicate_url"));
+    assert_eq!(
+        result.items[1].url.as_deref(),
+        Some("https://example.com/canonical")
+    );
+
+    // Exactly one leaf committed despite two computes.
+    let manifest = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    assert_eq!(manifest.leaves.len(), 1);
+    assert_eq!(
+        manifest.leaves[0].url.as_str(),
+        "https://example.com/canonical"
+    );
+}
+
+#[test]
+fn compute_leaf_url_rejects_blocked_http_status() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    // Loopback HTTP fixture returning 403; classify_http_status maps 403 to
+    // BlockedBySite. The rejection happens before summarize, so no LLM key
+    // or external network is needed. stdlib-only — no mock HTTP crate.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/html\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            let _ = stream.flush();
+        }
+    });
+
+    let url = format!("http://127.0.0.1:{port}/blocked");
+    let err = compute_leaf_url(&url, "", crate::engine::llm::Provider::OpenAI).unwrap_err();
+    match err {
+        CollectError::Rejected { url: u, reason } => {
+            assert_eq!(u, url);
+            assert_eq!(reason.to_string(), "blocked by site");
+        }
+        other => panic!("expected Rejected, got {other:?}"),
+    }
+}
+
 const ARTICLE_HTML: &str = r#"<html><head><title>Plain Article</title></head>
 <body><article><h1>Plain Article</h1>
 <p>This article contains enough useful body text to pass extraction and quality
