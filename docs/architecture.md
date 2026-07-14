@@ -64,7 +64,6 @@ Use traits only at a real interchangeable or testable boundary. Do not add ports
 Known departures are recorded rather than hidden:
 
 - `engine::fetch` and `engine::summary` currently write fallback/retry diagnostics to stderr. Return or trace those diagnostics when those paths are next changed.
-- `engine::llm::create_provider` reads custom-provider configuration while `engine::config` imports LLM types. Move configuration resolution to the composition call site if this sibling dependency starts obstructing reuse or tests.
 
 These are bounded cleanup targets, not reasons for a broad layer rewrite.
 
