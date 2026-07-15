@@ -1,18 +1,13 @@
 // bo collect — the collect pipeline.
 //
-// Orchestrates the full flow for `bo collect <url>`: fetch HTML from the
-// network, extract readable content, write the leaf file, and append to
-// the index.
+// Single URLs, URL lists, multi-URL, and local notes all route through ONE
+// pipeline: expand → dedup → compute → single-atomic-commit. The summary
+// provider is resolved once per invocation and shared across worker threads.
+// `CollectOutput::Single` vs `Batch` is output policy only — a single bare
+// URL returns the single-result contract; every other input shape returns
+// a batch.
 //
-// Two entry points:
-//
-//   collect_url(url, output_dir)        — full pipeline including network fetch
-//   collect_html(url, html, output_dir) — same, but accepts pre-fetched HTML
-//
-// `collect_html` is the testable core; `collect_url` is a thin wrapper that
-// fetches first.
-//
-// Dependency direction: collect → adapters, fetch, quality, extract, leaf, slug, index.
+// Dependency direction: collect → adapters, fetch, quality, extract, leaf, slug, manifest, pending.
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -36,15 +31,6 @@ use crate::engine::{extract, fetch, quality, summary};
 use serde_json::json;
 
 // ── types ────────────────────────────────────────────────────────────────────
-
-/// A document produced by the collect pipeline.
-#[derive(Debug)]
-pub struct Document {
-    /// Normalised URL that was collected and recorded in the index.
-    pub url: String,
-    /// Filename (including `.md` extension) written inside `output_dir`.
-    pub filename: String,
-}
 
 /// Unified error type for the collect pipeline.
 #[derive(Debug)]
@@ -256,6 +242,79 @@ enum ExpandedCollectInput {
     Failure { item: CollectItemResult },
 }
 
+// ── SummaryProvider — resolve once per invocation ────────────────────────────
+
+/// Resolved summary provider, shared across all worker threads. Auth and
+/// provider construction happen once per collect invocation; failure falls
+/// back to deterministic summaries.
+type Summarize = Arc<dyn Fn(&str, Option<&str>) -> String + Send + Sync>;
+
+#[derive(Clone)]
+struct SummaryProvider {
+    summarize: Summarize,
+}
+
+impl SummaryProvider {
+    fn resolve(
+        provider: crate::engine::llm::Provider,
+        model: String,
+        base_url: Option<&str>,
+    ) -> Self {
+        let resolved = (|| {
+            let api_key = auth::resolve_api_key(provider).ok()?;
+            crate::engine::llm::create_provider(provider, &api_key, base_url).ok()
+        })();
+        match resolved {
+            Some(p) => {
+                let p: Arc<dyn crate::engine::llm::LlmProvider> = Arc::from(p);
+                Self {
+                    summarize: Arc::new(move |body, title| {
+                        crate::engine::llm::blocking_runtime().block_on(
+                            summary::generate_llm_or_fallback(
+                                body,
+                                title,
+                                p.as_ref(),
+                                &model,
+                                summary::SUMMARY_LLM_POLICY,
+                            ),
+                        )
+                    }),
+                }
+            }
+            None => Self {
+                summarize: Arc::new(|body, _| summary::generate_fallback(body)),
+            },
+        }
+    }
+
+    #[cfg(test)]
+    fn fallback() -> Self {
+        Self {
+            summarize: Arc::new(|body, _| summary::generate_fallback(body)),
+        }
+    }
+
+    fn summarize(&self, body: &str, title: Option<&str>) -> String {
+        (self.summarize)(body, title)
+    }
+}
+
+// ── outcome ──────────────────────────────────────────────────────────────────
+
+/// Internal result from the pipeline, before shaping into output variants.
+enum Outcome {
+    Collected {
+        input: String,
+        result: CollectResult,
+    },
+    Errored {
+        input: String,
+        url: String,
+        error: CollectError,
+    },
+    Item(CollectItemResult),
+}
+
 // ── journal ───────────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -312,21 +371,6 @@ pub fn journal(tree_dir: &Path, model: &str, items: &[CollectItemResult]) {
     );
 }
 
-/// Build a collected-item result for a single successful URL collect.
-pub fn collected_item(input: &str, url: &str, file: &str) -> CollectItemResult {
-    CollectItemResult {
-        input: input.to_string(),
-        status: CollectItemStatus::Collected,
-        url: Some(url.to_string()),
-        file: Some(file.to_string()),
-        path: None,
-        code: None,
-        message: None,
-        existing_file: None,
-        reason: None,
-    }
-}
-
 // ── data for parallel batch compute ──────────────────────────────────────────
 
 /// Output of the compute phase: everything needed to write a leaf, but no
@@ -346,23 +390,13 @@ struct ComputedLeaf {
 /// Compute-only: fetch, extract, quality-check, and summarize a URL.
 /// Returns the data needed to write a leaf without touching the manifest or
 /// output directory. Safe to call from multiple threads.
-fn compute_leaf_url(
-    url: &str,
-    model: &str,
-    provider: crate::engine::llm::Provider,
-    base_url: Option<&str>,
-) -> Result<ComputedLeaf, CollectError> {
+fn compute_leaf(url: &str, summary: &SummaryProvider) -> Result<ComputedLeaf, CollectError> {
     // YouTube path — fetch transcript, summarize, return.
     match youtube::classify_url(url) {
         YoutubeUrlMatch::Supported(supported) => {
             let transcript = youtube::collect_transcript(&supported)?;
-            let summary_text = generate_summary_with_model(
-                &transcript.body_markdown,
-                Some(&transcript.title),
-                model,
-                provider,
-                base_url,
-            );
+            let summary_text =
+                summary.summarize(&transcript.body_markdown, Some(&transcript.title));
             return Ok(ComputedLeaf {
                 url: transcript.url,
                 title: Some(transcript.title),
@@ -392,34 +426,41 @@ fn compute_leaf_url(
         Err(e) => return Err(e.into()),
     };
 
-    if let Some(reason) = quality::classify_html(&fetched.html) {
+    compute_leaf_from_html(&fetched.url, &fetched.html, |b, t| summary.summarize(b, t))
+}
+
+/// Test seam: the HTML core of `compute_leaf` without network I/O.
+/// Injects pre-fetched HTML and a custom summarize closure.
+fn compute_leaf_from_html<F>(
+    url: &str,
+    html: &str,
+    summarize: F,
+) -> Result<ComputedLeaf, CollectError>
+where
+    F: FnOnce(&str, Option<&str>) -> String,
+{
+    if let Some(reason) = quality::classify_html(html) {
         return Err(CollectError::Rejected {
-            url: fetched.url.clone(),
+            url: url.to_string(),
             reason,
         });
     }
 
-    let content = extract::extract_content(&fetched.html)?;
+    let content = extract::extract_content(html)?;
 
     if let Some(reason) =
         quality::classify_extracted(content.title.as_deref(), &content.body_markdown)
     {
         return Err(CollectError::Rejected {
-            url: fetched.url.clone(),
+            url: url.to_string(),
             reason,
         });
     }
 
-    let summary_text = generate_summary_with_model(
-        &content.body_markdown,
-        content.title.as_deref(),
-        model,
-        provider,
-        base_url,
-    );
+    let summary_text = summarize(&content.body_markdown, content.title.as_deref());
 
     Ok(ComputedLeaf {
-        url: fetched.url,
+        url: url.to_string(),
         title: content.title,
         body_markdown: content.body_markdown,
         summary_text,
@@ -505,120 +546,7 @@ fn extract_note_title(body: &str) -> (Option<String>, String) {
     (Some(title.to_string()), remainder)
 }
 
-pub fn collect_url_with_model(
-    url: &str,
-    output_dir: &Path,
-    model: &str,
-    provider: crate::engine::llm::Provider,
-    base_url: Option<&str>,
-    warnings: &mut Vec<String>,
-) -> Result<Document, CollectError> {
-    recover_pending_if_needed(output_dir, warnings)?;
-
-    // Check for an existing leaf with this URL before any network work —
-    // duplicate detection must not depend on a successful fetch.
-    ensure_not_duplicate(url, output_dir)?;
-
-    match youtube::classify_url(url) {
-        YoutubeUrlMatch::Supported(supported) => {
-            let transcript = youtube::collect_transcript(&supported)?;
-            return write_new_document_with_model(
-                &transcript.url,
-                Some(&transcript.title),
-                &transcript.body_markdown,
-                output_dir,
-                model,
-                provider,
-                base_url,
-                warnings,
-            );
-        }
-        YoutubeUrlMatch::Unsupported { url, reason } => {
-            return Err(YoutubeError::UnsupportedUrl { url, reason }.into());
-        }
-        YoutubeUrlMatch::NotYoutube => {}
-    }
-
-    let fetched = match fetch::fetch_url(url) {
-        Ok(fetched) => fetched,
-        Err(fetch::FetchError::HttpStatus(status, message)) => {
-            if let Some(reason) = quality::classify_http_status(status) {
-                return Err(CollectError::Rejected {
-                    url: url.to_string(),
-                    reason,
-                });
-            }
-            return Err(fetch::FetchError::HttpStatus(status, message).into());
-        }
-        Err(e) => return Err(e.into()),
-    };
-    collect_html_with_model(
-        &fetched.url,
-        &fetched.html,
-        output_dir,
-        model,
-        provider,
-        base_url,
-        warnings,
-    )
-}
-
-pub fn collect_html_with_model(
-    url: &str,
-    html: &str,
-    output_dir: &Path,
-    model: &str,
-    provider: crate::engine::llm::Provider,
-    base_url: Option<&str>,
-    warnings: &mut Vec<String>,
-) -> Result<Document, CollectError> {
-    collect_html_with_summarizer(
-        url,
-        html,
-        output_dir,
-        |body, title| generate_summary_with_model(body, title, model, provider, base_url),
-        warnings,
-    )
-}
-
-pub fn collect_html_with_summarizer<F>(
-    url: &str,
-    html: &str,
-    output_dir: &Path,
-    summarize: F,
-    warnings: &mut Vec<String>,
-) -> Result<Document, CollectError>
-where
-    F: FnOnce(&str, Option<&str>) -> String,
-{
-    if let Some(reason) = quality::classify_html(html) {
-        return Err(CollectError::Rejected {
-            url: url.to_string(),
-            reason,
-        });
-    }
-
-    let content = extract::extract_content(html)?;
-
-    if let Some(reason) =
-        quality::classify_extracted(content.title.as_deref(), &content.body_markdown)
-    {
-        return Err(CollectError::Rejected {
-            url: url.to_string(),
-            reason,
-        });
-    }
-
-    let summary_text = summarize(&content.body_markdown, content.title.as_deref());
-    write_new_document_with_summary_result(
-        url,
-        content.title.as_deref(),
-        &content.body_markdown,
-        output_dir,
-        summary_text,
-        warnings,
-    )
-}
+// ── input expansion ──────────────────────────────────────────────────────────
 
 fn expand_collect_inputs(inputs: &[String]) -> Vec<ExpandedCollectInput> {
     inputs
@@ -719,6 +647,30 @@ pub fn is_local_note_file(input: &str) -> bool {
     is_md && path.is_file()
 }
 
+/// Whether `inputs` selects the single-result output contract. A lone
+/// argument that is neither a URL list nor an existing local note is
+/// collected as a single URL, selecting `CollectOutput::Single`; every other
+/// input shape returns a batch.
+///
+/// The URL-list test must agree with `is_url_list_file` (what expansion uses):
+/// anything expansion reads as a list must select Batch, or `shape_single`
+/// would report only the first outcome — or panic on an empty/failed list.
+/// `ends_with(".txt")` (case-sensitive) keeps the pre-unification routing for
+/// bare lowercase `urls.txt`-style arguments that `is_url_list_file` rejects
+/// via its dot/host heuristic; `is_url_list_file` (case-insensitive) covers
+/// nested and mixed-case (`.TXT`) lists it accepts.
+pub fn is_single_bare_url(inputs: &[String]) -> bool {
+    if inputs.len() != 1 {
+        return false;
+    }
+    let input = &inputs[0];
+    let is_url_list_like =
+        (input.ends_with(".txt") && !input.contains("://")) || is_url_list_file(input);
+    !is_url_list_like && !is_local_note_file(input)
+}
+
+// ── item constructors ────────────────────────────────────────────────────────
+
 fn collect_success_item(input: &str, result: CollectResult) -> CollectItemResult {
     CollectItemResult {
         input: input.to_string(),
@@ -772,12 +724,12 @@ fn collect_failure_item(
     }
 }
 
-fn collect_item_from_error(input: &str, url: &str, error: CollectError) -> CollectItemResult {
-    let mut item = collect_failure_item(input, Some(url), error_code(&error), error.to_string());
+fn collect_item_from_error(input: &str, url: &str, error: &CollectError) -> CollectItemResult {
+    let mut item = collect_failure_item(input, Some(url), error_code(error), error.to_string());
     match error {
         CollectError::DuplicateUrl { existing_file } => {
             item.status = CollectItemStatus::Skipped;
-            item.existing_file = Some(existing_file);
+            item.existing_file = Some(existing_file.clone());
         }
         CollectError::Rejected { reason, .. } => {
             item.reason = Some(reason.to_string());
@@ -804,6 +756,8 @@ fn summarize_collect_items(items: &[CollectItemResult]) -> BatchCollectSummary {
             .count(),
     }
 }
+
+// ── dedup helpers ────────────────────────────────────────────────────────────
 
 pub fn duplicate_file(url: &str, output_dir: &Path) -> Result<Option<String>, CollectError> {
     let manifest_path = output_dir.join(".bo").join("manifest.json");
@@ -857,121 +811,6 @@ fn existing_slug_stems(output_dir: &Path) -> std::collections::HashSet<String> {
     stems
 }
 
-fn ensure_not_duplicate(url: &str, output_dir: &Path) -> Result<(), CollectError> {
-    if let Some(existing_file) = duplicate_file(url, output_dir)? {
-        return Err(CollectError::DuplicateUrl { existing_file });
-    }
-    Ok(())
-}
-
-// ponytail: 8 args; collapse into a collect-context struct if it grows.
-#[allow(clippy::too_many_arguments)]
-fn write_new_document_with_model(
-    url: &str,
-    title: Option<&str>,
-    body_markdown: &str,
-    output_dir: &Path,
-    model: &str,
-    provider: crate::engine::llm::Provider,
-    base_url: Option<&str>,
-    warnings: &mut Vec<String>,
-) -> Result<Document, CollectError> {
-    let summary_text = generate_summary_with_model(body_markdown, title, model, provider, base_url);
-    write_new_document_with_summary_result(
-        url,
-        title,
-        body_markdown,
-        output_dir,
-        summary_text,
-        warnings,
-    )
-}
-
-fn generate_summary_with_model(
-    body: &str,
-    title: Option<&str>,
-    model: &str,
-    provider: crate::engine::llm::Provider,
-    base_url: Option<&str>,
-) -> String {
-    let api_key = match auth::resolve_api_key(provider) {
-        Ok(key) => key,
-        Err(_) => return summary::generate_fallback(body),
-    };
-    let provider = match crate::engine::llm::create_provider(provider, &api_key, base_url) {
-        Ok(provider) => provider,
-        Err(_) => return summary::generate_fallback(body),
-    };
-    crate::engine::llm::blocking_runtime().block_on(summary::generate_llm_or_fallback(
-        body,
-        title,
-        provider.as_ref(),
-        model,
-        summary::SUMMARY_LLM_POLICY,
-    ))
-}
-
-fn write_new_document_with_summary_result(
-    url: &str,
-    title: Option<&str>,
-    body_markdown: &str,
-    output_dir: &Path,
-    summary_text: String,
-    warnings: &mut Vec<String>,
-) -> Result<Document, CollectError> {
-    recover_pending_if_needed(output_dir, warnings)?;
-
-    let title_ref = title.unwrap_or("");
-    let base_slug = Slug::generate(title_ref, url);
-    let mut used = existing_slug_stems(output_dir);
-    let filename = slug::resolve_slug(&base_slug, url, &mut used);
-    let now = Timestamp::now();
-    // ponytail: URL already validated at fetch time; panic on impossible parse error.
-    let domain_url = Url::parse(url).expect("URL already validated at fetch time");
-    let domain_title = title.and_then(|t| Title::parse(t).ok());
-    let leaf_file = format!("leaf/{}.md", filename);
-    let leaf_content =
-        leaf::format_content(domain_title.as_ref(), &domain_url, &now, body_markdown);
-    let leaf_write = PendingWrite {
-        path: leaf_file.clone(),
-        content_hash: pending::content_hash(leaf_content.as_bytes()),
-    };
-
-    let mut manifest = load_or_bootstrap_manifest(output_dir, &now)?;
-    if let Some(existing) = manifest.leaves.iter().find(|leaf| leaf.url.as_str() == url) {
-        return Err(CollectError::DuplicateUrl {
-            existing_file: existing.file.clone(),
-        });
-    }
-    manifest.leaves.push(Leaf {
-        slug: filename.clone(),
-        file: leaf_file.clone(),
-        title: domain_title,
-        url: domain_url,
-        collected_at: now,
-        summary: if summary_text.is_empty() {
-            None
-        } else {
-            Some(summary_text.clone())
-        },
-    });
-
-    commit_manifest_and_writes(
-        output_dir,
-        OpKind::Collect {
-            url: url.to_string(),
-        },
-        &manifest,
-        &[(&leaf_write, leaf_content.as_bytes())],
-        &[],
-    )?;
-
-    Ok(Document {
-        url: url.to_string(),
-        filename: leaf_file,
-    })
-}
-
 /// Load the manifest from disk, or return an empty one if the tree is freshly seeded.
 fn load_or_bootstrap_manifest(
     output_dir: &Path,
@@ -1012,20 +851,16 @@ fn commit_manifest_and_writes(
         .map_err(|e| CollectError::Io(std::io::Error::other(e.to_string())))
 }
 
-// ── parallel batch collect ───────────────────────────────────────────────────
+// ── unified pipeline ─────────────────────────────────────────────────────────
 
-/// Collect a batch of URLs using parallel fetch+extract+summarize, then
-/// commit all writes in a single manifest operation.
-///
-/// The `compute` closure is called from spawned threads to produce a
-/// `ComputedLeaf` for each URL. Notes are pre-computed inline and never
-/// pass through `compute`.
-fn collect_batch_parallel_with_compute<F>(
+/// Expand, dedup, compute, and single-atomic-commit. Returns outcomes so the
+/// caller can shape them into `CollectOutput::Single` or `CollectOutput::Batch`.
+fn run_pipeline<F>(
     inputs: Vec<String>,
     output_dir: &Path,
     warnings: &mut Vec<String>,
     compute: F,
-) -> Result<BatchCollectResult, CollectError>
+) -> Result<Vec<Outcome>, CollectError>
 where
     F: Fn(&str) -> Result<ComputedLeaf, CollectError> + Send + Sync + 'static,
 {
@@ -1034,7 +869,7 @@ where
 
     // ── phase 1: dedup (sequential) ─────────────────────────────────────
     let mut seen: HashMap<String, String> = HashMap::new();
-    let mut items: Vec<CollectItemResult> = Vec::new();
+    let mut outcomes: Vec<Outcome> = Vec::new();
     let mut to_compute: Vec<(String, String)> = Vec::new();
     // Notes are computed inline (no fetch) and carried to phase 3 pre-computed.
     let mut precomputed_notes: Vec<(String, ComputedLeaf)> = Vec::new();
@@ -1043,43 +878,49 @@ where
         let (input_label, url) = match input {
             ExpandedCollectInput::Url { input, url, .. } => (input, url),
             ExpandedCollectInput::Failure { item, .. } => {
-                items.push(item);
+                outcomes.push(Outcome::Item(item));
                 continue;
             }
             ExpandedCollectInput::Note { input, path } => {
                 let computed = match compute_leaf_note(&path) {
                     Ok(c) => c,
                     Err(e) => {
-                        items.push(collect_item_from_error(&input, &path, e));
+                        outcomes.push(Outcome::Errored {
+                            input,
+                            url: path.clone(),
+                            error: e,
+                        });
                         continue;
                     }
                 };
                 let note_url = computed.url.clone();
                 if let Some(first_input) = seen.get(&note_url) {
-                    items.push(collect_skipped_item(
+                    outcomes.push(Outcome::Item(collect_skipped_item(
                         &input,
                         &note_url,
                         "duplicate_input",
                         format!("duplicate note first listed at {first_input}"),
                         None,
-                    ));
+                    )));
                     continue;
                 }
                 seen.insert(note_url.clone(), input.clone());
                 match duplicate_file(&note_url, output_dir) {
                     Ok(Some(existing_file)) => {
-                        items.push(collect_skipped_item(
-                            &input,
-                            &note_url,
-                            "duplicate_url",
-                            format!("already collected → {existing_file}"),
-                            Some(existing_file),
-                        ));
+                        outcomes.push(Outcome::Errored {
+                            input,
+                            url: note_url,
+                            error: CollectError::DuplicateUrl { existing_file },
+                        });
                         continue;
                     }
                     Ok(None) => {}
                     Err(error) => {
-                        items.push(collect_item_from_error(&input, &note_url, error));
+                        outcomes.push(Outcome::Errored {
+                            input,
+                            url: note_url,
+                            error,
+                        });
                         continue;
                     }
                 }
@@ -1089,31 +930,33 @@ where
         };
 
         if let Some(first_input) = seen.get(&url) {
-            items.push(collect_skipped_item(
+            outcomes.push(Outcome::Item(collect_skipped_item(
                 &input_label,
                 &url,
                 "duplicate_input",
                 format!("duplicate input URL first listed at {first_input}"),
                 None,
-            ));
+            )));
             continue;
         }
         seen.insert(url.clone(), input_label.clone());
 
         match duplicate_file(&url, output_dir) {
             Ok(Some(existing_file)) => {
-                items.push(collect_skipped_item(
-                    &input_label,
-                    &url,
-                    "duplicate_url",
-                    format!("already collected → {existing_file}"),
-                    Some(existing_file),
-                ));
+                outcomes.push(Outcome::Errored {
+                    input: input_label,
+                    url,
+                    error: CollectError::DuplicateUrl { existing_file },
+                });
                 continue;
             }
             Ok(None) => {}
             Err(error) => {
-                items.push(collect_item_from_error(&input_label, &url, error));
+                outcomes.push(Outcome::Errored {
+                    input: input_label,
+                    url,
+                    error,
+                });
                 continue;
             }
         }
@@ -1195,13 +1038,13 @@ where
                     .iter()
                     .find(|l| l.url.as_str() == computed.url)
                 {
-                    items.push(collect_skipped_item(
-                        &input_label,
-                        &computed.url,
-                        "duplicate_url",
-                        format!("already collected → {}", existing.file),
-                        Some(existing.file.clone()),
-                    ));
+                    outcomes.push(Outcome::Errored {
+                        input: input_label,
+                        url: computed.url,
+                        error: CollectError::DuplicateUrl {
+                            existing_file: existing.file.clone(),
+                        },
+                    });
                     continue;
                 }
                 let base_slug =
@@ -1241,11 +1084,18 @@ where
                     file: leaf_file,
                     path: output_dir.join(&leaf_write.path).display().to_string(),
                 };
-                items.push(collect_success_item(&input_label, result));
+                outcomes.push(Outcome::Collected {
+                    input: input_label,
+                    result,
+                });
                 staged.push((leaf_write, leaf_bytes));
             }
             Err(e) => {
-                items.push(collect_item_from_error(&input_label, &url, e));
+                outcomes.push(Outcome::Errored {
+                    input: input_label,
+                    url,
+                    error: e,
+                });
             }
         }
     }
@@ -1265,24 +1115,100 @@ where
         )?;
     }
 
-    let summary = summarize_collect_items(&items);
-    Ok(BatchCollectResult { summary, items })
+    Ok(outcomes)
 }
 
-/// Collect a batch of URLs using parallel fetch+extract+summarize, then
-/// commit all writes in a single manifest operation.
-pub fn collect_batch_parallel(
+// ── shapers ──────────────────────────────────────────────────────────────────
+
+fn shape_item(o: &Outcome) -> CollectItemResult {
+    match o {
+        Outcome::Collected { input, result } => collect_success_item(input, result.clone()),
+        Outcome::Errored { input, url, error } => collect_item_from_error(input, url, error),
+        Outcome::Item(item) => item.clone(),
+    }
+}
+
+fn shape_single(outcomes: Vec<Outcome>) -> Result<CollectResult, CollectError> {
+    match outcomes.into_iter().next() {
+        Some(Outcome::Collected { result, .. }) => Ok(result),
+        Some(Outcome::Errored { error, .. }) => Err(error),
+        Some(Outcome::Item(_)) => unreachable!("single bare URL cannot produce a synthetic item"),
+        None => unreachable!("single input produces one outcome"),
+    }
+}
+
+// ── public entry points ──────────────────────────────────────────────────────
+
+/// The one collect pipeline. Routes single URLs, URL lists, multi-URL, and
+/// local notes through expand→dedup→compute→single-atomic-commit. Resolves
+/// the summary provider once per invocation.
+pub fn collect(
+    inputs: Vec<String>,
+    output_dir: &Path,
+    provider: crate::engine::llm::Provider,
+    model: &str,
+    base_url: Option<&str>,
+    warnings: &mut Vec<String>,
+) -> Result<CollectOutput, CollectError> {
+    let summary = SummaryProvider::resolve(provider, model.to_string(), base_url);
+    collect_with_compute(inputs, output_dir, model, warnings, move |url| {
+        compute_leaf(url, &summary)
+    })
+}
+
+/// Run the unified pipeline with an injected compute closure, then journal and
+/// shape the output. `collect` resolves the provider once and delegates here;
+/// tests inject a compute closure to drive the pipeline (and its journaling)
+/// without network access.
+fn collect_with_compute<F>(
     inputs: Vec<String>,
     output_dir: &Path,
     model: &str,
-    provider: crate::engine::llm::Provider,
-    base_url: Option<&str>,
     warnings: &mut Vec<String>,
-) -> Result<BatchCollectResult, CollectError> {
-    let model = model.to_string();
-    let base_url = base_url.map(str::to_string);
-    collect_batch_parallel_with_compute(inputs, output_dir, warnings, move |url| {
-        compute_leaf_url(url, &model, provider, base_url.as_deref())
+    compute: F,
+) -> Result<CollectOutput, CollectError>
+where
+    F: Fn(&str) -> Result<ComputedLeaf, CollectError> + Send + Sync + 'static,
+{
+    let single = is_single_bare_url(&inputs);
+    let outcomes = run_pipeline(inputs, output_dir, warnings, compute)?;
+    let items: Vec<CollectItemResult> = outcomes.iter().map(shape_item).collect();
+    if single {
+        // A single bare URL propagates its raw error (duplicate/rejected/fetch)
+        // and, per the single-result contract, is not journaled on failure.
+        match shape_single(outcomes) {
+            Ok(result) => {
+                journal(output_dir, model, &items);
+                Ok(CollectOutput::Single(result))
+            }
+            Err(error) => Err(error),
+        }
+    } else {
+        journal(output_dir, model, &items);
+        Ok(CollectOutput::Batch(BatchCollectResult {
+            summary: summarize_collect_items(&items),
+            items,
+        }))
+    }
+}
+
+/// Test seam: the same pipeline as `collect` but with an injected compute
+/// closure. Does NOT journal — tests do not check journaling.
+#[cfg(test)]
+fn collect_batch_parallel_with_compute<F>(
+    inputs: Vec<String>,
+    output_dir: &Path,
+    warnings: &mut Vec<String>,
+    compute: F,
+) -> Result<BatchCollectResult, CollectError>
+where
+    F: Fn(&str) -> Result<ComputedLeaf, CollectError> + Send + Sync + 'static,
+{
+    let outcomes = run_pipeline(inputs, output_dir, warnings, compute)?;
+    let items: Vec<CollectItemResult> = outcomes.iter().map(shape_item).collect();
+    Ok(BatchCollectResult {
+        summary: summarize_collect_items(&items),
+        items,
     })
 }
 

@@ -667,53 +667,22 @@ fn execute_collect(
 ) -> Result<CollectOutput, CliError> {
     let cfg = require_seeded_config()?;
     let tree = cfg.tree();
-    let output_dir = tree.path().to_path_buf();
     let model = cfg
         .config
         .effective_model()
         .map_err(|e| CliError::ConfigRead(e.to_string()))?;
-
-    // Use parallel path for multiple URLs or file-based input.
-    let use_parallel = inputs.len() > 1
-        || inputs
-            .iter()
-            .any(|i| i.ends_with(".txt") && !i.contains("://"))
-        || inputs.iter().any(|i| collect::is_local_note_file(i));
-
-    if use_parallel {
-        let result = collect::collect_batch_parallel(
-            inputs,
-            &output_dir,
-            model.as_str(),
-            cfg.config.provider,
-            cfg.config.base_url.as_deref(),
-            warnings,
-        )
-        .map_err(CliError::Collect)?;
-        collect::journal(&output_dir, model.as_str(), &result.items);
-        return Ok(CollectOutput::Batch(result));
+    if collect::is_single_bare_url(&inputs) {
+        eprintln!("fetching {}...", inputs[0]);
     }
-
-    // ponytail: single URL — call collect_url_with_model directly.
-    let url = &inputs[0];
-    eprintln!("fetching {}...", url);
-    let doc = collect::collect_url_with_model(
-        url,
-        &output_dir,
-        model.as_str(),
+    collect::collect(
+        inputs,
+        tree.path(),
         cfg.config.provider,
+        model.as_str(),
         cfg.config.base_url.as_deref(),
         warnings,
     )
-    .map_err(CliError::Collect)?;
-    let path = output_dir.join(&doc.filename);
-    let item = collect::collected_item(url, &doc.url, &doc.filename);
-    collect::journal(&output_dir, model.as_str(), std::slice::from_ref(&item));
-    Ok(CollectOutput::Single(collect::CollectResult {
-        url: doc.url,
-        file: doc.filename,
-        path: path.display().to_string(),
-    }))
+    .map_err(CliError::Collect)
 }
 
 fn execute_list(
