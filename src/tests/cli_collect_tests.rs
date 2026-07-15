@@ -967,6 +967,11 @@ fn is_single_bare_url_distinguishes_inputs() {
     ]));
     // A bare .txt argument routes to batch (mirrors pre-unification routing).
     assert!(!is_single_bare_url(&["urls.txt".to_string()]));
+    // A nested mixed-case .TXT list routes to batch: is_url_list_file (used by
+    // expansion) recognises .txt case-insensitively, so the output-policy
+    // check must agree, or shape_single would report only the first outcome.
+    assert!(!is_single_bare_url(&["data/urls.TXT".to_string()]));
+    assert!(!is_single_bare_url(&["data/URLS.txt".to_string()]));
     // Multiple inputs always route to batch.
     assert!(!is_single_bare_url(&[
         "https://a.com".to_string(),
@@ -1072,4 +1077,74 @@ fn notes_only_batch_journals_without_model() {
     assert_eq!(events[0].op, crate::engine::journal::Op::Collect);
     // Notes collect no LLM summary, so the model is not recorded.
     assert!(events[0].model.is_none());
+}
+
+// ── mixed-case .txt URL-list routing (#191 regression) ──────────────────────
+
+#[test]
+fn mixed_case_txt_list_returns_batch_with_every_url() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".bo")).unwrap();
+    // Nested mixed-case extension: is_url_list_file accepts .TXT
+    // case-insensitively and reads it as a URL list. The output-policy check
+    // must agree so all URLs are reported, not just the first.
+    let list = dir.path().join("data/urls.TXT");
+    fs::create_dir_all(list.parent().unwrap()).unwrap();
+    fs::write(&list, "https://example.com/a\nhttps://example.com/b\n").unwrap();
+
+    let result = collect_with_compute(
+        vec![list.display().to_string()],
+        dir.path(),
+        "test-model",
+        &mut Vec::new(),
+        move |url| {
+            Ok(ComputedLeaf {
+                url: url.to_string(),
+                title: Some("T".to_string()),
+                body_markdown: "body".to_string(),
+                summary_text: "s".to_string(),
+                note_warning: None,
+            })
+        },
+    )
+    .unwrap();
+
+    let batch = match result {
+        CollectOutput::Batch(b) => b,
+        other => panic!("mixed-case .txt list must be Batch, got {other:?}"),
+    };
+    assert_eq!(
+        batch.summary.collected, 2,
+        "every URL in the list must be collected"
+    );
+    assert_eq!(batch.items.len(), 2);
+}
+
+#[test]
+fn empty_mixed_case_txt_list_is_batch_failure_not_panic() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".bo")).unwrap();
+    // An empty nested .TXT list expands to an empty_url_list failure item.
+    // With correct routing this is a Batch failure; with Single routing it
+    // would hit shape_single's Outcome::Item arm and panic (unreachable!).
+    let list = dir.path().join("sub/empty.TXT");
+    fs::create_dir_all(list.parent().unwrap()).unwrap();
+    fs::write(&list, "\n  \n").unwrap();
+
+    let result = collect_with_compute(
+        vec![list.display().to_string()],
+        dir.path(),
+        "test-model",
+        &mut Vec::new(),
+        move |_| panic!("empty list must not be computed"),
+    )
+    .unwrap();
+
+    let batch = match result {
+        CollectOutput::Batch(b) => b,
+        other => panic!("empty .txt list must be Batch, got {other:?}"),
+    };
+    assert_eq!(batch.summary.total, 1);
+    assert_eq!(batch.summary.failed, 1);
+    assert_eq!(batch.items[0].code.as_deref(), Some("empty_url_list"));
 }

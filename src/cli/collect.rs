@@ -647,19 +647,25 @@ pub fn is_local_note_file(input: &str) -> bool {
     is_md && path.is_file()
 }
 
-/// Whether `inputs` selects the single-result output contract. Mirrors the
-/// pre-unification routing: a lone argument that is not a URL list (`.txt`
-/// without a scheme) and not an existing local note is collected as a single
-/// URL, selecting `CollectOutput::Single`; every other input shape returns a
-/// batch. The `.txt` suffix check is intentionally broader than
-/// `is_url_list_file` so bare `urls.txt`-style arguments keep their prior
-/// batch routing (where expansion then treats them as URLs).
+/// Whether `inputs` selects the single-result output contract. A lone
+/// argument that is neither a URL list nor an existing local note is
+/// collected as a single URL, selecting `CollectOutput::Single`; every other
+/// input shape returns a batch.
+///
+/// The URL-list test must agree with `is_url_list_file` (what expansion uses):
+/// anything expansion reads as a list must select Batch, or `shape_single`
+/// would report only the first outcome — or panic on an empty/failed list.
+/// `ends_with(".txt")` (case-sensitive) keeps the pre-unification routing for
+/// bare lowercase `urls.txt`-style arguments that `is_url_list_file` rejects
+/// via its dot/host heuristic; `is_url_list_file` (case-insensitive) covers
+/// nested and mixed-case (`.TXT`) lists it accepts.
 pub fn is_single_bare_url(inputs: &[String]) -> bool {
     if inputs.len() != 1 {
         return false;
     }
     let input = &inputs[0];
-    let is_url_list_like = input.ends_with(".txt") && !input.contains("://");
+    let is_url_list_like =
+        (input.ends_with(".txt") && !input.contains("://")) || is_url_list_file(input);
     !is_url_list_like && !is_local_note_file(input)
 }
 
