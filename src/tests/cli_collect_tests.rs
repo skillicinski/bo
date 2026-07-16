@@ -1,6 +1,17 @@
+// Orchestrator-level tests for the collect pipeline: the full expand→dedup→
+// compute→commit flow driven through `run_pipeline`, `collect_with_compute`,
+// and the `collect_batch_parallel_with_compute` test seam. Stage-unit tests
+// (input/compute/commit/journal) live in their own files.
+//
+// This is the sole collect test file over 500 lines by design: every test here
+// drives the whole pipeline and shares the `collect_html_test` /
+// `seed_for_collect` / `assert_*` helpers and HTML fixtures; splitting it would
+// duplicate those fixtures across files.
+
 use super::*;
+use crate::cli::collect::compute::compute_leaf_from_html;
 use crate::domain::manifest;
-use crate::domain::{Slug, Timestamp};
+use crate::domain::{Slug, Timestamp, Title, Url};
 use std::fs;
 use std::path::Path;
 use std::sync::{
@@ -23,52 +34,6 @@ fn collect_html_test(
         move |_| compute_leaf_from_html(&url_s, &html_s, |_, _| "test summary".to_string()),
     )?;
     shape_single(outcomes)
-}
-
-#[test]
-fn collect_input_expands_txt_url_list() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("urls.txt");
-    fs::write(
-        &path,
-        " https://example.com/one \n\nhttps://example.com/two\n",
-    )
-    .unwrap();
-
-    let expanded = expand_collect_inputs(&[path.display().to_string()]);
-
-    assert_eq!(expanded.len(), 2);
-    match &expanded[0] {
-        ExpandedCollectInput::Url { input, url, .. } => {
-            assert!(input.ends_with("urls.txt:1"), "input was {input}");
-            assert_eq!(url, "https://example.com/one");
-        }
-        other => panic!("unexpected expanded input: {other:?}"),
-    }
-    match &expanded[1] {
-        ExpandedCollectInput::Url { input, url, .. } => {
-            assert!(input.ends_with("urls.txt:3"), "input was {input}");
-            assert_eq!(url, "https://example.com/two");
-        }
-        other => panic!("unexpected expanded input: {other:?}"),
-    }
-}
-
-#[test]
-fn collect_input_treats_missing_local_txt_as_url_list_error() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("missing.txt");
-
-    let expanded = expand_collect_inputs(&[path.display().to_string()]);
-
-    assert_eq!(expanded.len(), 1);
-    match &expanded[0] {
-        ExpandedCollectInput::Failure { item, .. } => {
-            assert_eq!(item.status, CollectItemStatus::Failed);
-            assert_eq!(item.code.as_deref(), Some("url_list_read_error"));
-        }
-        other => panic!("unexpected expanded input: {other:?}"),
-    }
 }
 
 #[test]
@@ -206,36 +171,6 @@ fn batch_collect_skips_same_batch_url_collapse() {
         manifest.leaves[0].url.as_str(),
         "https://example.com/canonical"
     );
-}
-
-#[test]
-fn compute_leaf_url_rejects_blocked_http_status() {
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-
-    // Loopback HTTP fixture returning 403; classify_http_status maps 403 to
-    // BlockedBySite. The rejection happens before summarize, so no LLM key
-    // or external network is needed. stdlib-only — no mock HTTP crate.
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    std::thread::spawn(move || {
-        if let Ok((mut stream, _)) = listener.accept() {
-            let mut buf = [0u8; 1024];
-            let _ = stream.read(&mut buf);
-            let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/html\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-            let _ = stream.flush();
-        }
-    });
-
-    let url = format!("http://127.0.0.1:{port}/blocked");
-    let err = compute_leaf(&url, &SummaryProvider::fallback()).unwrap_err();
-    match err {
-        CollectError::Rejected { url: u, reason } => {
-            assert_eq!(u, url);
-            assert_eq!(reason.to_string(), "blocked by site");
-        }
-        other => panic!("expected Rejected, got {other:?}"),
-    }
 }
 
 const ARTICLE_HTML: &str = r#"<html><head><title>Plain Article</title></head>
@@ -719,34 +654,6 @@ fn collect_omits_summary_field_when_empty_string() {
 }
 
 #[test]
-fn dedup_uses_manifest_not_index_jsonl() {
-    let dir = TempDir::new().unwrap();
-    seed_for_collect(&dir, "manifest-dedup-tree");
-
-    // Pre-populate the manifest with a leaf, but NOT the index. The dedup
-    // path (duplicate_file) must consult the manifest, not the old index.
-    let manifest_path = dir.path().join(".bo/manifest.json");
-    let mut m = crate::engine::manifest::read(&manifest_path).unwrap();
-    m.leaves.push(crate::domain::Leaf {
-        slug: Slug::parse("already-collected").unwrap(),
-        file: "already-collected.md".to_string(),
-        title: Some(Title::parse("Already").unwrap()),
-        url: Url::parse("https://example.com/article").unwrap(),
-        collected_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
-        summary: None,
-    });
-    crate::engine::manifest::write(&manifest_path, &m).unwrap();
-
-    // Verify duplicate_file (the dedup helper) finds it via manifest only.
-    let existing = duplicate_file("https://example.com/article", dir.path()).unwrap();
-    assert_eq!(existing.as_deref(), Some("already-collected.md"));
-
-    // Sanity: a different URL is not flagged.
-    let none = duplicate_file("https://example.com/other", dir.path()).unwrap();
-    assert!(none.is_none());
-}
-
-#[test]
 fn fresh_collect_after_3b_does_not_write_index_secondary() {
     let dir = TempDir::new().unwrap();
     seed_for_collect(&dir, "secondary-still-written-tree");
@@ -825,99 +732,6 @@ fn recovery_notice_lands_in_warnings_not_stderr() {
 // ── local markdown notes (#159) ─────────────────────────────────────────────
 
 #[test]
-fn note_synthetic_url_parses() {
-    // `bo` is a non-special scheme; url::Url must accept bo://note/<hex>.
-    assert!(Url::parse("bo://note/0123456789abcdef").is_ok());
-}
-
-#[test]
-fn is_local_note_file_requires_existing_md_without_scheme() {
-    let dir = TempDir::new().unwrap();
-    let md = dir.path().join("note.md");
-    fs::write(&md, "body").unwrap();
-
-    assert!(is_local_note_file(md.to_str().unwrap()));
-    assert!(!is_local_note_file(
-        dir.path().join("missing.md").to_str().unwrap()
-    ));
-    assert!(!is_local_note_file("https://example.com/page.md"));
-    let txt = dir.path().join("list.txt");
-    fs::write(&txt, "https://example.com").unwrap();
-    assert!(!is_local_note_file(txt.to_str().unwrap()));
-}
-
-#[test]
-fn expand_routes_existing_md_to_note() {
-    let dir = TempDir::new().unwrap();
-    let md = dir.path().join("n.md");
-    fs::write(&md, "body").unwrap();
-
-    let expanded = expand_collect_inputs(&[md.display().to_string()]);
-    assert!(matches!(expanded[0], ExpandedCollectInput::Note { .. }));
-}
-
-#[test]
-fn compute_leaf_note_strips_frontmatter_extracts_title_and_hashes_body() {
-    let dir = TempDir::new().unwrap();
-    let md = dir.path().join("note.md");
-    fs::write(
-        &md,
-        "---\ntitle: My Note\ntags: [x]\n---\n# Heading One\n\nSome body text.\n",
-    )
-    .unwrap();
-
-    let computed = compute_leaf_note(md.to_str().unwrap()).unwrap();
-    assert_eq!(computed.title.as_deref(), Some("Heading One"));
-    assert_eq!(computed.body_markdown, "Some body text.\n");
-    assert!(computed.url.starts_with("bo://note/"));
-    assert_eq!(computed.url.len(), "bo://note/".len() + 16);
-    assert!(
-        computed.note_warning.is_some(),
-        "non-empty frontmatter should warn"
-    );
-    assert!(computed.summary_text.is_empty());
-}
-
-#[test]
-fn compute_leaf_note_without_frontmatter_or_title_still_works() {
-    let dir = TempDir::new().unwrap();
-    let md = dir.path().join("plain.md");
-    fs::write(&md, "just a body, no heading").unwrap();
-
-    let computed = compute_leaf_note(md.to_str().unwrap()).unwrap();
-    assert!(computed.title.is_none());
-    assert!(computed.note_warning.is_none());
-    // Untitled note slug derives from the synthetic url → note-<hash>.
-    assert!(computed.url.starts_with("bo://note/"));
-}
-
-#[test]
-fn compute_leaf_note_rejects_empty_after_frontmatter() {
-    let dir = TempDir::new().unwrap();
-    let md = dir.path().join("empty.md");
-    fs::write(&md, "---\ntitle: x\n---\n\n").unwrap();
-
-    let err = compute_leaf_note(md.to_str().unwrap()).unwrap_err();
-    assert!(matches!(err, CollectError::Note(NoteError::Empty { .. })));
-}
-
-#[test]
-fn compute_leaf_note_identical_content_yields_same_url() {
-    let dir = TempDir::new().unwrap();
-    let a = dir.path().join("a.md");
-    let b = dir.path().join("b.md");
-    fs::write(&a, "# Same\n\nbody").unwrap();
-    fs::write(&b, "# Same\n\nbody").unwrap();
-
-    let first = compute_leaf_note(a.to_str().unwrap()).unwrap();
-    let second = compute_leaf_note(b.to_str().unwrap()).unwrap();
-    assert_eq!(
-        first.url, second.url,
-        "same content must hash to one source url"
-    );
-}
-
-#[test]
 fn collect_note_writes_leaf_with_no_summary_and_strips_frontmatter() {
     let dir = TempDir::new().unwrap();
     let md = dir.path().join("note.md");
@@ -953,130 +767,6 @@ fn collect_note_writes_leaf_with_no_summary_and_strips_frontmatter() {
         .find(|l| l.url.as_str().starts_with("bo://note/"))
         .expect("note leaf in manifest");
     assert!(leaf.summary.is_none());
-}
-
-// ── output-policy routing & journaling (#191) ─────────────────────────────
-
-#[test]
-fn is_single_bare_url_distinguishes_inputs() {
-    // A lone bare URL selects the single-result contract.
-    assert!(is_single_bare_url(&["https://example.com".to_string()]));
-    // A URL whose path ends in .txt is still a single URL (has a scheme).
-    assert!(is_single_bare_url(&[
-        "https://example.com/feed.txt".to_string()
-    ]));
-    // A bare .txt argument routes to batch (mirrors pre-unification routing).
-    assert!(!is_single_bare_url(&["urls.txt".to_string()]));
-    // A nested mixed-case .TXT list routes to batch: is_url_list_file (used by
-    // expansion) recognises .txt case-insensitively, so the output-policy
-    // check must agree, or shape_single would report only the first outcome.
-    assert!(!is_single_bare_url(&["data/urls.TXT".to_string()]));
-    assert!(!is_single_bare_url(&["data/URLS.txt".to_string()]));
-    // Multiple inputs always route to batch.
-    assert!(!is_single_bare_url(&[
-        "https://a.com".to_string(),
-        "https://b.com".to_string()
-    ]));
-}
-
-#[test]
-fn single_url_success_journals_one_collect_event_with_model() {
-    let dir = TempDir::new().unwrap();
-    fs::create_dir_all(dir.path().join(".bo")).unwrap();
-    let result = collect_with_compute(
-        vec!["https://example.com/article".to_string()],
-        dir.path(),
-        "test-model",
-        &mut Vec::new(),
-        move |_| {
-            Ok(ComputedLeaf {
-                url: "https://example.com/article".to_string(),
-                title: Some("Article".to_string()),
-                body_markdown: "body".to_string(),
-                summary_text: "summary".to_string(),
-                note_warning: None,
-            })
-        },
-    )
-    .unwrap();
-    assert!(matches!(result, CollectOutput::Single(_)));
-
-    let events = crate::engine::journal::read_recent(dir.path(), 10);
-    assert_eq!(events.len(), 1, "single success journals exactly one event");
-    assert_eq!(events[0].op, crate::engine::journal::Op::Collect);
-    assert_eq!(events[0].model.as_deref(), Some("test-model"));
-}
-
-#[test]
-fn single_url_duplicate_errors_without_journaling() {
-    let dir = TempDir::new().unwrap();
-    fs::create_dir_all(dir.path().join(".bo")).unwrap();
-    let manifest_path = dir.path().join(".bo/manifest.json");
-    crate::engine::manifest::write(
-        &manifest_path,
-        &manifest::Manifest {
-            tree: manifest::TreeMeta {
-                name: "t".to_string(),
-                created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
-                last_compiled_at: None,
-            },
-            leaves: vec![crate::domain::Leaf {
-                slug: Slug::parse("article").unwrap(),
-                file: "leaf/article.md".to_string(),
-                title: Some(Title::parse("Article").unwrap()),
-                url: Url::parse("https://example.com/article").unwrap(),
-                collected_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
-                summary: None,
-            }],
-            branches: Vec::new(),
-        },
-    )
-    .unwrap();
-
-    // A single bare URL that is already collected must propagate the raw
-    // DuplicateUrl error (exit 1) and, per the single-result contract, leave
-    // no journal entry — not become a batch skip (which would exit 0 and
-    // journal).
-    let result = collect_with_compute(
-        vec!["https://example.com/article".to_string()],
-        dir.path(),
-        "test-model",
-        &mut Vec::new(),
-        move |_| panic!("duplicate URL should not be computed"),
-    );
-    assert!(
-        matches!(result, Err(CollectError::DuplicateUrl { .. })),
-        "single duplicate must propagate DuplicateUrl, got {result:?}"
-    );
-
-    let events = crate::engine::journal::read_recent(dir.path(), 10);
-    assert!(
-        events.is_empty(),
-        "single-URL failure must not journal: {events:?}"
-    );
-}
-
-#[test]
-fn notes_only_batch_journals_without_model() {
-    let dir = TempDir::new().unwrap();
-    let md = dir.path().join("note.md");
-    fs::write(&md, "# A Note\n\nbody").unwrap();
-
-    let result = collect_with_compute(
-        vec![md.display().to_string()],
-        dir.path(),
-        "test-model",
-        &mut Vec::new(),
-        move |_| panic!("notes must not be fetched"),
-    )
-    .unwrap();
-    assert!(matches!(result, CollectOutput::Batch(_)));
-
-    let events = crate::engine::journal::read_recent(dir.path(), 10);
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].op, crate::engine::journal::Op::Collect);
-    // Notes collect no LLM summary, so the model is not recorded.
-    assert!(events[0].model.is_none());
 }
 
 // ── mixed-case .txt URL-list routing (#191 regression) ──────────────────────
