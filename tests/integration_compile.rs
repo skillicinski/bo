@@ -460,6 +460,54 @@ impl bo::engine::llm::LlmProvider for FakeLlmProvider {
     }
 }
 
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+
+/// Provider that records every system message and returns canned responses in order.
+/// Uses interior mutability so it can be passed as `&dyn LlmProvider`.
+struct CapturingProvider {
+    system_prompts: Arc<Mutex<Vec<String>>>,
+    responses: Arc<Mutex<VecDeque<String>>>,
+}
+
+impl CapturingProvider {
+    fn new(responses: Vec<String>) -> Self {
+        Self {
+            system_prompts: Arc::new(Mutex::new(Vec::new())),
+            responses: Arc::new(Mutex::new(VecDeque::from(responses))),
+        }
+    }
+}
+
+#[async_trait]
+impl bo::engine::llm::LlmProvider for CapturingProvider {
+    async fn complete(
+        &self,
+        messages: &[bo::engine::llm::Message],
+        _model: &str,
+        _max_tokens: u32,
+        _response_schema: Option<&bo::engine::llm::NormalizedSchema>,
+        _reasoning_disabled: bool,
+    ) -> Result<bo::engine::llm::LlmResponse, bo::engine::llm::LlmError> {
+        if let Some(msg) = messages.first() {
+            self.system_prompts
+                .lock()
+                .unwrap()
+                .push(msg.content.clone());
+        }
+        let response = self
+            .responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("CapturingProvider: no more canned responses");
+        Ok(bo::engine::llm::LlmResponse {
+            content: response,
+            finish_reason: bo::engine::llm::FinishReason::Stop,
+        })
+    }
+}
+
 fn compile_model() -> bo::engine::llm::Model {
     bo::engine::llm::Model::parse("gpt-4.1", bo::engine::llm::Provider::OpenAI).unwrap()
 }
@@ -809,4 +857,308 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
     );
     // Branch file deleted from disk
     assert!(!dir.path().join("branch/mixed-branch.md").exists());
+}
+
+// ── system-prompt assertion tests ─────────────────────────────────────────
+
+/// Generate `count` leaf files and return manifest `Leaf` records.
+fn create_leaf_docs(
+    dir: &std::path::Path,
+    count: usize,
+    prefix: &str,
+    ts: &Timestamp,
+) -> Vec<Leaf> {
+    let mut leaves = Vec::new();
+    for i in 1..=count {
+        let slug = format!("{}-{:02}", prefix, i);
+        let file = format!("{}.md", slug);
+        let title_str = format!("{} {}", prefix, i);
+        let body = format!("Content of leaf {} {}.", prefix, i);
+        let t = Title::parse(&title_str).unwrap();
+        let u = Url::parse(&format!("https://example.com/{}", file)).unwrap();
+        let content = bo::domain::leaf::format_content(Some(&t), &u, ts, &body);
+        fs::write(dir.join(&file), content).unwrap();
+        leaves.push(Leaf {
+            slug: bo::domain::Slug::parse(&slug).unwrap(),
+            file,
+            title: Some(t),
+            url: u,
+            collected_at: ts.clone(),
+            summary: None,
+        });
+    }
+    leaves
+}
+
+#[test]
+fn compile_one_shot_uses_compile_system_prompt() {
+    // 4 leaves < 40 threshold → single-pass Full path.
+    let dir = setup_fixture_collection();
+    let cfg = make_config(dir.path());
+    let model = compile_model();
+    let started_at = Timestamp::now();
+
+    let canned = serde_json::json!({
+        "branches": [
+            {
+                "title": "Rust Memory Safety",
+                "body": "# Rust Memory Safety\n\nContent.",
+                "leaves": ["rust-ownership.md", "memory-safety.md"]
+            },
+            {
+                "title": "Systems Design in Rust",
+                "body": "# Systems Design in Rust\n\nContent.",
+                "leaves": ["safe-concurrency.md", "zero-cost-abstractions.md"]
+            }
+        ]
+    })
+    .to_string();
+
+    let provider = CapturingProvider::new(vec![canned]);
+    let manifest = bo::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let mhash = pending::manifest_hash(dir.path()).unwrap();
+
+    let result = compile::run_compile_with_provider_started_at(
+        &cfg,
+        Default::default(),
+        &provider,
+        &model,
+        &started_at,
+        Vec::new(),
+        &manifest,
+        &[],
+        &mhash,
+        &mut Vec::new(),
+    );
+
+    assert!(result.is_ok(), "compile failed: {:?}", result.err());
+
+    let prompts = provider.system_prompts.lock().unwrap();
+    assert_eq!(prompts.len(), 1, "expected exactly one LLM call");
+    assert!(
+        prompts[0].contains("knowledge compilation engine for a personal document collection"),
+        "one-shot should send COMPILE system prompt, got: {}",
+        prompts[0]
+    );
+}
+
+#[test]
+fn compile_full_two_stage_uses_cluster_system_prompt() {
+    // 40 leaves ≥ 40 threshold → two-stage Full path.
+    let dir = tempfile::TempDir::new().unwrap();
+    let bo_dir = dir.path().join(".bo");
+    fs::create_dir_all(&bo_dir).unwrap();
+
+    let ts = Timestamp::parse("2025-06-01T10:00:00Z").unwrap();
+    let leaves = create_leaf_docs(dir.path(), 40, "leaf", &ts);
+
+    bo::engine::manifest::write(
+        &bo_dir.join("manifest.json"),
+        &Manifest {
+            tree: TreeMeta {
+                name: "two-stage-full-fixture".to_string(),
+                created_at: ts.clone(),
+                last_compiled_at: None,
+            },
+            leaves: leaves.clone(),
+            branches: Vec::new(),
+        },
+    )
+    .unwrap();
+
+    let cfg = make_config(dir.path());
+    let model = compile_model();
+    let started_at = Timestamp::now();
+
+    // Stage 1: 2 clusters of 20 leaves each.
+    let slugs_1_20: Vec<String> = (1..=20).map(|i| format!("leaf-{:02}", i)).collect();
+    let slugs_21_40: Vec<String> = (21..=40).map(|i| format!("leaf-{:02}", i)).collect();
+
+    let stage1 = serde_json::json!({
+        "clusters": [
+            {"title": "First Cluster", "leaf_slugs": slugs_1_20},
+            {"title": "Second Cluster", "leaf_slugs": slugs_21_40},
+        ]
+    })
+    .to_string();
+
+    // Stage 2: one synthesize response per cluster.
+    let stage2_a = serde_json::json!({
+        "title": "First Cluster",
+        "body": "# First Cluster\n\nSynthesized content."
+    })
+    .to_string();
+    let stage2_b = serde_json::json!({
+        "title": "Second Cluster",
+        "body": "# Second Cluster\n\nSynthesized content."
+    })
+    .to_string();
+
+    let provider = CapturingProvider::new(vec![stage1, stage2_a, stage2_b]);
+    let manifest = bo::engine::manifest::read(&bo_dir.join("manifest.json")).unwrap();
+    let mhash = pending::manifest_hash(dir.path()).unwrap();
+
+    let result = compile::run_compile_with_provider_started_at(
+        &cfg,
+        Default::default(),
+        &provider,
+        &model,
+        &started_at,
+        Vec::new(),
+        &manifest,
+        &[],
+        &mhash,
+        &mut Vec::new(),
+    );
+
+    assert!(result.is_ok(), "compile failed: {:?}", result.err());
+
+    let prompts = provider.system_prompts.lock().unwrap();
+    assert!(
+        prompts.len() >= 2,
+        "expected at least 2 LLM calls (stage 1 + stage 2), got {}",
+        prompts.len()
+    );
+    assert!(
+        prompts[0].contains("You are clustering documents for a knowledge tree compilation"),
+        "stage 1 should send CLUSTER system prompt, got: {}",
+        prompts[0]
+    );
+    for (i, p) in prompts.iter().enumerate().skip(1) {
+        assert!(
+            p.contains("knowledge compilation engine"),
+            "stage 2 call {} should send COMPILE system prompt, got: {}",
+            i,
+            p
+        );
+    }
+}
+
+#[test]
+fn compile_incremental_two_stage_uses_incremental_cluster_system_prompt() {
+    // Existing tree: 4 compiled leaves, 1 branch, last_compiled_at set.
+    // Add 16 new leaves (collected after last_compile) → 16 ≥ 15 threshold.
+    let dir = tempfile::TempDir::new().unwrap();
+    let bo_dir = dir.path().join(".bo");
+    fs::create_dir_all(&bo_dir).unwrap();
+    fs::create_dir_all(dir.path().join("branch")).unwrap();
+
+    let ts_old = Timestamp::parse("2025-06-01T10:00:00Z").unwrap();
+    let ts_last_compile = Timestamp::parse("2025-06-02T00:00:00Z").unwrap();
+    let ts_new = Timestamp::parse("2025-06-03T10:00:00Z").unwrap();
+
+    // Existing compiled leaves (4).
+    let existing_leaves = create_leaf_docs(dir.path(), 4, "existing", &ts_old);
+    // New leaves (16).
+    let new_leaves = create_leaf_docs(dir.path(), 16, "new", &ts_new);
+
+    // Existing branch file on disk.
+    fs::write(
+        dir.path().join("branch/existing-branch.md"),
+        "---\ntitle: Existing Branch\ncreated_at: 2025-06-02T00:00:00Z\nupdated_at: 2025-06-02T00:00:00Z\nleaves:\n  - existing-01\n  - existing-02\n  - existing-03\n  - existing-04\n---\n\n# Existing Branch\n\nOriginal body.\n",
+    )
+    .unwrap();
+
+    let all_leaves: Vec<Leaf> = existing_leaves
+        .into_iter()
+        .chain(new_leaves.clone())
+        .collect();
+
+    bo::engine::manifest::write(
+        &bo_dir.join("manifest.json"),
+        &Manifest {
+            tree: TreeMeta {
+                name: "incremental-two-stage-fixture".to_string(),
+                created_at: ts_old.clone(),
+                last_compiled_at: Some(ts_last_compile.clone()),
+            },
+            leaves: all_leaves,
+            branches: vec![Branch {
+                slug: bo::domain::Slug::parse("existing-branch").unwrap(),
+                file: "branch/existing-branch.md".to_string(),
+                title: Title::parse("Existing Branch").unwrap(),
+                created_at: ts_last_compile.clone(),
+                updated_at: ts_last_compile.clone(),
+                leaves: vec![
+                    bo::domain::Slug::parse("existing-01").unwrap(),
+                    bo::domain::Slug::parse("existing-02").unwrap(),
+                    bo::domain::Slug::parse("existing-03").unwrap(),
+                    bo::domain::Slug::parse("existing-04").unwrap(),
+                ],
+            }],
+        },
+    )
+    .unwrap();
+
+    let cfg = make_config(dir.path());
+    let model = compile_model();
+    let started_at = Timestamp::now();
+
+    // new leaf slugs: new-01 through new-16
+    let new_slug_values: Vec<String> = (1..=16).map(|i| format!("new-{:02}", i)).collect();
+
+    // Stage 1: assign first 8 new leaves to the existing branch, rest to a new cluster.
+    let assign_slugs: Vec<String> = (1..=8).map(|i| format!("new-{:02}", i)).collect();
+    let new_cluster_slugs: Vec<String> = (9..=16).map(|i| format!("new-{:02}", i)).collect();
+
+    let stage1 = serde_json::json!({
+        "assignments": [
+            {"branch_slug": "existing-branch", "leaf_slugs": assign_slugs}
+        ],
+        "new_clusters": [
+            {"title": "New Concept", "leaf_slugs": new_cluster_slugs}
+        ]
+    })
+    .to_string();
+
+    // Stage 2: update response for existing branch + synthesize for new cluster.
+    let stage2_update = serde_json::json!({
+        "title": "Existing Branch",
+        "body": "# Existing Branch\n\nUpdated body."
+    })
+    .to_string();
+    let stage2_new = serde_json::json!({
+        "title": "New Concept",
+        "body": "# New Concept\n\nSynthesized content."
+    })
+    .to_string();
+
+    let provider = CapturingProvider::new(vec![stage1, stage2_update, stage2_new]);
+    let manifest = bo::engine::manifest::read(&bo_dir.join("manifest.json")).unwrap();
+    let mhash = pending::manifest_hash(dir.path()).unwrap();
+
+    let result = compile::run_compile_with_provider_started_at(
+        &cfg,
+        Default::default(),
+        &provider,
+        &model,
+        &started_at,
+        Vec::new(),
+        &manifest,
+        &new_slug_values,
+        &mhash,
+        &mut Vec::new(),
+    );
+
+    assert!(result.is_ok(), "compile failed: {:?}", result.err());
+
+    let prompts = provider.system_prompts.lock().unwrap();
+    assert!(
+        prompts.len() >= 2,
+        "expected at least 2 LLM calls (stage 1 + stage 2), got {}",
+        prompts.len()
+    );
+    assert!(
+        prompts[0].contains("You are clustering new documents into an existing knowledge tree"),
+        "stage 1 should send INCREMENTAL_CLUSTER system prompt, got: {}",
+        prompts[0]
+    );
+    for (i, p) in prompts.iter().enumerate().skip(1) {
+        assert!(
+            p.contains("knowledge compilation engine"),
+            "stage 2 call {} should send COMPILE system prompt, got: {}",
+            i,
+            p
+        );
+    }
 }

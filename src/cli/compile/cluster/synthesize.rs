@@ -265,12 +265,19 @@ fn synthesize_one_cluster(
     warnings: &mut Vec<String>,
 ) -> Result<ValidatedBranch, CompileError> {
     // Attempt 1.
-    let response = execute::call_llm_blocking(provider, model, user_message, schema);
+    let response =
+        execute::call_llm_blocking(provider, model, user_message, schema, COMPILE_SYSTEM_PROMPT);
     match parse_stage2_response(&response, cluster_label, leaf_files, warnings) {
         Ok(branch) => Ok(branch),
         Err(_first_error) => {
             // Attempt 2 (retry once).
-            let retry_response = execute::call_llm_blocking(provider, model, user_message, schema);
+            let retry_response = execute::call_llm_blocking(
+                provider,
+                model,
+                user_message,
+                schema,
+                COMPILE_SYSTEM_PROMPT,
+            );
             match parse_stage2_response(&retry_response, cluster_label, leaf_files, warnings) {
                 Ok(branch) => {
                     warnings.push(format!(
