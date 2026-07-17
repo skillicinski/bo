@@ -81,11 +81,9 @@ fn add(home: &Path, url: &str) -> Output {
         .expect("failed to run bo add")
 }
 
+// Now refuses non-interactively so cleanup is a no-op unless run interactively.
 fn raze(home: &Path) {
-    let _ = bo(home)
-        .arg("raze")
-        .env("BO_RAZE_NON_INTERACTIVE", "1")
-        .output();
+    let _ = bo(home).arg("raze").output();
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────
