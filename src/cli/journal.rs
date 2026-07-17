@@ -7,6 +7,7 @@
 //
 // See internal/principles/derivation-tiers.md (tier 3) and issue #178.
 
+use crate::engine::config::SeededConfig;
 use crate::engine::journal::{self, Event};
 use serde::Serialize;
 use serde_json::Value;
@@ -17,6 +18,11 @@ use std::path::Path;
 #[derive(Debug, Clone, Serialize)]
 pub struct JournalResult {
     pub events: Vec<Event>,
+}
+
+pub fn run(cfg: &SeededConfig, limit: usize) -> JournalResult {
+    let tree = cfg.tree();
+    read(tree.path(), limit)
 }
 
 /// Read up to `limit` recent events (newest last). Missing file = empty.

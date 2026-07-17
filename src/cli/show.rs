@@ -5,6 +5,7 @@ use crate::cli::resolve_leaf_path;
 use crate::domain::manifest::{self};
 use crate::domain::tree::TreeRuntimeState;
 use crate::domain::{Leaf, Title, Url};
+use crate::engine::config::SeededConfig;
 use serde::Serialize;
 use serde_json::json;
 use serde_yaml_ng::{Mapping, Value};
@@ -144,6 +145,11 @@ impl ShowError {
             }
         }
     }
+}
+
+pub fn run(cfg: &SeededConfig, title: &str, full: bool) -> Result<ShowResult, ShowError> {
+    let tree = cfg.tree();
+    show_leaf(tree.path(), title, &ShowOptions { full })
 }
 
 // ── show ─────────────────────────────────────────────────────────────────────

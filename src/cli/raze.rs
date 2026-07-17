@@ -1,6 +1,7 @@
 use crate::cli::json::JsonWarning;
 use crate::domain::tree::TreeRuntimeState;
 use crate::domain::{manifest, tree};
+use crate::engine::config::Config;
 use crate::engine::pending::{self, OpKind};
 
 use serde::Serialize;
@@ -54,6 +55,48 @@ impl std::fmt::Display for RazeError {
         match self {
             Self::Io(msg) => write!(f, "{}", msg),
             Self::Busy(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+pub fn run(
+    config: Option<Config>,
+    config_path: &Path,
+    auth_path: &Path,
+    include_auth: bool,
+) -> Result<Option<RazeOutput>, RazeError> {
+    match config {
+        Some(cfg) => {
+            let Some(seeded) = cfg.into_seeded() else {
+                return Ok(None);
+            };
+            let auth_cleanup = if include_auth {
+                AuthCleanup::Delete
+            } else {
+                AuthCleanup::Preserve
+            };
+            let tree = seeded.tree();
+            Ok(Some(raze_with_auth(
+                tree.path(),
+                config_path,
+                auth_path,
+                auth_cleanup,
+            )?))
+        }
+        None => {
+            if !include_auth {
+                return Ok(None);
+            }
+            match raze_auth_only(auth_path)? {
+                Some(output) => Ok(Some(output)),
+                None => Ok(Some(RazeOutput {
+                    result: RazeResult {
+                        auth_path: auth_path.to_string_lossy().into_owned(),
+                        ..Default::default()
+                    },
+                    warnings: Vec::new(),
+                })),
+            }
         }
     }
 }

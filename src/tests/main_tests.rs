@@ -1,7 +1,10 @@
 use super::*;
 use async_trait::async_trait;
+use bo::cli::compile::{CompileError, CompileResult};
+use bo::cli::json as json_output;
 use bo::domain::tree::TreeConfig;
 use bo::domain::{Slug, Timestamp, Title, Url};
+use bo::engine::llm::LlmProvider;
 use std::cell::Cell;
 use std::fs;
 use std::path::Path;
@@ -229,7 +232,7 @@ fn query_relevant_sources_require_provider() {
     );
     let calls = Cell::new(0);
 
-    let err = execute_query_with_provider_resolver(
+    let err = query::run_with_provider_resolver(
         &seeded_config(dir.path()),
         "what is rust safety",
         || {
@@ -279,7 +282,7 @@ fn query_uses_model_not_compile_model() {
         },
     );
 
-    let result = execute_query_with_provider_resolver(&cfg, "what is rust safety", || {
+    let result = query::run_with_provider_resolver(&cfg, "what is rust safety", || {
         Ok(Box::new(provider.clone_box()) as Box<dyn LlmProvider>)
     });
 
@@ -337,7 +340,7 @@ fn assert_no_provider_resolver_not_called(
     matches_expected_error: impl FnOnce(query::QueryError) -> bool,
 ) {
     let calls = Cell::new(0);
-    let err = execute_query_with_provider_resolver(cfg, question, || {
+    let err = query::run_with_provider_resolver(cfg, question, || {
         calls.set(calls.get() + 1);
         Err(query::QueryError::NoProvider(
             "missing provider".to_string(),

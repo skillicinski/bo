@@ -8,8 +8,10 @@
 // → render. Nothing below the entry point prints.
 
 use crate::cli::json::JsonError;
+use crate::engine::config::{Config, ConfigError, SeededConfig};
+use crate::engine::llm::LlmProvider;
 use crate::engine::llm::{
-    complete_with_policy, FinishReason, LlmCallPolicy, LlmError, LlmProvider, Message, Model,
+    complete_with_policy, FinishReason, LlmCallPolicy, LlmError, Message, Model,
 };
 use crate::engine::retrieval::{
     assemble_context, compute_context_budget, extract_terms, retrieve_docs, validate_citations,
@@ -316,6 +318,58 @@ pub fn render_human(result: &QueryResult) -> String {
 }
 
 // ── orchestrator ─────────────────────────────────────────────────────────────
+
+const NOT_SEEDED_HINT: &str = "bo hasn't been seeded yet — run: bo seed --path <path>";
+
+pub fn run<F>(
+    config: std::result::Result<Option<Config>, ConfigError>,
+    question: &str,
+    resolve_provider: F,
+) -> Result<QueryResult, QueryError>
+where
+    F: FnOnce(&SeededConfig) -> Result<Box<dyn LlmProvider>, QueryError>,
+{
+    let cfg = match config {
+        Ok(Some(c)) => c.into_seeded().ok_or_else(|| {
+            QueryError::NoProvider(format!(
+                "{NOT_SEEDED_HINT}. Cannot query without a configured tree."
+            ))
+        })?,
+        Ok(None) => {
+            return Err(QueryError::NoProvider(format!(
+                "{NOT_SEEDED_HINT}. Cannot query without a configured tree."
+            )));
+        }
+        Err(e) => {
+            return Err(QueryError::NoProvider(format!(
+                "failed to read config: {e}. Cannot query without a configured tree."
+            )));
+        }
+    };
+    run_with_provider_resolver(&cfg, question, || resolve_provider(&cfg))
+}
+
+pub fn run_with_provider_resolver<F>(
+    cfg: &SeededConfig,
+    question: &str,
+    resolve_provider: F,
+) -> Result<QueryResult, QueryError>
+where
+    F: FnOnce() -> Result<Box<dyn LlmProvider>, QueryError>,
+{
+    let model = cfg
+        .config
+        .effective_model()
+        .map_err(|e| QueryError::NoProvider(e.to_string()))?;
+    let tree = cfg.tree();
+    eprintln!("searching...");
+    let prepared = prepare(tree.path(), question, &model)?;
+    let provider = resolve_provider()?;
+    eprintln!("synthesizing...");
+    let result = run_prepared_with_provider(prepared, provider.as_ref())?;
+    journal(tree.path(), question, &result);
+    Ok(result)
+}
 
 /// Run query preflight up to, but not including, provider-backed synthesis.
 /// Presentation-pure: prints nothing; the argv-facing caller emits progress.
