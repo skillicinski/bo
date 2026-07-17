@@ -867,7 +867,13 @@ fn run_one_shot_dry_run(
         }
     };
     execute::ensure_compile_context_fits(model, prompt_tokens)?;
-    let response = execute::call_llm_blocking(provider, model, &user_message, &schema)?;
+    let response = execute::call_llm_blocking(
+        provider,
+        model,
+        &user_message,
+        &schema,
+        prompt::COMPILE_SYSTEM_PROMPT,
+    )?;
     let input_body_bytes: usize = loaded_leaves.iter().map(|l| l.body.len()).sum();
     let plan = match run_mode {
         CompileRunMode::Full => parse::parse_and_validate_with_input_size(
@@ -1029,8 +1035,13 @@ fn run_two_stage_full(
         cluster::ClusterResponse,
     >())
     .unwrap();
-    let cluster_response =
-        execute::call_llm_blocking(provider, model, &cluster_user_message, &cluster_schema)?;
+    let cluster_response = execute::call_llm_blocking(
+        provider,
+        model,
+        &cluster_user_message,
+        &cluster_schema,
+        cluster::CLUSTER_SYSTEM_PROMPT,
+    )?;
     let parsed: cluster::ClusterResponse = serde_json::from_str(&cluster_response)
         .map_err(|e| CompileError::Validation(format!("invalid cluster response shape: {}", e)))?;
     let stage1 = cluster::validate_clusters(&parsed, loaded_leaves, warnings)?;
@@ -1076,8 +1087,13 @@ fn run_two_stage_incremental(
         cluster::IncrementalClusterResponse,
     >())
     .unwrap();
-    let cluster_response =
-        execute::call_llm_blocking(provider, model, &cluster_user_message, &cluster_schema)?;
+    let cluster_response = execute::call_llm_blocking(
+        provider,
+        model,
+        &cluster_user_message,
+        &cluster_schema,
+        cluster::INCREMENTAL_CLUSTER_SYSTEM_PROMPT,
+    )?;
     let parsed: cluster::IncrementalClusterResponse = serde_json::from_str(&cluster_response)
         .map_err(|e| {
             CompileError::Validation(format!("invalid incremental cluster response shape: {}", e))
@@ -1209,8 +1225,13 @@ pub fn run_compile_with_provider_started_at(
                 }
             };
             execute::ensure_compile_context_fits(model, prompt_tokens)?;
-            let response =
-                execute::call_llm_blocking(provider, model, &user_message, &response_schema)?;
+            let response = execute::call_llm_blocking(
+                provider,
+                model,
+                &user_message,
+                &response_schema,
+                prompt::COMPILE_SYSTEM_PROMPT,
+            )?;
             match run_mode {
                 CompileRunMode::Full => parse::parse_and_validate_with_input_size(
                     &response,

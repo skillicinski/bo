@@ -13,7 +13,6 @@ use crate::engine::llm::{
 use crate::engine::pending::{self, CompileMode, OpKind, PendingWrite};
 
 use super::plan::build_manifest_delta;
-use super::prompt::COMPILE_SYSTEM_PROMPT;
 use super::validation::CompilePlan;
 use super::{
     BranchResult, CompileError, CompileRunMode, CompileSummary, COMPILE_LLM_POLICY,
@@ -56,6 +55,7 @@ pub(super) fn call_llm_blocking(
     model: &Model,
     user_message: &str,
     schema: &Value,
+    system_prompt: &str,
 ) -> Result<String, CompileError> {
     crate::engine::llm::blocking_runtime().block_on(call_llm_with_provider(
         provider,
@@ -63,6 +63,7 @@ pub(super) fn call_llm_blocking(
         user_message,
         schema,
         COMPILE_LLM_POLICY,
+        system_prompt,
     ))
 }
 
@@ -72,11 +73,9 @@ async fn call_llm_with_provider(
     user_message: &str,
     schema: &Value,
     policy: LlmCallPolicy,
+    system_prompt: &str,
 ) -> Result<String, CompileError> {
-    let messages = vec![
-        Message::system(COMPILE_SYSTEM_PROMPT),
-        Message::user(user_message),
-    ];
+    let messages = vec![Message::system(system_prompt), Message::user(user_message)];
 
     let response = complete_with_policy(
         provider,
