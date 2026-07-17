@@ -13,11 +13,12 @@ use crate::engine::llm::{
 use crate::engine::pending::{self, CompileMode, OpKind, PendingWrite};
 
 use super::plan::build_manifest_delta;
-use super::validation::CompilePlan;
-use super::{
-    BranchResult, CompileError, CompileRunMode, CompileSummary, COMPILE_LLM_POLICY,
-    COMPILE_PROMPT_OVERHEAD_TOKENS, MAX_COMPLETION_TOKENS, TOKEN_ESTIMATE_BYTES_PER_TOKEN,
+use super::types::{
+    COMPILE_LLM_POLICY, COMPILE_PROMPT_OVERHEAD_TOKENS, MAX_COMPLETION_TOKENS,
+    TOKEN_ESTIMATE_BYTES_PER_TOKEN,
 };
+use super::validation::CompilePlan;
+use super::{BranchResult, CompileError, CompileRunMode, CompileSummary};
 
 // ── token estimation ──────────────────────────────────────────────────────────
 
@@ -223,3 +224,7 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
         leaves_skipped: skipped_leaves.to_vec(),
     })
 }
+
+#[cfg(test)]
+#[path = "../../tests/cli_compile_execute_tests.rs"]
+mod execute_tests;

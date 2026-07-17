@@ -10,7 +10,8 @@ use crate::domain::Slug;
 
 use super::parse::{CompileResponse, IncrementalCompileResponse};
 use super::plan::{self, select_new_leaf_slugs};
-use super::{CompileError, MAX_COMPILED_BODY_BYTES_MIN, MAX_COMPILED_BODY_BYTES_PER_INPUT_BYTE};
+use super::types::{MAX_COMPILED_BODY_BYTES_MIN, MAX_COMPILED_BODY_BYTES_PER_INPUT_BYTE};
+use super::CompileError;
 
 // ── types ─────────────────────────────────────────────────────────────────────
 

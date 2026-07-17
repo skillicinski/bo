@@ -657,3 +657,7 @@ fn agent_failed(message: &str, diag: &agent::AgentDiagnostics) -> CompileError {
         signals_sent: diag.signals_sent,
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/cli_compile_agent_tests.rs"]
+mod agent_tests;

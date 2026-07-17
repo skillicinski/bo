@@ -2,7 +2,8 @@
 
 use std::io::{self, Write};
 
-use super::{CompilePreview, CompileResult, NO_NEW_LEAVES_REASON};
+use super::types::NO_NEW_LEAVES_REASON;
+use super::{CompilePreview, CompileResult};
 
 /// Render stderr-bound diagnostic/progress lines (title-collision warnings,
 /// pending-recovery notices, per-branch write progress) collected during the
