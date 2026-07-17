@@ -2,7 +2,13 @@
 
 ## check-rust.ts
 
-Runs `cargo check`, `cargo fmt --check`, and `cargo clippy -- -D warnings` after every `.rs` file modification (edit or write). Auto-loads when pi is launched from the repo root. Silent on success; on failure, surfaces the combined cargo errors as a tool error so the model can self-correct.
+Runs the project Rust gate — `cargo fmt --check` and `cargo clippy --all-targets --all-features -- -D warnings` (per `AGENTS.md`/`CONTRIBUTING.md`) — after every `.rs` edit or write that lands inside the session cwd. Checks run from the session cwd, so edits in worktrees target the right project and edits outside the project are skipped. Silent on success; on failure it surfaces the combined cargo output as a tool error so the model can self-correct. A hook-level failure (e.g. cargo unavailable) is surfaced rather than swallowed.
+
+Run its no-network regression check with:
+
+```bash
+node --experimental-strip-types .pi/extensions/test-check-rust.mjs
+```
 
 ## review-after-pi-commit.ts
 
