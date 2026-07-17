@@ -184,6 +184,10 @@ pub(super) fn repair_stale_branches(
     })
 }
 
+#[cfg(test)]
+#[path = "../../tests/cli_compile_repair_tests.rs"]
+mod repair_tests;
+
 // ── pipeline stages ───────────────────────────────────────────────────────────
 
 /// Classify deleted leaves and compute the deletion sets needed by later stages.

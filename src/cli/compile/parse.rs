@@ -93,3 +93,7 @@ pub(super) fn parse_and_validate_incremental_with_input_size(
         warnings,
     )
 }
+
+#[cfg(test)]
+#[path = "../../tests/cli_compile_parse_tests.rs"]
+mod parse_tests;

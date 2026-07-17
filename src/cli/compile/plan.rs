@@ -10,8 +10,12 @@ use crate::domain::Timestamp;
 use crate::domain::{Branch, Leaf, Title};
 use crate::engine::config::SeededConfig;
 
+use super::types::{CompileStages, TWO_STAGE_FULL_THRESHOLD, TWO_STAGE_INCREMENTAL_THRESHOLD};
 use super::validation::{CompilePlan, ValidatedBranch};
-use super::{BranchResult, CompileError, CompileOptions, CompileRunMode};
+use super::{
+    cluster, execute, parse, prompt, BranchResult, CompileError, CompileOptions, CompileRunMode,
+};
+use crate::engine::llm::{LlmProvider, Model};
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
@@ -307,3 +311,113 @@ fn finalize_manifest_delta(
         branches_updated,
     })
 }
+
+// ── shared plan dispatch ─────────────────────────────────────────────────────
+
+/// Single plan-building path called by both dry-run and live orchestration.
+/// Threshold-checked dispatch: two-stage when leaf/new-leaf counts exceed
+/// thresholds, otherwise single-pass prompt→execute→parse.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn build_compile_plan(
+    cfg: &SeededConfig,
+    provider: &dyn LlmProvider,
+    model: &Model,
+    manifest: &Manifest,
+    loaded_leaves: &[LoadedLeaf],
+    new_leaf_slugs: &[String],
+    run_mode: CompileRunMode,
+    warnings: &mut Vec<String>,
+) -> Result<(CompilePlan, Option<CompileStages>), CompileError> {
+    let should_use_two_stage = match run_mode {
+        CompileRunMode::Full => loaded_leaves.len() >= TWO_STAGE_FULL_THRESHOLD,
+        CompileRunMode::Incremental => new_leaf_slugs.len() >= TWO_STAGE_INCREMENTAL_THRESHOLD,
+    };
+
+    if should_use_two_stage {
+        let (plan, stages) = match run_mode {
+            CompileRunMode::Full => {
+                cluster::run_two_stage_full(cfg, provider, model, loaded_leaves, warnings)?
+            }
+            CompileRunMode::Incremental => cluster::run_two_stage_incremental(
+                cfg,
+                provider,
+                model,
+                manifest,
+                loaded_leaves,
+                new_leaf_slugs,
+                warnings,
+            )?,
+        };
+        return Ok((plan, Some(stages)));
+    }
+
+    // Single-pass path.
+    let input_body_bytes: usize = loaded_leaves.iter().map(|l| l.body.len()).sum();
+    let (user_message, prompt_tokens, response_schema) = match run_mode {
+        CompileRunMode::Full => {
+            let msg = prompt::build_user_message(loaded_leaves);
+            let tokens = execute::estimate_compile_prompt_tokens(
+                prompt::COMPILE_SYSTEM_PROMPT
+                    .len()
+                    .saturating_add(msg.len()),
+            );
+            (
+                msg,
+                tokens,
+                serde_json::to_value(crate::engine::schema::inline_schema_for::<
+                    parse::CompileResponse,
+                >())
+                .unwrap(),
+            )
+        }
+        CompileRunMode::Incremental => {
+            let msg = prompt::build_incremental_user_message(
+                cfg,
+                manifest,
+                loaded_leaves,
+                new_leaf_slugs,
+            );
+            let tokens = execute::estimate_compile_prompt_tokens(
+                prompt::COMPILE_SYSTEM_PROMPT
+                    .len()
+                    .saturating_add(msg.len()),
+            );
+            (
+                msg,
+                tokens,
+                serde_json::to_value(crate::engine::schema::inline_schema_for::<
+                    parse::IncrementalCompileResponse,
+                >())
+                .unwrap(),
+            )
+        }
+    };
+    execute::ensure_compile_context_fits(model, prompt_tokens)?;
+    let response = execute::call_llm_blocking(
+        provider,
+        model,
+        &user_message,
+        &response_schema,
+        prompt::COMPILE_SYSTEM_PROMPT,
+    )?;
+    let plan = match run_mode {
+        CompileRunMode::Full => parse::parse_and_validate_with_input_size(
+            &response,
+            loaded_leaves,
+            input_body_bytes,
+            warnings,
+        )?,
+        CompileRunMode::Incremental => parse::parse_and_validate_incremental_with_input_size(
+            &response,
+            cfg,
+            loaded_leaves,
+            input_body_bytes,
+            warnings,
+        )?,
+    };
+    Ok((plan, None))
+}
+
+#[cfg(test)]
+#[path = "../../tests/cli_compile_plan_tests.rs"]
+mod plan_tests;
