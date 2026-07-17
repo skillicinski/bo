@@ -12,7 +12,6 @@ use tempfile::TempDir;
 fn bo(home: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_bo"));
     cmd.env("HOME", home);
-    cmd.env("BO_RAZE_NON_INTERACTIVE", "1");
     cmd
 }
 
@@ -365,47 +364,30 @@ fn show_json_ambiguous_title_includes_candidates() {
 // ── raze ─────────────────────────────────────────────────────────────────────
 
 #[test]
-fn raze_json_summary() {
+fn raze_json_refuses_without_interactive_terminal() {
     let home = TempDir::new().unwrap();
     let tree = seed_tree(&home, "tree");
-    let tree_path = fs::canonicalize(&tree).unwrap().display().to_string();
+    assert!(tree.exists());
 
     let out = run(home.path(), &["raze", "--json"]);
-    assert!(out.status.success());
+    assert!(!out.status.success());
     let parsed = parse_json(&out);
-    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["ok"], false);
     assert_eq!(parsed["command"], "raze");
-    assert_eq!(parsed["data"]["output_dir"], tree_path);
-    assert_eq!(parsed["data"]["removed_output_dir"], true);
-    assert_eq!(parsed["data"]["deleted_config"], true);
-    assert_eq!(parsed["data"]["deleted_auth"], false);
-    assert_eq!(parsed["data"]["preserved_auth"], false);
+    assert_eq!(parsed["error"]["code"], "io_error");
+    assert!(parsed["error"]["message"]
+        .as_str()
+        .is_some_and(|msg| msg.contains("interactive terminal")));
+
+    // Refusal fires before any deletion.
+    assert!(tree.exists(), "tree must survive a refused raze");
 }
 
 #[test]
-fn raze_json_preserves_auth_by_default() {
+fn raze_json_include_auth_refuses_without_interactive_terminal() {
     let home = TempDir::new().unwrap();
-    seed_tree(&home, "tree");
     let auth_path = home.path().join(".bo").join("auth.json");
-    fs::write(
-        &auth_path,
-        r#"{"providers":{"openai":{"api_key":"sk-json-raze"}}}"#,
-    )
-    .unwrap();
-
-    let out = run(home.path(), &["raze", "--json"]);
-    assert!(out.status.success());
-    let parsed = parse_json(&out);
-    assert_eq!(parsed["data"]["deleted_auth"], false);
-    assert_eq!(parsed["data"]["preserved_auth"], true);
-    assert!(auth_path.exists());
-}
-
-#[test]
-fn raze_json_include_auth_deletes_auth() {
-    let home = TempDir::new().unwrap();
-    seed_tree(&home, "tree");
-    let auth_path = home.path().join(".bo").join("auth.json");
+    fs::create_dir_all(auth_path.parent().unwrap()).unwrap();
     fs::write(
         &auth_path,
         r#"{"providers":{"openai":{"api_key":"sk-json-raze"}}}"#,
@@ -413,29 +395,17 @@ fn raze_json_include_auth_deletes_auth() {
     .unwrap();
 
     let out = run(home.path(), &["raze", "--include-auth", "--json"]);
-    assert!(out.status.success());
+    assert!(!out.status.success());
     let parsed = parse_json(&out);
-    assert_eq!(parsed["data"]["deleted_auth"], true);
-    assert_eq!(parsed["data"]["preserved_auth"], false);
-    assert!(!auth_path.exists());
-}
+    assert_eq!(parsed["ok"], false);
+    assert_eq!(parsed["command"], "raze");
+    assert_eq!(parsed["error"]["code"], "io_error");
+    assert!(parsed["error"]["message"]
+        .as_str()
+        .is_some_and(|msg| msg.contains("interactive terminal")));
 
-#[test]
-fn raze_json_reports_suspicious_manifest_entries_as_warnings() {
-    let home = TempDir::new().unwrap();
-    let tree = seed_tree(&home, "tree");
-    add_manifest_leaf(
-        &tree,
-        "../outside.md",
-        "Suspicious",
-        "https://example.com/suspicious",
-    );
-
-    let out = run(home.path(), &["raze", "--json"]);
-    assert!(out.status.success());
-    let parsed = parse_json(&out);
-    assert_eq!(parsed["warnings"][0]["code"], "suspicious_manifest_entry");
-    assert_eq!(parsed["warnings"][0]["details"]["file"], "../outside.md");
+    // Credential deletion is gated; auth survives a non-interactive refusal.
+    assert!(auth_path.exists());
 }
 
 // ── collect ──────────────────────────────────────────────────────────────────

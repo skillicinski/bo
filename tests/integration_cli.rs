@@ -58,7 +58,6 @@ fn raze_with_args(home: &Path, args: &[&str]) -> Output {
     bo(home)
         .arg("raze")
         .args(args)
-        .env("BO_RAZE_NON_INTERACTIVE", "1")
         .output()
         .expect("failed to run bo raze")
 }
@@ -1103,7 +1102,7 @@ fn query_empty_tree_reports_no_sources_before_auth() {
 // ── raze ─────────────────────────────────────────────────────────────────────
 
 #[test]
-fn raze_preserves_auth_and_cleans_tree() {
+fn raze_refuses_without_interactive_terminal_and_preserves_tree() {
     let home = TempDir::new().unwrap();
     let tree = home.path().join("my-tree");
 
@@ -1124,29 +1123,20 @@ fn raze_preserves_auth_and_cleans_tree() {
     upsert_manifest_leaf(&tree, "article.md", "Article", "2026-01-01T00:00:00Z");
 
     let out = raze(home.path());
-    assert!(
-        out.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(1));
 
-    let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stdout.contains("preserved auth"), "stdout: {stdout}");
-    assert!(!stdout.contains("sk-raze"));
-    assert!(!stderr.contains("sk-raze"));
+    assert!(stderr.contains("interactive terminal"), "stderr: {stderr}");
 
-    // Config deleted, auth preserved
-    assert!(!config_path(&home).exists());
+    // Nothing was deleted
+    assert!(tree.join("article.md").exists());
+    assert!(config_path(&home).exists());
     assert!(auth_path(&home).exists());
-
-    // Tree file and index deleted
-    assert!(!tree.join("article.md").exists());
-    assert!(!tree.join(".bo").exists());
 }
 
 #[test]
-fn raze_include_auth_deletes_auth_with_seeded_tree() {
+fn raze_refuses_with_include_auth_does_not_bypass_gate() {
     let home = TempDir::new().unwrap();
     let tree = home.path().join("my-tree");
     seed(home.path(), &tree);
@@ -1158,19 +1148,14 @@ fn raze_include_auth_deletes_auth_with_seeded_tree() {
     .unwrap();
 
     let out = raze_with_args(home.path(), &["--include-auth"]);
-    assert!(
-        out.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(1));
 
-    let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stdout.contains("deleted auth"), "stdout: {stdout}");
-    assert!(!stdout.contains("sk-raze-include"));
-    assert!(!stderr.contains("sk-raze-include"));
-    assert!(!config_path(&home).exists());
-    assert!(!auth_path(&home).exists());
+    assert!(stderr.contains("interactive terminal"), "stderr: {stderr}");
+
+    // --include-auth must not bypass the gate; auth still exists
+    assert!(auth_path(&home).exists());
 }
 
 #[test]
@@ -1211,7 +1196,7 @@ fn raze_without_seed_preserves_auth_and_fails_without_include_auth() {
 }
 
 #[test]
-fn raze_include_auth_deletes_auth_and_succeeds_without_seed() {
+fn raze_include_auth_refuses_without_seed_non_interactively() {
     let home = TempDir::new().unwrap();
     fs::create_dir_all(auth_path(&home).parent().unwrap()).unwrap();
     fs::write(
@@ -1221,37 +1206,12 @@ fn raze_include_auth_deletes_auth_and_succeeds_without_seed() {
     .unwrap();
 
     let out = raze_with_args(home.path(), &["--include-auth"]);
-    assert!(
-        out.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(1));
 
-    let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stdout.contains("deleted auth"), "stdout: {stdout}");
-    assert!(!stdout.contains("sk-auth-only"));
-    assert!(!stderr.contains("sk-auth-only"));
-    assert!(!auth_path(&home).exists());
-}
+    assert!(stderr.contains("interactive terminal"), "stderr: {stderr}");
 
-#[test]
-fn raze_tolerates_already_deleted_files() {
-    let home = TempDir::new().unwrap();
-    let tree = home.path().join("my-tree");
-
-    seed(home.path(), &tree);
-
-    // Manifest references a file that doesn't exist on disk
-    fs::create_dir_all(&tree).unwrap();
-    append_index_entry(&tree, "gone.md", "Gone");
-
-    // Should not error — missing files are silently skipped
-    let out = raze(home.path());
-    assert!(
-        out.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(!config_path(&home).exists());
+    // Credential deletion is gated; auth survives a non-interactive refusal.
+    assert!(auth_path(&home).exists());
 }

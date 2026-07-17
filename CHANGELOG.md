@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Removed
+
+- `BO_RAZE_NON_INTERACTIVE` environment variable bypass.
+
+### Changed
+
+- `bo raze` now always requires an interactive terminal for confirmation and refuses to run non-interactively, including the credential-only `--include-auth` path when no tree is seeded.
+
 ## [0.0.10] - 2026-07-13
 
 ### Added

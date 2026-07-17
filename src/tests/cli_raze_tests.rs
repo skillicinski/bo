@@ -406,6 +406,37 @@ fn confirm_with_auth_shows_will_be_deleted() {
 }
 
 #[test]
+fn confirm_auth_only_accepts_yes() {
+    let mut reader = Cursor::new(b"yes\n");
+    let mut writer = Vec::new();
+    let result = confirm_auth_only(
+        std::path::Path::new("/tmp/.bo/auth.json"),
+        &mut reader,
+        &mut writer,
+    )
+    .unwrap();
+    assert!(result);
+    let output = String::from_utf8(writer).unwrap();
+    assert!(output.contains("Type 'yes' to confirm:"));
+    assert!(output.contains("/tmp/.bo/auth.json"));
+}
+
+#[test]
+fn confirm_auth_only_rejects_non_yes() {
+    for input in &["Yes\n", "YES\n", "y\n", "\n", "no\n", "yes \n"] {
+        let mut reader = Cursor::new(input.as_bytes());
+        let mut writer = Vec::new();
+        let result = confirm_auth_only(
+            std::path::Path::new("/tmp/.bo/auth.json"),
+            &mut reader,
+            &mut writer,
+        )
+        .unwrap();
+        assert!(!result, "should reject {:?}", input);
+    }
+}
+
+#[test]
 fn render_human_cancelled_shows_message() {
     let result = RazeResult {
         cancelled: true,

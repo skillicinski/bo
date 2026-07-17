@@ -87,6 +87,21 @@ pub fn run(
             if !include_auth {
                 return Ok(None);
             }
+            // Same hardening as the seeded-tree path: refuse non-interactive
+            // invocation and let the user back out before credentials are deleted.
+            #[cfg(not(test))]
+            {
+                if confirm_auth_only_interactive(auth_path)? {
+                    return Ok(Some(RazeOutput {
+                        result: RazeResult {
+                            cancelled: true,
+                            auth_path: auth_path.to_string_lossy().into_owned(),
+                            ..Default::default()
+                        },
+                        warnings: Vec::new(),
+                    }));
+                }
+            }
             match raze_auth_only(auth_path)? {
                 Some(output) => Ok(Some(output)),
                 None => Ok(Some(RazeOutput {
@@ -121,8 +136,7 @@ pub fn raze_with_auth(
         Err(error) => return Err(RazeError::Io(format!("failed to read manifest: {error}"))),
     };
 
-    // Confirmation gate (skipped in unit tests via #[cfg(not(test))]).
-    // Integration tests use BO_RAZE_NON_INTERACTIVE=1 to bypass.
+    // There is no non-interactive bypass; integration tests verify the refusal.
     #[cfg(not(test))]
     {
         let include_auth = auth_cleanup.deletes_auth();
@@ -267,17 +281,14 @@ pub fn raze_auth_only(auth_path: &Path) -> Result<Option<RazeOutput>, RazeError>
 
 /// Run the confirmation gate with real stdin/stderr. Returns `Ok(true)` if the
 /// user cancelled (caller should return early with no mutation). Returns
-/// `Ok(false)` if confirmed or bypassed via `BO_RAZE_NON_INTERACTIVE`. Returns
-/// `Err` if stdin is not a TTY and the env bypass is not set.
+/// `Ok(false)` if confirmed. Returns `Err` if stdin is not a TTY, refusing to
+/// run non-interactively.
 #[cfg(not(test))]
 fn confirm_raze_interactive(
     tree_root: &Path,
     manifest: Option<&manifest::Manifest>,
     include_auth: bool,
 ) -> Result<bool, RazeError> {
-    if std::env::var("BO_RAZE_NON_INTERACTIVE").is_ok() {
-        return Ok(false);
-    }
     use std::io::IsTerminal;
     if !std::io::stdin().is_terminal() {
         return Err(RazeError::Io(
@@ -295,6 +306,51 @@ fn confirm_raze_interactive(
     Ok(!confirmed)
 }
 
+/// Credential-only confirmation gate. Same contract as `confirm_raze_interactive`:
+/// `Ok(true)` if the user cancelled, `Ok(false)` if confirmed, `Err` if stdin is
+/// not a TTY.
+#[cfg(not(test))]
+fn confirm_auth_only_interactive(auth_path: &Path) -> Result<bool, RazeError> {
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() {
+        return Err(RazeError::Io(
+            "raze requires an interactive terminal for confirmation. Refusing to run non-interactively."
+                .into(),
+        ));
+    }
+    let confirmed = confirm_auth_only(
+        auth_path,
+        &mut std::io::BufReader::new(std::io::stdin()),
+        &mut std::io::stderr(),
+    )?;
+    Ok(!confirmed)
+}
+
+/// Print a credential-deletion prompt to `writer`, read response from `reader`.
+/// Returns `true` for exact "yes\n", `false` for anything else.
+fn confirm_auth_only(
+    auth_path: &Path,
+    reader: &mut impl BufRead,
+    writer: &mut impl Write,
+) -> Result<bool, RazeError> {
+    writeln!(
+        writer,
+        "This will permanently delete your bo credentials at {}:",
+        auth_path.display()
+    )
+    .map_err(map_io_error)?;
+    write!(writer, "Type 'yes' to confirm: ").map_err(map_io_error)?;
+    writer.flush().map_err(map_io_error)?;
+
+    let mut buf = String::new();
+    reader.read_line(&mut buf).map_err(map_io_error)?;
+    Ok(buf == "yes\n")
+}
+
+fn map_io_error(error: std::io::Error) -> RazeError {
+    RazeError::Io(error.to_string())
+}
+
 /// Print confirmation prompt to `writer`, read response from `reader`.
 /// Returns `true` for exact "yes\n", `false` for anything else.
 fn confirm_raze(
@@ -304,9 +360,6 @@ fn confirm_raze(
     reader: &mut impl BufRead,
     writer: &mut impl Write,
 ) -> Result<bool, RazeError> {
-    fn map_io_error(error: std::io::Error) -> RazeError {
-        RazeError::Io(error.to_string())
-    }
     writeln!(
         writer,
         "This will permanently delete the tree at {}:",
