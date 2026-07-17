@@ -52,6 +52,7 @@ echo "OK"
 
 # 3. seed into a tree
 TREE_DIR="$FAKE_HOME/test-tree"
+MANIFEST="$TREE_DIR/.bo/manifest.json"
 echo -n "  bo seed --path $TREE_DIR --name test-tree --provider openai --model gpt-4.1-mini ... "
 HOME="$FAKE_HOME" "$BO" seed \
     --path "$TREE_DIR" \
@@ -60,12 +61,20 @@ HOME="$FAKE_HOME" "$BO" seed \
     --model gpt-4.1-mini > /dev/null 2>&1
 echo "OK"
 
-# 4. list (empty tree)
+# 4. manifest absent immediately after seed
+echo -n "  manifest absent after seed ... "
+if [[ -f "$MANIFEST" ]]; then
+    echo "FAIL: manifest exists immediately after seed"
+    exit 1
+fi
+echo "OK"
+
+# 5. list (empty tree)
 echo -n "  bo list (empty) ... "
 HOME="$FAKE_HOME" "$BO" list > /dev/null 2>&1
 echo "OK"
 
-# 5. status shows model after config
+# 6. status shows model after config
 echo -n "  bo status shows model ... "
 STATUS=$(HOME="$FAKE_HOME" "$BO" status 2>/dev/null)
 if ! echo "$STATUS" | grep -q "gpt-4.1-mini"; then
@@ -74,7 +83,7 @@ if ! echo "$STATUS" | grep -q "gpt-4.1-mini"; then
 fi
 echo "OK"
 
-# 6. JSON output works
+# 7. JSON output works
 echo -n "  bo --json list ... "
 JSON=$(HOME="$FAKE_HOME" "$BO" --json list 2>/dev/null)
 if ! echo "$JSON" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null; then
@@ -83,7 +92,7 @@ if ! echo "$JSON" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/nu
 fi
 echo "OK"
 
-# 7. show nonexistent (exits 1, no crash)
+# 8. show nonexistent (exits 1, no crash)
 echo -n "  bo show nonexistent (exits 1, no crash) ... "
 if HOME="$FAKE_HOME" "$BO" show nonexistent > /dev/null 2>&1; then
     echo "FAIL: expected exit 1"
@@ -91,10 +100,40 @@ if HOME="$FAKE_HOME" "$BO" show nonexistent > /dev/null 2>&1; then
 fi
 echo "OK (exit 1 as expected)"
 
-# 8. Verify no .env or repo files needed
+# 9. Verify no .env or repo files needed
 echo -n "  no repo-relative files required ... "
 if [[ -f "$WORK_DIR/.env" ]] || [[ -f "$FAKE_HOME/.env" ]]; then
     echo "FAIL: .env file found"
+    exit 1
+fi
+echo "OK"
+
+# 10. collect a local markdown note
+echo -n "  bo collect local note ... "
+cat > "$WORK_DIR/note.md" << 'EOF'
+# Smoke Test Note
+This is a test note to verify local collect works.
+EOF
+if ! HOME="$FAKE_HOME" "$BO" collect "$WORK_DIR/note.md" > /dev/null 2>&1; then
+    echo "FAIL: collect local note failed"
+    exit 1
+fi
+echo "OK"
+
+# 11. manifest has one bo://note/ leaf
+echo -n "  manifest has one bo://note/ leaf ... "
+if [[ ! -f "$MANIFEST" ]]; then
+    echo "FAIL: manifest not created after collect"
+    exit 1
+fi
+if ! python3 -c '
+import sys, json
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+assert len(data["leaves"]) == 1
+assert data["leaves"][0]["url"].startswith("bo://note/")
+' "$MANIFEST" 2>/dev/null; then
+    echo "FAIL: manifest did not validate"
     exit 1
 fi
 echo "OK"
