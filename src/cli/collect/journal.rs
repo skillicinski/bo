@@ -1,6 +1,7 @@
 // Collect stage: journal payload and append. Best-effort — a journal failure
-// never fails the command. `model` is recorded only when at least one real
-// (non-note) URL was processed.
+// never fails the command. `model` is recorded only when at least one
+// summary-eligible external source (a real URL) was present in the expanded
+// inputs, as determined at expand time and passed in explicitly.
 
 use std::path::Path;
 
@@ -41,19 +42,24 @@ pub(super) struct CollectJournalPayload<'a> {
 }
 
 /// Record a collect operation in the tree's journal. Best-effort: a journal
-/// failure never fails the command. `model` is included only when at least one
-/// real (non-note) URL was processed — notes collect no LLM summary.
-pub(super) fn journal(tree_dir: &Path, model: &str, items: &[CollectItemResult]) {
-    let involved = items
-        .iter()
-        .any(|i| i.url.as_deref().is_some_and(|u| !u.starts_with("bo://")));
+/// failure never fails the command. `model` is included only when
+/// `model_applicable` is true — that is, when at least one summary-eligible
+/// external source (a real URL) was present in the expanded inputs. This is
+/// derived from source classification at expand time and passed in explicitly,
+/// so it is independent of credentials and per-item outcomes.
+pub(super) fn journal(
+    tree_dir: &Path,
+    model: &str,
+    model_applicable: bool,
+    items: &[CollectItemResult],
+) {
     let payload = CollectJournalPayload {
         items: items.iter().map(CollectJournalItem::from).collect(),
     };
     crate::engine::journal::append_payload(
         tree_dir,
         crate::engine::journal::Op::Collect,
-        if involved {
+        if model_applicable {
             Some(model.to_string())
         } else {
             None

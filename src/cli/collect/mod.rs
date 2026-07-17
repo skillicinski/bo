@@ -255,18 +255,21 @@ pub enum CollectOutput {
 // ── unified pipeline ─────────────────────────────────────────────────────────
 
 /// Expand, dedup, compute, and single-atomic-commit. Returns outcomes so the
-/// caller can shape them into `CollectOutput::Single` or `CollectOutput::Batch`.
+/// caller can shape them into `CollectOutput::Single` or `CollectOutput::Batch`,
+/// plus a flag indicating whether any expanded input is a summary-eligible
+/// external source (drives journal model applicability).
 fn run_pipeline<F>(
     inputs: Vec<String>,
     output_dir: &Path,
     warnings: &mut Vec<String>,
     compute: F,
-) -> Result<Vec<Outcome>, CollectError>
+) -> Result<(Vec<Outcome>, bool), CollectError>
 where
     F: Fn(&str) -> Result<ComputedLeaf, CollectError> + Send + Sync + 'static,
 {
     recover_pending_if_needed(output_dir, warnings)?;
     let expanded = expand_collect_inputs(&inputs);
+    let model_applicable = input::has_external_source(&expanded);
 
     let DedupPlan {
         mut outcomes,
@@ -327,7 +330,7 @@ where
 
     commit_computed(compute_results, output_dir, &mut outcomes, warnings)?;
 
-    Ok(outcomes)
+    Ok((outcomes, model_applicable))
 }
 
 // ── public entry points ──────────────────────────────────────────────────────
@@ -367,20 +370,20 @@ where
     F: Fn(&str) -> Result<ComputedLeaf, CollectError> + Send + Sync + 'static,
 {
     let single = is_single_bare_url(&inputs);
-    let outcomes = run_pipeline(inputs, output_dir, warnings, compute)?;
+    let (outcomes, model_applicable) = run_pipeline(inputs, output_dir, warnings, compute)?;
     let items: Vec<CollectItemResult> = outcomes.iter().map(shape_item).collect();
     if single {
         // A single bare URL propagates its raw error (duplicate/rejected/fetch)
         // and, per the single-result contract, is not journaled on failure.
         match shape_single(outcomes) {
             Ok(result) => {
-                journal::journal(output_dir, model, &items);
+                journal::journal(output_dir, model, model_applicable, &items);
                 Ok(CollectOutput::Single(result))
             }
             Err(error) => Err(error),
         }
     } else {
-        journal::journal(output_dir, model, &items);
+        journal::journal(output_dir, model, model_applicable, &items);
         Ok(CollectOutput::Batch(BatchCollectResult {
             summary: summarize_collect_items(&items),
             items,
@@ -400,7 +403,7 @@ fn collect_batch_parallel_with_compute<F>(
 where
     F: Fn(&str) -> Result<ComputedLeaf, CollectError> + Send + Sync + 'static,
 {
-    let outcomes = run_pipeline(inputs, output_dir, warnings, compute)?;
+    let (outcomes, _) = run_pipeline(inputs, output_dir, warnings, compute)?;
     let items: Vec<CollectItemResult> = outcomes.iter().map(shape_item).collect();
     Ok(BatchCollectResult {
         summary: summarize_collect_items(&items),
