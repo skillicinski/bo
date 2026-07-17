@@ -31,6 +31,16 @@ pub(super) fn expand_collect_inputs(inputs: &[String]) -> Vec<ExpandedCollectInp
         .collect()
 }
 
+/// Whether any expanded input is a summary-eligible external source (a real
+/// URL). Notes and URL-list read/empty failures are not summary-eligible.
+/// Drives `journal.model` applicability deterministically from source
+/// classification, independent of credentials and request outcomes.
+pub(super) fn has_external_source(expanded: &[ExpandedCollectInput]) -> bool {
+    expanded
+        .iter()
+        .any(|input| matches!(input, ExpandedCollectInput::Url { .. }))
+}
+
 fn expand_collect_input(input: &str) -> Vec<ExpandedCollectInput> {
     if is_local_note_file(input) {
         return vec![ExpandedCollectInput::Note {

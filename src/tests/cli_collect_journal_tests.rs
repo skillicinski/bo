@@ -109,3 +109,115 @@ fn notes_only_batch_journals_without_model() {
     // Notes collect no LLM summary, so the model is not recorded.
     assert!(events[0].model.is_none());
 }
+
+#[test]
+fn failed_note_only_omits_model() {
+    let dir = TempDir::new().unwrap();
+    let md = dir.path().join("empty.md");
+    fs::write(&md, "   \n  ").unwrap();
+
+    let result = collect_with_compute(
+        vec![md.display().to_string()],
+        dir.path(),
+        "test-model",
+        &mut Vec::new(),
+        move |_| panic!("notes must not be fetched"),
+    )
+    .unwrap();
+    assert!(matches!(result, CollectOutput::Batch(_)));
+
+    let events = crate::engine::journal::read_recent(dir.path(), 10);
+    assert_eq!(events.len(), 1, "failed note journals exactly one event");
+    assert_eq!(events[0].op, crate::engine::journal::Op::Collect);
+    assert!(events[0].model.is_none());
+}
+
+#[test]
+fn failed_web_batch_includes_model() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".bo")).unwrap();
+
+    let result = collect_with_compute(
+        vec![
+            "https://example.com/a".to_string(),
+            "https://example.com/b".to_string(),
+        ],
+        dir.path(),
+        "test-model",
+        &mut Vec::new(),
+        move |_| {
+            Err(CollectError::Fetch(
+                crate::engine::fetch::FetchError::Network("boom".to_string()),
+            ))
+        },
+    )
+    .unwrap();
+    assert!(matches!(result, CollectOutput::Batch(_)));
+
+    let events = crate::engine::journal::read_recent(dir.path(), 10);
+    assert_eq!(
+        events.len(),
+        1,
+        "failed web batch journals exactly one event"
+    );
+    assert_eq!(events[0].op, crate::engine::journal::Op::Collect);
+    assert_eq!(events[0].model.as_deref(), Some("test-model"));
+}
+
+#[test]
+fn mixed_note_web_batch_includes_model() {
+    let dir = TempDir::new().unwrap();
+    let md = dir.path().join("note.md");
+    fs::write(&md, "# Note\n\nbody").unwrap();
+
+    let result = collect_with_compute(
+        vec![
+            md.display().to_string(),
+            "https://example.com/article".to_string(),
+        ],
+        dir.path(),
+        "test-model",
+        &mut Vec::new(),
+        move |_| {
+            Ok(ComputedLeaf {
+                url: "https://example.com/article".to_string(),
+                title: Some("Article".to_string()),
+                body_markdown: "body".to_string(),
+                summary_text: "summary".to_string(),
+                note_warning: None,
+            })
+        },
+    )
+    .unwrap();
+    assert!(matches!(result, CollectOutput::Batch(_)));
+
+    let events = crate::engine::journal::read_recent(dir.path(), 10);
+    assert_eq!(events.len(), 1, "mixed batch journals exactly one event");
+    assert_eq!(events[0].op, crate::engine::journal::Op::Collect);
+    assert_eq!(events[0].model.as_deref(), Some("test-model"));
+}
+
+#[test]
+fn empty_url_list_omits_model() {
+    // A URL-list file with no URLs expands to a single `empty_url_list`
+    // Failure — no summary-eligible external source — so model is omitted
+    // even though the batch journals a failed item.
+    let dir = TempDir::new().unwrap();
+    let list = dir.path().join("urls.txt");
+    fs::write(&list, "\n   \n").unwrap();
+
+    let result = collect_with_compute(
+        vec![list.display().to_string()],
+        dir.path(),
+        "test-model",
+        &mut Vec::new(),
+        move |_| panic!("empty URL list must not be fetched"),
+    )
+    .unwrap();
+    assert!(matches!(result, CollectOutput::Batch(_)));
+
+    let events = crate::engine::journal::read_recent(dir.path(), 10);
+    assert_eq!(events.len(), 1, "empty URL list journals exactly one event");
+    assert_eq!(events[0].op, crate::engine::journal::Op::Collect);
+    assert!(events[0].model.is_none());
+}

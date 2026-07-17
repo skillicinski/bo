@@ -27,7 +27,7 @@ fn collect_html_test(
 ) -> Result<CollectResult, CollectError> {
     let url_s = url.to_string();
     let html_s = html.to_string();
-    let outcomes = run_pipeline(
+    let (outcomes, _) = run_pipeline(
         vec![url_s.clone()],
         output_dir,
         &mut Vec::new(),
