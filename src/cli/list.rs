@@ -1,12 +1,14 @@
 // bo list — deterministic tree inspection for collected leaves and compiled branches.
 
-use crate::cli::json::JsonError;
+use crate::cli::json::{JsonError, JsonWarning};
 use crate::cli::resolve_leaf_path;
 use crate::domain::manifest::{self, Manifest};
 use crate::domain::tree::TreeRuntimeState;
 use crate::domain::Leaf;
+use crate::engine::config::SeededConfig;
 use chrono::{DateTime, FixedOffset};
 use serde::Serialize;
+use serde_json::json;
 use std::cmp::Ordering;
 use std::fmt;
 use std::fs;
@@ -146,6 +148,52 @@ impl ListError {
     pub fn json_error(&self) -> JsonError {
         JsonError::new(self.code(), self.to_string())
     }
+}
+
+pub fn run(
+    cfg: &SeededConfig,
+    branches: bool,
+    leaves: bool,
+    terms: Vec<String>,
+    limit: Option<usize>,
+    recent: bool,
+    branch: Option<String>,
+) -> Result<ListResult, ListError> {
+    let view = if leaves {
+        ListViewMode::Leaves
+    } else if branches {
+        ListViewMode::Branches
+    } else {
+        ListViewMode::BranchCentric
+    };
+    let tree = cfg.tree();
+    list_tree(
+        tree.path(),
+        &ListOptions {
+            view,
+            terms: terms.iter().map(|t| t.to_lowercase()).collect(),
+            limit,
+            recent,
+            branch,
+        },
+    )
+}
+
+pub fn warnings(result: &ListResult) -> Vec<JsonWarning> {
+    result
+        .degraded_leaves()
+        .iter()
+        .map(|row| {
+            JsonWarning::with_details(
+                "degraded_leaf",
+                format!("leaf '{}' is degraded", row.display_title),
+                json!({
+                    "file": row.file,
+                    "reasons": row.degradation_reasons,
+                }),
+            )
+        })
+        .collect()
 }
 
 // ── list_tree ────────────────────────────────────────────────────────────────

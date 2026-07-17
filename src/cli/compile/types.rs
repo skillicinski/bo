@@ -5,7 +5,7 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::json;
 
-use crate::cli::json::JsonError;
+use crate::cli::json::{JsonError, JsonWarning};
 use crate::engine::llm::{LlmCallPolicy, Model, Usage};
 use crate::engine::pending;
 
@@ -333,6 +333,44 @@ pub struct BranchResult {
 pub(super) struct CompileStages {
     pub(super) stage1_clusters: usize,
     pub(super) stage2_calls: usize,
+}
+
+pub fn result_warnings(result: &CompileResult) -> Vec<JsonWarning> {
+    let mut warnings = Vec::new();
+
+    if !result.leaves_skipped.is_empty() {
+        warnings.push(JsonWarning::with_details(
+            "skipped_leaves",
+            format!(
+                "skipped {} leaves with unparseable frontmatter",
+                result.leaves_skipped.len()
+            ),
+            json!({ "files": result.leaves_skipped }),
+        ));
+    }
+
+    if let Some(msg) =
+        super::degenerate_result_warning(result.mode, &result.branches, result.leaves_processed)
+    {
+        warnings.push(JsonWarning::new("degenerate_result", msg));
+    }
+
+    warnings
+}
+
+pub fn preview_warnings(preview: &CompilePreview) -> Vec<JsonWarning> {
+    let mut warnings = Vec::new();
+    if !preview.leaves_skipped.is_empty() {
+        warnings.push(JsonWarning::with_details(
+            "skipped_leaves",
+            format!(
+                "skipped {} leaves with unparseable frontmatter",
+                preview.leaves_skipped.len()
+            ),
+            json!({ "files": preview.leaves_skipped }),
+        ));
+    }
+    warnings
 }
 
 #[cfg(test)]

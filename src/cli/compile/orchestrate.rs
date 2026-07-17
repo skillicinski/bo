@@ -11,13 +11,14 @@ use crate::engine::journal;
 use crate::engine::llm::{LlmProvider, Model};
 use crate::engine::pending;
 
+use super::dry_run::run_compile_dry_run;
 use super::execute;
 use super::journal as journal_mod;
 use super::plan;
 use super::repair;
 use super::types::{
-    BranchResult, CompileError, CompileOptions, CompileOutcome, CompileResult, CompileRunMode,
-    CompileSummary, NO_NEW_LEAVES_REASON,
+    BranchResult, CompileDryRunOutcome, CompileError, CompileOptions, CompileOutcome,
+    CompileResult, CompileRunMode, CompileSummary, NO_NEW_LEAVES_REASON,
 };
 
 pub(super) fn preflight_noop(
@@ -275,5 +276,20 @@ pub fn run_compile_with_provider_started_at(
             }
             Err(error)
         }
+    }
+}
+
+// ── entry point: dry-run / live dispatch ────────────────────────────────────
+
+pub enum Dispatch {
+    DryRun(CompileDryRunOutcome),
+    Live(CompileOutcome),
+}
+
+pub fn run(cfg: &SeededConfig, options: CompileOptions) -> Dispatch {
+    if options.dry_run {
+        Dispatch::DryRun(run_compile_dry_run(cfg, options))
+    } else {
+        Dispatch::Live(run_compile_with_options(cfg, options))
     }
 }

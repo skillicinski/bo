@@ -93,6 +93,20 @@ impl From<manifest::ManifestError> for StatusError {
     }
 }
 
+// ── entry point ───────────────────────────────────────────────────────────────
+
+pub fn run(config: Option<Config>) -> Result<StatusResult, StatusError> {
+    let Some(tree) = config
+        .clone()
+        .and_then(Config::into_seeded)
+        .map(|c| c.tree())
+    else {
+        return Ok(config_only_status(config.as_ref()));
+    };
+
+    compute_status(tree.path(), &tree.name, config.as_ref())
+}
+
 // ── pipeline ──────────────────────────────────────────────────────────────────
 
 pub fn compute_status(

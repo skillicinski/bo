@@ -1,30 +1,30 @@
 use bo::cli::collect::{self, BatchCollectResult, CollectError, CollectOutput};
-use bo::cli::compile::{self, CompileError, CompileOptions, CompilePreview, CompileResult};
-use bo::cli::config as cli_config;
+use bo::cli::compile::{self, CompileError, CompileOptions};
+use bo::cli::config::{self as cli_config, ConfigWriteError};
 use bo::cli::journal;
 use bo::cli::json::{self as json_output, JsonError, JsonWarning};
-use bo::cli::list::{self};
+use bo::cli::list::{self, ListError};
 use bo::cli::query;
-use bo::cli::raze;
-use bo::cli::seed;
-use bo::cli::show::{self, ShowOptions};
-use bo::cli::status;
+use bo::cli::raze::{self, RazeError};
+use bo::cli::seed::{self, SeedError};
+use bo::cli::show::{self, ShowError};
+use bo::cli::status::{self, StatusError};
 use bo::engine::auth;
-use bo::engine::config::{self, ConfigError, SeededConfig};
-use bo::engine::llm::{self, LlmProvider, Provider};
+use bo::engine::config::{self, Config, ConfigError, SeededConfig};
+use bo::engine::llm::{self as llm_mod, LlmProvider};
+use bo::engine::pending::PendingError;
 use clap::{error::ErrorKind as ClapErrorKind, Parser, Subcommand};
 use serde::Serialize;
-use serde_json::json;
 use std::ffi::OsString;
 use std::fmt;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
 
-const NOT_SEEDED_MSG: &str = "bo hasn't been seeded yet — run: bo seed --path <path>";
-const KNOWN_COMMANDS: &[&str] = &[
-    "seed", "config", "collect", "compile", "journal", "list", "show", "query", "status", "raze",
-];
+// main.rs owns all process-shell responsibilities per docs/architecture.md:
+// clap argument schema, CliError + exit-code policy, stdout/stderr/JSON
+// emission, clap parse-error routing, dependency composition, and the command
+// dispatch table. Command policy lives in the cli modules.
 
 #[derive(Parser, Debug)]
 #[command(
@@ -150,22 +150,22 @@ enum Commands {
     },
 }
 
-// ── JSON payloads ────────────────────────────────────────────────────────────
+// ── process-shell types ──────────────────────────────────────────────────────
 
-// ── errors ───────────────────────────────────────────────────────────────────
+const NOT_SEEDED_MSG: &str = "bo hasn't been seeded yet — run: bo seed --path <path>";
 
 #[derive(Debug)]
 enum CliError {
     NotSeeded,
     ConfigRead(String),
-    Seed(seed::SeedError),
-    Raze(raze::RazeError),
+    Seed(SeedError),
+    Raze(RazeError),
     Collect(CollectError),
-    List(list::ListError),
-    Show(show::ShowError),
+    List(ListError),
+    Show(ShowError),
     Compile(CompileError),
-    Status(status::StatusError),
-    ConfigWrite(cli_config::ConfigWriteError),
+    Status(StatusError),
+    ConfigWrite(ConfigWriteError),
 }
 
 impl CliError {
@@ -173,11 +173,9 @@ impl CliError {
         match self {
             CliError::Seed(error) => error.exit_code(),
             CliError::ConfigWrite(error) => error.exit_code(),
-            CliError::Collect(CollectError::Pending(bo::engine::pending::PendingError::Busy {
-                ..
-            }))
+            CliError::Collect(CollectError::Pending(PendingError::Busy { .. }))
             | CliError::Compile(CompileError::Busy(_))
-            | CliError::Raze(raze::RazeError::Busy(_)) => 2,
+            | CliError::Raze(RazeError::Busy(_)) => 2,
             _ => 1,
         }
     }
@@ -217,296 +215,7 @@ impl fmt::Display for CliError {
     }
 }
 
-// ── runner ───────────────────────────────────────────────────────────────────
-
-fn run_from<I, T, W, E>(args: I, stdout: &mut W, stderr: &mut E) -> i32
-where
-    I: IntoIterator<Item = T>,
-    T: Into<OsString>,
-    W: Write,
-    E: Write,
-{
-    let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
-    let raw_json_mode = raw_json_mode_requested(&args);
-
-    match Cli::try_parse_from(args.clone()) {
-        Ok(cli) => run_cli(cli, stdout, stderr),
-        Err(error) => render_parse_error(error, raw_json_mode, &args, stdout, stderr),
-    }
-}
-
-fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 {
-    let json = cli.json;
-
-    match cli.command {
-        Commands::Seed {
-            path,
-            name,
-            provider,
-            model,
-        } => {
-            if json {
-                return emit_cli_error(
-                    "seed",
-                    false,
-                    CliError::Seed(seed::SeedError::UnsupportedFlag { flag: "--json" }),
-                    stderr,
-                );
-            }
-
-            let mut prompt = seed::StdioSeedPrompt;
-            match seed::seed(
-                seed::SeedOptions {
-                    path,
-                    name,
-                    provider,
-                    model,
-                },
-                &config::config_path(),
-                &mut prompt,
-            ) {
-                Ok(result) => wrote(write!(stdout, "{}", seed::render_human(&result)), 0),
-                Err(error) => emit_cli_error("seed", false, CliError::Seed(error), stderr),
-            }
-        }
-        Commands::Config {
-            provider,
-            model,
-            compile_model,
-            base_url,
-        } => {
-            let provider_opt = match provider {
-                Some(ref p) => Some(match Provider::parse(p) {
-                    Some(provider) => provider,
-                    None => {
-                        let err = cli_config::ConfigWriteError::UnknownProvider { raw: p.clone() };
-                        return emit_cli_error("config", json, CliError::ConfigWrite(err), stderr);
-                    }
-                }),
-                None => None,
-            };
-
-            match cli_config::write_config(
-                cli_config::WriteConfigOptions {
-                    provider: provider_opt,
-                    model,
-                    compile_model,
-                    base_url,
-                },
-                &config::config_path(),
-            ) {
-                Ok(result) if json => emit_json_success("config", &result, Vec::new(), stdout),
-                Ok(result) => wrote(write!(stdout, "{}", cli_config::render_human(&result)), 0),
-                Err(error) => emit_cli_error("config", json, CliError::ConfigWrite(error), stderr),
-            }
-        }
-        Commands::Collect { inputs } => {
-            let mut warnings = Vec::new();
-            let outcome = execute_collect(inputs, &mut warnings);
-            // Recovery notices are stderr-bound diagnostics collected by the
-            // pipeline; the CLI renders them post-run, on success and failure.
-            for line in &warnings {
-                let _ = writeln!(stderr, "{}", line);
-            }
-            match outcome {
-                Ok(CollectOutput::Single(result)) if json => {
-                    emit_json_success("collect", &result, Vec::new(), stdout)
-                }
-                Ok(CollectOutput::Single(result)) => {
-                    wrote(collect::render_human(&result, stdout), 0)
-                }
-                Ok(CollectOutput::Batch(result)) if json => {
-                    emit_batch_collect_json(&result, stdout)
-                }
-                Ok(CollectOutput::Batch(result)) => {
-                    let exit_code = if result.has_failures() { 1 } else { 0 };
-                    match collect::render_batch_human(&result, stdout) {
-                        Ok(()) => exit_code,
-                        Err(_) => 1,
-                    }
-                }
-                Err(error) => emit_cli_error("collect", json, error, stderr),
-            }
-        }
-        Commands::Compile {
-            all,
-            agent,
-            dry_run,
-        } => match require_seeded_config() {
-            Err(error) => emit_cli_error("compile", json, error, stderr),
-            Ok(config) => {
-                let options = CompileOptions {
-                    all,
-                    agent,
-                    dry_run,
-                };
-                if dry_run {
-                    let outcome = compile::run_compile_dry_run(&config, options);
-                    let _ = compile::render_diagnostics(outcome.stderr_lines(), stderr);
-                    match outcome.result {
-                        Ok(preview) if json => {
-                            let warnings = compile_preview_warnings(&preview);
-                            emit_json_success("compile", &preview, warnings, stdout)
-                        }
-                        Ok(preview) => wrote(
-                            compile::render_preview_human(&preview, stdout, &config.tree().name),
-                            0,
-                        ),
-                        Err(error) => {
-                            emit_cli_error("compile", json, CliError::Compile(error), stderr)
-                        }
-                    }
-                } else {
-                    let outcome = compile::run_compile_with_options(&config, options);
-                    let _ = compile::render_diagnostics(outcome.stderr_lines(), stderr);
-                    match outcome.result {
-                        Ok(result) if json => {
-                            let warnings = compile_warnings(&result);
-                            emit_json_success("compile", &result, warnings, stdout)
-                        }
-                        Ok(result) => wrote(
-                            compile::render_human(&result, stdout, &config.tree().name),
-                            0,
-                        ),
-                        Err(error) => {
-                            emit_cli_error("compile", json, CliError::Compile(error), stderr)
-                        }
-                    }
-                }
-            }
-        },
-        Commands::List {
-            branches,
-            leaves,
-            terms,
-            limit,
-            recent,
-            branch,
-        } => match execute_list(branches, leaves, terms, limit, recent, branch) {
-            Ok(result) if json => {
-                let warnings = list_warnings(&result);
-                emit_json_success("list", &result, warnings, stdout)
-            }
-            Ok(result) => wrote(write!(stdout, "{}", list::render_human(&result)), 0),
-            Err(error) => emit_cli_error("list", json, error, stderr),
-        },
-        Commands::Show { title, full } => match execute_show(title, full) {
-            Ok(result) if json => emit_json_success("show", &result, Vec::new(), stdout),
-            Ok(result) => wrote(write!(stdout, "{}", show::render_human(&result)), 0),
-            Err(error) => emit_cli_error("show", json, error, stderr),
-        },
-        Commands::Raze { include_auth } => match execute_raze(include_auth) {
-            Ok(output) if json => {
-                emit_json_success("raze", &output.result, output.warnings, stdout)
-            }
-            Ok(output) => {
-                for warning in &output.warnings {
-                    let _ = writeln!(stderr, "warning: {}", warning.message);
-                }
-                wrote(write!(stdout, "{}", raze::render_human(&output.result)), 0)
-            }
-            Err(error) => emit_cli_error("raze", json, error, stderr),
-        },
-        Commands::Query { question } => {
-            let question_str = question.join(" ");
-            match execute_query(&question_str) {
-                Ok(result) if json => emit_json_success("query", &result, Vec::new(), stdout),
-                Ok(result) => wrote(write!(stdout, "{}", query::render_human(&result)), 0),
-                Err(error) => {
-                    let exit_code = error.exit_code();
-                    let json_error = error.json_error();
-                    if json {
-                        emit_json_error("query", json_error, Vec::new(), exit_code)
-                    } else {
-                        query::render_error_human(&error, stderr, exit_code)
-                    }
-                }
-            }
-        }
-        Commands::Status => match execute_status() {
-            Ok(result) if json => emit_json_success("status", &result, Vec::new(), stdout),
-            Ok(result) => wrote(write!(stdout, "{}", status::render_human(&result)), 0),
-            Err(error) => emit_cli_error("status", json, error, stderr),
-        },
-        Commands::Journal { limit } => match execute_journal(limit) {
-            Ok(result) if json => emit_json_success("journal", &result, Vec::new(), stdout),
-            Ok(result) => wrote(write!(stdout, "{}", journal::render_human(&result)), 0),
-            Err(error) => emit_cli_error("journal", json, error, stderr),
-        },
-    }
-}
-
-fn render_parse_error<W: Write, E: Write>(
-    error: clap::Error,
-    raw_json_mode: bool,
-    args: &[OsString],
-    stdout: &mut W,
-    stderr: &mut E,
-) -> i32 {
-    let exit_code = error.exit_code();
-
-    if matches!(
-        error.kind(),
-        ClapErrorKind::DisplayHelp | ClapErrorKind::DisplayVersion
-    ) {
-        return wrote(write!(stdout, "{}", error.render()), exit_code);
-    }
-
-    let command = infer_command(args);
-    if raw_json_mode && command == "seed" {
-        return wrote(write!(stderr, "{}", error.render()), exit_code);
-    }
-
-    if raw_json_mode {
-        let rendered = error.render().to_string();
-        let json_error = JsonError::with_details(
-            "usage_error",
-            rendered.trim().to_string(),
-            json!({
-                "kind": format!("{:?}", error.kind()),
-                "exit_code": exit_code,
-            }),
-        );
-        return emit_json_error(command, json_error, Vec::new(), exit_code);
-    }
-
-    wrote(write!(stderr, "{}", error.render()), exit_code)
-}
-
-fn raw_json_mode_requested(args: &[OsString]) -> bool {
-    args.iter()
-        .skip(1)
-        .take_while(|arg| arg.as_os_str() != "--")
-        .any(|arg| arg.as_os_str() == "--json")
-}
-
-fn infer_command(args: &[OsString]) -> &'static str {
-    for arg in args.iter().skip(1) {
-        if arg.as_os_str() == "--" {
-            break;
-        }
-
-        let Some(value) = arg.to_str() else {
-            continue;
-        };
-
-        if value == "--json" || value.starts_with('-') {
-            continue;
-        }
-
-        if let Some(command) = KNOWN_COMMANDS
-            .iter()
-            .copied()
-            .find(|command| *command == value)
-        {
-            return command;
-        }
-
-        return "bo";
-    }
-
-    "bo"
-}
+// ── I/O helpers ──────────────────────────────────────────────────────────────
 
 fn wrote(result: io::Result<()>, exit_code: i32) -> i32 {
     match result {
@@ -542,7 +251,11 @@ fn emit_batch_collect_json<W: Write>(result: &BatchCollectResult, stdout: &mut W
     if result.has_failures() {
         return emit_json_error(
             "collect",
-            JsonError::with_details("batch_failed", result.failure_message(), json!(result)),
+            JsonError::with_details(
+                "batch_failed",
+                result.failure_message(),
+                serde_json::json!(result),
+            ),
             Vec::new(),
             1,
         );
@@ -579,240 +292,397 @@ fn emit_cli_error<E: Write>(command: &str, json: bool, error: CliError, stderr: 
     }
 }
 
-// ── command execution ────────────────────────────────────────────────────────
+// ── argument helpers ─────────────────────────────────────────────────────────
+
+const KNOWN_COMMANDS: &[&str] = &[
+    "seed", "config", "collect", "compile", "journal", "list", "show", "query", "status", "raze",
+];
+
+fn raw_json_mode_requested(args: &[OsString]) -> bool {
+    args.iter()
+        .skip(1)
+        .take_while(|arg| arg.as_os_str() != "--")
+        .any(|arg| arg.as_os_str() == "--json")
+}
+
+fn infer_command(args: &[OsString]) -> &'static str {
+    for arg in args.iter().skip(1) {
+        if arg.as_os_str() == "--" {
+            break;
+        }
+
+        let Some(value) = arg.to_str() else {
+            continue;
+        };
+
+        if value == "--json" || value.starts_with('-') {
+            continue;
+        }
+
+        if let Some(command) = KNOWN_COMMANDS
+            .iter()
+            .copied()
+            .find(|command| *command == value)
+        {
+            return command;
+        }
+
+        return "bo";
+    }
+
+    "bo"
+}
+
+fn render_parse_error<W: Write, E: Write>(
+    error: clap::Error,
+    raw_json_mode: bool,
+    args: &[OsString],
+    stdout: &mut W,
+    stderr: &mut E,
+) -> i32 {
+    let exit_code = error.exit_code();
+
+    if matches!(
+        error.kind(),
+        ClapErrorKind::DisplayHelp | ClapErrorKind::DisplayVersion
+    ) {
+        return wrote(write!(stdout, "{}", error.render()), exit_code);
+    }
+
+    let command = infer_command(args);
+    if raw_json_mode && command == "seed" {
+        return wrote(write!(stderr, "{}", error.render()), exit_code);
+    }
+
+    if raw_json_mode {
+        let rendered = error.render().to_string();
+        let json_error = JsonError::with_details(
+            "usage_error",
+            rendered.trim().to_string(),
+            serde_json::json!({
+                "kind": format!("{:?}", error.kind()),
+                "exit_code": exit_code,
+            }),
+        );
+        return emit_json_error(command, json_error, Vec::new(), exit_code);
+    }
+
+    wrote(write!(stderr, "{}", error.render()), exit_code)
+}
+
+// ── host helpers ─────────────────────────────────────────────────────────────
+
+fn read_config() -> Result<Option<Config>, ConfigError> {
+    match config::read_config(&config::config_path()) {
+        Ok(cfg) => Ok(Some(cfg)),
+        Err(ConfigError::NotFound) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+fn load_config() -> Result<Option<Config>, CliError> {
+    read_config().map_err(|e| CliError::ConfigRead(format!("failed to read config: {}", e)))
+}
 
 fn require_seeded_config() -> Result<SeededConfig, CliError> {
-    let seeded = match config::read_config(&config::config_path()) {
-        Ok(cfg) => cfg.into_seeded().ok_or(CliError::NotSeeded),
-        Err(ConfigError::NotFound) => Err(CliError::NotSeeded),
-        Err(error) => Err(CliError::ConfigRead(format!(
-            "failed to read config: {}",
-            error
-        ))),
-    }?;
-    Ok(seeded)
-}
-
-fn execute_status() -> Result<status::StatusResult, CliError> {
-    let config = match config::read_config(&config::config_path()) {
-        Ok(c) => Some(c),
-        Err(ConfigError::NotFound) => None,
-        Err(e) => {
-            return Err(CliError::ConfigRead(format!(
-                "failed to read config: {}",
-                e
-            )))
-        }
+    let Some(cfg) = load_config()? else {
+        return Err(CliError::NotSeeded);
     };
-
-    let Some(tree) = config
-        .clone()
-        .and_then(config::Config::into_seeded)
-        .map(|c| c.tree())
-    else {
-        return Ok(status::config_only_status(config.as_ref()));
-    };
-
-    status::compute_status(tree.path(), &tree.name, config.as_ref()).map_err(CliError::Status)
+    cfg.into_seeded().ok_or(CliError::NotSeeded)
 }
 
-fn execute_journal(limit: usize) -> Result<journal::JournalResult, CliError> {
-    let cfg = require_seeded_config()?;
-    let tree = cfg.tree();
-    Ok(journal::read(tree.path(), limit))
+// ── runner ───────────────────────────────────────────────────────────────────
+
+fn run_from<I, T, W, E>(args: I, stdout: &mut W, stderr: &mut E) -> i32
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString>,
+    W: Write,
+    E: Write,
+{
+    let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
+    let raw_json_mode = raw_json_mode_requested(&args);
+
+    match Cli::try_parse_from(args.clone()) {
+        Ok(cli) => run_cli(cli, stdout, stderr),
+        Err(error) => render_parse_error(error, raw_json_mode, &args, stdout, stderr),
+    }
 }
 
-fn execute_raze(include_auth: bool) -> Result<raze::RazeOutput, CliError> {
-    let config_path = config::config_path();
-    let auth_path = auth::auth_path();
+fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 {
+    let json = cli.json;
 
-    match config::read_config(&config_path) {
-        Ok(cfg) => {
-            let seeded = cfg.into_seeded().ok_or(CliError::NotSeeded)?;
-            let auth_cleanup = if include_auth {
-                raze::AuthCleanup::Delete
-            } else {
-                raze::AuthCleanup::Preserve
-            };
-            let tree = seeded.tree();
-            raze::raze_with_auth(tree.path(), &config_path, &auth_path, auth_cleanup)
-                .map_err(CliError::Raze)
-        }
-        Err(ConfigError::NotFound) => {
-            if !include_auth {
-                return Err(CliError::NotSeeded);
+    match cli.command {
+        Commands::Seed {
+            path,
+            name,
+            provider,
+            model,
+        } => {
+            if json {
+                return emit_cli_error(
+                    "seed",
+                    false,
+                    CliError::Seed(SeedError::UnsupportedFlag { flag: "--json" }),
+                    stderr,
+                );
             }
 
-            match raze::raze_auth_only(&auth_path).map_err(CliError::Raze)? {
-                Some(output) => Ok(output),
-                None => Ok(raze::RazeOutput {
-                    result: raze::RazeResult {
-                        auth_path: auth_path.to_string_lossy().into_owned(),
-                        ..Default::default()
-                    },
-                    warnings: Vec::new(),
+            let mut prompt = seed::StdioSeedPrompt;
+            match seed::seed(
+                seed::SeedOptions {
+                    path,
+                    name,
+                    provider,
+                    model,
+                },
+                &config::config_path(),
+                &mut prompt,
+            ) {
+                Ok(result) => wrote(write!(stdout, "{}", seed::render_human(&result)), 0),
+                Err(error) => emit_cli_error("seed", false, CliError::Seed(error), stderr),
+            }
+        }
+        Commands::Config {
+            provider,
+            model,
+            compile_model,
+            base_url,
+        } => {
+            let provider_opt = match provider {
+                Some(ref p) => Some(match bo::engine::llm::Provider::parse(p) {
+                    Some(provider) => provider,
+                    None => {
+                        let err = ConfigWriteError::UnknownProvider { raw: p.clone() };
+                        return emit_cli_error("config", json, CliError::ConfigWrite(err), stderr);
+                    }
                 }),
+                None => None,
+            };
+
+            match cli_config::write_config(
+                cli_config::WriteConfigOptions {
+                    provider: provider_opt,
+                    model,
+                    compile_model,
+                    base_url,
+                },
+                &config::config_path(),
+            ) {
+                Ok(result) if json => emit_json_success("config", &result, Vec::new(), stdout),
+                Ok(result) => wrote(write!(stdout, "{}", cli_config::render_human(&result)), 0),
+                Err(error) => emit_cli_error("config", json, CliError::ConfigWrite(error), stderr),
             }
         }
-        Err(error) => Err(CliError::ConfigRead(format!(
-            "failed to read config: {}",
-            error
-        ))),
-    }
-}
+        Commands::Collect { inputs } => {
+            let mut warnings = Vec::new();
+            let cfg = match require_seeded_config() {
+                Ok(c) => c,
+                Err(error) => return emit_cli_error("collect", json, error, stderr),
+            };
+            let tree = cfg.tree();
+            let model = match cfg.config.effective_model() {
+                Ok(m) => m,
+                Err(e) => {
+                    return emit_cli_error(
+                        "collect",
+                        json,
+                        CliError::ConfigRead(e.to_string()),
+                        stderr,
+                    );
+                }
+            };
+            let outcome = collect::collect(
+                inputs,
+                tree.path(),
+                cfg.config.provider,
+                model.as_str(),
+                cfg.config.base_url.as_deref(),
+                &mut warnings,
+            )
+            .map_err(CliError::Collect);
 
-fn execute_collect(
-    inputs: Vec<String>,
-    warnings: &mut Vec<String>,
-) -> Result<CollectOutput, CliError> {
-    let cfg = require_seeded_config()?;
-    let tree = cfg.tree();
-    let model = cfg
-        .config
-        .effective_model()
-        .map_err(|e| CliError::ConfigRead(e.to_string()))?;
-    if collect::is_single_bare_url(&inputs) {
-        eprintln!("fetching {}...", inputs[0]);
-    }
-    collect::collect(
-        inputs,
-        tree.path(),
-        cfg.config.provider,
-        model.as_str(),
-        cfg.config.base_url.as_deref(),
-        warnings,
-    )
-    .map_err(CliError::Collect)
-}
-
-fn execute_list(
-    branches: bool,
-    leaves: bool,
-    terms: Vec<String>,
-    limit: Option<usize>,
-    recent: bool,
-    branch: Option<String>,
-) -> Result<list::ListResult, CliError> {
-    let view = if leaves {
-        list::ListViewMode::Leaves
-    } else if branches {
-        list::ListViewMode::Branches
-    } else {
-        list::ListViewMode::BranchCentric
-    };
-    let cfg = require_seeded_config()?;
-    let tree = cfg.tree();
-    list::list_tree(
-        tree.path(),
-        &list::ListOptions {
-            view,
-            terms: terms.iter().map(|t| t.to_lowercase()).collect(),
+            for line in &warnings {
+                let _ = writeln!(stderr, "{}", line);
+            }
+            match outcome {
+                Ok(CollectOutput::Single(result)) if json => {
+                    emit_json_success("collect", &result, Vec::new(), stdout)
+                }
+                Ok(CollectOutput::Single(result)) => {
+                    wrote(collect::render_human(&result, stdout), 0)
+                }
+                Ok(CollectOutput::Batch(result)) if json => {
+                    emit_batch_collect_json(&result, stdout)
+                }
+                Ok(CollectOutput::Batch(result)) => {
+                    let exit_code = if result.has_failures() { 1 } else { 0 };
+                    match collect::render_batch_human(&result, stdout) {
+                        Ok(()) => exit_code,
+                        Err(_) => 1,
+                    }
+                }
+                Err(error) => emit_cli_error("collect", json, error, stderr),
+            }
+        }
+        Commands::Compile {
+            all,
+            agent,
+            dry_run,
+        } => {
+            let cfg = match require_seeded_config() {
+                Ok(c) => c,
+                Err(error) => return emit_cli_error("compile", json, error, stderr),
+            };
+            match compile::run(
+                &cfg,
+                CompileOptions {
+                    all,
+                    agent,
+                    dry_run,
+                },
+            ) {
+                compile::Dispatch::DryRun(outcome) => {
+                    let _ = compile::render_diagnostics(outcome.stderr_lines(), stderr);
+                    match outcome.result {
+                        Ok(preview) if json => emit_json_success(
+                            "compile",
+                            &preview,
+                            compile::preview_warnings(&preview),
+                            stdout,
+                        ),
+                        Ok(preview) => wrote(
+                            compile::render_preview_human(&preview, stdout, &cfg.tree().name),
+                            0,
+                        ),
+                        Err(error) => {
+                            emit_cli_error("compile", json, CliError::Compile(error), stderr)
+                        }
+                    }
+                }
+                compile::Dispatch::Live(outcome) => {
+                    let _ = compile::render_diagnostics(outcome.stderr_lines(), stderr);
+                    match outcome.result {
+                        Ok(result) if json => emit_json_success(
+                            "compile",
+                            &result,
+                            compile::result_warnings(&result),
+                            stdout,
+                        ),
+                        Ok(result) => {
+                            wrote(compile::render_human(&result, stdout, &cfg.tree().name), 0)
+                        }
+                        Err(error) => {
+                            emit_cli_error("compile", json, CliError::Compile(error), stderr)
+                        }
+                    }
+                }
+            }
+        }
+        Commands::List {
+            branches,
+            leaves,
+            terms,
             limit,
             recent,
             branch,
-        },
-    )
-    .map_err(CliError::List)
-}
-
-fn execute_show(title: String, full: bool) -> Result<show::ShowResult, CliError> {
-    let cfg = require_seeded_config()?;
-    let tree = cfg.tree();
-    show::show_leaf(tree.path(), &title, &ShowOptions { full }).map_err(CliError::Show)
-}
-
-fn execute_query(question: &str) -> Result<query::QueryResult, query::QueryError> {
-    let cfg = require_seeded_config().map_err(|e| {
-        query::QueryError::NoProvider(format!("{}. Cannot query without a configured tree.", e))
-    })?;
-
-    execute_query_with_provider_resolver(&cfg, question, || {
-        let api_key = auth::resolve_api_key(cfg.config.provider)
-            .map_err(|e| query::QueryError::NoProvider(e.to_string()))?;
-        llm::create_provider(
-            cfg.config.provider,
-            &api_key,
-            cfg.config.base_url.as_deref(),
-        )
-        .map_err(|e| query::QueryError::NoProvider(e.to_string()))
-    })
-}
-
-fn execute_query_with_provider_resolver<F>(
-    cfg: &SeededConfig,
-    question: &str,
-    resolve_provider: F,
-) -> Result<query::QueryResult, query::QueryError>
-where
-    F: FnOnce() -> Result<Box<dyn LlmProvider>, query::QueryError>,
-{
-    let model = cfg
-        .config
-        .effective_model()
-        .map_err(|e| query::QueryError::NoProvider(e.to_string()))?;
-    let tree = cfg.tree();
-    eprintln!("searching...");
-    let prepared = query::prepare(tree.path(), question, &model)?;
-    let provider = resolve_provider()?;
-    eprintln!("synthesizing...");
-    let result = query::run_prepared_with_provider(prepared, provider.as_ref())?;
-    query::journal(tree.path(), question, &result);
-    Ok(result)
-}
-
-fn list_warnings(result: &list::ListResult) -> Vec<JsonWarning> {
-    result
-        .degraded_leaves()
-        .iter()
-        .map(|row| {
-            JsonWarning::with_details(
-                "degraded_leaf",
-                format!("leaf '{}' is degraded", row.display_title),
-                json!({
-                    "file": row.file,
-                    "reasons": row.degradation_reasons,
-                }),
-            )
-        })
-        .collect()
-}
-
-fn compile_warnings(result: &CompileResult) -> Vec<JsonWarning> {
-    let mut warnings = Vec::new();
-
-    if !result.leaves_skipped.is_empty() {
-        warnings.push(JsonWarning::with_details(
-            "skipped_leaves",
-            format!(
-                "skipped {} leaves with unparseable frontmatter",
-                result.leaves_skipped.len()
-            ),
-            json!({ "files": result.leaves_skipped }),
-        ));
+        } => {
+            let cfg = match require_seeded_config() {
+                Ok(c) => c,
+                Err(error) => return emit_cli_error("list", json, error, stderr),
+            };
+            match list::run(&cfg, branches, leaves, terms, limit, recent, branch) {
+                Ok(result) if json => {
+                    let warnings = list::warnings(&result);
+                    emit_json_success("list", &result, warnings, stdout)
+                }
+                Ok(result) => wrote(write!(stdout, "{}", list::render_human(&result)), 0),
+                Err(error) => emit_cli_error("list", json, CliError::List(error), stderr),
+            }
+        }
+        Commands::Show { title, full } => {
+            let cfg = match require_seeded_config() {
+                Ok(c) => c,
+                Err(error) => return emit_cli_error("show", json, error, stderr),
+            };
+            match show::run(&cfg, &title, full) {
+                Ok(result) if json => emit_json_success("show", &result, Vec::new(), stdout),
+                Ok(result) => wrote(write!(stdout, "{}", show::render_human(&result)), 0),
+                Err(error) => emit_cli_error("show", json, CliError::Show(error), stderr),
+            }
+        }
+        Commands::Raze { include_auth } => {
+            let config_path = config::config_path();
+            let auth_path = auth::auth_path();
+            let config = match load_config() {
+                Ok(c) => c,
+                Err(error) => return emit_cli_error("raze", json, error, stderr),
+            };
+            match raze::run(config, &config_path, &auth_path, include_auth) {
+                Ok(Some(output)) if json => {
+                    emit_json_success("raze", &output.result, output.warnings, stdout)
+                }
+                Ok(Some(output)) => {
+                    for warning in &output.warnings {
+                        let _ = writeln!(stderr, "warning: {}", warning.message);
+                    }
+                    wrote(write!(stdout, "{}", raze::render_human(&output.result)), 0)
+                }
+                Ok(None) => emit_cli_error("raze", json, CliError::NotSeeded, stderr),
+                Err(error) => emit_cli_error("raze", json, CliError::Raze(error), stderr),
+            }
+        }
+        Commands::Query { question } => {
+            let question_str = question.join(" ");
+            let resolve_provider =
+                |cfg: &SeededConfig| -> Result<Box<dyn LlmProvider>, query::QueryError> {
+                    let api_key = auth::resolve_api_key(cfg.config.provider)
+                        .map_err(|e| query::QueryError::NoProvider(e.to_string()))?;
+                    llm_mod::create_provider(
+                        cfg.config.provider,
+                        &api_key,
+                        cfg.config.base_url.as_deref(),
+                    )
+                    .map_err(|e| query::QueryError::NoProvider(e.to_string()))
+                };
+            match query::run(read_config(), &question_str, resolve_provider) {
+                Ok(result) if json => emit_json_success("query", &result, Vec::new(), stdout),
+                Ok(result) => wrote(write!(stdout, "{}", query::render_human(&result)), 0),
+                Err(error) => {
+                    let exit_code = error.exit_code();
+                    let json_error = error.json_error();
+                    if json {
+                        emit_json_error("query", json_error, Vec::new(), exit_code)
+                    } else {
+                        query::render_error_human(&error, stderr, exit_code)
+                    }
+                }
+            }
+        }
+        Commands::Status => {
+            let config = match load_config() {
+                Ok(c) => c,
+                Err(error) => return emit_cli_error("status", json, error, stderr),
+            };
+            match status::run(config) {
+                Ok(result) if json => emit_json_success("status", &result, Vec::new(), stdout),
+                Ok(result) => wrote(write!(stdout, "{}", status::render_human(&result)), 0),
+                Err(error) => emit_cli_error("status", json, CliError::Status(error), stderr),
+            }
+        }
+        Commands::Journal { limit } => {
+            let cfg = match require_seeded_config() {
+                Ok(c) => c,
+                Err(error) => return emit_cli_error("journal", json, error, stderr),
+            };
+            let result = journal::run(&cfg, limit);
+            if json {
+                emit_json_success("journal", &result, Vec::new(), stdout)
+            } else {
+                wrote(write!(stdout, "{}", journal::render_human(&result)), 0)
+            }
+        }
     }
-
-    if let Some(msg) =
-        compile::degenerate_result_warning(result.mode, &result.branches, result.leaves_processed)
-    {
-        warnings.push(JsonWarning::new("degenerate_result", msg));
-    }
-
-    warnings
-}
-
-fn compile_preview_warnings(preview: &CompilePreview) -> Vec<JsonWarning> {
-    let mut warnings = Vec::new();
-    if !preview.leaves_skipped.is_empty() {
-        warnings.push(JsonWarning::with_details(
-            "skipped_leaves",
-            format!(
-                "skipped {} leaves with unparseable frontmatter",
-                preview.leaves_skipped.len()
-            ),
-            json!({ "files": preview.leaves_skipped }),
-        ));
-    }
-    warnings
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────
@@ -826,9 +696,6 @@ fn main() {
         .with_target(false)
         .without_time()
         .with_level(false)
-        // stderr, not the default stdout: stdout is reserved for command output
-        // (in --json mode, a single JSON envelope) — a stray retry warning on
-        // stdout corrupts the envelope for downstream parsers.
         .with_writer(io::stderr)
         .init();
 

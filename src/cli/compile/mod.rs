@@ -23,13 +23,14 @@ mod validation;
 
 pub use dry_run::{run_compile_dry_run, run_compile_dry_run_with_provider};
 pub use orchestrate::{
-    degenerate_result_warning, run_compile_with_options, run_compile_with_provider_started_at,
+    degenerate_result_warning, run, run_compile_with_options, run_compile_with_provider_started_at,
+    Dispatch,
 };
 pub use render::{render_diagnostics, render_human, render_preview_human};
 pub use types::{
-    BranchResult, CompileDryRunOutcome, CompileError, CompileOptions, CompileOutcome,
-    CompilePreview, CompileResult, CompileRunMode, CompileSummary, PreviewBranch,
-    VALIDATION_NEXT_STEP,
+    preview_warnings, result_warnings, BranchResult, CompileDryRunOutcome, CompileError,
+    CompileOptions, CompileOutcome, CompilePreview, CompileResult, CompileRunMode, CompileSummary,
+    PreviewBranch, VALIDATION_NEXT_STEP,
 };
 
 #[cfg(test)]

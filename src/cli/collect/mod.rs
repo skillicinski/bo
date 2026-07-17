@@ -343,6 +343,9 @@ pub fn collect(
     base_url: Option<&str>,
     warnings: &mut Vec<String>,
 ) -> Result<CollectOutput, CollectError> {
+    if is_single_bare_url(&inputs) {
+        eprintln!("fetching {}...", inputs[0]);
+    }
     let summary = SummaryProvider::resolve(provider, model.to_string(), base_url);
     collect_with_compute(inputs, output_dir, model, warnings, move |url| {
         compute_leaf(url, &summary)
