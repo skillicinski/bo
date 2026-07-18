@@ -104,13 +104,6 @@ async fn call_llm_with_provider(
 pub(super) fn map_compile_llm_error(error: LlmError) -> CompileError {
     let message = error.to_string();
     match error {
-        LlmError::Api(msg) if msg.contains("maximum context length") => {
-            CompileError::ContextOverflow {
-                model: "unknown".to_string(),
-                estimated_tokens: None,
-                context_tokens: None,
-            }
-        }
         _ if message.contains("maximum context length") => CompileError::ContextOverflow {
             model: "unknown".to_string(),
             estimated_tokens: None,

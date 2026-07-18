@@ -21,7 +21,6 @@ use super::CompileError;
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct LeafFileClassification {
     pub(super) deleted_leaf_slugs: Vec<String>,
-    pub(super) skipped_leaf_slugs: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -80,7 +79,6 @@ pub(super) fn classify_leaf_files(
     let new_leaf_slugs: HashSet<&str> = new_leaf_slugs.iter().map(String::as_str).collect();
 
     let mut deleted_leaf_slugs = Vec::new();
-    let mut skipped_leaf_slugs = Vec::new();
 
     for leaf in &manifest.leaves {
         let leaf_path = tree.join(&leaf.file);
@@ -88,14 +86,11 @@ pub(super) fn classify_leaf_files(
 
         match fs::read_to_string(&leaf_path) {
             Ok(content) => {
-                if frontmatter::parse(&content).is_err() {
-                    if is_new {
-                        return Err(CompileError::Io(format!(
-                            "newly selected leaf '{}' is malformed; no files were changed",
-                            leaf.file
-                        )));
-                    }
-                    skipped_leaf_slugs.push(leaf.slug.as_str().to_string());
+                if frontmatter::parse(&content).is_err() && is_new {
+                    return Err(CompileError::Io(format!(
+                        "newly selected leaf '{}' is malformed; no files were changed",
+                        leaf.file
+                    )));
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -111,15 +106,11 @@ pub(super) fn classify_leaf_files(
                         leaf.file, error
                     )));
                 }
-                skipped_leaf_slugs.push(leaf.slug.as_str().to_string());
             }
         }
     }
 
-    Ok(LeafFileClassification {
-        deleted_leaf_slugs,
-        skipped_leaf_slugs,
-    })
+    Ok(LeafFileClassification { deleted_leaf_slugs })
 }
 
 /// Read-only check: are there deleted leaf files whose absence would require

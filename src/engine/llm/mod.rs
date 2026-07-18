@@ -29,18 +29,14 @@ pub(crate) fn sanitize_provider_error_message(message: &str) -> String {
 
 /// Error creating a provider: the custom provider needs a base URL.
 #[derive(Debug)]
-pub enum ProviderInitError {
-    MissingBaseUrl,
-}
+pub struct ProviderInitError;
 
 impl fmt::Display for ProviderInitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ProviderInitError::MissingBaseUrl => write!(
-                f,
-                "custom provider requires a base URL — run: bo config --provider custom --base-url <url>"
-            ),
-        }
+        write!(
+            f,
+            "custom provider requires a base URL — run: bo config --provider custom --base-url <url>"
+        )
     }
 }
 
@@ -62,7 +58,7 @@ pub fn create_provider(
         Provider::Google => Ok(Box::new(GoogleProvider::new(api_key))),
         Provider::Zai => Ok(Box::new(OpenAiCompatProvider::zai(api_key))),
         Provider::Custom => {
-            let base_url = custom_base_url.ok_or(ProviderInitError::MissingBaseUrl)?;
+            let base_url = custom_base_url.ok_or(ProviderInitError)?;
             Ok(Box::new(OpenAiCompatProvider::custom(api_key, base_url)))
         }
     }
