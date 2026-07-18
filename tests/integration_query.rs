@@ -1,7 +1,8 @@
 // Integration tests for `bo query`.
 //
-// Uses a mock LlmProvider to test the full pipeline without network calls.
-// Tests that require a live API key are marked `#[ignore]`.
+// All CI tests use mock LLM providers (no API keys needed).
+// One manual-dogfooding smoke test (`live_api_query`) is kept `#[ignore]` for
+// live-openai connectivity checks outside CI.
 
 use async_trait::async_trait;
 use bo::cli::query;
@@ -423,10 +424,19 @@ fn zero_citations_returns_insufficient_sources() {
         .contains("could not produce a grounded answer"));
 }
 
-// ── live API test (ignored by default) ───────────────────────────────────────
+// ── manual dogfooding smoke test (live OpenAI; kept #[ignore]) ──
 
+/// Manual smoke test of the real OpenAI provider. The query pipeline
+/// (retrieval, synthesis, citation validation, JSON envelope) is covered
+/// deterministically by the mock tests above. This only adds live-provider
+/// connectivity and stays out of CI (no key, nondeterministic model output).
+///
+/// Run:
+/// ```bash
+/// OPENAI_API_KEY=sk-... cargo test --test integration_query -- --ignored live_api_query
+/// ```
 #[test]
-#[ignore]
+#[ignore = "manual dogfooding: hits live OpenAI; pipeline covered by mock tests"]
 fn live_api_query() {
     let dir = setup_test_tree();
     let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
