@@ -4,7 +4,7 @@
 //!
 //! Repeated environment construction only: launch the installed `bo` binary
 //! against an isolated HOME, seed a named tree, bootstrap/read/write a
-//! manifest, append typed leaf/branch records, and the canonical fixture
+//! manifest, append typed leaf records, and the canonical fixture
 //! collection shared by the compile suites.
 //!
 //! No assertions on command output, no fixture-builder hierarchy, and no
@@ -17,7 +17,7 @@
 
 use bo::domain::manifest::{Manifest, TreeMeta};
 use bo::domain::tree::TreeConfig;
-use bo::domain::{Branch, Leaf, Slug, Timestamp, Title, Url};
+use bo::domain::{Leaf, Slug, Timestamp, Title, Url};
 use bo::engine::config::{Config, SeededConfig};
 use bo::engine::llm::Provider;
 use std::fs;
@@ -72,7 +72,7 @@ pub fn seed_with(home: &Path, name: &str, provider: &str, model: &str) -> PathBu
 // ── manifest ─────────────────────────────────────────────────────────────────
 
 /// Path to a tree's manifest.
-pub fn manifest_path(tree: &Path) -> PathBuf {
+fn manifest_path(tree: &Path) -> PathBuf {
     tree.join(".bo").join("manifest.json")
 }
 
@@ -102,15 +102,8 @@ pub fn append_leaf(tree: &Path, leaf: Leaf) {
     write_manifest(tree, &m);
 }
 
-/// Append a branch record to the manifest (does not touch files on disk).
-pub fn append_branch(tree: &Path, branch: Branch) {
-    let mut m = read_manifest(tree);
-    m.branches.push(branch);
-    write_manifest(tree, &m);
-}
-
 /// An empty manifest named `name` stamped at the harness epoch.
-pub fn empty_manifest(name: &str) -> Manifest {
+fn empty_manifest(name: &str) -> Manifest {
     Manifest {
         tree: TreeMeta {
             name: name.to_string(),
@@ -126,46 +119,18 @@ fn ts(s: &str) -> Timestamp {
     Timestamp::parse(s).unwrap()
 }
 
-// ── record constructors with explicit inputs ────────────────────────────────
-
-/// A leaf record with explicit title/url. Slug is derived from `file` (minus
-/// `.md`); `collected_at` defaults to the harness epoch.
-pub fn leaf(file: &str, title: &str, url: &str) -> Leaf {
-    let stem = file.trim_end_matches(".md");
-    Leaf {
-        slug: Slug::parse(stem).unwrap_or_else(|_| Slug::generate(stem, url)),
-        file: file.to_string(),
-        title: Title::parse(title).ok(),
-        url: Url::parse(url).unwrap(),
-        collected_at: ts(EPOCH),
-        summary: None,
-    }
-}
-
-/// A branch record titled by its slug, filing under `branch/<slug>.md`.
-pub fn branch(slug: &str, leaves: &[&str]) -> Branch {
-    Branch {
-        slug: Slug::parse(slug).unwrap(),
-        file: format!("branch/{slug}.md"),
-        title: Title::parse(slug).unwrap(),
-        created_at: ts(EPOCH),
-        updated_at: ts(EPOCH),
-        leaves: leaves.iter().map(|s| Slug::parse(s).unwrap()).collect(),
-    }
-}
-
 // ── compile-suite fixture collection ─────────────────────────────────────────
 //
 // Shared verbatim by `integration_compile` and `integration_compile_dry_run`.
 
-pub struct FixtureDoc {
-    pub file: &'static str,
-    pub title: &'static str,
-    pub url: &'static str,
-    pub body: &'static str,
+struct FixtureDoc {
+    file: &'static str,
+    title: &'static str,
+    url: &'static str,
+    body: &'static str,
 }
 
-pub const FIXTURE_DOCS: &[FixtureDoc] = &[
+const FIXTURE_DOCS: &[FixtureDoc] = &[
     FixtureDoc {
         file: "rust-ownership.md",
         title: "Rust Ownership",
