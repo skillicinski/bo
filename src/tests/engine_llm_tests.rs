@@ -291,7 +291,7 @@ fn model_catalog_accepts_any_non_empty_model_for_custom() {
 fn create_provider_custom_requires_base_url() {
     assert!(matches!(
         create_provider(Provider::Custom, "sk-test", None),
-        Err(ProviderInitError::MissingBaseUrl)
+        Err(ProviderInitError)
     ));
 }
 

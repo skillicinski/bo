@@ -155,24 +155,10 @@ fn iter_branches<'a>(
 ///
 /// Reads leaf files from `tree_dir`. Skips missing/unreadable/malformed files.
 ///
-/// Uses per-call IDF — scores are corpus-relative. Do not merge results from
-/// a separate `score_branches` call; use `retrieve_docs` for combined scoring.
+/// Uses per-call IDF — scores are corpus-relative; use `retrieve_docs` for
+/// combined leaf+branch scoring.
 pub fn score_corpus(tree_dir: &Path, manifest: &Manifest, terms: &[String]) -> Vec<ScoredDoc> {
     score_candidates(iter_leaves(tree_dir, manifest), terms)
-}
-
-/// Score all branches in a manifest against the given terms.
-///
-/// A branch is a synthesized concept page; its body is the cross-source
-/// synthesis, so it is scored as a single searchable document. Branches have
-/// no URL (`url` empty, `collected_at` None). This makes compile's synthesized
-/// output reachable at retrieval time — without it, only raw leaves are visible
-/// and the compiled branches are invisible.
-///
-/// Uses per-call IDF — scores are corpus-relative. Do not merge results from
-/// a separate `score_corpus` call; use `retrieve_docs` for combined scoring.
-pub fn score_branches(tree_dir: &Path, manifest: &Manifest, terms: &[String]) -> Vec<ScoredDoc> {
-    score_candidates(iter_branches(tree_dir, manifest), terms)
 }
 
 /// Read a file under `tree_dir` and return its post-frontmatter body, or None

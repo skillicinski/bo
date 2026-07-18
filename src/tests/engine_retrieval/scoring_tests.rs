@@ -9,7 +9,7 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
-// ── in-memory record builders (for score_corpus / score_branches) ─────
+// ── in-memory record builders (for score_corpus) ─────
 
 fn leaf_record(slug: &str, title: &str, url: &str, summary: Option<&str>) -> Leaf {
     Leaf {

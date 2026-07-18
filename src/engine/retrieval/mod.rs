@@ -136,7 +136,7 @@ pub const MAX_COMPLETION_TOKENS: u32 = 2048;
 pub use citations::validate_citations;
 pub use context::{assemble_context, compute_context_budget, compute_context_budget_from_tokens};
 pub use relevance::validate_relevance;
-pub use scoring::{retrieve_docs, score_branches, score_corpus};
+pub use scoring::{retrieve_docs, score_corpus};
 pub use terms::extract_terms;
 // crate-visible: cli::compile::cluster::discovery tokenizes search text here.
 pub(crate) use terms::tokenize;
