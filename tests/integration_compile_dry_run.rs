@@ -32,34 +32,6 @@ fn compile_cmd(home: &Path, args: &[&str]) -> Output {
         .expect("failed to run bo compile")
 }
 
-// ── tree snapshot helper ────────────────────────────────────────────────────
-
-/// Recursively walk `dir`, collecting (relative_path, bytes) into a sorted Vec.
-/// Used to assert zero writes: snapshot before and after, compare for equality.
-fn snapshot_tree(dir: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
-    let mut entries = Vec::new();
-    let prefix = dir.to_path_buf();
-    collect_files(dir, &prefix, &mut entries);
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
-    entries
-}
-
-fn collect_files(abs: &Path, prefix: &Path, out: &mut Vec<(std::path::PathBuf, Vec<u8>)>) {
-    if let Ok(read_dir) = fs::read_dir(abs) {
-        let mut names: Vec<_> = read_dir.filter_map(|e| e.ok()).collect();
-        names.sort_by_key(|e| e.file_name());
-        for entry in names {
-            if entry.file_type().is_ok_and(|t| t.is_dir()) {
-                collect_files(&entry.path(), prefix, out);
-            } else {
-                let content = fs::read(entry.path()).unwrap_or_default();
-                let rel = entry.path().strip_prefix(prefix).unwrap().to_path_buf();
-                out.push((rel, content));
-            }
-        }
-    }
-}
-
 fn make_config(output_dir: &Path) -> bo::engine::config::SeededConfig {
     common::seeded_config(
         output_dir,
@@ -211,7 +183,7 @@ fn compile_dry_run_empty_tree_is_noop_and_zero_write() {
     let home = TempDir::new().unwrap();
     let tree = seed(home.path(), "meadow");
 
-    let before = snapshot_tree(&tree);
+    let before = common::snapshot_tree(&tree);
 
     let out = compile_cmd(home.path(), &["--dry-run"]);
     assert!(
@@ -227,7 +199,7 @@ fn compile_dry_run_empty_tree_is_noop_and_zero_write() {
         "stdout: {stdout}"
     );
 
-    let after = snapshot_tree(&tree);
+    let after = common::snapshot_tree(&tree);
     assert_eq!(
         before, after,
         "tree was modified by --dry-run on empty tree"
@@ -278,7 +250,7 @@ fn dry_run_blocked_by_pending_writes_zero() {
     let pending_path = bo_dir.join("pending.json");
     bo::engine::pending::write(&pending_path, &pending).unwrap();
 
-    let before = snapshot_tree(tree_dir);
+    let before = common::snapshot_tree(tree_dir);
 
     let outcome = compile::run_compile_dry_run(
         &cfg,
@@ -306,7 +278,7 @@ fn dry_run_blocked_by_pending_writes_zero() {
     );
 
     // tree must be byte-identical
-    let after = snapshot_tree(tree_dir);
+    let after = common::snapshot_tree(tree_dir);
     assert_eq!(before, after, "tree was modified by blocked dry-run");
 }
 
@@ -328,7 +300,7 @@ fn dry_run_blocked_by_stale_repair_writes_zero() {
     bo::engine::manifest::write(&bo_dir.join("manifest.json"), &m).unwrap();
 
     let manifest_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
-    let before = snapshot_tree(tree_dir);
+    let before = common::snapshot_tree(tree_dir);
 
     let outcome = compile::run_compile_dry_run(
         &cfg,
@@ -363,7 +335,7 @@ fn dry_run_blocked_by_stale_repair_writes_zero() {
         "branch/ directory has files after blocked dry-run"
     );
 
-    let after = snapshot_tree(tree_dir);
+    let after = common::snapshot_tree(tree_dir);
     assert_eq!(before, after, "tree was modified by blocked dry-run");
 }
 
@@ -374,7 +346,7 @@ fn agent_dry_run_with_scripted_provider_produces_preview_and_zero_writes() {
     let model = compile_model();
     let tree_dir = dir.path();
 
-    let before = snapshot_tree(tree_dir);
+    let before = common::snapshot_tree(tree_dir);
     let before_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
 
     // Turn 1: list_leaves (no args needed; the tool defaults offset/limit)
@@ -430,7 +402,7 @@ fn agent_dry_run_with_scripted_provider_produces_preview_and_zero_writes() {
     assert!(!preview.branches.is_empty());
     assert!(preview.manifest_unchanged);
 
-    let after = snapshot_tree(tree_dir);
+    let after = common::snapshot_tree(tree_dir);
     assert_eq!(before, after, "tree was modified by agent dry-run");
 
     let after_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
@@ -444,7 +416,7 @@ fn one_shot_dry_run_with_scripted_provider_produces_preview() {
     let model = compile_model();
     let tree_dir = dir.path();
 
-    let before = snapshot_tree(tree_dir);
+    let before = common::snapshot_tree(tree_dir);
     let before_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
 
     let valid_plan = serde_json::json!({
@@ -484,7 +456,7 @@ fn one_shot_dry_run_with_scripted_provider_produces_preview() {
     assert_eq!(preview.tool_calls, 0);
     assert!(!preview.branches.is_empty());
 
-    let after = snapshot_tree(tree_dir);
+    let after = common::snapshot_tree(tree_dir);
     assert_eq!(before, after, "tree was modified by one-shot dry-run");
 
     let after_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
@@ -498,7 +470,7 @@ fn agent_dry_run_validation_feedback_then_success() {
     let model = compile_model();
     let tree_dir = dir.path();
 
-    let before = snapshot_tree(tree_dir);
+    let before = common::snapshot_tree(tree_dir);
     let before_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
 
     // Turn 1: invalid submit_compile (branch references unknown leaf)
@@ -552,7 +524,7 @@ fn agent_dry_run_validation_feedback_then_success() {
     assert_eq!(preview.turns, 2, "expected 2 turns, got {}", preview.turns);
     assert!(!preview.branches.is_empty());
 
-    let after = snapshot_tree(tree_dir);
+    let after = common::snapshot_tree(tree_dir);
     assert_eq!(
         before, after,
         "tree was modified by agent validation-feedback dry-run"
@@ -573,7 +545,7 @@ fn agent_dry_run_unsupported_provider_errors_with_actionable_message() {
     let model = compile_model();
     let tree_dir = dir.path();
 
-    let before = snapshot_tree(tree_dir);
+    let before = common::snapshot_tree(tree_dir);
 
     // ScriptedOneShotProvider implements `complete` only; the default
     // `complete_with_tools` returns the unsupported error.
@@ -606,7 +578,7 @@ fn agent_dry_run_unsupported_provider_errors_with_actionable_message() {
     );
 
     // Zero writes even on the error path.
-    let after = snapshot_tree(tree_dir);
+    let after = common::snapshot_tree(tree_dir);
     assert_eq!(
         before, after,
         "tree was modified on the unsupported-provider path"
@@ -624,7 +596,7 @@ fn agent_dry_run_limit_failure_surfaces_diagnostics_in_json() {
     let model = compile_model();
     let tree_dir = dir.path();
 
-    let before = snapshot_tree(tree_dir);
+    let before = common::snapshot_tree(tree_dir);
 
     let script: Vec<bo::engine::llm::AgentResponse> = (0..6)
         .map(|t| {
@@ -668,6 +640,6 @@ fn agent_dry_run_limit_failure_surfaces_diagnostics_in_json() {
         "expected 48 tool calls, got: {details}"
     );
 
-    let after = snapshot_tree(tree_dir);
+    let after = common::snapshot_tree(tree_dir);
     assert_eq!(before, after, "limit-failure path wrote bytes");
 }

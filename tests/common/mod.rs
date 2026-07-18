@@ -208,3 +208,39 @@ pub fn seeded_config(dir: &Path, provider: Provider, model: &str) -> SeededConfi
         },
     )
 }
+
+// ── byte-exact tree snapshot ─────────────────────────────────────────────────
+//
+// Shared by the agent smoke and dry-run suites to assert a dry-run wrote no
+// bytes: snapshot before and after, compare for equality.
+
+/// Recursively collect every regular file under `dir` as `(relative path, raw
+/// bytes)`, sorted by path. Byte-exact and deterministic across platforms.
+pub fn snapshot_tree(dir: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut entries = Vec::new();
+    collect_files(dir, dir, &mut entries);
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+}
+
+fn collect_files(root: &Path, dir: &Path, out: &mut Vec<(String, Vec<u8>)>) {
+    let Ok(read_dir) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<_> = read_dir.filter_map(Result::ok).collect();
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files(root, &path, out);
+        } else {
+            let rel = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string();
+            out.push((rel, fs::read(&path).unwrap()));
+        }
+    }
+}

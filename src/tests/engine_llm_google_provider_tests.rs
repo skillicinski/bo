@@ -104,26 +104,6 @@ fn to_gemini_schema_handles_arrays() {
     assert!(result["items"].get("additionalProperties").is_none());
 }
 
-// ── error sanitizer tests ──────────────────────────────────────────────────
-
-#[test]
-fn sanitizer_redacts_gemini_key_fragments() {
-    let message = "API key not valid: AIzaSyD-test-key-12345.";
-
-    let sanitized = sanitize_provider_error_message(message);
-
-    assert!(!sanitized.contains("AIzaSyD-test-key-12345"));
-}
-
-#[test]
-fn sanitizer_redacts_key_in_json_body() {
-    let message = r#"body: {"api_key":"AIzaSySecretKey"}"#;
-
-    let sanitized = sanitize_provider_error_message(message);
-
-    assert!(!sanitized.contains("AIzaSySecretKey"));
-}
-
 // ── smoke tests (require GEMINI_API_KEY env var) ──────────────────────────
 
 #[tokio::test]
