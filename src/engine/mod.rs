@@ -9,5 +9,5 @@ pub mod manifest;
 pub mod pending;
 pub mod quality;
 pub mod retrieval;
-pub mod schema;
+pub(crate) mod schema;
 pub mod summary;

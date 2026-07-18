@@ -31,16 +31,15 @@ pub enum DocKind {
 }
 
 /// A document (leaf or branch) scored against a set of terms.
-pub struct ScoredDoc {
-    pub kind: DocKind,
-    pub slug: String,
-    pub file: String,
-    pub title: String,
-    pub url: String,
-    pub summary: String,
-    pub body: String,
-    pub score: f64,
-    pub collected_at: Option<String>,
+pub(crate) struct ScoredDoc {
+    pub(crate) kind: DocKind,
+    pub(crate) slug: String,
+    pub(crate) file: String,
+    pub(crate) title: String,
+    pub(crate) url: String,
+    pub(crate) summary: String,
+    pub(crate) body: String,
+    pub(crate) score: f64,
 }
 
 /// Why a retrieval result was judged too weak to synthesize against.
@@ -134,9 +133,9 @@ pub const MAX_COMPLETION_TOKENS: u32 = 2048;
 // ── public facade re-exports ────────────────────────────────────────────────
 
 pub use citations::validate_citations;
-pub use context::{assemble_context, compute_context_budget, compute_context_budget_from_tokens};
+pub use context::{assemble_context, compute_context_budget};
 pub use relevance::validate_relevance;
-pub use scoring::{retrieve_docs, score_corpus};
+pub use scoring::retrieve_docs;
 pub use terms::extract_terms;
 // crate-visible: cli::compile::cluster::discovery tokenizes search text here.
 pub(crate) use terms::tokenize;

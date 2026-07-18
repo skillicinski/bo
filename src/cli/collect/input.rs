@@ -139,7 +139,7 @@ pub(super) fn is_local_note_file(input: &str) -> bool {
 /// bare lowercase `urls.txt`-style arguments that `is_url_list_file` rejects
 /// via its dot/host heuristic; `is_url_list_file` (case-insensitive) covers
 /// nested and mixed-case (`.TXT`) lists it accepts.
-pub fn is_single_bare_url(inputs: &[String]) -> bool {
+pub(crate) fn is_single_bare_url(inputs: &[String]) -> bool {
     if inputs.len() != 1 {
         return false;
     }

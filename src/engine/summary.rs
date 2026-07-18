@@ -17,10 +17,10 @@ use std::time::Duration;
 
 // ── constants ────────────────────────────────────────────────────────────────
 
-pub const SUMMARY_TARGET_WORDS: usize = 200;
-pub const SUMMARY_INPUT_MAX_WORDS: usize = 4000;
+const SUMMARY_TARGET_WORDS: usize = 200;
+const SUMMARY_INPUT_MAX_WORDS: usize = 4000;
 
-pub const SUMMARY_LLM_POLICY: LlmCallPolicy = LlmCallPolicy {
+pub(crate) const SUMMARY_LLM_POLICY: LlmCallPolicy = LlmCallPolicy {
     timeout: Duration::from_secs(30),
     max_attempts: 3,
     initial_backoff: Duration::from_millis(500),
@@ -37,7 +37,7 @@ discusses...\" — write directly about the content.";
 // ── errors ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
-pub enum SummaryError {
+pub(crate) enum SummaryError {
     Llm(LlmError),
     Parse(String),
     Truncated,
@@ -81,7 +81,7 @@ pub(super) struct SummaryResponse {
 
 /// Generate a summary via a single structured-output LLM call,
 /// falling back to deterministic summary if the LLM fails for any reason.
-pub async fn generate_llm_or_fallback(
+pub(crate) async fn generate_llm_or_fallback(
     body: &str,
     title: Option<&str>,
     provider: &dyn LlmProvider,

@@ -16,11 +16,6 @@ use std::path::Path;
 
 // ── public types ─────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Default, Eq, PartialEq)]
-pub struct ShowOptions {
-    pub full: bool,
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub struct ShowCandidateSummary {
     pub file: String,
@@ -149,16 +144,12 @@ impl ShowError {
 
 pub fn run(cfg: &SeededConfig, title: &str, full: bool) -> Result<ShowResult, ShowError> {
     let tree = cfg.tree();
-    show_leaf(tree.path(), title, &ShowOptions { full })
+    show_leaf(tree.path(), title, full)
 }
 
 // ── show ─────────────────────────────────────────────────────────────────────
 
-pub fn show_leaf(
-    tree_dir: &Path,
-    title: &str,
-    options: &ShowOptions,
-) -> Result<ShowResult, ShowError> {
+pub(crate) fn show_leaf(tree_dir: &Path, title: &str, full: bool) -> Result<ShowResult, ShowError> {
     let requested_title = normalize_title(title);
     if title.is_empty() {
         return Err(ShowError::NotFound {
@@ -203,7 +194,7 @@ pub fn show_leaf(
             title: title.to_string(),
         }),
         1 => match matches.remove(0) {
-            CandidateLoad::Loaded(leaf) => Ok(build_result(leaf, options)),
+            CandidateLoad::Loaded(leaf) => Ok(build_result(leaf, full)),
             CandidateLoad::Broken { error, .. } => Err(error),
         },
         _ => Err(ShowError::Ambiguous {
@@ -309,7 +300,7 @@ fn load_candidate(
     })
 }
 
-fn build_result(leaf: LoadedLeaf, options: &ShowOptions) -> ShowResult {
+fn build_result(leaf: LoadedLeaf, full: bool) -> ShowResult {
     ShowResult {
         title: leaf.summary.title,
         file: leaf.summary.file,
@@ -317,8 +308,8 @@ fn build_result(leaf: LoadedLeaf, options: &ShowOptions) -> ShowResult {
         url: leaf.summary.url,
         frontmatter: leaf.frontmatter,
         frontmatter_raw: leaf.frontmatter_raw,
-        body: options.full.then_some(leaf.body),
-        full: options.full,
+        body: full.then_some(leaf.body),
+        full,
     }
 }
 

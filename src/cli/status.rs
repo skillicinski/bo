@@ -212,7 +212,7 @@ fn config_fields(
 }
 
 /// Return a StatusResult when the tree hasn't been seeded yet — config fields only.
-pub fn config_only_status(config: Option<&Config>) -> StatusResult {
+fn config_only_status(config: Option<&Config>) -> StatusResult {
     let (provider, model, compile_model, model_ctx, compile_ctx) = config_fields(config);
     StatusResult {
         tree_name: String::new(),

@@ -37,7 +37,7 @@ mod input;
 mod journal;
 mod render;
 
-pub use input::is_single_bare_url;
+pub(crate) use input::is_single_bare_url;
 pub use render::{render_batch_human, render_human};
 
 use commit::{
