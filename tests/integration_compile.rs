@@ -1,9 +1,8 @@
 // Integration tests for `bo compile`.
 //
-// Tests that require a live OpenAI API key are marked `#[ignore]` so they do
-// not run in CI without credentials.  Run them explicitly with:
-//
-//   OPENAI_API_KEY=sk-... cargo test --test integration_compile -- --ignored
+// All tests use injectable mock LLM providers and run in CI without API keys.
+// Former live-API tests were migrated/dropped per #131 — their unique
+// assertions were folded into the mock-based tests below.
 
 use bo::domain::Timestamp;
 use bo::domain::{Title, Url};
@@ -105,131 +104,6 @@ fn make_config(output_dir: &std::path::Path) -> SeededConfig {
             created_at: bo::domain::Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         },
     )
-}
-
-// ── live API tests (require OPENAI_API_KEY) ───────────────────────────────────
-
-#[test]
-#[ignore = "requires OPENAI_API_KEY"]
-fn compile_creates_branches_directory() {
-    let dir = setup_fixture_collection();
-    let cfg = make_config(dir.path());
-
-    let result = compile::run_compile_with_options(&cfg, Default::default()).result;
-    assert!(result.is_ok(), "compile failed: {:?}", result.err());
-
-    assert!(
-        dir.path().join("branch").exists(),
-        "branch/ directory was not created"
-    );
-}
-
-#[test]
-#[ignore = "requires OPENAI_API_KEY"]
-fn compile_produces_at_least_one_branch_file() {
-    let dir = setup_fixture_collection();
-    let cfg = make_config(dir.path());
-
-    compile::run_compile_with_options(&cfg, Default::default())
-        .result
-        .unwrap();
-
-    let branches_dir = dir.path().join("branch");
-    let branch_files: Vec<_> = fs::read_dir(&branches_dir)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
-        .collect();
-
-    assert!(
-        !branch_files.is_empty(),
-        "no branch files were written to branches/"
-    );
-
-    // Validate the first branch file has correct frontmatter
-    let first_path = branch_files[0].path();
-    let content = fs::read_to_string(&first_path).unwrap();
-    let (mapping, body) = bo::domain::frontmatter::parse(&content).unwrap();
-    assert!(
-        mapping.get("title").and_then(|v| v.as_str()).is_some(),
-        "branch missing 'title' in frontmatter"
-    );
-    assert!(
-        mapping.get("created_at").and_then(|v| v.as_str()).is_some(),
-        "branch missing 'created_at' in frontmatter"
-    );
-    assert!(
-        mapping.get("updated_at").and_then(|v| v.as_str()).is_some(),
-        "branch missing 'updated_at' in frontmatter"
-    );
-    assert!(
-        mapping.get("leaves").is_some(),
-        "branch missing 'leaves' in frontmatter"
-    );
-    assert!(!body.trim().is_empty(), "branch body is empty");
-}
-
-#[test]
-#[ignore = "requires OPENAI_API_KEY"]
-fn compile_does_not_create_index_jsonl() {
-    let dir = setup_fixture_collection();
-    let cfg = make_config(dir.path());
-
-    compile::run_compile_with_options(&cfg, Default::default())
-        .result
-        .unwrap();
-
-    assert!(!dir.path().join(".bo/index.jsonl").exists());
-}
-
-#[test]
-#[ignore = "requires OPENAI_API_KEY"]
-fn compile_rerun_preserves_created_at() {
-    let dir = setup_fixture_collection();
-    let cfg = make_config(dir.path());
-
-    // First compile
-    compile::run_compile_with_options(&cfg, Default::default())
-        .result
-        .unwrap();
-
-    let branches_dir = dir.path().join("branch");
-    let first_branch = fs::read_dir(&branches_dir)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .find(|e| e.path().extension().is_some_and(|ext| ext == "md"))
-        .expect("no branch files after first compile")
-        .path();
-
-    let content1 = fs::read_to_string(&first_branch).unwrap();
-    let (m1, _) = bo::domain::frontmatter::parse(&content1).unwrap();
-    let created_at_1 = m1
-        .get("created_at")
-        .and_then(|v| v.as_str())
-        .unwrap()
-        .to_string();
-
-    // Brief sleep to ensure timestamp differs if updated_at changes
-    std::thread::sleep(std::time::Duration::from_secs(1));
-
-    // Second compile
-    compile::run_compile_with_options(&cfg, Default::default())
-        .result
-        .unwrap();
-
-    // Find the same branch (by slug/filename)
-    let content2 = fs::read_to_string(&first_branch).unwrap();
-    let (m2, _) = bo::domain::frontmatter::parse(&content2).unwrap();
-    let created_at_2 = m2
-        .get("created_at")
-        .and_then(|v| v.as_str())
-        .unwrap()
-        .to_string();
-
-    assert_eq!(
-        created_at_1, created_at_2,
-        "created_at changed on second compile run"
-    );
 }
 
 // ── crash recovery integration tests ─────────────────────────────────────────
@@ -567,6 +441,32 @@ fn compile_full_with_canned_response_creates_branches() {
     assert!(content.contains("rust-ownership.md"));
     assert!(content.contains("memory-safety.md"));
 
+    // Frontmatter schema assertions (migrated from dropped live tests)
+    let (mapping, body) = bo::domain::frontmatter::parse(&content).unwrap();
+    assert!(
+        mapping.get("title").and_then(|v| v.as_str()).is_some(),
+        "branch missing 'title' in frontmatter"
+    );
+    assert!(
+        mapping.get("created_at").and_then(|v| v.as_str()).is_some(),
+        "branch missing 'created_at' in frontmatter"
+    );
+    assert!(
+        mapping.get("updated_at").and_then(|v| v.as_str()).is_some(),
+        "branch missing 'updated_at' in frontmatter"
+    );
+    assert!(
+        mapping.get("leaves").is_some(),
+        "branch missing 'leaves' in frontmatter"
+    );
+    assert!(!body.trim().is_empty(), "branch body is empty");
+
+    // No index store (migrated from dropped live test)
+    assert!(
+        !dir.path().join(".bo/index.jsonl").exists(),
+        "compile must not write .bo/index.jsonl"
+    );
+
     let branch_b = branches_dir.join("systems-design-in-rust.md");
     assert!(branch_b.exists(), "missing branch file: {:?}", branch_b);
     let content_b = fs::read_to_string(&branch_b).unwrap();
@@ -759,6 +659,17 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
     let slugs: Vec<&str> = m.branches.iter().map(|b| b.slug.as_str()).collect();
     assert!(slugs.contains(&"memory-model"));
     assert!(slugs.contains(&"type-system"));
+
+    // Created-at preservation (migrated from dropped live test)
+    let memory_model = m
+        .branches
+        .iter()
+        .find(|b| b.slug.as_str() == "memory-model")
+        .expect("memory-model branch present");
+    assert_eq!(
+        memory_model.created_at, ts_last_compile,
+        "created_at must be preserved across an incremental update"
+    );
 }
 
 #[test]
