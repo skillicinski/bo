@@ -13,7 +13,7 @@ pub fn compute_context_budget(model: &Model) -> Result<usize, RetrievalError> {
     compute_context_budget_from_tokens(model.as_str(), model.context_tokens())
 }
 
-pub fn compute_context_budget_from_tokens(
+pub(crate) fn compute_context_budget_from_tokens(
     model: &str,
     context_tokens: usize,
 ) -> Result<usize, RetrievalError> {

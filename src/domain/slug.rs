@@ -200,14 +200,10 @@ fn url_hash(url: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(url.as_bytes());
     let result = hasher.finalize();
-    hex::encode(&result[..6]) // 6 bytes = 12 hex chars
-}
-
-// Inline hex encoding to avoid adding a dep
-mod hex {
-    pub fn encode(bytes: &[u8]) -> String {
-        bytes.iter().map(|b| format!("{:02x}", b)).collect()
-    }
+    result[..6]
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>()
 }
 
 #[cfg(test)]

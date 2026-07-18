@@ -22,7 +22,6 @@ struct Scorable {
     url: String,
     summary: String,
     body: String,
-    collected_at: Option<String>,
 }
 
 /// Score a stream of documents against `terms` using token-level matching
@@ -96,7 +95,6 @@ fn score_candidates(
                 summary: c.summary,
                 body: c.body,
                 score,
-                collected_at: c.collected_at,
             })
         })
         .collect()
@@ -125,7 +123,6 @@ fn iter_leaves<'a>(
             url: leaf.url.as_str().to_string(),
             summary,
             body,
-            collected_at: Some(leaf.collected_at.to_rfc3339_millis()),
         })
     })
 }
@@ -146,7 +143,6 @@ fn iter_branches<'a>(
             url: String::new(),
             summary,
             body,
-            collected_at: None,
         })
     })
 }
@@ -157,7 +153,12 @@ fn iter_branches<'a>(
 ///
 /// Uses per-call IDF — scores are corpus-relative; use `retrieve_docs` for
 /// combined leaf+branch scoring.
-pub fn score_corpus(tree_dir: &Path, manifest: &Manifest, terms: &[String]) -> Vec<ScoredDoc> {
+#[cfg(test)]
+pub(crate) fn score_corpus(
+    tree_dir: &Path,
+    manifest: &Manifest,
+    terms: &[String],
+) -> Vec<ScoredDoc> {
     score_candidates(iter_leaves(tree_dir, manifest), terms)
 }
 

@@ -65,16 +65,6 @@ impl Tree {
     pub fn join(&self, path: impl AsRef<Path>) -> PathBuf {
         self.path.join(path)
     }
-
-    /// Path to the directory that holds branch files for this tree.
-    pub fn branch_dir(&self) -> PathBuf {
-        self.path.join("branch")
-    }
-
-    /// Path to the directory that holds leaf files for this tree.
-    pub fn leaf_dir(&self) -> PathBuf {
-        self.path.join("leaf")
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

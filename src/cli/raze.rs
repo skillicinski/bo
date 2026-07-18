@@ -116,7 +116,8 @@ pub fn run(
     }
 }
 
-pub fn raze(output_dir: &Path, config_path: &Path) -> Result<RazeOutput, RazeError> {
+#[cfg(test)]
+pub(crate) fn raze(output_dir: &Path, config_path: &Path) -> Result<RazeOutput, RazeError> {
     let auth_path = config_path.with_file_name("auth.json");
     raze_with_auth(output_dir, config_path, &auth_path, AuthCleanup::Preserve)
 }

@@ -4,7 +4,7 @@ use crate::domain::manifest::{Manifest, TreeMeta};
 use crate::domain::slug::Slug;
 use crate::domain::timestamp::Timestamp;
 use crate::domain::{Leaf, Title, Url};
-use crate::engine::retrieval::score_corpus;
+use crate::engine::retrieval::scoring::score_corpus;
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;

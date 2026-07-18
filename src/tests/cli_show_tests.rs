@@ -14,7 +14,7 @@ struct FileSnapshot {
 #[test]
 fn empty_index_returns_not_found_with_list_suggestion() {
     let dir = TempDir::new().unwrap();
-    let err = show_leaf(dir.path(), "Missing", &ShowOptions::default()).unwrap_err();
+    let err = show_leaf(dir.path(), "Missing", false).unwrap_err();
 
     let message = err.to_string();
     assert!(message.contains("not found"), "message: {message}");
@@ -33,7 +33,7 @@ fn suspicious_path_is_rejected_and_never_read() {
     )
     .unwrap();
 
-    let err = show_leaf(&tree_dir, "Outside Title", &ShowOptions::default()).unwrap_err();
+    let err = show_leaf(&tree_dir, "Outside Title", false).unwrap_err();
 
     assert!(matches!(err, ShowError::SuspiciousPath { .. }));
     assert!(err.to_string().contains("suspicious path"));
@@ -49,7 +49,7 @@ fn show_leaf_card_view_returns_frontmatter_only() {
         "---\ntitle: \"Raw: Title\"\nurl: https://example.com\n---\n\n# Heading\n\nBody.\n",
     );
 
-    let result = show_leaf(dir.path(), "raw: title", &ShowOptions::default()).unwrap();
+    let result = show_leaf(dir.path(), "raw: title", false).unwrap();
 
     assert_eq!(
         result.frontmatter_raw,
@@ -73,7 +73,7 @@ fn show_leaf_full_returns_body() {
         "---\ntitle: \"Raw: Title\"\nurl: https://example.com\n---\n\n# Heading\n\nBody.\n",
     );
 
-    let result = show_leaf(dir.path(), "raw: title", &ShowOptions { full: true }).unwrap();
+    let result = show_leaf(dir.path(), "raw: title", true).unwrap();
 
     assert_eq!(result.body.as_deref(), Some("# Heading\n\nBody.\n"));
     assert!(result.full);
@@ -97,8 +97,8 @@ fn title_uses_frontmatter_then_index_fallback() {
     );
     write_leaf(dir.path(), "index.md", "title: \"\"\n", "body\n");
 
-    let frontmatter = show_leaf(dir.path(), "frontmatter title", &ShowOptions::default()).unwrap();
-    let index = show_leaf(dir.path(), "index fallback title", &ShowOptions::default()).unwrap();
+    let frontmatter = show_leaf(dir.path(), "frontmatter title", false).unwrap();
+    let index = show_leaf(dir.path(), "index fallback title", false).unwrap();
 
     assert_eq!(frontmatter.title.as_str(), "Frontmatter Title");
     assert_eq!(frontmatter.file, "frontmatter.md");
@@ -112,14 +112,13 @@ fn matching_is_case_insensitive_and_exact() {
     write_index(dir.path(), &[("leaf.md", "Some Title")]);
     write_leaf(dir.path(), "leaf.md", "title: Some Title\n", "body\n");
 
-    let result = show_leaf(dir.path(), "sOmE tItLe", &ShowOptions::default()).unwrap();
+    let result = show_leaf(dir.path(), "sOmE tItLe", false).unwrap();
     assert_eq!(result.file, "leaf.md");
 
-    let err = show_leaf(dir.path(), "Some", &ShowOptions::default()).unwrap_err();
+    let err = show_leaf(dir.path(), "Some", false).unwrap_err();
     assert!(matches!(err, ShowError::NotFound { .. }));
 
-    let whitespace_err =
-        show_leaf(dir.path(), " Some Title ", &ShowOptions::default()).unwrap_err();
+    let whitespace_err = show_leaf(dir.path(), " Some Title ", false).unwrap_err();
     assert!(matches!(whitespace_err, ShowError::NotFound { .. }));
 }
 
@@ -129,7 +128,7 @@ fn not_found_mentions_requested_title_and_list() {
     write_index(dir.path(), &[("leaf.md", "Available")]);
     write_leaf(dir.path(), "leaf.md", "title: Available\n", "body\n");
 
-    let err = show_leaf(dir.path(), "Missing Title", &ShowOptions::default()).unwrap_err();
+    let err = show_leaf(dir.path(), "Missing Title", false).unwrap_err();
     let message = err.to_string();
 
     assert!(message.contains("Missing Title"), "message: {message}");
@@ -146,7 +145,7 @@ fn duplicate_titles_return_ambiguity_with_candidate_details() {
     write_leaf(dir.path(), "one.md", "title: Duplicate\n", "one\n");
     write_leaf(dir.path(), "two.md", "title: duplicate\n", "two\n");
 
-    let err = show_leaf(dir.path(), "DUPLICATE", &ShowOptions::default()).unwrap_err();
+    let err = show_leaf(dir.path(), "DUPLICATE", false).unwrap_err();
     let ShowError::Ambiguous { candidates, .. } = &err else {
         panic!("expected ambiguous error, got {err:?}");
     };
@@ -178,15 +177,15 @@ fn selected_leaf_failures_are_clear() {
         "---\n: invalid: yaml\n---\n\nbody\n",
     );
 
-    let missing = show_leaf(dir.path(), "Missing", &ShowOptions::default()).unwrap_err();
+    let missing = show_leaf(dir.path(), "Missing", false).unwrap_err();
     assert!(matches!(missing, ShowError::MissingFile { .. }));
     assert!(missing.to_string().contains("file is missing"));
 
-    let unreadable = show_leaf(dir.path(), "Unreadable", &ShowOptions::default()).unwrap_err();
+    let unreadable = show_leaf(dir.path(), "Unreadable", false).unwrap_err();
     assert!(matches!(unreadable, ShowError::UnreadableFile { .. }));
     assert!(unreadable.to_string().contains("unreadable file"));
 
-    let broken = show_leaf(dir.path(), "Broken", &ShowOptions::default()).unwrap_err();
+    let broken = show_leaf(dir.path(), "Broken", false).unwrap_err();
     assert!(matches!(broken, ShowError::InvalidFrontmatter { .. }));
     assert!(broken.to_string().contains("invalid frontmatter"));
 }
@@ -197,7 +196,7 @@ fn show_leaf_card_view_has_no_body() {
     write_index(dir.path(), &[("leaf.md", "Leaf")]);
     write_leaf(dir.path(), "leaf.md", "title: Leaf\n", "body content");
 
-    let result = show_leaf(dir.path(), "Leaf", &ShowOptions::default()).unwrap();
+    let result = show_leaf(dir.path(), "Leaf", false).unwrap();
 
     assert!(result.body.is_none());
     assert!(!result.full);
@@ -210,8 +209,8 @@ fn show_leaf_full_option_returns_full_body() {
     write_index(dir.path(), &[("leaf.md", "Long")]);
     write_leaf(dir.path(), "leaf.md", "title: Long\n", &long_body);
 
-    let card = show_leaf(dir.path(), "Long", &ShowOptions { full: false }).unwrap();
-    let full = show_leaf(dir.path(), "Long", &ShowOptions { full: true }).unwrap();
+    let card = show_leaf(dir.path(), "Long", false).unwrap();
+    let full = show_leaf(dir.path(), "Long", true).unwrap();
 
     assert!(card.body.is_none(), "card view should have no body");
     assert_eq!(full.body.as_deref(), Some(long_body.as_str()));
@@ -225,7 +224,7 @@ fn show_leaf_is_read_only() {
     write_leaf(dir.path(), "leaf.md", "title: Leaf\n", "body\n");
     let before = snapshot_tree(dir.path());
 
-    let _ = show_leaf(dir.path(), "Leaf", &ShowOptions::default()).unwrap();
+    let _ = show_leaf(dir.path(), "Leaf", false).unwrap();
 
     let after = snapshot_tree(dir.path());
     assert_eq!(before, after);
@@ -263,7 +262,7 @@ fn title_numeric_value_falls_back_to_manifest_title() {
         "---\ntitle: 123\nurl: https://example.com\n---\n\n# Body\n",
     );
 
-    let result = show_leaf(dir.path(), "manifest title", &ShowOptions::default()).unwrap();
+    let result = show_leaf(dir.path(), "manifest title", false).unwrap();
 
     assert_eq!(
         result.title.as_str(),
@@ -283,7 +282,7 @@ fn unknown_frontmatter_keys_preserved_in_result() {
         "---\ntitle: Leaf\nrating: 5\ntags:\n  - rust\n  - cli\n---\n\n# Body\n",
     );
 
-    let result = show_leaf(dir.path(), "Leaf", &ShowOptions::default()).unwrap();
+    let result = show_leaf(dir.path(), "Leaf", false).unwrap();
 
     assert_eq!(
         result.frontmatter.get("rating").and_then(Value::as_i64),

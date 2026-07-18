@@ -11,7 +11,6 @@ use crate::engine::config::SeededConfig;
 use crate::engine::journal::{self, Event};
 use serde::Serialize;
 use serde_json::Value;
-use std::path::Path;
 
 // ── public types ──────────────────────────────────────────────────────────────
 
@@ -22,13 +21,8 @@ pub struct JournalResult {
 
 pub fn run(cfg: &SeededConfig, limit: usize) -> JournalResult {
     let tree = cfg.tree();
-    read(tree.path(), limit)
-}
-
-/// Read up to `limit` recent events (newest last). Missing file = empty.
-pub fn read(tree_dir: &Path, limit: usize) -> JournalResult {
     JournalResult {
-        events: journal::read_recent(tree_dir, limit),
+        events: journal::read_recent(tree.path(), limit),
     }
 }
 

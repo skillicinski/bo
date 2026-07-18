@@ -267,7 +267,7 @@ fn synthesize_one_cluster(
     // Attempt 1.
     let response =
         execute::call_llm_blocking(provider, model, user_message, schema, COMPILE_SYSTEM_PROMPT);
-    match parse_stage2_response(&response, cluster_label, leaf_files, warnings) {
+    match parse_stage2_response(&response, cluster_label, leaf_files) {
         Ok(branch) => Ok(branch),
         Err(_first_error) => {
             // Attempt 2 (retry once).
@@ -278,7 +278,7 @@ fn synthesize_one_cluster(
                 schema,
                 COMPILE_SYSTEM_PROMPT,
             );
-            match parse_stage2_response(&retry_response, cluster_label, leaf_files, warnings) {
+            match parse_stage2_response(&retry_response, cluster_label, leaf_files) {
                 Ok(branch) => {
                     warnings.push(format!(
                         "warning: cluster '{}' succeeded on retry",
@@ -304,7 +304,6 @@ pub(super) fn parse_stage2_response(
     response: &Result<String, CompileError>,
     cluster_label: &str,
     leaf_files: &[String],
-    _warnings: &mut Vec<String>,
 ) -> Result<ValidatedBranch, CompileError> {
     let response = match response {
         Ok(r) => r,
@@ -368,8 +367,7 @@ mod tests {
     fn parse_stage2_response_valid_constructs_branch() {
         let response = Ok(r#"{"title": "Concept Name", "body": "Synthesized body."}"#.to_string());
         let leaf_files = vec!["a.md".to_string(), "b.md".to_string()];
-        let mut warnings = Vec::new();
-        let branch = parse_stage2_response(&response, "test-cluster", &leaf_files, &mut warnings)
+        let branch = parse_stage2_response(&response, "test-cluster", &leaf_files)
             .expect("valid response should parse");
         assert_eq!(branch.title, "Concept Name");
         assert_eq!(branch.body, "Synthesized body.");
@@ -381,8 +379,7 @@ mod tests {
     fn parse_stage2_response_rejects_malformed_json() {
         let response = Ok("not json".to_string());
         let leaf_files = vec!["a.md".to_string(), "b.md".to_string()];
-        let mut warnings = Vec::new();
-        let result = parse_stage2_response(&response, "test-cluster", &leaf_files, &mut warnings);
+        let result = parse_stage2_response(&response, "test-cluster", &leaf_files);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
@@ -396,8 +393,7 @@ mod tests {
     fn parse_stage2_response_rejects_empty_title() {
         let response = Ok(r#"{"title": "  ", "body": "Some body."}"#.to_string());
         let leaf_files = vec!["a.md".to_string(), "b.md".to_string()];
-        let mut warnings = Vec::new();
-        let result = parse_stage2_response(&response, "test-cluster", &leaf_files, &mut warnings);
+        let result = parse_stage2_response(&response, "test-cluster", &leaf_files);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
@@ -411,8 +407,7 @@ mod tests {
     fn parse_stage2_response_rejects_empty_body() {
         let response = Ok(r#"{"title": "Title", "body": "  "}"#.to_string());
         let leaf_files = vec!["a.md".to_string(), "b.md".to_string()];
-        let mut warnings = Vec::new();
-        let result = parse_stage2_response(&response, "test-cluster", &leaf_files, &mut warnings);
+        let result = parse_stage2_response(&response, "test-cluster", &leaf_files);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
@@ -429,8 +424,7 @@ mod tests {
         let response =
             Ok(r#"{"title": "Concept", "body": "Body.", "leaves": ["hacked.md"]}"#.to_string());
         let leaf_files = vec!["a.md".to_string(), "b.md".to_string()];
-        let mut warnings = Vec::new();
-        let result = parse_stage2_response(&response, "test-cluster", &leaf_files, &mut warnings);
+        let result = parse_stage2_response(&response, "test-cluster", &leaf_files);
         // deny_unknown_fields should reject the extra "leaves" field.
         assert!(result.is_err(), "should reject unknown fields");
     }
@@ -439,8 +433,7 @@ mod tests {
     fn parse_stage2_response_llm_error_propagates() {
         let response: Result<String, CompileError> = Err(CompileError::Truncated);
         let leaf_files = vec!["a.md".to_string(), "b.md".to_string()];
-        let mut warnings = Vec::new();
-        let result = parse_stage2_response(&response, "test-cluster", &leaf_files, &mut warnings);
+        let result = parse_stage2_response(&response, "test-cluster", &leaf_files);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(

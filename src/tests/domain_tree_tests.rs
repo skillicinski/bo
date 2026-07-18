@@ -24,20 +24,6 @@ fn tree_uses_config_metadata_directly() {
 }
 
 #[test]
-fn branch_dir_is_path_slash_branch() {
-    let tree = Tree::from_config(&full_config());
-
-    assert_eq!(tree.branch_dir(), PathBuf::from("/tmp/my-research/branch"));
-}
-
-#[test]
-fn leaf_dir_is_path_slash_leaf() {
-    let tree = Tree::from_config(&full_config());
-
-    assert_eq!(tree.leaf_dir(), PathBuf::from("/tmp/my-research/leaf"));
-}
-
-#[test]
 fn infra_dir_is_path_slash_bo() {
     let tree = Tree::from_config(&full_config());
 

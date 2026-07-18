@@ -33,7 +33,7 @@ enum DryRunPreflight {
 /// LLM call is needed. Zero tree writes in every path.
 pub fn run_compile_dry_run(cfg: &SeededConfig, options: CompileOptions) -> CompileDryRunOutcome {
     let mut warnings = Vec::new();
-    let preflight = dry_run_preflight(cfg, options, &mut warnings);
+    let preflight = dry_run_preflight(cfg, options);
     let preflight = match preflight {
         Ok(DryRunPreflight::Noop(preview)) => {
             return CompileDryRunOutcome {
@@ -95,7 +95,7 @@ pub fn run_compile_dry_run_with_provider(
     model: &Model,
 ) -> CompileDryRunOutcome {
     let mut warnings = Vec::new();
-    let preflight = dry_run_preflight(cfg, options, &mut warnings);
+    let preflight = dry_run_preflight(cfg, options);
     let preflight = match preflight {
         Ok(DryRunPreflight::Noop(preview)) => {
             return CompileDryRunOutcome {
@@ -130,7 +130,6 @@ pub fn run_compile_dry_run_with_provider(
 fn dry_run_preflight(
     cfg: &SeededConfig,
     options: CompileOptions,
-    _warnings: &mut Vec<String>,
 ) -> Result<DryRunPreflight, CompileError> {
     let tree = cfg.tree();
     let tree_dir = tree.path();
