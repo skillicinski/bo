@@ -304,3 +304,51 @@ fn create_provider_custom_uses_explicit_base_url() {
     )
     .is_ok());
 }
+
+#[test]
+fn sanitizer_redacts_bare_key_fragment() {
+    let message = "Invalid API key: sk-dogfood-key-12345.";
+
+    let sanitized = sanitize_provider_error_message(message);
+
+    assert!(!sanitized.contains("sk-dogfood"));
+    assert!(sanitized.contains("<redacted>"));
+}
+
+#[test]
+fn sanitizer_redacts_partially_masked_key() {
+    let message = "Incorrect API key provided: sk-dogfo*******-key. Check credentials.";
+
+    let sanitized = sanitize_provider_error_message(message);
+
+    assert!(!sanitized.contains("sk-dogfo"));
+    assert!(!sanitized.contains("*******-key"));
+    assert!(sanitized.contains("<redacted>"));
+    assert!(sanitized.contains("Incorrect API key provided"));
+}
+
+#[test]
+fn sanitizer_redacts_key_embedded_in_json_body() {
+    let message = r#"body: {"api_key":"sk-json-secret"}"#;
+
+    let sanitized = sanitize_provider_error_message(message);
+
+    assert!(!sanitized.contains("sk-json-secret"));
+    assert!(sanitized.contains("<redacted>"));
+
+    // Google keys embedded in a JSON body token are redacted by the same path.
+    let google = r#"body: {"api_key":"AIzaSySecretKey"}"#;
+    let sanitized = sanitize_provider_error_message(google);
+    assert!(!sanitized.contains("AIzaSySecretKey"));
+    assert!(sanitized.contains("<redacted>"));
+}
+
+#[test]
+fn sanitizer_redacts_google_key_fragment() {
+    let message = "API key not valid: AIzaSyD-test-key-12345.";
+
+    let sanitized = sanitize_provider_error_message(message);
+
+    assert!(!sanitized.contains("AIzaSyD-test-key-12345"));
+    assert!(sanitized.contains("<redacted>"));
+}

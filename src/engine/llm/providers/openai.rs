@@ -107,7 +107,3 @@ impl LlmProvider for OpenAiProvider {
         })
     }
 }
-
-#[cfg(test)]
-#[path = "../../../tests/engine_llm_openai_provider_tests.rs"]
-mod tests;
