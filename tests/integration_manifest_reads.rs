@@ -8,35 +8,15 @@
 // fixtures are staged on disk directly so we can invoke `bo status`, `bo list`,
 // `bo show`, etc. without going through `collect`/`compile`.
 
+mod common;
+
 use bo::domain::{Slug, Timestamp, Title, Url};
+use common::bo;
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 use tempfile::TempDir;
-
-fn bo(home: &Path) -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_bo"));
-    cmd.env("HOME", home);
-    cmd
-}
-
-fn seed(home: &Path, output_dir: &Path) -> Output {
-    bo(home)
-        .args([
-            "seed",
-            "--path",
-            output_dir.to_str().unwrap(),
-            "--name",
-            "tree",
-            "--provider",
-            "openai",
-            "--model",
-            "gpt-4.1-mini",
-        ])
-        .output()
-        .expect("failed to run bo seed")
-}
 
 fn run(home: &Path, args: &[&str]) -> Output {
     bo(home)
@@ -49,8 +29,7 @@ fn run(home: &Path, args: &[&str]) -> Output {
 /// and one branch file. The fixture mimics the manifest-only outcome of
 /// normal seed → collect → compile.
 fn stage_tree(home: &Path) -> std::path::PathBuf {
-    let tree_dir = home.join("tree");
-    seed(home, &tree_dir);
+    let tree_dir = common::seed(home, "tree");
 
     let leaves = [
         ("alpha", "Alpha", "https://example.com/alpha"),
@@ -100,7 +79,7 @@ fn stage_tree(home: &Path) -> std::path::PathBuf {
             leaves: vec![Slug::parse("alpha").unwrap(), Slug::parse("beta").unwrap()],
         }],
     };
-    bo::engine::manifest::write(&tree_dir.join(".bo/manifest.json"), &m).unwrap();
+    common::write_manifest(&tree_dir, &m);
 
     tree_dir
 }

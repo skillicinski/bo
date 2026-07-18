@@ -2,18 +2,15 @@
 //
 // Tests command JSON envelopes. `bo seed` intentionally rejects --json.
 
+mod common;
+
 use bo::domain::{Slug, Timestamp, Title, Url};
+use common::bo;
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 use tempfile::TempDir;
-
-fn bo(home: &Path) -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_bo"));
-    cmd.env("HOME", home);
-    cmd
-}
 
 fn run(home: &Path, args: &[&str]) -> Output {
     bo(home).args(args).output().expect("failed to run bo")
@@ -37,44 +34,8 @@ fn parse_json(output: &Output) -> Value {
         .unwrap_or_else(|e| panic!("stderr is not valid JSON: {e}\nstderr:\n{stderr}"))
 }
 
-fn ensure_manifest(tree: &Path) {
-    let manifest_path = tree.join(".bo/manifest.json");
-    if manifest_path.exists() {
-        return;
-    }
-    bo::engine::manifest::write(
-        &manifest_path,
-        &bo::domain::manifest::Manifest {
-            tree: bo::domain::manifest::TreeMeta {
-                name: "tree".to_string(),
-                created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
-                last_compiled_at: None,
-            },
-            leaves: Vec::new(),
-            branches: Vec::new(),
-        },
-    )
-    .unwrap();
-}
-
 fn seed_tree(home: &TempDir, name: &str) -> std::path::PathBuf {
-    let output_dir = home.path().join(name);
-    let out = run(
-        home.path(),
-        &[
-            "seed",
-            "--path",
-            output_dir.to_str().unwrap(),
-            "--name",
-            name,
-            "--provider",
-            "openai",
-            "--model",
-            "gpt-4.1-mini",
-        ],
-    );
-    assert!(out.status.success());
-    output_dir
+    common::seed(home.path(), name)
 }
 
 fn write_compile_leaf(tree: &Path, file: &str, title: &str) {
@@ -96,20 +57,20 @@ fn write_compile_leaf(tree: &Path, file: &str, title: &str) {
 
 fn add_manifest_leaf(tree: &Path, file: &str, title: &str, url: &str) {
     static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let manifest_path = tree.join(".bo/manifest.json");
-    ensure_manifest(tree);
-    let mut manifest = bo::engine::manifest::read(&manifest_path).unwrap();
+    common::ensure_manifest(tree);
     let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let slug = Slug::parse(&format!("leaf-{}", idx)).unwrap_or_else(|_| Slug::generate(title, url));
-    manifest.leaves.push(bo::domain::Leaf {
-        slug,
-        file: file.to_string(),
-        title: Title::parse(title).ok(),
-        url: Url::parse(url).unwrap(),
-        collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
-        summary: None,
-    });
-    bo::engine::manifest::write(&manifest_path, &manifest).unwrap();
+    common::append_leaf(
+        tree,
+        bo::domain::Leaf {
+            slug,
+            file: file.to_string(),
+            title: Title::parse(title).ok(),
+            url: Url::parse(url).unwrap(),
+            collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+            summary: None,
+        },
+    );
 }
 
 // ── parse errors ─────────────────────────────────────────────────────────────

@@ -3,35 +3,16 @@
 // Tests the full CLI binary with $HOME override. Simulates tree states
 // by directly constructing files (no network/LLM required).
 
+mod common;
+
 use bo::domain::{Slug, Timestamp, Title, Url};
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 use tempfile::TempDir;
 
-fn bo(home: &Path) -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_bo"));
-    cmd.env("HOME", home);
-    cmd
-}
-
-fn seed(home: &Path, output_dir: &Path) -> Output {
-    bo(home)
-        .args([
-            "seed",
-            "--path",
-            output_dir.to_str().unwrap(),
-            "--name",
-            "tree",
-            "--provider",
-            "openai",
-            "--model",
-            "gpt-4.1-mini",
-        ])
-        .output()
-        .expect("failed to run bo seed")
-}
+use common::bo;
 
 fn status(home: &Path) -> Output {
     bo(home)
@@ -47,26 +28,6 @@ fn status_json(home: &Path) -> Output {
         .expect("failed to run bo status --json")
 }
 
-fn ensure_manifest(tree_dir: &Path) {
-    let manifest_path = tree_dir.join(".bo/manifest.json");
-    if manifest_path.exists() {
-        return;
-    }
-    bo::engine::manifest::write(
-        &manifest_path,
-        &bo::domain::manifest::Manifest {
-            tree: bo::domain::manifest::TreeMeta {
-                name: "tree".to_string(),
-                created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
-                last_compiled_at: None,
-            },
-            leaves: Vec::new(),
-            branches: Vec::new(),
-        },
-    )
-    .unwrap();
-}
-
 fn write_leaf(tree_dir: &Path, slug: &str, url: &str) {
     let filename = format!("{}.md", slug);
     let collected_at = "2026-05-14T10:00:00Z";
@@ -78,18 +39,18 @@ fn write_leaf(tree_dir: &Path, slug: &str, url: &str) {
     fs::write(leaf_dir.join(&filename), content).unwrap();
 
     // Append to manifest so reads see the leaf.
-    let manifest_path = tree_dir.join(".bo/manifest.json");
-    ensure_manifest(tree_dir);
-    let mut m = bo::engine::manifest::read(&manifest_path).unwrap();
-    m.leaves.push(bo::domain::Leaf {
-        slug: Slug::parse(slug).unwrap(),
-        file: format!("leaf/{filename}"),
-        title: Title::parse(slug).ok(),
-        url: Url::parse(url).unwrap(),
-        collected_at: Timestamp::parse(collected_at).unwrap(),
-        summary: None,
-    });
-    bo::engine::manifest::write(&manifest_path, &m).unwrap();
+    common::ensure_manifest(tree_dir);
+    common::append_leaf(
+        tree_dir,
+        bo::domain::Leaf {
+            slug: Slug::parse(slug).unwrap(),
+            file: format!("leaf/{filename}"),
+            title: Title::parse(slug).ok(),
+            url: Url::parse(url).unwrap(),
+            collected_at: Timestamp::parse(collected_at).unwrap(),
+            summary: None,
+        },
+    );
 }
 
 fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
@@ -100,10 +61,9 @@ fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
     );
     fs::write(branches_dir.join(format!("{}.md", slug)), content).unwrap();
 
-    // Append to manifest.
-    let manifest_path = tree_dir.join(".bo/manifest.json");
-    ensure_manifest(tree_dir);
-    let mut m = bo::engine::manifest::read(&manifest_path).unwrap();
+    // Append to manifest and stamp last_compiled_at.
+    common::ensure_manifest(tree_dir);
+    let mut m = common::read_manifest(tree_dir);
     m.branches.push(bo::domain::Branch {
         slug: Slug::parse(slug).unwrap(),
         file: format!("branch/{}.md", slug),
@@ -113,7 +73,7 @@ fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
         leaves: vec![Slug::parse("some-leaf").unwrap()],
     });
     m.tree.last_compiled_at = Some(Timestamp::parse(created_at).unwrap());
-    bo::engine::manifest::write(&manifest_path, &m).unwrap();
+    common::write_manifest(tree_dir, &m);
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -121,10 +81,7 @@ fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
 #[test]
 fn status_after_seed_shows_empty_tree() {
     let tmp = TempDir::new().unwrap();
-    let tree_dir = tmp.path().join("tree");
-
-    let out = seed(tmp.path(), &tree_dir);
-    assert!(out.status.success());
+    common::seed(tmp.path(), "tree");
 
     let out = status(tmp.path());
     assert!(out.status.success());
@@ -138,9 +95,7 @@ fn status_after_seed_shows_empty_tree() {
 #[test]
 fn status_shows_uncompiled_leaves() {
     let tmp = TempDir::new().unwrap();
-    let tree_dir = tmp.path().join("tree");
-
-    seed(tmp.path(), &tree_dir);
+    let tree_dir = common::seed(tmp.path(), "tree");
 
     write_leaf(&tree_dir, "leaf-one", "https://one.com");
     write_leaf(&tree_dir, "leaf-two", "https://two.com");
@@ -160,9 +115,7 @@ fn status_shows_uncompiled_leaves() {
 #[test]
 fn status_after_compile_shows_zero_uncompiled() {
     let tmp = TempDir::new().unwrap();
-    let tree_dir = tmp.path().join("tree");
-
-    seed(tmp.path(), &tree_dir);
+    let tree_dir = common::seed(tmp.path(), "tree");
 
     write_leaf(&tree_dir, "leaf-a", "https://a.com");
     write_leaf(&tree_dir, "leaf-b", "https://b.com");
@@ -182,9 +135,7 @@ fn status_after_compile_shows_zero_uncompiled() {
 #[test]
 fn status_detects_orphan_manifest_entry() {
     let tmp = TempDir::new().unwrap();
-    let tree_dir = tmp.path().join("tree");
-
-    seed(tmp.path(), &tree_dir);
+    let tree_dir = common::seed(tmp.path(), "tree");
 
     write_leaf(&tree_dir, "exists", "https://exists.com");
     write_leaf(&tree_dir, "will-delete", "https://deleted.com");
@@ -206,9 +157,7 @@ fn status_detects_orphan_manifest_entry() {
 #[test]
 fn status_detects_missing_from_index() {
     let tmp = TempDir::new().unwrap();
-    let tree_dir = tmp.path().join("tree");
-
-    seed(tmp.path(), &tree_dir);
+    let tree_dir = common::seed(tmp.path(), "tree");
 
     // Write a leaf file directly without going through collect (not in index)
     let content = "---\ntitle: \"stray\"\nurl: https://stray.com\ncollected_at: 2026-05-14T10:00:00Z\nupdated_at: 2026-05-14T10:00:00Z\n---\n\n# stray\n\nOrphaned leaf.\n";
@@ -230,9 +179,8 @@ fn status_detects_missing_from_index() {
 #[test]
 fn status_json_is_valid_and_complete() {
     let tmp = TempDir::new().unwrap();
-    let tree_dir = tmp.path().join("tree");
+    let tree_dir = common::seed(tmp.path(), "tree");
 
-    seed(tmp.path(), &tree_dir);
     write_leaf(&tree_dir, "test-leaf", "https://test.com");
 
     let out = status_json(tmp.path());

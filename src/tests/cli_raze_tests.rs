@@ -2,14 +2,120 @@ use super::*;
 use crate::domain::Timestamp;
 use std::fs;
 use std::io::Cursor;
+use std::path::PathBuf;
 use tempfile::TempDir;
 
-#[path = "fixtures/mod.rs"]
-mod fixtures;
+// Inlined from the former src/tests/fixtures/mod.rs (single-consumer).
+// Each helper constructs bo's typed records and stages them under a temp tree.
 
-use fixtures::{
-    add_leaf, add_manifest_leaf, auth_path_for_config, make_leaf_record, make_manifest, setup_tree,
-};
+fn title(s: &str) -> crate::domain::Title {
+    crate::domain::Title::parse(s).expect("invalid test title")
+}
+
+fn url(s: &str) -> crate::domain::Url {
+    crate::domain::Url::parse(s).expect("invalid test url")
+}
+
+/// Create a minimal seeded tree with an empty manifest inside `tmp`.
+/// Returns `(tree_dir, config_path)`.
+fn setup_tree(tmp: &TempDir) -> (PathBuf, PathBuf) {
+    let tree_dir = tmp.path().join("tree");
+    let config_path = tmp.path().join("config.json");
+    fs::create_dir_all(&tree_dir).unwrap();
+    let bo_dir = tree_dir.join(".bo");
+    fs::create_dir_all(&bo_dir).unwrap();
+    crate::engine::manifest::write(
+        &bo_dir.join("manifest.json"),
+        &crate::domain::manifest::Manifest {
+            tree: crate::domain::manifest::TreeMeta {
+                name: "tree".to_string(),
+                created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+                last_compiled_at: None,
+            },
+            leaves: Vec::new(),
+            branches: Vec::new(),
+        },
+    )
+    .unwrap();
+
+    crate::engine::config::write_config(
+        &crate::engine::config::Config {
+            provider: crate::engine::llm::Provider::OpenAI,
+            tree: Some(crate::domain::tree::TreeConfig {
+                path: tree_dir.clone(),
+                name: "tree".to_string(),
+                created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+            }),
+            model: "gpt-4.1-mini".to_string(),
+            compile_model: None,
+            base_url: None,
+        },
+        &config_path,
+    )
+    .unwrap();
+
+    (tree_dir, config_path)
+}
+
+fn auth_path_for_config(config_path: &Path) -> PathBuf {
+    config_path.with_file_name("auth.json")
+}
+
+/// Add a leaf file (`.md`) and a corresponding manifest entry.
+fn add_leaf(tree_dir: &Path, file: &str) {
+    add_manifest_leaf(tree_dir, file);
+    let path = tree_dir.join(file);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, "# content\n").unwrap();
+}
+
+/// Add a manifest entry for a leaf without creating the file on disk.
+fn add_manifest_leaf(tree_dir: &Path, file: &str) {
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let manifest_path = tree_dir.join(".bo/manifest.json");
+    let mut manifest = crate::engine::manifest::read(&manifest_path).unwrap();
+    let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let slug = crate::domain::Slug::parse(&format!("leaf-{}", idx)).unwrap();
+    manifest.leaves.push(crate::domain::Leaf {
+        slug,
+        file: file.to_string(),
+        title: Some(title(file.trim_end_matches(".md"))),
+        url: url("https://example.com/test"),
+        collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+        summary: None,
+    });
+    crate::engine::manifest::write(&manifest_path, &manifest).unwrap();
+}
+
+/// Construct a `Leaf` with sensible defaults for tests.
+fn make_leaf_record(slug: &str, file: &str) -> crate::domain::Leaf {
+    crate::domain::Leaf {
+        slug: crate::domain::Slug::parse(slug).expect("invalid test slug"),
+        file: file.to_string(),
+        title: Some(title(file.trim_end_matches(".md"))),
+        url: url(&format!("https://example.com/{slug}")),
+        collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+        summary: None,
+    }
+}
+
+/// Construct a `Manifest` with the given leaves and empty branches.
+fn make_manifest(
+    name: &str,
+    leaves: Vec<crate::domain::Leaf>,
+) -> crate::domain::manifest::Manifest {
+    crate::domain::manifest::Manifest {
+        tree: crate::domain::manifest::TreeMeta {
+            name: name.to_string(),
+            created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+            last_compiled_at: None,
+        },
+        leaves,
+        branches: Vec::new(),
+    }
+}
 
 #[test]
 fn deletes_indexed_files() {

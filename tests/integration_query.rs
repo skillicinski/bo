@@ -4,6 +4,8 @@
 // One manual-dogfooding smoke test (`live_api_query`) is kept `#[ignore]` for
 // live-openai connectivity checks outside CI.
 
+mod common;
+
 use async_trait::async_trait;
 use bo::cli::query;
 use bo::domain::{Timestamp, Title, Url};
@@ -108,10 +110,8 @@ fn make_manifest(dir: &std::path::Path, entries: &[(&str, &str, &str)]) {
             }
         })
         .collect();
-    let bo_dir = dir.join(".bo");
-    fs::create_dir_all(&bo_dir).unwrap();
-    bo::engine::manifest::write(
-        &bo_dir.join("manifest.json"),
+    common::write_manifest(
+        dir,
         &bo::domain::manifest::Manifest {
             tree: bo::domain::manifest::TreeMeta {
                 name: "query-test".to_string(),
@@ -121,8 +121,7 @@ fn make_manifest(dir: &std::path::Path, entries: &[(&str, &str, &str)]) {
             leaves,
             branches: Vec::new(),
         },
-    )
-    .unwrap();
+    );
 }
 
 fn setup_test_tree() -> TempDir {
