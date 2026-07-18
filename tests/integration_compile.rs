@@ -5,6 +5,8 @@
 //
 //   OPENAI_API_KEY=sk-... cargo test --test integration_compile -- --ignored
 
+mod common;
+
 use bo::domain::Timestamp;
 use bo::domain::{Title, Url};
 use std::fs;
@@ -15,96 +17,8 @@ use bo::domain::{Branch, Leaf};
 use bo::engine::config::SeededConfig;
 use bo::engine::pending;
 
-struct FixtureDoc {
-    file: &'static str,
-    title: &'static str,
-    url: &'static str,
-    body: &'static str,
-}
-
-const FIXTURE_DOCS: &[FixtureDoc] = &[
-    FixtureDoc {
-        file: "rust-ownership.md",
-        title: "Rust Ownership",
-        url: "https://example.com/rust-ownership",
-        body: "Rust's ownership model makes memory safety a compile-time property. Borrowing and lifetimes let programs share references without a garbage collector while still controlling resource cleanup precisely.",
-    },
-    FixtureDoc {
-        file: "memory-safety.md",
-        title: "Memory Safety",
-        url: "https://example.com/memory-safety",
-        body: "Memory safety matters in systems programming because pointer mistakes can become security bugs. Rust uses ownership, borrowing, and lifetimes to prevent dangling references and data races before runtime.",
-    },
-    FixtureDoc {
-        file: "safe-concurrency.md",
-        title: "Safe Concurrency",
-        url: "https://example.com/safe-concurrency",
-        body: "Safe concurrency depends on clear ownership of shared state. Rust's type system prevents data races by enforcing borrowing rules across threads and synchronisation boundaries.",
-    },
-    FixtureDoc {
-        file: "zero-cost-abstractions.md",
-        title: "Zero-Cost Abstractions",
-        url: "https://example.com/zero-cost-abstractions",
-        body: "Zero-cost abstractions allow high-level APIs without runtime penalties. In Rust, ownership and static dispatch let systems code remain expressive while preserving predictable memory and performance behaviour.",
-    },
-];
-
-/// Build a small synthetic tree in a temp directory and return the path.
-fn setup_fixture_collection() -> tempfile::TempDir {
-    let dir = tempfile::TempDir::new().unwrap();
-    let bo_dir = dir.path().join(".bo");
-    fs::create_dir_all(&bo_dir).unwrap();
-    let mut leaves = Vec::new();
-
-    for doc in FIXTURE_DOCS {
-        let title: Option<Title> = Title::parse(doc.title).ok();
-        let url = Url::parse(doc.url).unwrap();
-        let ts = Timestamp::parse("2025-06-01T10:00:00Z").unwrap();
-        let content = bo::domain::leaf::format_content(title.as_ref(), &url, &ts, doc.body);
-        fs::write(dir.path().join(doc.file), content).unwrap();
-
-        leaves.push(Leaf {
-            slug: bo::domain::Slug::parse(doc.file.trim_end_matches(".md")).unwrap(),
-            file: doc.file.to_string(),
-            title,
-            url,
-            collected_at: Timestamp::parse("2025-06-01T10:00:00Z").unwrap(),
-            summary: None,
-        });
-    }
-
-    bo::engine::manifest::write(
-        &bo_dir.join("manifest.json"),
-        &Manifest {
-            tree: TreeMeta {
-                name: "compile-fixture".to_string(),
-                created_at: Timestamp::parse("2025-06-01T09:00:00Z").unwrap(),
-                last_compiled_at: None,
-            },
-            leaves,
-            branches: Vec::new(),
-        },
-    )
-    .unwrap();
-
-    dir
-}
-
 fn make_config(output_dir: &std::path::Path) -> SeededConfig {
-    SeededConfig::new(
-        bo::engine::config::Config {
-            provider: bo::engine::llm::Provider::OpenAI,
-            model: "gpt-4o-mini".to_string(), // cheaper model for tests
-            compile_model: None,
-            base_url: None,
-            tree: None,
-        },
-        bo::domain::tree::TreeConfig {
-            path: output_dir.to_path_buf(),
-            name: "test-tree".to_string(),
-            created_at: bo::domain::Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
-        },
-    )
+    common::seeded_config(output_dir, bo::engine::llm::Provider::OpenAI, "gpt-4o-mini")
 }
 
 // ── live API tests (require OPENAI_API_KEY) ───────────────────────────────────
@@ -112,7 +26,7 @@ fn make_config(output_dir: &std::path::Path) -> SeededConfig {
 #[test]
 #[ignore = "requires OPENAI_API_KEY"]
 fn compile_creates_branches_directory() {
-    let dir = setup_fixture_collection();
+    let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
 
     let result = compile::run_compile_with_options(&cfg, Default::default()).result;
@@ -127,7 +41,7 @@ fn compile_creates_branches_directory() {
 #[test]
 #[ignore = "requires OPENAI_API_KEY"]
 fn compile_produces_at_least_one_branch_file() {
-    let dir = setup_fixture_collection();
+    let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
 
     compile::run_compile_with_options(&cfg, Default::default())
@@ -172,7 +86,7 @@ fn compile_produces_at_least_one_branch_file() {
 #[test]
 #[ignore = "requires OPENAI_API_KEY"]
 fn compile_does_not_create_index_jsonl() {
-    let dir = setup_fixture_collection();
+    let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
 
     compile::run_compile_with_options(&cfg, Default::default())
@@ -185,7 +99,7 @@ fn compile_does_not_create_index_jsonl() {
 #[test]
 #[ignore = "requires OPENAI_API_KEY"]
 fn compile_rerun_preserves_created_at() {
-    let dir = setup_fixture_collection();
+    let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
 
     // First compile
@@ -239,7 +153,7 @@ fn crash_mid_compile_rollback_cleans_staged_files() {
     // Simulate: compile started, pending.json written, staged .tmp exists,
     // but manifest was NOT updated (crash before commit).
     // Next invocation should rollback: delete .tmp, clear pending.
-    let dir = setup_fixture_collection();
+    let dir = common::setup_fixture_collection();
     let tree_dir = dir.path();
     let bo_dir = tree_dir.join(".bo");
 
@@ -312,7 +226,7 @@ fn crash_mid_compile_roll_forward_applies_staged_writes() {
     // Simulate: compile started, pending.json written, staged .tmp exists,
     // AND manifest WAS updated (crash after commit but before rename).
     // Next invocation should roll forward: rename .tmp to final, clear pending.
-    let dir = setup_fixture_collection();
+    let dir = common::setup_fixture_collection();
     let tree_dir = dir.path();
     let bo_dir = tree_dir.join(".bo");
 
@@ -378,7 +292,7 @@ fn crash_mid_collect_rollback_leaves_tree_unchanged() {
     // Simulate: collect started, pending.json written for a collect op,
     // staged leaf .tmp exists, manifest NOT updated.
     // Next compile invocation should rollback the stale collect.
-    let dir = setup_fixture_collection();
+    let dir = common::setup_fixture_collection();
     let tree_dir = dir.path();
     let bo_dir = tree_dir.join(".bo");
 
@@ -514,7 +428,7 @@ fn compile_model() -> bo::engine::llm::Model {
 
 #[test]
 fn compile_full_with_canned_response_creates_branches() {
-    let dir = setup_fixture_collection();
+    let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
     let model = compile_model();
     let started_at = Timestamp::now();
@@ -893,7 +807,7 @@ fn create_leaf_docs(
 #[test]
 fn compile_one_shot_uses_compile_system_prompt() {
     // 4 leaves < 40 threshold → single-pass Full path.
-    let dir = setup_fixture_collection();
+    let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
     let model = compile_model();
     let started_at = Timestamp::now();

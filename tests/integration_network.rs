@@ -4,6 +4,8 @@
 // Each test creates its own HOME and tree TempDir so tests are fully isolated
 // and safe to run in parallel.
 
+mod common;
+
 // ── test URLs ────────────────────────────────────────────────────────────────
 
 /// Standard articles — happy path
@@ -41,38 +43,11 @@ const NON_HTML_PDF: &str =
     "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf";
 const NON_HTML_BINARY: &str = "https://httpbin.org/bytes/1024";
 
+use common::bo;
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 use tempfile::TempDir;
-
-fn bo(home: &Path) -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_bo"));
-    cmd.env("HOME", home);
-    cmd
-}
-
-fn seed(home: &Path, output_dir: &Path) {
-    let out = bo(home)
-        .args([
-            "seed",
-            "--path",
-            output_dir.to_str().unwrap(),
-            "--name",
-            "tree",
-            "--provider",
-            "openai",
-            "--model",
-            "gpt-4.1-mini",
-        ])
-        .output()
-        .expect("failed to run bo seed");
-    assert!(
-        out.status.success(),
-        "seed failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
 
 fn add(home: &Path, url: &str) -> Output {
     bo(home)
@@ -92,8 +67,7 @@ fn raze(home: &Path) {
 #[ignore]
 fn network_happy_path_wikipedia() {
     let home = TempDir::new().unwrap();
-    let tree = home.path().join("tree");
-    seed(home.path(), &tree);
+    let tree = common::seed(home.path(), "tree");
 
     let out = add(home.path(), ARTICLE_WIKIPEDIA_2);
     assert!(
@@ -123,8 +97,7 @@ fn network_happy_path_bodhi() {
     // Jaya Sri Maha Bodhi was the original problem URL: link-heavy tables,
     // reference markers, and a heading that matches the page title.
     let home = TempDir::new().unwrap();
-    let tree = home.path().join("tree");
-    seed(home.path(), &tree);
+    let tree = common::seed(home.path(), "tree");
 
     let out = add(home.path(), ARTICLE_WIKIPEDIA_1);
     assert!(
@@ -153,8 +126,7 @@ fn network_happy_path_bodhi() {
 #[ignore]
 fn network_happy_path_blog() {
     let home = TempDir::new().unwrap();
-    let tree = home.path().join("tree");
-    seed(home.path(), &tree);
+    common::seed(home.path(), "tree");
 
     let out = add(home.path(), ARTICLE_BLOG);
     assert!(
@@ -170,8 +142,7 @@ fn network_happy_path_blog() {
 #[ignore]
 fn network_very_long_page() {
     let home = TempDir::new().unwrap();
-    let tree = home.path().join("tree");
-    seed(home.path(), &tree);
+    let tree = common::seed(home.path(), "tree");
 
     let out = add(home.path(), VERY_LONG);
     assert!(
@@ -199,8 +170,7 @@ fn network_very_long_page() {
 #[ignore]
 fn network_404_fails_gracefully() {
     let home = TempDir::new().unwrap();
-    let tree = home.path().join("tree");
-    seed(home.path(), &tree);
+    let tree = common::seed(home.path(), "tree");
 
     let out = add(home.path(), DEAD_404);
     assert!(!out.status.success());
@@ -223,8 +193,7 @@ fn network_404_fails_gracefully() {
 #[ignore]
 fn network_pdf_fails_gracefully() {
     let home = TempDir::new().unwrap();
-    let tree = home.path().join("tree");
-    seed(home.path(), &tree);
+    common::seed(home.path(), "tree");
 
     let out = add(home.path(), NON_HTML_PDF);
     assert!(!out.status.success());
@@ -238,8 +207,7 @@ fn network_pdf_fails_gracefully() {
 #[ignore]
 fn network_duplicate_rejected() {
     let home = TempDir::new().unwrap();
-    let tree = home.path().join("tree");
-    seed(home.path(), &tree);
+    common::seed(home.path(), "tree");
 
     let out1 = add(home.path(), ARTICLE_WIKIPEDIA_2);
     assert!(out1.status.success());
@@ -256,8 +224,7 @@ fn network_duplicate_rejected() {
 #[ignore]
 fn network_near_duplicate_urls_both_stored() {
     let home = TempDir::new().unwrap();
-    let tree = home.path().join("tree");
-    seed(home.path(), &tree);
+    let tree = common::seed(home.path(), "tree");
 
     let out1 = add(home.path(), NEAR_DUP_BASE);
     assert!(out1.status.success());
@@ -275,8 +242,7 @@ fn network_near_duplicate_urls_both_stored() {
 #[ignore]
 fn network_link_heavy_page() {
     let home = TempDir::new().unwrap();
-    let tree = home.path().join("tree");
-    seed(home.path(), &tree);
+    let tree = common::seed(home.path(), "tree");
 
     let out = add(home.path(), LINK_HEAVY);
     assert!(
@@ -303,8 +269,7 @@ fn network_link_heavy_page() {
 #[ignore]
 fn network_slug_collision_pair() {
     let home = TempDir::new().unwrap();
-    let tree = home.path().join("tree");
-    seed(home.path(), &tree);
+    let tree = common::seed(home.path(), "tree");
 
     let out1 = add(home.path(), SLUG_COLLISION_1);
     assert!(
@@ -337,8 +302,7 @@ fn network_slug_collision_pair() {
 #[ignore]
 fn network_500_retries_then_fails() {
     let home = TempDir::new().unwrap();
-    let tree = home.path().join("tree");
-    seed(home.path(), &tree);
+    common::seed(home.path(), "tree");
 
     let out = add(home.path(), DEAD_500);
     assert!(!out.status.success());
@@ -355,8 +319,7 @@ fn network_500_retries_then_fails() {
 #[ignore]
 fn network_binary_content_fails() {
     let home = TempDir::new().unwrap();
-    let tree = home.path().join("tree");
-    seed(home.path(), &tree);
+    common::seed(home.path(), "tree");
 
     let out = add(home.path(), NON_HTML_BINARY);
     assert!(!out.status.success());
@@ -370,8 +333,7 @@ fn network_binary_content_fails() {
 #[ignore]
 fn network_paywalled_degrades_gracefully() {
     let home = TempDir::new().unwrap();
-    let tree = home.path().join("tree");
-    seed(home.path(), &tree);
+    common::seed(home.path(), "tree");
 
     let out = add(home.path(), PAYWALLED);
     // May succeed with partial content or fail — either is acceptable
@@ -385,8 +347,7 @@ fn network_paywalled_degrades_gracefully() {
 #[ignore]
 fn network_js_spa_degrades_gracefully() {
     let home = TempDir::new().unwrap();
-    let tree = home.path().join("tree");
-    seed(home.path(), &tree);
+    common::seed(home.path(), "tree");
 
     let out = add(home.path(), JS_SPA);
     // SPA may return some server-rendered content or fail extraction

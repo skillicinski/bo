@@ -3,19 +3,17 @@
 // Uses $HOME override to redirect config to a temp dir, avoiding any
 // interaction with the real ~/.bo/config.json.
 
+mod common;
+
 use bo::domain::{Slug, Timestamp, Title, Url};
 use serde_json::Value;
 use std::fs;
 
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 use tempfile::TempDir;
 
-fn bo(home: &Path) -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_bo"));
-    cmd.env("HOME", home);
-    cmd
-}
+use common::bo;
 
 fn seed(home: &Path, output_dir: &Path) -> Output {
     bo(home)
@@ -70,34 +68,13 @@ fn auth_path(home: &TempDir) -> std::path::PathBuf {
     home.path().join(".bo").join("auth.json")
 }
 
-fn ensure_manifest(tree: &Path) {
-    let manifest_path = tree.join(".bo/manifest.json");
-    if manifest_path.exists() {
-        return;
-    }
-    bo::engine::manifest::write(
-        &manifest_path,
-        &bo::domain::manifest::Manifest {
-            tree: bo::domain::manifest::TreeMeta {
-                name: "tree".to_string(),
-                created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
-                last_compiled_at: None,
-            },
-            leaves: Vec::new(),
-            branches: Vec::new(),
-        },
-    )
-    .unwrap();
-}
-
 fn append_index_entry(tree: &Path, file: &str, title: &str) {
     upsert_manifest_leaf(tree, file, title, "2025-01-01T00:00:00Z");
 }
 
 fn upsert_manifest_leaf(tree: &Path, file: &str, title: &str, collected_at: &str) {
-    let manifest_path = tree.join(".bo/manifest.json");
-    ensure_manifest(tree);
-    let mut manifest = bo::engine::manifest::read(&manifest_path).unwrap();
+    common::ensure_manifest(tree);
+    let mut manifest = common::read_manifest(tree);
     let slug = file.trim_end_matches(".md").to_string();
     let url = format!("https://example.com/{}", file.trim_end_matches(".md"));
     if let Some(existing) = manifest.leaves.iter_mut().find(|leaf| leaf.file == file) {
@@ -114,13 +91,12 @@ fn upsert_manifest_leaf(tree: &Path, file: &str, title: &str, collected_at: &str
             summary: None,
         });
     }
-    bo::engine::manifest::write(&manifest_path, &manifest).unwrap();
+    common::write_manifest(tree, &manifest);
 }
 
 fn set_manifest_branches_for_leaf(tree: &Path, file: &str, branches: &[&str], timestamp: &str) {
-    let manifest_path = tree.join(".bo/manifest.json");
-    ensure_manifest(tree);
-    let mut manifest = bo::engine::manifest::read(&manifest_path).unwrap();
+    common::ensure_manifest(tree);
+    let mut manifest = common::read_manifest(tree);
     let leaf_slug = file.trim_end_matches(".md").to_string();
 
     for branch in &mut manifest.branches {
@@ -152,7 +128,7 @@ fn set_manifest_branches_for_leaf(tree: &Path, file: &str, branches: &[&str], ti
     }
 
     manifest.branches.retain(|branch| !branch.leaves.is_empty());
-    bo::engine::manifest::write(&manifest_path, &manifest).unwrap();
+    common::write_manifest(tree, &manifest);
 }
 
 fn write_leaf(tree: &Path, file: &str, title: &str, collected_at: &str, branches: Option<&[&str]>) {

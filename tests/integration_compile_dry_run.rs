@@ -4,40 +4,24 @@
 // block, agent-without-dry-run rejection, and scripted-provider agent and
 // one-shot previews with validation feedback.
 
+mod common;
+
 use bo::cli::compile;
 use bo::domain::Timestamp;
-use bo::domain::{Title, Url};
 use std::fs;
-use std::path::Path;
-use std::process::{Command, Output};
+use std::path::{Path, PathBuf};
+use std::process::Output;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use tempfile::TempDir;
 
+use common::bo;
+
 // ── subprocess helpers ──────────────────────────────────────────────────────
 
-fn bo(home: &Path) -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_bo"));
-    cmd.env("HOME", home);
-    cmd
-}
-
-fn seed(home: &Path, output_dir: &Path, name: &str) -> Output {
-    bo(home)
-        .args([
-            "seed",
-            "--path",
-            output_dir.to_str().unwrap(),
-            "--name",
-            name,
-            "--provider",
-            "deepseek",
-            "--model",
-            "deepseek-v4-flash",
-        ])
-        .output()
-        .expect("failed to run bo seed")
+fn seed(home: &Path, name: &str) -> PathBuf {
+    common::seed_with(home, name, "deepseek", "deepseek-v4-flash")
 }
 
 fn compile_cmd(home: &Path, args: &[&str]) -> Output {
@@ -76,96 +60,11 @@ fn collect_files(abs: &Path, prefix: &Path, out: &mut Vec<(std::path::PathBuf, V
     }
 }
 
-// ── fixture setup (mirrors integration_compile.rs) ──────────────────────────
-
-struct FixtureDoc {
-    file: &'static str,
-    title: &'static str,
-    url: &'static str,
-    body: &'static str,
-}
-
-const FIXTURE_DOCS: &[FixtureDoc] = &[
-    FixtureDoc {
-        file: "rust-ownership.md",
-        title: "Rust Ownership",
-        url: "https://example.com/rust-ownership",
-        body: "Rust's ownership model makes memory safety a compile-time property. Borrowing and lifetimes let programs share references without a garbage collector while still controlling resource cleanup precisely.",
-    },
-    FixtureDoc {
-        file: "memory-safety.md",
-        title: "Memory Safety",
-        url: "https://example.com/memory-safety",
-        body: "Memory safety matters in systems programming because pointer mistakes can become security bugs. Rust uses ownership, borrowing, and lifetimes to prevent dangling references and data races before runtime.",
-    },
-    FixtureDoc {
-        file: "safe-concurrency.md",
-        title: "Safe Concurrency",
-        url: "https://example.com/safe-concurrency",
-        body: "Safe concurrency depends on clear ownership of shared state. Rust's type system prevents data races by enforcing borrowing rules across threads and synchronisation boundaries.",
-    },
-    FixtureDoc {
-        file: "zero-cost-abstractions.md",
-        title: "Zero-Cost Abstractions",
-        url: "https://example.com/zero-cost-abstractions",
-        body: "Zero-cost abstractions allow high-level APIs without runtime penalties. In Rust, ownership and static dispatch let systems code remain expressive while preserving predictable memory and performance behaviour.",
-    },
-];
-
-fn setup_fixture_collection() -> TempDir {
-    let dir = TempDir::new().unwrap();
-    let bo_dir = dir.path().join(".bo");
-    fs::create_dir_all(&bo_dir).unwrap();
-    let mut leaves = Vec::new();
-
-    for doc in FIXTURE_DOCS {
-        let title: Option<Title> = Title::parse(doc.title).ok();
-        let url = Url::parse(doc.url).unwrap();
-        let ts = Timestamp::parse("2025-06-01T10:00:00Z").unwrap();
-        let content = bo::domain::leaf::format_content(title.as_ref(), &url, &ts, doc.body);
-        fs::write(dir.path().join(doc.file), content).unwrap();
-
-        leaves.push(bo::domain::Leaf {
-            slug: bo::domain::Slug::parse(doc.file.trim_end_matches(".md")).unwrap(),
-            file: doc.file.to_string(),
-            title,
-            url,
-            collected_at: Timestamp::parse("2025-06-01T10:00:00Z").unwrap(),
-            summary: None,
-        });
-    }
-
-    bo::engine::manifest::write(
-        &bo_dir.join("manifest.json"),
-        &bo::domain::manifest::Manifest {
-            tree: bo::domain::manifest::TreeMeta {
-                name: "compile-fixture".to_string(),
-                created_at: Timestamp::parse("2025-06-01T09:00:00Z").unwrap(),
-                last_compiled_at: None,
-            },
-            leaves,
-            branches: Vec::new(),
-        },
-    )
-    .unwrap();
-
-    dir
-}
-
 fn make_config(output_dir: &Path) -> bo::engine::config::SeededConfig {
-    bo::engine::config::SeededConfig::new(
-        bo::engine::config::Config {
-            provider: bo::engine::llm::Provider::Deepseek,
-            model: "deepseek-v4-flash".to_string(),
-            compile_model: None,
-            base_url: None,
-            tree: None,
-        },
-        bo::domain::tree::TreeConfig {
-            path: output_dir.to_path_buf(),
-            name: "test-tree".to_string(),
-            created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
-        },
+    common::seeded_config(
+        output_dir,
+        bo::engine::llm::Provider::Deepseek,
+        "deepseek-v4-flash",
     )
 }
 
@@ -287,14 +186,7 @@ fn tool_response_many(calls: Vec<bo::engine::llm::ToolCall>) -> bo::engine::llm:
 #[test]
 fn compile_no_flags_empty_tree_byte_for_byte() {
     let home = TempDir::new().unwrap();
-    let tree = home.path().join("grove");
-
-    let seeded = seed(home.path(), &tree, "test-grove");
-    assert!(
-        seeded.status.success(),
-        "seed failed: {}",
-        String::from_utf8_lossy(&seeded.stderr)
-    );
+    seed(home.path(), "test-grove");
 
     let out = compile_cmd(home.path(), &[]);
     assert!(
@@ -317,14 +209,7 @@ fn compile_no_flags_empty_tree_byte_for_byte() {
 #[test]
 fn compile_dry_run_empty_tree_is_noop_and_zero_write() {
     let home = TempDir::new().unwrap();
-    let tree = home.path().join("meadow");
-
-    let seeded = seed(home.path(), &tree, "meadow");
-    assert!(
-        seeded.status.success(),
-        "seed failed: {}",
-        String::from_utf8_lossy(&seeded.stderr)
-    );
+    let tree = seed(home.path(), "meadow");
 
     let before = snapshot_tree(&tree);
 
@@ -352,10 +237,7 @@ fn compile_dry_run_empty_tree_is_noop_and_zero_write() {
 #[test]
 fn agent_without_dry_run_is_rejected() {
     let home = TempDir::new().unwrap();
-    let tree = home.path().join("copse");
-
-    let seeded = seed(home.path(), &tree, "copse");
-    assert!(seeded.status.success());
+    seed(home.path(), "copse");
 
     let out = compile_cmd(home.path(), &["--agent"]);
     assert!(!out.status.success(), "expected non-zero exit code");
@@ -375,7 +257,7 @@ fn agent_without_dry_run_is_rejected() {
 
 #[test]
 fn dry_run_blocked_by_pending_writes_zero() {
-    let dir = setup_fixture_collection();
+    let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
     let tree_dir = dir.path();
     let bo_dir = tree_dir.join(".bo");
@@ -430,7 +312,7 @@ fn dry_run_blocked_by_pending_writes_zero() {
 
 #[test]
 fn dry_run_blocked_by_stale_repair_writes_zero() {
-    let dir = setup_fixture_collection();
+    let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
     let tree_dir = dir.path();
     let bo_dir = tree_dir.join(".bo");
@@ -487,7 +369,7 @@ fn dry_run_blocked_by_stale_repair_writes_zero() {
 
 #[test]
 fn agent_dry_run_with_scripted_provider_produces_preview_and_zero_writes() {
-    let dir = setup_fixture_collection();
+    let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
     let model = compile_model();
     let tree_dir = dir.path();
@@ -557,7 +439,7 @@ fn agent_dry_run_with_scripted_provider_produces_preview_and_zero_writes() {
 
 #[test]
 fn one_shot_dry_run_with_scripted_provider_produces_preview() {
-    let dir = setup_fixture_collection();
+    let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
     let model = compile_model();
     let tree_dir = dir.path();
@@ -611,7 +493,7 @@ fn one_shot_dry_run_with_scripted_provider_produces_preview() {
 
 #[test]
 fn agent_dry_run_validation_feedback_then_success() {
-    let dir = setup_fixture_collection();
+    let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
     let model = compile_model();
     let tree_dir = dir.path();
@@ -686,7 +568,7 @@ fn agent_dry_run_unsupported_provider_errors_with_actionable_message() {
     // uses the trait's default, which returns an explicit unsupported error.
     // The agent path must surface it as an actionable AgentFailed, not panic
     // or silently degrade. Covers acceptance #6 (unsupported providers).
-    let dir = setup_fixture_collection();
+    let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
     let model = compile_model();
     let tree_dir = dir.path();
@@ -737,7 +619,7 @@ fn agent_dry_run_limit_failure_surfaces_diagnostics_in_json() {
     // agent hits the total-tool-call limit. The error envelope must carry the
     // same resource diagnostics as a success envelope: turns, tool_calls,
     // usage, and last_error (the last tool-result error).
-    let dir = setup_fixture_collection();
+    let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
     let model = compile_model();
     let tree_dir = dir.path();
