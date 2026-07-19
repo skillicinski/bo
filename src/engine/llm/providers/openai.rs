@@ -4,7 +4,7 @@ use serde_json::Value;
 use super::{map_http_error, map_reqwest_error};
 use crate::engine::llm::{
     sanitize_provider_error_message, FinishReason, LlmError, LlmProvider, LlmResponse, Message,
-    NormalizedSchema, Role,
+    ProviderSchema, Role,
 };
 
 pub struct OpenAiProvider {
@@ -28,7 +28,7 @@ impl LlmProvider for OpenAiProvider {
         messages: &[Message],
         model: &str,
         max_tokens: u32,
-        response_schema: Option<&NormalizedSchema>,
+        response_schema: Option<&ProviderSchema>,
         _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         let api_messages: Vec<Value> = messages

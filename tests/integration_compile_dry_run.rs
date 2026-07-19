@@ -75,7 +75,7 @@ impl bo::engine::llm::LlmProvider for ScriptedAgentProvider {
         _messages: &[bo::engine::llm::Message],
         _model: &str,
         _max_tokens: u32,
-        _response_schema: Option<&bo::engine::llm::NormalizedSchema>,
+        _response_schema: Option<&bo::engine::llm::ProviderSchema>,
         _reasoning_disabled: bool,
     ) -> Result<bo::engine::llm::LlmResponse, bo::engine::llm::LlmError> {
         // Unreachable for agent tests, but provide a stubbed response.
@@ -119,7 +119,7 @@ impl bo::engine::llm::LlmProvider for ScriptedOneShotProvider {
         _messages: &[bo::engine::llm::Message],
         _model: &str,
         _max_tokens: u32,
-        _response_schema: Option<&bo::engine::llm::NormalizedSchema>,
+        _response_schema: Option<&bo::engine::llm::ProviderSchema>,
         _reasoning_disabled: bool,
     ) -> Result<bo::engine::llm::LlmResponse, bo::engine::llm::LlmError> {
         Ok(bo::engine::llm::LlmResponse {

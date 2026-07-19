@@ -5,8 +5,8 @@ use crate::domain::slug::Slug;
 use crate::domain::{Branch, Leaf, Timestamp, Title, Url};
 use crate::engine::config::SeededConfig;
 use crate::engine::llm::{
-    AgentMessage, AgentResponse, FinishReason, LlmError, LlmProvider, LlmResponse, Model,
-    NormalizedSchema, Provider, ToolSchema,
+    AgentMessage, AgentResponse, FinishReason, LlmError, LlmProvider, LlmResponse, Model, Provider,
+    ProviderSchema, ToolSchema,
 };
 use async_trait::async_trait;
 use std::collections::HashSet;
@@ -128,7 +128,7 @@ impl LlmProvider for ScriptedAgentProvider {
         _: &[crate::engine::llm::Message],
         _: &str,
         _: u32,
-        _: Option<&NormalizedSchema>,
+        _: Option<&ProviderSchema>,
         _: bool,
     ) -> Result<LlmResponse, LlmError> {
         unreachable!("agent compile tests only use complete_with_tools")

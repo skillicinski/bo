@@ -4,7 +4,7 @@ use serde_json::Value;
 use super::{map_http_error, map_reqwest_error};
 use crate::engine::llm::{
     sanitize_provider_error_message, FinishReason, LlmError, LlmProvider, LlmResponse, Message,
-    NormalizedSchema, Role,
+    ProviderSchema, Role,
 };
 
 pub struct GoogleProvider {
@@ -26,8 +26,8 @@ impl LlmProvider for GoogleProvider {
     /// Gemini's `responseSchema` accepts a subset of OpenAPI 3.0 Schema.
     /// `additionalProperties: false` is not part of that subset — strip it.
     /// Reject anything else (e.g. `additionalProperties: { … }`) as unsupported.
-    fn map_response_schema(&self, schema: &Value) -> Result<NormalizedSchema, LlmError> {
-        to_gemini_schema(schema).map(NormalizedSchema)
+    fn map_response_schema(&self, schema: &Value) -> Result<ProviderSchema, LlmError> {
+        to_gemini_schema(schema).map(ProviderSchema)
     }
 
     async fn complete(
@@ -35,7 +35,7 @@ impl LlmProvider for GoogleProvider {
         messages: &[Message],
         model: &str,
         max_tokens: u32,
-        response_schema: Option<&NormalizedSchema>,
+        response_schema: Option<&ProviderSchema>,
         reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         // 1. Separate system messages from conversation turns.
