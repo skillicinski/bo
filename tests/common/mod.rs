@@ -160,16 +160,18 @@ const FIXTURE_DOCS: &[FixtureDoc] = &[
 /// Build the canonical synthesis fixture tree in a fresh temp dir.
 pub fn setup_fixture_collection() -> TempDir {
     let dir = TempDir::new().unwrap();
+    let leaf_dir = dir.path().join("leaf");
+    fs::create_dir_all(&leaf_dir).unwrap();
     let mut leaves = Vec::new();
     for doc in FIXTURE_DOCS {
         let title = Title::parse(doc.title).ok();
         let url = Url::parse(doc.url).unwrap();
         let collected = ts("2025-06-01T10:00:00Z");
         let content = bo::domain::leaf::format_content(title.as_ref(), &url, &collected, doc.body);
-        fs::write(dir.path().join(doc.file), content).unwrap();
+        fs::write(leaf_dir.join(doc.file), content).unwrap();
         leaves.push(Leaf {
             slug: Slug::parse(doc.file.trim_end_matches(".md")).unwrap(),
-            file: doc.file.to_string(),
+            file: format!("leaf/{}", doc.file),
             title,
             url,
             collected_at: collected,

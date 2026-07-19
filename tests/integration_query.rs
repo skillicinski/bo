@@ -55,33 +55,21 @@ impl LlmProvider for MockProvider {
 
 // ── test fixtures ────────────────────────────────────────────────────────────
 
-fn make_leaf(
-    dir: &std::path::Path,
-    filename: &str,
-    title: &str,
-    url: &str,
-    summary: Option<&str>,
-    body: &str,
-) {
-    let leaves_dir = dir.join("leaves");
-    fs::create_dir_all(&leaves_dir).unwrap();
+fn make_leaf(dir: &std::path::Path, filename: &str, title: &str, url: &str, body: &str) {
+    let leaf_dir = dir.join("leaf");
+    fs::create_dir_all(&leaf_dir).unwrap();
 
-    let mut content = String::from("---\n");
-    content.push_str(&format!("title: \"{}\"\n", title));
-    content.push_str(&format!("url: \"{}\"\n", url));
-    if let Some(s) = summary {
-        content.push_str(&format!("summary: \"{}\"\n", s));
-    }
-    content.push_str("---\n\n");
-    content.push_str(body);
+    let content = format!(
+        "---\ntitle: \"{title}\"\nurl: \"{url}\"\ncollected_at: 2025-01-01T00:00:00Z\n---\n\n{body}"
+    );
 
-    fs::write(leaves_dir.join(filename), content).unwrap();
+    fs::write(leaf_dir.join(filename), content).unwrap();
 }
 
-fn make_state(dir: &std::path::Path, entries: &[(&str, &str, &str)]) {
+fn make_state(dir: &std::path::Path, entries: &[(&str, &str, &str, Option<&str>)]) {
     let leaves: Vec<_> = entries
         .iter()
-        .map(|(file, title, url)| {
+        .map(|(file, title, url, summary)| {
             let slug_str = std::path::Path::new(file)
                 .file_stem()
                 .unwrap()
@@ -89,24 +77,13 @@ fn make_state(dir: &std::path::Path, entries: &[(&str, &str, &str)]) {
                 .into_owned();
             let slug = bo::domain::Slug::parse(&slug_str)
                 .unwrap_or_else(|_| bo::domain::Slug::generate(&slug_str, ""));
-            // Read summary from the leaf file if it exists
-            let summary = fs::read_to_string(dir.join(file)).ok().and_then(|content| {
-                bo::domain::frontmatter::parse(&content)
-                    .ok()
-                    .and_then(|(mapping, _)| {
-                        mapping
-                            .get("summary")
-                            .and_then(|v| v.as_str())
-                            .map(str::to_string)
-                    })
-            });
             bo::domain::Leaf {
                 slug,
                 file: file.to_string(),
                 title: Title::parse(title).ok(),
                 url: Url::parse(url).unwrap(),
                 collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
-                summary,
+                summary: summary.map(str::to_string),
             }
         })
         .collect();
@@ -133,7 +110,6 @@ fn setup_test_tree() -> TempDir {
         "rust-ownership.md",
         "Understanding Ownership",
         "https://doc.rust-lang.org/ownership",
-        Some("Rust ownership model ensures memory safety through compile-time checks"),
         "Ownership is Rust's most unique feature. Each value has a variable that's its owner. There can only be one owner at a time. When the owner goes out of scope, the value is dropped.",
     );
     make_leaf(
@@ -141,7 +117,6 @@ fn setup_test_tree() -> TempDir {
         "rust-borrowing.md",
         "References and Borrowing",
         "https://doc.rust-lang.org/borrowing",
-        Some("Borrowing allows references without taking ownership"),
         "References allow you to refer to some value without taking ownership. The rules: you can have either one mutable reference or any number of immutable references. References must always be valid.",
     );
     make_leaf(
@@ -149,7 +124,6 @@ fn setup_test_tree() -> TempDir {
         "rust-lifetimes.md",
         "Lifetimes in Rust",
         "https://doc.rust-lang.org/lifetimes",
-        Some("Lifetimes ensure references remain valid for their intended scope"),
         "Every reference in Rust has a lifetime. Lifetimes are a way of describing the relationship between references. The borrow checker uses lifetimes to ensure references are valid.",
     );
     make_leaf(
@@ -157,7 +131,6 @@ fn setup_test_tree() -> TempDir {
         "python-gc.md",
         "Python Garbage Collection",
         "https://docs.python.org/gc",
-        Some("Python uses reference counting and cycle detection for memory management"),
         "Python manages memory automatically using reference counting. When an object's reference count drops to zero, it is deallocated. A cycle detector handles circular references.",
     );
     make_leaf(
@@ -165,7 +138,6 @@ fn setup_test_tree() -> TempDir {
         "go-concurrency.md",
         "Go Concurrency",
         "https://go.dev/concurrency",
-        Some("Go uses goroutines and channels for concurrent programming"),
         "Goroutines are lightweight threads managed by the Go runtime. Channels provide typed communication between goroutines. The select statement multiplexes channel operations.",
     );
     // Leaf without summary field
@@ -174,7 +146,6 @@ fn setup_test_tree() -> TempDir {
         "rust-traits.md",
         "Rust Traits",
         "https://doc.rust-lang.org/traits",
-        None,
         "Traits define shared behavior. A trait tells the Rust compiler about functionality a type must provide. Trait bounds constrain generic types to those implementing specific traits.",
     );
 
@@ -182,34 +153,40 @@ fn setup_test_tree() -> TempDir {
         tree,
         &[
             (
-                "leaves/rust-ownership.md",
+                "leaf/rust-ownership.md",
                 "Understanding Ownership",
                 "https://doc.rust-lang.org/ownership",
+                Some("Rust ownership model ensures memory safety through compile-time checks"),
             ),
             (
-                "leaves/rust-borrowing.md",
+                "leaf/rust-borrowing.md",
                 "References and Borrowing",
                 "https://doc.rust-lang.org/borrowing",
+                Some("Borrowing allows references without taking ownership"),
             ),
             (
-                "leaves/rust-lifetimes.md",
+                "leaf/rust-lifetimes.md",
                 "Lifetimes in Rust",
                 "https://doc.rust-lang.org/lifetimes",
+                Some("Lifetimes ensure references remain valid for their intended scope"),
             ),
             (
-                "leaves/python-gc.md",
+                "leaf/python-gc.md",
                 "Python Garbage Collection",
                 "https://docs.python.org/gc",
+                Some("Python uses reference counting and cycle detection for memory management"),
             ),
             (
-                "leaves/go-concurrency.md",
+                "leaf/go-concurrency.md",
                 "Go Concurrency",
                 "https://go.dev/concurrency",
+                Some("Go uses goroutines and channels for concurrent programming"),
             ),
             (
-                "leaves/rust-traits.md",
+                "leaf/rust-traits.md",
                 "Rust Traits",
                 "https://doc.rust-lang.org/traits",
+                None,
             ),
         ],
     );
@@ -348,15 +325,15 @@ fn single_leaf_tree_works() {
         "only-leaf.md",
         "The Only Leaf",
         "https://example.com/only",
-        Some("This is the only document in the tree about Rust"),
         "Rust is a systems programming language focused on safety and performance.",
     );
     make_state(
         tree,
         &[(
-            "leaves/only-leaf.md",
+            "leaf/only-leaf.md",
             "The Only Leaf",
             "https://example.com/only",
+            Some("This is the only document in the tree about Rust"),
         )],
     );
 

@@ -32,7 +32,7 @@ fn write_leaf(tree_dir: &Path, slug: &str, url: &str) {
     let filename = format!("{}.md", slug);
     let collected_at = "2026-05-14T10:00:00Z";
     let content = format!(
-        "---\ntitle: \"{slug}\"\nurl: {url}\ncollected_at: {collected_at}\nupdated_at: {collected_at}\n---\n\n# {slug}\n\nContent for {slug}.\n"
+        "---\ntitle: \"{slug}\"\nurl: {url}\ncollected_at: {collected_at}\n---\n\n# {slug}\n\nContent for {slug}.\n"
     );
     let leaf_dir = tree_dir.join("leaf");
     fs::create_dir_all(&leaf_dir).unwrap();
@@ -161,7 +161,7 @@ fn status_detects_untracked_leaf_file() {
     common::ensure_state(&tree_dir);
 
     // Write a leaf file directly without going through collect (not tracked in state)
-    let content = "---\ntitle: \"stray\"\nurl: https://stray.com\ncollected_at: 2026-05-14T10:00:00Z\nupdated_at: 2026-05-14T10:00:00Z\n---\n\n# stray\n\nOrphaned leaf.\n";
+    let content = "---\ntitle: \"stray\"\nurl: https://stray.com\ncollected_at: 2026-05-14T10:00:00Z\n---\n\n# stray\n\nOrphaned leaf.\n";
     let leaf_dir = tree_dir.join("leaf");
     fs::create_dir_all(&leaf_dir).unwrap();
     fs::write(leaf_dir.join("stray.md"), content).unwrap();

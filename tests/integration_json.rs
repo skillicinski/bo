@@ -45,10 +45,11 @@ fn write_synthesis_leaf(tree: &Path, file: &str, title: &str) {
         title,
         &format!("https://example.com/{}", file.trim_end_matches(".md")),
     );
+    fs::create_dir_all(tree.join("leaf")).unwrap();
     fs::write(
-        tree.join(file),
+        tree.join("leaf").join(file),
         format!(
-            "---\ntitle: {title}\nurl: https://example.com/{slug}\ncollected_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-01T00:00:00Z\n---\n\n# {title}\n\nBody.\n",
+            "---\ntitle: {title}\nurl: https://example.com/{slug}\ncollected_at: 2025-01-01T00:00:00Z\n---\n\n# {title}\n\nBody.\n",
             slug = file.trim_end_matches(".md")
         ),
     )
@@ -64,7 +65,7 @@ fn add_state_leaf(tree: &Path, file: &str, title: &str, url: &str) {
         tree,
         bo::domain::Leaf {
             slug,
-            file: file.to_string(),
+            file: format!("leaf/{file}"),
             title: Title::parse(title).ok(),
             url: Url::parse(url).unwrap(),
             collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
@@ -384,7 +385,10 @@ fn collect_json_duplicate_url_is_structured_error() {
     assert_eq!(parsed["ok"], false);
     assert_eq!(parsed["command"], "collect");
     assert_eq!(parsed["error"]["code"], "duplicate_url");
-    assert_eq!(parsed["error"]["details"]["existing_file"], "existing.md");
+    assert_eq!(
+        parsed["error"]["details"]["existing_file"],
+        "leaf/existing.md"
+    );
 }
 
 #[test]
@@ -404,7 +408,10 @@ fn collect_json_batch_reports_skipped_duplicates_per_input() {
     assert_eq!(parsed["data"]["summary"]["failed"], 0);
     assert_eq!(parsed["data"]["items"][0]["status"], "skipped");
     assert_eq!(parsed["data"]["items"][0]["code"], "duplicate_url");
-    assert_eq!(parsed["data"]["items"][0]["existing_file"], "existing.md");
+    assert_eq!(
+        parsed["data"]["items"][0]["existing_file"],
+        "leaf/existing.md"
+    );
     assert_eq!(parsed["data"]["items"][1]["code"], "duplicate_input");
 }
 

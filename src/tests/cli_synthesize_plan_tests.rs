@@ -83,13 +83,19 @@ fn build_state_delta_allows_one_leaf_in_multiple_branches() {
                 slug: "concept-a".to_string(),
                 title: "Concept A".to_string(),
                 body: "body a".to_string(),
-                leaves: vec!["shared-leaf.md".to_string(), "alpha.md".to_string()],
+                leaves: vec![
+                    "leaf/shared-leaf.md".to_string(),
+                    "leaf/alpha.md".to_string(),
+                ],
             },
             ValidatedBranch {
                 slug: "concept-b".to_string(),
                 title: "Concept B".to_string(),
                 body: "body b".to_string(),
-                leaves: vec!["shared-leaf.md".to_string(), "beta.md".to_string()],
+                leaves: vec![
+                    "leaf/shared-leaf.md".to_string(),
+                    "leaf/beta.md".to_string(),
+                ],
             },
         ],
     };

@@ -313,12 +313,12 @@ fn synthesize_full_with_canned_response_creates_branches() {
             {
                 "title": "Rust Memory Safety",
                 "body": "# Rust Memory Safety\n\nOwnership and borrowing make memory safety a compile-time guarantee.",
-                "leaves": ["rust-ownership.md", "memory-safety.md"]
+                "leaves": ["rust-ownership", "memory-safety"]
             },
             {
                 "title": "Systems Design in Rust",
                 "body": "# Systems Design in Rust\n\nZero-cost abstractions and safe concurrency shape Rust systems code.",
-                "leaves": ["safe-concurrency.md", "zero-cost-abstractions.md"]
+                "leaves": ["safe-concurrency", "zero-cost-abstractions"]
             }
         ]
     })
@@ -369,9 +369,16 @@ fn synthesize_full_with_canned_response_creates_branches() {
         mapping.get("updated_at").and_then(|v| v.as_str()).is_some(),
         "branch missing 'updated_at' in frontmatter"
     );
-    assert!(
-        mapping.get("leaves").is_some(),
-        "branch missing 'leaves' in frontmatter"
+    let leaves: Vec<_> = mapping
+        .get("leaves")
+        .and_then(|value| value.as_sequence())
+        .expect("branch missing 'leaves' in frontmatter")
+        .iter()
+        .filter_map(|value| value.as_str())
+        .collect();
+    assert_eq!(
+        leaves,
+        vec!["leaf/rust-ownership.md", "leaf/memory-safety.md"]
     );
     assert!(!body.trim().is_empty(), "branch body is empty");
 
@@ -400,6 +407,7 @@ fn synthesize_incremental_with_canned_response_updates_existing_branches() {
     let bo_dir = dir.path().join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
     fs::create_dir_all(dir.path().join("branch")).unwrap();
+    fs::create_dir_all(dir.path().join("leaf")).unwrap();
 
     let ts_old = Timestamp::parse("2025-06-01T10:00:00Z").unwrap();
     let ts_last_synthesis = Timestamp::parse("2025-06-02T00:00:00Z").unwrap();
@@ -421,7 +429,7 @@ fn synthesize_incremental_with_canned_response_updates_existing_branches() {
         let t = Title::parse(title).unwrap();
         let u = Url::parse(&format!("https://example.com/{}", file)).unwrap();
         let content = bo::domain::leaf::format_content(Some(&t), &u, &ts_old, body);
-        fs::write(dir.path().join(file), content).unwrap();
+        fs::write(dir.path().join("leaf").join(file), content).unwrap();
     }
 
     // Two new leaves (collected after last synthesis)
@@ -440,13 +448,13 @@ fn synthesize_incremental_with_canned_response_updates_existing_branches() {
         let t = Title::parse(title).unwrap();
         let u = Url::parse(&format!("https://example.com/{}", file)).unwrap();
         let content = bo::domain::leaf::format_content(Some(&t), &u, &ts_new, body);
-        fs::write(dir.path().join(file), content).unwrap();
+        fs::write(dir.path().join("leaf").join(file), content).unwrap();
     }
 
     // Write existing branch file on disk (needed for incremental prompt)
     fs::write(
         dir.path().join("branch/memory-model.md"),
-        "---\ntitle: Memory Model\ncreated_at: 2025-06-02T00:00:00Z\nupdated_at: 2025-06-02T00:00:00Z\nleaves:\n  - ownership\n  - borrowing\n---\n\n# Memory Model\n\nOriginal body.\n",
+        "---\ntitle: Memory Model\ncreated_at: 2025-06-02T00:00:00Z\nupdated_at: 2025-06-02T00:00:00Z\nleaves:\n  - leaf/ownership.md\n  - leaf/borrowing.md\n---\n\n# Memory Model\n\nOriginal body.\n",
     )
     .unwrap();
 
@@ -461,7 +469,7 @@ fn synthesize_incremental_with_canned_response_updates_existing_branches() {
             leaves: vec![
                 Leaf {
                     slug: bo::domain::Slug::parse("ownership").unwrap(),
-                    file: "ownership.md".to_string(),
+                    file: "leaf/ownership.md".to_string(),
                     title: Some(Title::parse("Ownership").unwrap()),
                     url: Url::parse("https://example.com/ownership.md").unwrap(),
                     collected_at: ts_old.clone(),
@@ -469,7 +477,7 @@ fn synthesize_incremental_with_canned_response_updates_existing_branches() {
                 },
                 Leaf {
                     slug: bo::domain::Slug::parse("borrowing").unwrap(),
-                    file: "borrowing.md".to_string(),
+                    file: "leaf/borrowing.md".to_string(),
                     title: Some(Title::parse("Borrowing").unwrap()),
                     url: Url::parse("https://example.com/borrowing.md").unwrap(),
                     collected_at: ts_old.clone(),
@@ -477,7 +485,7 @@ fn synthesize_incremental_with_canned_response_updates_existing_branches() {
                 },
                 Leaf {
                     slug: bo::domain::Slug::parse("lifetimes").unwrap(),
-                    file: "lifetimes.md".to_string(),
+                    file: "leaf/lifetimes.md".to_string(),
                     title: Some(Title::parse("Lifetimes").unwrap()),
                     url: Url::parse("https://example.com/lifetimes.md").unwrap(),
                     collected_at: ts_new.clone(),
@@ -485,7 +493,7 @@ fn synthesize_incremental_with_canned_response_updates_existing_branches() {
                 },
                 Leaf {
                     slug: bo::domain::Slug::parse("traits").unwrap(),
-                    file: "traits.md".to_string(),
+                    file: "leaf/traits.md".to_string(),
                     title: Some(Title::parse("Traits").unwrap()),
                     url: Url::parse("https://example.com/traits.md").unwrap(),
                     collected_at: ts_new.clone(),
@@ -518,14 +526,14 @@ fn synthesize_incremental_with_canned_response_updates_existing_branches() {
                 "slug": "memory-model",
                 "title": "Memory Model",
                 "body": "# Memory Model\n\nUpdated with lifetimes.",
-                "leaves": ["ownership.md", "borrowing.md", "lifetimes.md"]
+                "leaves": ["ownership", "borrowing", "lifetimes"]
             }
         ],
         "new_branches": [
             {
                 "title": "Type System",
                 "body": "# Type System\n\nTraits enable polymorphism.",
-                "leaves": ["traits.md", "ownership.md"]
+                "leaves": ["traits", "ownership"]
             }
         ]
     })
@@ -595,6 +603,7 @@ fn synthesize_all_leaves_deleted_repair_handles_missing_files() {
     let bo_dir = dir.path().join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
     fs::create_dir_all(dir.path().join("branch")).unwrap();
+    fs::create_dir_all(dir.path().join("leaf")).unwrap();
 
     let ts = Timestamp::parse("2025-06-01T10:00:00Z").unwrap();
 
@@ -603,7 +612,7 @@ fn synthesize_all_leaves_deleted_repair_handles_missing_files() {
     let url = Url::parse("https://example.com/survivor").unwrap();
     let content =
         bo::domain::leaf::format_content(Some(&title), &url, &ts, "This leaf still exists.");
-    fs::write(dir.path().join("survivor.md"), content).unwrap();
+    fs::write(dir.path().join("leaf/survivor.md"), content).unwrap();
 
     // Write branch file that references both survivor and missing leaf
     fs::write(
@@ -623,7 +632,7 @@ fn synthesize_all_leaves_deleted_repair_handles_missing_files() {
             leaves: vec![
                 Leaf {
                     slug: bo::domain::Slug::parse("survivor").unwrap(),
-                    file: "survivor.md".to_string(),
+                    file: "leaf/survivor.md".to_string(),
                     title: Some(Title::parse("Survivor").unwrap()),
                     url: Url::parse("https://example.com/survivor").unwrap(),
                     collected_at: ts.clone(),
@@ -631,7 +640,7 @@ fn synthesize_all_leaves_deleted_repair_handles_missing_files() {
                 },
                 Leaf {
                     slug: bo::domain::Slug::parse("deleted").unwrap(),
-                    file: "deleted.md".to_string(),
+                    file: "leaf/deleted.md".to_string(),
                     title: Some(Title::parse("Deleted").unwrap()),
                     url: Url::parse("https://example.com/deleted").unwrap(),
                     collected_at: ts.clone(),
@@ -654,7 +663,7 @@ fn synthesize_all_leaves_deleted_repair_handles_missing_files() {
     .unwrap();
 
     // Verify the deleted leaf file is actually missing
-    assert!(!dir.path().join("deleted.md").exists());
+    assert!(!dir.path().join("leaf/deleted.md").exists());
 
     let cfg = make_config(dir.path());
     let result = synthesize::run_with_options(&cfg, Default::default()).result;
@@ -693,14 +702,17 @@ fn create_leaf_docs(
     prefix: &str,
     ts: &Timestamp,
 ) -> Vec<Leaf> {
+    let leaf_dir = dir.join("leaf");
+    fs::create_dir_all(&leaf_dir).unwrap();
     let mut leaves = Vec::new();
     for i in 1..=count {
         let slug = format!("{}-{:02}", prefix, i);
-        let file = format!("{}.md", slug);
+        let filename = format!("{}.md", slug);
+        let file = format!("leaf/{filename}");
         let title_str = format!("{} {}", prefix, i);
         let body = format!("Content of leaf {} {}.", prefix, i);
         let t = Title::parse(&title_str).unwrap();
-        let u = Url::parse(&format!("https://example.com/{}", file)).unwrap();
+        let u = Url::parse(&format!("https://example.com/{filename}")).unwrap();
         let content = bo::domain::leaf::format_content(Some(&t), &u, ts, &body);
         fs::write(dir.join(&file), content).unwrap();
         leaves.push(Leaf {
@@ -728,12 +740,12 @@ fn synthesize_one_shot_uses_synthesis_system_prompt() {
             {
                 "title": "Rust Memory Safety",
                 "body": "# Rust Memory Safety\n\nContent.",
-                "leaves": ["rust-ownership.md", "memory-safety.md"]
+                "leaves": ["rust-ownership", "memory-safety"]
             },
             {
                 "title": "Systems Design in Rust",
                 "body": "# Systems Design in Rust\n\nContent.",
-                "leaves": ["safe-concurrency.md", "zero-cost-abstractions.md"]
+                "leaves": ["safe-concurrency", "zero-cost-abstractions"]
             }
         ]
     })
@@ -880,7 +892,7 @@ fn synthesize_incremental_two_stage_uses_incremental_cluster_system_prompt() {
     // Existing branch file on disk.
     fs::write(
         dir.path().join("branch/existing-branch.md"),
-        "---\ntitle: Existing Branch\ncreated_at: 2025-06-02T00:00:00Z\nupdated_at: 2025-06-02T00:00:00Z\nleaves:\n  - existing-01\n  - existing-02\n  - existing-03\n  - existing-04\n---\n\n# Existing Branch\n\nOriginal body.\n",
+        "---\ntitle: Existing Branch\ncreated_at: 2025-06-02T00:00:00Z\nupdated_at: 2025-06-02T00:00:00Z\nleaves:\n  - leaf/existing-01.md\n  - leaf/existing-02.md\n  - leaf/existing-03.md\n  - leaf/existing-04.md\n---\n\n# Existing Branch\n\nOriginal body.\n",
     )
     .unwrap();
 

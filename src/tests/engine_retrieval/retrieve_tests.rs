@@ -15,50 +15,27 @@ use tempfile::TempDir;
 
 // ── on-disk tree builders (retrieve_docs reads .bo/state.json) ─────
 
-fn make_leaf(
-    dir: &Path,
-    filename: &str,
-    title: &str,
-    url: &str,
-    summary: Option<&str>,
-    body: &str,
-) {
-    let leaves_dir = dir.join("leaves");
-    fs::create_dir_all(&leaves_dir).unwrap();
+fn make_leaf(dir: &Path, filename: &str, title: &str, url: &str, body: &str) {
+    let leaf_dir = dir.join("leaf");
+    fs::create_dir_all(&leaf_dir).unwrap();
 
-    let mut content = String::from("---\n");
-    content.push_str(&format!("title: \"{}\"\n", title));
-    content.push_str(&format!("url: \"{}\"\n", url));
-    if let Some(s) = summary {
-        content.push_str(&format!("summary: \"{}\"\n", s));
-    }
-    content.push_str("---\n\n");
-    content.push_str(body);
+    let content = format!(
+        "---\ntitle: \"{title}\"\nurl: \"{url}\"\ncollected_at: 2025-01-01T00:00:00Z\n---\n\n{body}"
+    );
 
-    fs::write(leaves_dir.join(filename), content).unwrap()
+    fs::write(leaf_dir.join(filename), content).unwrap()
 }
 
-fn make_state(dir: &Path, entries: &[(&str, &str, &str)]) {
+fn make_state(dir: &Path, entries: &[(&str, &str, &str, Option<&str>)]) {
     let leaves: Vec<_> = entries
         .iter()
-        .map(|(file, title, url)| {
-            let summary = fs::read_to_string(dir.join(file))
-                .ok()
-                .and_then(|content| crate::domain::frontmatter::parse(&content).ok())
-                .and_then(|(mapping, _)| {
-                    mapping
-                        .get("summary")
-                        .and_then(|value| value.as_str())
-                        .map(str::to_string)
-                });
-            Leaf {
-                slug: Slug::generate(&Path::new(file).file_stem().unwrap().to_string_lossy(), ""),
-                file: file.to_string(),
-                title: Title::parse(title).ok(),
-                url: Url::parse(url).unwrap(),
-                collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
-                summary,
-            }
+        .map(|(file, title, url, summary)| Leaf {
+            slug: Slug::generate(&Path::new(file).file_stem().unwrap().to_string_lossy(), ""),
+            file: file.to_string(),
+            title: Title::parse(title).ok(),
+            url: Url::parse(url).unwrap(),
+            collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+            summary: summary.map(str::to_string),
         })
         .collect();
     let bo_dir = dir.join(".bo");
@@ -88,7 +65,6 @@ fn retrieve_or_semantics_scores_partial_matches() {
         "ownership.md",
         "Understanding Ownership",
         "https://example.com/ownership",
-        Some("Rust ownership and borrowing"),
         "Ownership is a key feature of Rust. It ensures memory safety without a garbage collector.",
     );
     make_leaf(
@@ -96,7 +72,6 @@ fn retrieve_or_semantics_scores_partial_matches() {
         "lifetimes.md",
         "Lifetimes in Rust",
         "https://example.com/lifetimes",
-        Some("How lifetimes work"),
         "Lifetimes ensure references are valid. They are part of Rust's type system.",
     );
     make_leaf(
@@ -104,7 +79,6 @@ fn retrieve_or_semantics_scores_partial_matches() {
         "cooking.md",
         "Cooking Tips",
         "https://example.com/cooking",
-        Some("How to cook pasta"),
         "Boil water and add salt. Cook pasta for 10 minutes.",
     );
 
@@ -112,19 +86,22 @@ fn retrieve_or_semantics_scores_partial_matches() {
         tree,
         &[
             (
-                "leaves/ownership.md",
+                "leaf/ownership.md",
                 "Understanding Ownership",
                 "https://example.com/ownership",
+                Some("Rust ownership and borrowing"),
             ),
             (
-                "leaves/lifetimes.md",
+                "leaf/lifetimes.md",
                 "Lifetimes in Rust",
                 "https://example.com/lifetimes",
+                Some("How lifetimes work"),
             ),
             (
-                "leaves/cooking.md",
+                "leaf/cooking.md",
                 "Cooking Tips",
                 "https://example.com/cooking",
+                Some("How to cook pasta"),
             ),
         ],
     );
@@ -160,15 +137,15 @@ fn retrieve_no_matches_returns_error() {
         "cooking.md",
         "Cooking Tips",
         "https://example.com/cooking",
-        Some("How to cook"),
         "Boil water.",
     );
     make_state(
         tree,
         &[(
-            "leaves/cooking.md",
+            "leaf/cooking.md",
             "Cooking Tips",
             "https://example.com/cooking",
+            Some("How to cook"),
         )],
     );
 
@@ -186,15 +163,15 @@ fn retrieve_missing_summary_uses_body_fallback() {
         "nosummary.md",
         "No Summary Leaf",
         "https://example.com/ns",
-        None,
         "This leaf has no summary field but has a body about Rust programming.",
     );
     make_state(
         tree,
         &[(
-            "leaves/nosummary.md",
+            "leaf/nosummary.md",
             "No Summary Leaf",
             "https://example.com/ns",
+            None,
         )],
     );
 
@@ -219,7 +196,6 @@ fn retrieve_returns_synthesized_branch_when_no_leaf_matches() {
         "cooking.md",
         "Cooking Tips",
         "https://example.com/cooking",
-        Some("How to cook"),
         "Boil water. Chop vegetables. Simmer for twenty minutes.",
     );
     make_leaf(
@@ -227,7 +203,6 @@ fn retrieve_returns_synthesized_branch_when_no_leaf_matches() {
         "sports.md",
         "Sports News",
         "https://example.com/sports",
-        Some("Match reports"),
         "The team won the final. Goals were scored in each half.",
     );
 
@@ -257,7 +232,7 @@ fn retrieve_returns_synthesized_branch_when_no_leaf_matches() {
         leaves: vec![
             Leaf {
                 slug: Slug::generate("cooking", ""),
-                file: "leaves/cooking.md".to_string(),
+                file: "leaf/cooking.md".to_string(),
                 title: Some(Title::parse("Cooking Tips").unwrap()),
                 url: Url::parse("https://example.com/cooking").unwrap(),
                 collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
@@ -265,7 +240,7 @@ fn retrieve_returns_synthesized_branch_when_no_leaf_matches() {
             },
             Leaf {
                 slug: Slug::generate("sports", ""),
-                file: "leaves/sports.md".to_string(),
+                file: "leaf/sports.md".to_string(),
                 title: Some(Title::parse("Sports News").unwrap()),
                 url: Url::parse("https://example.com/sports").unwrap(),
                 collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
@@ -330,7 +305,6 @@ fn scorer_leaf_and_branch_equal_scores_for_identical_content() {
         "topic.md",
         "Topic",
         "https://x.com/topic",
-        None,
         "lorem ipsum dolor sit amet",
     );
     fs::create_dir_all(tree.join("branch")).unwrap();
@@ -348,7 +322,7 @@ fn scorer_leaf_and_branch_equal_scores_for_identical_content() {
         },
         leaves: vec![Leaf {
             slug: Slug::generate("topic", ""),
-            file: "leaves/topic.md".to_string(),
+            file: "leaf/topic.md".to_string(),
             title: Some(Title::parse("Topic").unwrap()),
             url: Url::parse("https://x.com/topic").unwrap(),
             collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),

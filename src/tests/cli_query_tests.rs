@@ -64,50 +64,27 @@ fn low_relevance_details_include_reason_and_matched_sources() {
 
 // ── on-disk tree helpers (for provider-backed synthesis tests) ────────
 
-fn make_leaf(
-    dir: &Path,
-    filename: &str,
-    title: &str,
-    url: &str,
-    summary: Option<&str>,
-    body: &str,
-) {
-    let leaves_dir = dir.join("leaves");
-    fs::create_dir_all(&leaves_dir).unwrap();
+fn make_leaf(dir: &Path, filename: &str, title: &str, url: &str, body: &str) {
+    let leaf_dir = dir.join("leaf");
+    fs::create_dir_all(&leaf_dir).unwrap();
 
-    let mut content = String::from("---\n");
-    content.push_str(&format!("title: \"{}\"\n", title));
-    content.push_str(&format!("url: \"{}\"\n", url));
-    if let Some(s) = summary {
-        content.push_str(&format!("summary: \"{}\"\n", s));
-    }
-    content.push_str("---\n\n");
-    content.push_str(body);
+    let content = format!(
+        "---\ntitle: \"{title}\"\nurl: \"{url}\"\ncollected_at: 2025-01-01T00:00:00Z\n---\n\n{body}"
+    );
 
-    fs::write(leaves_dir.join(filename), content).unwrap()
+    fs::write(leaf_dir.join(filename), content).unwrap()
 }
 
-fn make_state(dir: &Path, entries: &[(&str, &str, &str)]) {
+fn make_state(dir: &Path, entries: &[(&str, &str, &str, Option<&str>)]) {
     let leaves: Vec<_> = entries
         .iter()
-        .map(|(file, title, url)| {
-            let summary = fs::read_to_string(dir.join(file))
-                .ok()
-                .and_then(|content| crate::domain::frontmatter::parse(&content).ok())
-                .and_then(|(mapping, _)| {
-                    mapping
-                        .get("summary")
-                        .and_then(|value| value.as_str())
-                        .map(str::to_string)
-                });
-            crate::domain::Leaf {
-                slug: Slug::generate(&Path::new(file).file_stem().unwrap().to_string_lossy(), ""),
-                file: file.to_string(),
-                title: crate::domain::Title::parse(title).ok(),
-                url: crate::domain::Url::parse(url).unwrap(),
-                collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
-                summary,
-            }
+        .map(|(file, title, url, summary)| crate::domain::Leaf {
+            slug: Slug::generate(&Path::new(file).file_stem().unwrap().to_string_lossy(), ""),
+            file: file.to_string(),
+            title: crate::domain::Title::parse(title).ok(),
+            url: crate::domain::Url::parse(url).unwrap(),
+            collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
+            summary: summary.map(str::to_string),
         })
         .collect();
     let bo_dir = dir.join(".bo");
@@ -213,15 +190,15 @@ fn single_leaf_query_tree() -> TempDir {
         "only-leaf.md",
         "Only Leaf",
         "https://example.com/only",
-        Some("Rust safety"),
         "Rust is a language focused on safety.",
     );
     make_state(
         dir.path(),
         &[(
-            "leaves/only-leaf.md",
+            "leaf/only-leaf.md",
             "Only Leaf",
             "https://example.com/only",
+            Some("Rust safety"),
         )],
     );
     dir
