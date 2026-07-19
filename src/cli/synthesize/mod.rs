@@ -1,4 +1,4 @@
-// bo compile — validated deterministic and agent-assisted pipelines.
+// Synthesis — validated deterministic and agent-assisted pipelines.
 //
 // Default: read leaves → LLM call(s) → parse/validate → write. With
 // `--agent --dry-run`: bounded tool loop → validated plan → read-only preview.
@@ -21,18 +21,17 @@ mod validation;
 
 // ── re-exports: public API ───────────────────────────────────────────────────
 
-pub use dry_run::{run_compile_dry_run, run_compile_dry_run_with_provider};
+pub use dry_run::{run_dry_run, run_dry_run_with_provider};
 pub use orchestrate::{
-    degenerate_result_warning, run, run_compile_with_options, run_compile_with_provider_started_at,
-    Dispatch,
+    degenerate_result_warning, run, run_with_options, run_with_provider_started_at, Dispatch,
 };
 pub use render::{render_diagnostics, render_human, render_preview_human};
 pub use types::{
-    preview_warnings, result_warnings, BranchResult, CompileDryRunOutcome, CompileError,
-    CompileOptions, CompileOutcome, CompilePreview, CompileResult, CompileRunMode, CompileSummary,
-    PreviewBranch, VALIDATION_NEXT_STEP,
+    preview_warnings, result_warnings, BranchResult, PreviewBranch, SynthesisDryRunOutcome,
+    SynthesisError, SynthesisMode, SynthesisOptions, SynthesisOutcome, SynthesisPreview,
+    SynthesisResult, SynthesisSummary, VALIDATION_NEXT_STEP,
 };
 
 #[cfg(test)]
-#[path = "../../tests/cli_compile_tests.rs"]
+#[path = "../../tests/cli_synthesize_tests.rs"]
 mod tests;

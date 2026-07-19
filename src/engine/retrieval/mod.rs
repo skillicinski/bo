@@ -137,5 +137,5 @@ pub use context::{assemble_context, compute_context_budget};
 pub use relevance::validate_relevance;
 pub use scoring::retrieve_docs;
 pub use terms::extract_terms;
-// crate-visible: cli::compile::cluster::discovery tokenizes search text here.
+// crate-visible: cli::synthesize::cluster::discovery tokenizes search text here.
 pub(crate) use terms::tokenize;

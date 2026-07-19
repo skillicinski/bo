@@ -1,4 +1,4 @@
-use crate::cli::compile::plan::LoadedLeaf;
+use crate::cli::synthesize::plan::LoadedLeaf;
 use crate::domain::state::{TreeMetadata, TreeState};
 use crate::domain::{Branch, Leaf, Title, Url};
 use crate::domain::{Slug, Timestamp};

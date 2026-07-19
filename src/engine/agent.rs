@@ -1,8 +1,8 @@
 //! Provider-neutral agent turn loop.
 //!
 //! One file holds the loop, the typed tool contract, the transcript, and the
-//! fixed resource envelope. Compile-specific tools and orchestration live in
-//! `cli::compile::agent`; this module imports no `cli` or `adapters` types
+//! fixed resource envelope. Synthesis-specific tools and orchestration live in
+//! `cli::synthesize::agent`; this module imports no `cli` or `adapters` types
 //! (`tests/architecture.rs` enforces that).
 //!
 //! Semantics copied from the pi protocol reference: preserve `tool_calls` and
@@ -54,7 +54,7 @@ const AGENT_CALL_POLICY: LlmCallPolicy = LlmCallPolicy {
 // ── tool contract ────────────────────────────────────────────────────────────
 
 /// A tool the agent can call. Implementations live in the composition layer
-/// (e.g. `cli::compile::agent`); this trait is provider- and command-neutral.
+/// (e.g. `cli::synthesize::agent`); this trait is provider- and command-neutral.
 pub(crate) trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn schema(&self) -> ToolSchema;

@@ -13,7 +13,7 @@ use crate::domain::{Branch, Leaf};
 use crate::engine::config::SeededConfig;
 
 use super::plan::select_new_leaf_slugs;
-use super::CompileError;
+use super::SynthesisError;
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
@@ -74,7 +74,7 @@ pub(super) fn classify_leaf_files(
     cfg: &SeededConfig,
     state: &TreeState,
     new_leaf_slugs: &[String],
-) -> Result<LeafFileClassification, CompileError> {
+) -> Result<LeafFileClassification, SynthesisError> {
     let tree = cfg.tree();
     let new_leaf_slugs: HashSet<&str> = new_leaf_slugs.iter().map(String::as_str).collect();
 
@@ -87,7 +87,7 @@ pub(super) fn classify_leaf_files(
         match fs::read_to_string(&leaf_path) {
             Ok(content) => {
                 if frontmatter::parse(&content).is_err() && is_new {
-                    return Err(CompileError::Io(format!(
+                    return Err(SynthesisError::Io(format!(
                         "newly selected leaf '{}' is malformed; no files were changed",
                         leaf.file
                     )));
@@ -101,7 +101,7 @@ pub(super) fn classify_leaf_files(
             }
             Err(error) => {
                 if is_new {
-                    return Err(CompileError::Io(format!(
+                    return Err(SynthesisError::Io(format!(
                         "newly selected leaf '{}' is unreadable: {}; no files were changed",
                         leaf.file, error
                     )));
@@ -116,7 +116,10 @@ pub(super) fn classify_leaf_files(
 /// Read-only check: are there deleted leaf files whose absence would require
 /// stale-branch repair? Dry-run paths use this to fail with an actionable
 /// diagnostic instead of writing the repaired state/branches.
-pub(super) fn requires_repair(cfg: &SeededConfig, state: &TreeState) -> Result<bool, CompileError> {
+pub(super) fn requires_repair(
+    cfg: &SeededConfig,
+    state: &TreeState,
+) -> Result<bool, SynthesisError> {
     let class = classify_deletions(cfg, state)?;
     Ok(!class.deleted_slugs.is_empty())
 }
@@ -127,7 +130,7 @@ pub(super) fn requires_repair(cfg: &SeededConfig, state: &TreeState) -> Result<b
 pub(super) fn repair_stale_branches(
     cfg: &SeededConfig,
     state: &TreeState,
-) -> Result<RepairReport, CompileError> {
+) -> Result<RepairReport, SynthesisError> {
     let class = classify_deletions(cfg, state)?;
     if class.deleted_slugs.is_empty() {
         return Ok(RepairReport::default());
@@ -154,7 +157,7 @@ pub(super) fn repair_stale_branches(
     let tree = cfg.tree();
     let state_path = crate::domain::tree::state_path(tree.path());
     crate::engine::state::write(&state_path, &repaired_state)
-        .map_err(|e| CompileError::Io(format!("failed to write repaired state: {}", e)))?;
+        .map_err(|e| SynthesisError::Io(format!("failed to write repaired state: {}", e)))?;
 
     // Delete branch files
     for file in &outcome.branch_deletes {
@@ -173,7 +176,7 @@ pub(super) fn repair_stale_branches(
 }
 
 #[cfg(test)]
-#[path = "../../tests/cli_compile_repair_tests.rs"]
+#[path = "../../tests/cli_synthesize_repair_tests.rs"]
 mod repair_tests;
 
 // ── pipeline stages ───────────────────────────────────────────────────────────
@@ -182,7 +185,7 @@ mod repair_tests;
 fn classify_deletions(
     cfg: &SeededConfig,
     state: &TreeState,
-) -> Result<DeletionClassification, CompileError> {
+) -> Result<DeletionClassification, SynthesisError> {
     let new_leaf_slugs = select_new_leaf_slugs(state)?;
     let classification = classify_leaf_files(cfg, state, &new_leaf_slugs)?;
     let deleted_slugs = classification.deleted_leaf_slugs;

@@ -1,8 +1,8 @@
-// ── two-stage compile: deterministic cluster pre-pass ────────────────────────
+// ── two-stage synthesis: deterministic cluster pre-pass ──────────────────────
 
 use std::collections::HashSet;
 
-use crate::cli::compile::plan::LoadedLeaf;
+use crate::cli::synthesize::plan::LoadedLeaf;
 
 // ── deterministic pre-pass ───────────────────────────────────────────────────
 

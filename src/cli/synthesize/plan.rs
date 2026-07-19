@@ -1,4 +1,4 @@
-// ── compile planning: leaf loading, classification, state delta ─────────────
+// ── synthesis planning: leaf loading, classification, state delta ─────────────
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -10,10 +10,10 @@ use crate::domain::Timestamp;
 use crate::domain::{Branch, Leaf, Title};
 use crate::engine::config::SeededConfig;
 
-use super::types::{CompileStages, TWO_STAGE_FULL_THRESHOLD, TWO_STAGE_INCREMENTAL_THRESHOLD};
-use super::validation::{CompilePlan, ValidatedBranch};
+use super::types::{SynthesisStages, TWO_STAGE_FULL_THRESHOLD, TWO_STAGE_INCREMENTAL_THRESHOLD};
+use super::validation::{SynthesisPlan, ValidatedBranch};
 use super::{
-    cluster, execute, parse, prompt, BranchResult, CompileError, CompileOptions, CompileRunMode,
+    cluster, execute, parse, prompt, BranchResult, SynthesisError, SynthesisMode, SynthesisOptions,
 };
 use crate::engine::llm::{LlmProvider, Model};
 
@@ -48,21 +48,21 @@ pub(super) struct StateDelta {
 
 // ── functions ─────────────────────────────────────────────────────────────────
 
-/// Decide whether this compile re-derives the whole branch graph (`Full`) or
+/// Decide whether this synthesis re-derives the whole branch graph (`Full`) or
 /// fits new leaves into existing branches (`Incremental`).
 ///
-/// A tree with no branches has nothing to incrementally update, so it compiles
+/// A tree with no branches has nothing to incrementally update, so it synthesizes
 /// from scratch regardless of `--all`. Incremental mode is only coherent
 /// against an existing branch graph.
-pub(super) fn select_run_mode(options: CompileOptions, state: &TreeState) -> CompileRunMode {
+pub(super) fn select_run_mode(options: SynthesisOptions, state: &TreeState) -> SynthesisMode {
     if options.all || state.branches.is_empty() {
-        CompileRunMode::Full
+        SynthesisMode::Full
     } else {
-        CompileRunMode::Incremental
+        SynthesisMode::Incremental
     }
 }
 
-pub(super) fn select_new_leaf_slugs(state: &TreeState) -> Result<Vec<String>, CompileError> {
+pub(super) fn select_new_leaf_slugs(state: &TreeState) -> Result<Vec<String>, SynthesisError> {
     let Some(last_compiled_at) = &state.tree.last_compiled_at else {
         return Ok(state
             .leaves
@@ -143,21 +143,21 @@ pub(super) fn validated_branch_leaf_slugs(branch: &ValidatedBranch) -> Vec<Slug>
 
 pub(super) fn build_state_delta(
     current: &TreeState,
-    plan: &CompilePlan,
-    run_mode: CompileRunMode,
+    plan: &SynthesisPlan,
+    run_mode: SynthesisMode,
     run_timestamp: &Timestamp,
-) -> Result<StateDelta, CompileError> {
+) -> Result<StateDelta, SynthesisError> {
     match run_mode {
-        CompileRunMode::Full => build_full_delta(current, plan, run_timestamp),
-        CompileRunMode::Incremental => build_incremental_delta(current, plan, run_timestamp),
+        SynthesisMode::Full => build_full_delta(current, plan, run_timestamp),
+        SynthesisMode::Incremental => build_incremental_delta(current, plan, run_timestamp),
     }
 }
 
 fn build_full_delta(
     current: &TreeState,
-    plan: &CompilePlan,
+    plan: &SynthesisPlan,
     run_timestamp: &Timestamp,
-) -> Result<StateDelta, CompileError> {
+) -> Result<StateDelta, SynthesisError> {
     let mut branch_writes = Vec::new();
     let mut branch_deletes = Vec::new();
     let mut branches_created = Vec::new();
@@ -233,9 +233,9 @@ fn build_branch_artifacts(
 
 fn build_incremental_delta(
     current: &TreeState,
-    plan: &CompilePlan,
+    plan: &SynthesisPlan,
     run_timestamp: &Timestamp,
-) -> Result<StateDelta, CompileError> {
+) -> Result<StateDelta, SynthesisError> {
     let mut branch_writes = Vec::new();
     let mut branches_created = Vec::new();
     let mut branches_updated = Vec::new();
@@ -292,7 +292,7 @@ fn finalize_state_delta(
     branches_created: Vec<BranchResult>,
     branches_updated: Vec<BranchResult>,
     new_branches: Vec<Branch>,
-) -> Result<StateDelta, CompileError> {
+) -> Result<StateDelta, SynthesisError> {
     let new_state = TreeState {
         tree: TreeMetadata {
             name: current.tree.name.clone(),
@@ -318,27 +318,27 @@ fn finalize_state_delta(
 /// Threshold-checked dispatch: two-stage when leaf/new-leaf counts exceed
 /// thresholds, otherwise single-pass prompt→execute→parse.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn build_compile_plan(
+pub(super) fn build_plan(
     cfg: &SeededConfig,
     provider: &dyn LlmProvider,
     model: &Model,
     state: &TreeState,
     loaded_leaves: &[LoadedLeaf],
     new_leaf_slugs: &[String],
-    run_mode: CompileRunMode,
+    run_mode: SynthesisMode,
     warnings: &mut Vec<String>,
-) -> Result<(CompilePlan, Option<CompileStages>), CompileError> {
+) -> Result<(SynthesisPlan, Option<SynthesisStages>), SynthesisError> {
     let should_use_two_stage = match run_mode {
-        CompileRunMode::Full => loaded_leaves.len() >= TWO_STAGE_FULL_THRESHOLD,
-        CompileRunMode::Incremental => new_leaf_slugs.len() >= TWO_STAGE_INCREMENTAL_THRESHOLD,
+        SynthesisMode::Full => loaded_leaves.len() >= TWO_STAGE_FULL_THRESHOLD,
+        SynthesisMode::Incremental => new_leaf_slugs.len() >= TWO_STAGE_INCREMENTAL_THRESHOLD,
     };
 
     if should_use_two_stage {
         let (plan, stages) = match run_mode {
-            CompileRunMode::Full => {
+            SynthesisMode::Full => {
                 cluster::run_two_stage_full(cfg, provider, model, loaded_leaves, warnings)?
             }
-            CompileRunMode::Incremental => cluster::run_two_stage_incremental(
+            SynthesisMode::Incremental => cluster::run_two_stage_incremental(
                 cfg,
                 provider,
                 model,
@@ -354,10 +354,10 @@ pub(super) fn build_compile_plan(
     // Single-pass path.
     let input_body_bytes: usize = loaded_leaves.iter().map(|l| l.body.len()).sum();
     let (user_message, prompt_tokens, response_schema) = match run_mode {
-        CompileRunMode::Full => {
+        SynthesisMode::Full => {
             let msg = prompt::build_user_message(loaded_leaves);
-            let tokens = execute::estimate_compile_prompt_tokens(
-                prompt::COMPILE_SYSTEM_PROMPT
+            let tokens = execute::estimate_synthesis_prompt_tokens(
+                prompt::SYNTHESIS_SYSTEM_PROMPT
                     .len()
                     .saturating_add(msg.len()),
             );
@@ -365,16 +365,16 @@ pub(super) fn build_compile_plan(
                 msg,
                 tokens,
                 serde_json::to_value(crate::engine::schema::inline_schema_for::<
-                    parse::CompileResponse,
+                    parse::BranchSynthesisResponse,
                 >())
                 .unwrap(),
             )
         }
-        CompileRunMode::Incremental => {
+        SynthesisMode::Incremental => {
             let msg =
                 prompt::build_incremental_user_message(cfg, state, loaded_leaves, new_leaf_slugs);
-            let tokens = execute::estimate_compile_prompt_tokens(
-                prompt::COMPILE_SYSTEM_PROMPT
+            let tokens = execute::estimate_synthesis_prompt_tokens(
+                prompt::SYNTHESIS_SYSTEM_PROMPT
                     .len()
                     .saturating_add(msg.len()),
             );
@@ -382,28 +382,28 @@ pub(super) fn build_compile_plan(
                 msg,
                 tokens,
                 serde_json::to_value(crate::engine::schema::inline_schema_for::<
-                    parse::IncrementalCompileResponse,
+                    parse::IncrementalSynthesisResponse,
                 >())
                 .unwrap(),
             )
         }
     };
-    execute::ensure_compile_context_fits(model, prompt_tokens)?;
+    execute::ensure_synthesis_context_fits(model, prompt_tokens)?;
     let response = execute::call_llm_blocking(
         provider,
         model,
         &user_message,
         &response_schema,
-        prompt::COMPILE_SYSTEM_PROMPT,
+        prompt::SYNTHESIS_SYSTEM_PROMPT,
     )?;
     let plan = match run_mode {
-        CompileRunMode::Full => parse::parse_and_validate_with_input_size(
+        SynthesisMode::Full => parse::parse_and_validate_with_input_size(
             &response,
             loaded_leaves,
             input_body_bytes,
             warnings,
         )?,
-        CompileRunMode::Incremental => parse::parse_and_validate_incremental_with_input_size(
+        SynthesisMode::Incremental => parse::parse_and_validate_incremental_with_input_size(
             &response,
             cfg,
             loaded_leaves,
@@ -415,5 +415,5 @@ pub(super) fn build_compile_plan(
 }
 
 #[cfg(test)]
-#[path = "../../tests/cli_compile_plan_tests.rs"]
+#[path = "../../tests/cli_synthesize_plan_tests.rs"]
 mod plan_tests;

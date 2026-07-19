@@ -1,5 +1,4 @@
 use bo::cli::collect::{self, BatchCollectResult, CollectError, CollectOutput};
-use bo::cli::compile::{self, CompileError, CompileOptions};
 use bo::cli::config::{self as cli_config, ConfigWriteError};
 use bo::cli::journal;
 use bo::cli::json::{self as json_output, JsonError, JsonWarning};
@@ -9,6 +8,7 @@ use bo::cli::raze::{self, RazeError};
 use bo::cli::seed::{self, SeedError};
 use bo::cli::show::{self, ShowError};
 use bo::cli::status::{self, StatusError};
+use bo::cli::synthesize::{self, SynthesisError, SynthesisOptions};
 use bo::engine::auth;
 use bo::engine::config::{self, Config, ConfigError, SeededConfig};
 use bo::engine::llm::{self as llm_mod, LlmProvider};
@@ -163,7 +163,7 @@ enum CliError {
     Collect(CollectError),
     List(ListError),
     Show(ShowError),
-    Compile(CompileError),
+    Compile(SynthesisError),
     Status(StatusError),
     ConfigWrite(ConfigWriteError),
 }
@@ -174,7 +174,7 @@ impl CliError {
             CliError::Seed(error) => error.exit_code(),
             CliError::ConfigWrite(error) => error.exit_code(),
             CliError::Collect(CollectError::Transaction(TransactionError::Busy { .. }))
-            | CliError::Compile(CompileError::Busy(_))
+            | CliError::Compile(SynthesisError::Busy(_))
             | CliError::Raze(RazeError::Busy(_)) => 2,
             _ => 1,
         }
@@ -537,25 +537,25 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 Ok(c) => c,
                 Err(error) => return emit_cli_error("compile", json, error, stderr),
             };
-            match compile::run(
+            match synthesize::run(
                 &cfg,
-                CompileOptions {
+                SynthesisOptions {
                     all,
                     agent,
                     dry_run,
                 },
             ) {
-                compile::Dispatch::DryRun(outcome) => {
-                    let _ = compile::render_diagnostics(outcome.stderr_lines(), stderr);
+                synthesize::Dispatch::DryRun(outcome) => {
+                    let _ = synthesize::render_diagnostics(outcome.stderr_lines(), stderr);
                     match outcome.result {
                         Ok(preview) if json => emit_json_success(
                             "compile",
                             &preview,
-                            compile::preview_warnings(&preview),
+                            synthesize::preview_warnings(&preview),
                             stdout,
                         ),
                         Ok(preview) => wrote(
-                            compile::render_preview_human(&preview, stdout, &cfg.tree().name),
+                            synthesize::render_preview_human(&preview, stdout, &cfg.tree().name),
                             0,
                         ),
                         Err(error) => {
@@ -563,18 +563,19 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                         }
                     }
                 }
-                compile::Dispatch::Live(outcome) => {
-                    let _ = compile::render_diagnostics(outcome.stderr_lines(), stderr);
+                synthesize::Dispatch::Live(outcome) => {
+                    let _ = synthesize::render_diagnostics(outcome.stderr_lines(), stderr);
                     match outcome.result {
                         Ok(result) if json => emit_json_success(
                             "compile",
                             &result,
-                            compile::result_warnings(&result),
+                            synthesize::result_warnings(&result),
                             stdout,
                         ),
-                        Ok(result) => {
-                            wrote(compile::render_human(&result, stdout, &cfg.tree().name), 0)
-                        }
+                        Ok(result) => wrote(
+                            synthesize::render_human(&result, stdout, &cfg.tree().name),
+                            0,
+                        ),
                         Err(error) => {
                             emit_cli_error("compile", json, CliError::Compile(error), stderr)
                         }

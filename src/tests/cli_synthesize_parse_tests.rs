@@ -1,10 +1,10 @@
-use crate::cli::compile::parse::{
+use crate::cli::synthesize::parse::{
     parse_and_validate_incremental_with_input_size, parse_and_validate_with_input_size,
-    CompileResponse, IncrementalCompileResponse,
+    BranchSynthesisResponse, IncrementalSynthesisResponse,
 };
-use crate::cli::compile::plan::LoadedLeaf;
-use crate::cli::compile::types::CompileError;
-use crate::cli::compile::validation::leaf_resolver;
+use crate::cli::synthesize::plan::LoadedLeaf;
+use crate::cli::synthesize::types::SynthesisError;
+use crate::cli::synthesize::validation::leaf_resolver;
 use crate::domain::slug::Slug;
 use crate::domain::state::{TreeMetadata, TreeState};
 use crate::domain::{Branch, Leaf, Timestamp, Title, Url};
@@ -85,7 +85,7 @@ fn loaded_leaf(slug: &str, title: &str) -> LoadedLeaf {
     }
 }
 
-/// Minimal valid full-compile response: one branch over the given leaf refs.
+/// Minimal valid full-synthesis response: one branch over the given leaf refs.
 fn branch_response(leaves: &[&str]) -> String {
     let leaves_json = leaves
         .iter()
@@ -166,10 +166,11 @@ fn setup_incremental_tree(dir: &Path) -> (SeededConfig, TreeState, Vec<LoadedLea
 // ── schema derivation ────────────────────────────────────────────────────────
 
 #[test]
-fn derived_compile_schema_requires_branches() {
-    let schema =
-        serde_json::to_value(crate::engine::schema::inline_schema_for::<CompileResponse>())
-            .unwrap();
+fn derived_synthesis_schema_requires_branches() {
+    let schema = serde_json::to_value(crate::engine::schema::inline_schema_for::<
+        BranchSynthesisResponse,
+    >())
+    .unwrap();
     let obj = schema.as_object().expect("top-level is object");
     assert_eq!(obj["additionalProperties"], false);
     let required: Vec<&str> = obj["required"]
@@ -180,9 +181,9 @@ fn derived_compile_schema_requires_branches() {
 }
 
 #[test]
-fn derived_incremental_compile_schema_requires_updated_and_new_branches() {
+fn derived_incremental_synthesis_schema_requires_updated_and_new_branches() {
     let schema = serde_json::to_value(crate::engine::schema::inline_schema_for::<
-        IncrementalCompileResponse,
+        IncrementalSynthesisResponse,
     >())
     .unwrap();
     let obj = schema.as_object().expect("top-level is object");
@@ -196,10 +197,11 @@ fn derived_incremental_compile_schema_requires_updated_and_new_branches() {
 }
 
 #[test]
-fn derived_compile_schema_has_no_ref_or_defs_or_schema_key() {
-    let schema =
-        serde_json::to_value(crate::engine::schema::inline_schema_for::<CompileResponse>())
-            .unwrap();
+fn derived_synthesis_schema_has_no_ref_or_defs_or_schema_key() {
+    let schema = serde_json::to_value(crate::engine::schema::inline_schema_for::<
+        BranchSynthesisResponse,
+    >())
+    .unwrap();
     let json_str = schema.to_string();
     assert!(!json_str.contains("\"$schema\""));
     assert!(!json_str.contains("\"definitions\""));
@@ -207,9 +209,9 @@ fn derived_compile_schema_has_no_ref_or_defs_or_schema_key() {
 }
 
 #[test]
-fn derived_incremental_compile_schema_has_no_ref_or_defs_or_schema_key() {
+fn derived_incremental_synthesis_schema_has_no_ref_or_defs_or_schema_key() {
     let schema = serde_json::to_value(crate::engine::schema::inline_schema_for::<
-        IncrementalCompileResponse,
+        IncrementalSynthesisResponse,
     >())
     .unwrap();
     let json_str = schema.to_string();
@@ -339,7 +341,7 @@ fn parse_rejects_invented_leaf_reference() {
     )
     .unwrap_err();
     assert!(
-        matches!(err, CompileError::Validation(ref msg) if msg.contains("unknown leaf")),
+        matches!(err, SynthesisError::Validation(ref msg) if msg.contains("unknown leaf")),
         "invented leaf reference must be a validation error: {:?}",
         err
     );
@@ -360,7 +362,7 @@ fn parse_rejects_ambiguous_title_reference() {
     )
     .unwrap_err();
     assert!(
-        matches!(err, CompileError::Validation(ref msg) if msg.contains("unknown leaf")),
+        matches!(err, SynthesisError::Validation(ref msg) if msg.contains("unknown leaf")),
         "ambiguous title reference must fail validation, not silently resolve: {:?}",
         err
     );
@@ -373,7 +375,7 @@ fn parse_full_rejects_empty_title() {
     let leaves = vec![loaded_leaf("a", "A"), loaded_leaf("b", "B")];
     let json = r#"{"branches":[{"title":"","body":"some body","leaves":["a","b"]}]}"#;
     let err = parse_and_validate_with_input_size(json, &leaves, 1024, &mut Vec::new()).unwrap_err();
-    assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("empty title")));
+    assert!(matches!(err, SynthesisError::Validation(ref msg) if msg.contains("empty title")));
 }
 
 #[test]
@@ -381,7 +383,7 @@ fn parse_full_rejects_empty_body() {
     let leaves = vec![loaded_leaf("a", "A"), loaded_leaf("b", "B")];
     let json = r#"{"branches":[{"title":"Concept","body":"","leaves":["a","b"]}]}"#;
     let err = parse_and_validate_with_input_size(json, &leaves, 1024, &mut Vec::new()).unwrap_err();
-    assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("empty body")));
+    assert!(matches!(err, SynthesisError::Validation(ref msg) if msg.contains("empty body")));
 }
 
 #[test]
@@ -395,7 +397,7 @@ fn parse_full_rejects_duplicate_slug() {
     let json = r#"{"branches":[{"title":"Same Thing","body":"body","leaves":["a","b"]},{"title":"Same Thing","body":"body","leaves":["c","d"]}]}"#;
     let err = parse_and_validate_with_input_size(json, &leaves, 1024, &mut Vec::new()).unwrap_err();
     assert!(
-        matches!(err, CompileError::Validation(ref msg) if msg.contains("duplicate branch slug"))
+        matches!(err, SynthesisError::Validation(ref msg) if msg.contains("duplicate branch slug"))
     );
 }
 
@@ -408,7 +410,9 @@ fn parse_full_rejects_single_leaf_branch() {
     ];
     let json = r#"{"branches":[{"title":"Concept","body":"body","leaves":["a"]}]}"#;
     let err = parse_and_validate_with_input_size(json, &leaves, 1024, &mut Vec::new()).unwrap_err();
-    assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("at least 2 leaves")));
+    assert!(
+        matches!(err, SynthesisError::Validation(ref msg) if msg.contains("at least 2 leaves"))
+    );
 }
 
 // ── incremental-mode parse validation ─────────────────────────────────────
@@ -452,7 +456,7 @@ fn parse_incremental_update_dropping_existing_leaf_errors() {
     )
     .unwrap_err();
     assert!(
-        matches!(err, CompileError::Validation(ref msg) if msg.contains("dropped existing leaf"))
+        matches!(err, SynthesisError::Validation(ref msg) if msg.contains("dropped existing leaf"))
     );
 }
 
@@ -494,7 +498,7 @@ fn parse_incremental_update_unknown_branch_errors() {
         &mut Vec::new(),
     )
     .unwrap_err();
-    assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("unknown branch")));
+    assert!(matches!(err, SynthesisError::Validation(ref msg) if msg.contains("unknown branch")));
 }
 
 #[test]
@@ -512,7 +516,7 @@ fn parse_incremental_title_change_errors() {
         &mut Vec::new(),
     )
     .unwrap_err();
-    assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("changed title")));
+    assert!(matches!(err, SynthesisError::Validation(ref msg) if msg.contains("changed title")));
 }
 
 #[test]
@@ -530,7 +534,7 @@ fn parse_incremental_new_branch_empty_title_errors() {
         &mut Vec::new(),
     )
     .unwrap_err();
-    assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("empty title")));
+    assert!(matches!(err, SynthesisError::Validation(ref msg) if msg.contains("empty title")));
 }
 
 #[test]
@@ -548,7 +552,7 @@ fn parse_incremental_new_branch_empty_body_errors() {
         &mut Vec::new(),
     )
     .unwrap_err();
-    assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("empty body")));
+    assert!(matches!(err, SynthesisError::Validation(ref msg) if msg.contains("empty body")));
 }
 
 #[test]
@@ -567,7 +571,7 @@ fn parse_incremental_update_with_no_new_leaf_errors() {
     )
     .unwrap_err();
     assert!(
-        matches!(err, CompileError::Validation(ref msg) if msg.contains("no newly processed leaf"))
+        matches!(err, SynthesisError::Validation(ref msg) if msg.contains("no newly processed leaf"))
     );
 }
 
@@ -586,5 +590,7 @@ fn parse_incremental_insufficient_leaves_errors() {
         &mut Vec::new(),
     )
     .unwrap_err();
-    assert!(matches!(err, CompileError::Validation(ref msg) if msg.contains("at least 2 leaves")));
+    assert!(
+        matches!(err, SynthesisError::Validation(ref msg) if msg.contains("at least 2 leaves"))
+    );
 }

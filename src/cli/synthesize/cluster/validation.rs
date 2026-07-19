@@ -1,12 +1,12 @@
-// ── two-stage compile: cluster response validation ───────────────────────────
+// ── two-stage synthesis: cluster response validation ─────────────────────────
 
 use std::collections::{HashMap, HashSet};
 
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::cli::compile::validation::{leaf_resolver, LeafLookup};
-use crate::cli::compile::CompileError;
+use crate::cli::synthesize::validation::{leaf_resolver, LeafLookup};
+use crate::cli::synthesize::SynthesisError;
 use crate::domain::state::TreeState;
 
 // ── cluster response schemas ─────────────────────────────────────────────────
@@ -14,14 +14,14 @@ use crate::domain::state::TreeState;
 /// Deserialized cluster LLM response for Full mode.
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub(in crate::cli::compile) struct ClusterResponse {
+pub(in crate::cli::synthesize) struct ClusterResponse {
     pub(super) clusters: Vec<ClusterAssignment>,
 }
 
 /// Deserialized cluster LLM response for Incremental mode.
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub(in crate::cli::compile) struct IncrementalClusterResponse {
+pub(in crate::cli::synthesize) struct IncrementalClusterResponse {
     /// New leaves assigned to existing branches (by branch slug).
     #[serde(default)]
     pub(super) assignments: Vec<BranchAssignment>,
@@ -48,13 +48,13 @@ pub(super) struct BranchAssignment {
 
 /// Validated cluster output ready for stage 2.
 #[derive(Debug)]
-pub(in crate::cli::compile) struct ValidatedClusters {
+pub(in crate::cli::synthesize) struct ValidatedClusters {
     /// Clusters for Full mode (all new).
-    pub(in crate::cli::compile) clusters: Vec<ValidatedCluster>,
+    pub(in crate::cli::synthesize) clusters: Vec<ValidatedCluster>,
 }
 
 #[derive(Debug)]
-pub(in crate::cli::compile) struct ValidatedCluster {
+pub(in crate::cli::synthesize) struct ValidatedCluster {
     pub(super) title: String,
     /// Canonical leaf filenames (resolved via leaf_resolver).
     pub(super) leaf_files: Vec<String>,
@@ -87,11 +87,11 @@ impl ValidatedCluster {
 ///
 /// Hard rejections: empty title, duplicate title, empty leaf reference,
 /// every cluster repaired away to nothing.
-pub(in crate::cli::compile) fn validate_clusters(
+pub(in crate::cli::synthesize) fn validate_clusters(
     response: &ClusterResponse,
-    loaded_leaves: &[crate::cli::compile::plan::LoadedLeaf],
+    loaded_leaves: &[crate::cli::synthesize::plan::LoadedLeaf],
     warnings: &mut Vec<String>,
-) -> Result<ValidatedClusters, CompileError> {
+) -> Result<ValidatedClusters, SynthesisError> {
     let lookup = leaf_resolver(loaded_leaves);
     for msg in &lookup.collisions {
         warnings.push(format!("warning: title collision — {}", msg));
@@ -104,13 +104,13 @@ pub(in crate::cli::compile) fn validate_clusters(
     for (i, cluster) in response.clusters.iter().enumerate() {
         let title = cluster.title.trim().to_string();
         if title.is_empty() {
-            return Err(CompileError::Validation(format!(
+            return Err(SynthesisError::Validation(format!(
                 "invalid cluster response: cluster #{} has empty title",
                 i + 1
             )));
         }
         if !seen_titles.insert(title.to_lowercase()) {
-            return Err(CompileError::Validation(format!(
+            return Err(SynthesisError::Validation(format!(
                 "invalid cluster response: duplicate cluster title '{}'",
                 title
             )));
@@ -122,7 +122,7 @@ pub(in crate::cli::compile) fn validate_clusters(
         for raw_leaf in &cluster.leaf_slugs {
             let key = raw_leaf.trim().to_string();
             if key.is_empty() {
-                return Err(CompileError::Validation(format!(
+                return Err(SynthesisError::Validation(format!(
                     "invalid cluster response: cluster '{}' has an empty leaf reference",
                     title
                 )));
@@ -151,7 +151,7 @@ pub(in crate::cli::compile) fn validate_clusters(
         }
 
         if leaf_files.len() < 2 {
-            return Err(CompileError::Validation(format!(
+            return Err(SynthesisError::Validation(format!(
                 "invalid cluster response: cluster '{}' has {} leaf; clusters must have at least 2",
                 title,
                 leaf_files.len()
@@ -183,7 +183,7 @@ pub(in crate::cli::compile) fn validate_clusters(
     }
 
     if validated.is_empty() {
-        return Err(CompileError::Validation(
+        return Err(SynthesisError::Validation(
             "invalid cluster response: every cluster was repaired away — no valid clusters remain"
                 .to_string(),
         ));
@@ -203,12 +203,12 @@ pub(in crate::cli::compile) fn validate_clusters(
 ///
 /// Hard rejections: empty/duplicate cluster titles, title collision with
 /// existing branch, empty leaf reference, every cluster repaired away.
-pub(in crate::cli::compile) fn validate_incremental_clusters(
+pub(in crate::cli::synthesize) fn validate_incremental_clusters(
     response: &IncrementalClusterResponse,
     state: &TreeState,
-    loaded_leaves: &[crate::cli::compile::plan::LoadedLeaf],
+    loaded_leaves: &[crate::cli::synthesize::plan::LoadedLeaf],
     warnings: &mut Vec<String>,
-) -> Result<ValidatedClusters, CompileError> {
+) -> Result<ValidatedClusters, SynthesisError> {
     let lookup = leaf_resolver(loaded_leaves);
     for msg in &lookup.collisions {
         warnings.push(format!("warning: title collision — {}", msg));
@@ -288,7 +288,7 @@ pub(in crate::cli::compile) fn validate_incremental_clusters(
         };
 
         if !seen_assignment_slugs.insert(assignment.branch_slug.clone()) {
-            return Err(CompileError::Validation(format!(
+            return Err(SynthesisError::Validation(format!(
                 "invalid cluster response: duplicate assignment to branch '{}'",
                 assignment.branch_slug
             )));
@@ -329,20 +329,20 @@ pub(in crate::cli::compile) fn validate_incremental_clusters(
     for (i, cluster) in response.new_clusters.iter().enumerate() {
         let title = cluster.title.trim().to_string();
         if title.is_empty() {
-            return Err(CompileError::Validation(format!(
+            return Err(SynthesisError::Validation(format!(
                 "invalid cluster response: new cluster #{} has empty title",
                 i + 1
             )));
         }
         let title_lower = title.to_lowercase();
         if !seen_new_titles.insert(title_lower.clone()) {
-            return Err(CompileError::Validation(format!(
+            return Err(SynthesisError::Validation(format!(
                 "invalid cluster response: duplicate new cluster title '{}'",
                 title
             )));
         }
         if existing_titles_lower.contains(&title_lower) {
-            return Err(CompileError::Validation(format!(
+            return Err(SynthesisError::Validation(format!(
                 "invalid cluster response: new cluster title '{}' collides with existing branch",
                 title
             )));
@@ -354,7 +354,7 @@ pub(in crate::cli::compile) fn validate_incremental_clusters(
 
         // Check for empty leaf refs (hard reject — LLM output garbage).
         if cluster.leaf_slugs.iter().any(|s| s.trim().is_empty()) {
-            return Err(CompileError::Validation(format!(
+            return Err(SynthesisError::Validation(format!(
                 "invalid cluster response: new cluster '{}' has an empty leaf reference",
                 title
             )));
@@ -369,7 +369,7 @@ pub(in crate::cli::compile) fn validate_incremental_clusters(
         }
 
         if leaf_files.len() < 2 {
-            return Err(CompileError::Validation(format!(
+            return Err(SynthesisError::Validation(format!(
                 "invalid cluster response: new cluster '{}' has {} leaf; clusters must have at least 2",
                 title,
                 leaf_files.len()
@@ -389,7 +389,7 @@ pub(in crate::cli::compile) fn validate_incremental_clusters(
     }
 
     if validated.is_empty() {
-        return Err(CompileError::Validation(
+        return Err(SynthesisError::Validation(
             "invalid cluster response: every cluster was repaired away — no valid clusters remain"
                 .to_string(),
         ));

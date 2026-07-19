@@ -5,10 +5,10 @@
 //! Repeated environment construction only: launch the installed `bo` binary
 //! against an isolated HOME, seed a named tree, bootstrap/read/write a
 //! state, append typed leaf records, and the canonical fixture
-//! collection shared by the compile suites.
+//! collection shared by the synthesis suites.
 //!
 //! No assertions on command output, no fixture-builder hierarchy, and no
-//! scenario data beyond the compile fixtures shared verbatim by two suites.
+//! scenario data beyond the synthesis fixtures shared verbatim by two suites.
 //! Each suite keeps its command arguments, expected output, and assertions at
 //! the call site.
 //!
@@ -119,9 +119,9 @@ fn ts(s: &str) -> Timestamp {
     Timestamp::parse(s).unwrap()
 }
 
-// ── compile-suite fixture collection ─────────────────────────────────────────
+// ── synthesis-suite fixture collection ───────────────────────────────────────
 //
-// Shared verbatim by `integration_compile` and `integration_compile_dry_run`.
+// Shared verbatim by `integration_synthesize` and `integration_synthesize_dry_run`.
 
 struct FixtureDoc {
     file: &'static str,
@@ -157,7 +157,7 @@ const FIXTURE_DOCS: &[FixtureDoc] = &[
     },
 ];
 
-/// Build the canonical compile fixture tree in a fresh temp dir.
+/// Build the canonical synthesis fixture tree in a fresh temp dir.
 pub fn setup_fixture_collection() -> TempDir {
     let dir = TempDir::new().unwrap();
     let mut leaves = Vec::new();
@@ -180,7 +180,7 @@ pub fn setup_fixture_collection() -> TempDir {
         dir.path(),
         &TreeState {
             tree: TreeMetadata {
-                name: "compile-fixture".to_string(),
+                name: "synthesis-fixture".to_string(),
                 created_at: ts("2025-06-01T09:00:00Z"),
                 last_compiled_at: None,
             },

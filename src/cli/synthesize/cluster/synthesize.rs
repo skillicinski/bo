@@ -1,15 +1,15 @@
-// ── two-stage compile: stage 2 per-cluster synthesize ────────────────────────
+// ── two-stage synthesis: stage 2 per-cluster synthesis ───────────────────────
 
 use std::collections::HashSet;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::cli::compile::execute;
-use crate::cli::compile::plan::LoadedLeaf;
-use crate::cli::compile::prompt::COMPILE_SYSTEM_PROMPT;
-use crate::cli::compile::validation::{CompilePlan, ValidatedBranch};
-use crate::cli::compile::CompileError;
+use crate::cli::synthesize::execute;
+use crate::cli::synthesize::plan::LoadedLeaf;
+use crate::cli::synthesize::prompt::SYNTHESIS_SYSTEM_PROMPT;
+use crate::cli::synthesize::validation::{SynthesisPlan, ValidatedBranch};
+use crate::cli::synthesize::SynthesisError;
 use crate::domain::state::TreeState;
 use crate::engine::config::SeededConfig;
 use crate::engine::schema::inline_schema_for;
@@ -40,13 +40,13 @@ struct Stage2Response {
 ///
 /// ponytail: sequential calls for v1; parallelize with tokio::spawn if
 /// per-cluster latency becomes the bottleneck.
-pub(in crate::cli::compile) fn run_stage2_synthesize(
+pub(in crate::cli::synthesize) fn run_stage2_synthesize(
     provider: &dyn crate::engine::llm::LlmProvider,
     model: &crate::engine::llm::Model,
     clusters: &ValidatedClusters,
     all_leaves: &[LoadedLeaf],
     warnings: &mut Vec<String>,
-) -> Result<Vec<ValidatedBranch>, CompileError> {
+) -> Result<Vec<ValidatedBranch>, SynthesisError> {
     let schema = serde_json::to_value(inline_schema_for::<Stage2Response>()).unwrap();
     let mut all_branches: Vec<ValidatedBranch> = Vec::new();
     let mut seen_slugs: HashSet<String> = HashSet::new();
@@ -60,12 +60,12 @@ pub(in crate::cli::compile) fn run_stage2_synthesize(
             .collect();
 
         let user_message = build_synthesize_user_message(&cluster.title, &cluster_leaves);
-        let prompt_tokens = execute::estimate_compile_prompt_tokens(
-            COMPILE_SYSTEM_PROMPT
+        let prompt_tokens = execute::estimate_synthesis_prompt_tokens(
+            SYNTHESIS_SYSTEM_PROMPT
                 .len()
                 .saturating_add(user_message.len()),
         );
-        execute::ensure_compile_context_fits(model, prompt_tokens)?;
+        execute::ensure_synthesis_context_fits(model, prompt_tokens)?;
 
         match synthesize_one_cluster(
             provider,
@@ -95,7 +95,7 @@ pub(in crate::cli::compile) fn run_stage2_synthesize(
     }
 
     if !any_success {
-        return Err(CompileError::Validation(
+        return Err(SynthesisError::Validation(
             "stage-2 synthesize: all clusters failed — no branches produced".to_string(),
         ));
     }
@@ -109,7 +109,7 @@ pub(in crate::cli::compile) fn run_stage2_synthesize(
 /// Retry: same per-cluster retry semantics as Full mode.
 ///
 /// Returns (updated_branches, new_branches).
-pub(in crate::cli::compile) fn run_stage2_synthesize_incremental(
+pub(in crate::cli::synthesize) fn run_stage2_synthesize_incremental(
     cfg: &SeededConfig,
     provider: &dyn crate::engine::llm::LlmProvider,
     model: &crate::engine::llm::Model,
@@ -117,7 +117,7 @@ pub(in crate::cli::compile) fn run_stage2_synthesize_incremental(
     state: &TreeState,
     all_leaves: &[LoadedLeaf],
     warnings: &mut Vec<String>,
-) -> Result<(Vec<ValidatedBranch>, Vec<ValidatedBranch>), CompileError> {
+) -> Result<(Vec<ValidatedBranch>, Vec<ValidatedBranch>), SynthesisError> {
     let schema = serde_json::to_value(inline_schema_for::<Stage2Response>()).unwrap();
     let tree = cfg.tree();
     let mut updated_branches: Vec<ValidatedBranch> = Vec::new();
@@ -160,12 +160,12 @@ pub(in crate::cli::compile) fn run_stage2_synthesize_incremental(
                 &existing_body,
                 &cluster_leaves,
             );
-            let prompt_tokens = execute::estimate_compile_prompt_tokens(
-                COMPILE_SYSTEM_PROMPT
+            let prompt_tokens = execute::estimate_synthesis_prompt_tokens(
+                SYNTHESIS_SYSTEM_PROMPT
                     .len()
                     .saturating_add(user_message.len()),
             );
-            execute::ensure_compile_context_fits(model, prompt_tokens)?;
+            execute::ensure_synthesis_context_fits(model, prompt_tokens)?;
 
             // Merge cluster leaves with existing branch leaves.
             let mut all_leaf_files: Vec<String> = cluster.leaf_files.clone();
@@ -206,12 +206,12 @@ pub(in crate::cli::compile) fn run_stage2_synthesize_incremental(
         } else {
             // New cluster — same as Full mode.
             let user_message = build_synthesize_user_message(&cluster.title, &cluster_leaves);
-            let prompt_tokens = execute::estimate_compile_prompt_tokens(
-                COMPILE_SYSTEM_PROMPT
+            let prompt_tokens = execute::estimate_synthesis_prompt_tokens(
+                SYNTHESIS_SYSTEM_PROMPT
                     .len()
                     .saturating_add(user_message.len()),
             );
-            execute::ensure_compile_context_fits(model, prompt_tokens)?;
+            execute::ensure_synthesis_context_fits(model, prompt_tokens)?;
 
             match synthesize_one_cluster(
                 provider,
@@ -242,7 +242,7 @@ pub(in crate::cli::compile) fn run_stage2_synthesize_incremental(
     }
 
     if !any_success {
-        return Err(CompileError::Validation(
+        return Err(SynthesisError::Validation(
             "stage-2 synthesize: all clusters failed — no branches produced".to_string(),
         ));
     }
@@ -263,10 +263,15 @@ fn synthesize_one_cluster(
     cluster_label: &str,
     leaf_files: &[String],
     warnings: &mut Vec<String>,
-) -> Result<ValidatedBranch, CompileError> {
+) -> Result<ValidatedBranch, SynthesisError> {
     // Attempt 1.
-    let response =
-        execute::call_llm_blocking(provider, model, user_message, schema, COMPILE_SYSTEM_PROMPT);
+    let response = execute::call_llm_blocking(
+        provider,
+        model,
+        user_message,
+        schema,
+        SYNTHESIS_SYSTEM_PROMPT,
+    );
     match parse_stage2_response(&response, cluster_label, leaf_files) {
         Ok(branch) => Ok(branch),
         Err(_first_error) => {
@@ -276,7 +281,7 @@ fn synthesize_one_cluster(
                 model,
                 user_message,
                 schema,
-                COMPILE_SYSTEM_PROMPT,
+                SYNTHESIS_SYSTEM_PROMPT,
             );
             match parse_stage2_response(&retry_response, cluster_label, leaf_files) {
                 Ok(branch) => {
@@ -301,14 +306,14 @@ fn synthesize_one_cluster(
 /// Parse a stage-2 LLM response (title+body only) and construct a
 /// ValidatedBranch with membership taken from the cluster's leaf_files.
 pub(super) fn parse_stage2_response(
-    response: &Result<String, CompileError>,
+    response: &Result<String, SynthesisError>,
     cluster_label: &str,
     leaf_files: &[String],
-) -> Result<ValidatedBranch, CompileError> {
+) -> Result<ValidatedBranch, SynthesisError> {
     let response = match response {
         Ok(r) => r,
         Err(e) => {
-            return Err(CompileError::Validation(format!(
+            return Err(SynthesisError::Validation(format!(
                 "stage-2 LLM call failed for '{}': {}",
                 cluster_label, e
             )));
@@ -316,7 +321,7 @@ pub(super) fn parse_stage2_response(
     };
 
     let parsed: Stage2Response = serde_json::from_str(response).map_err(|e| {
-        CompileError::Validation(format!(
+        SynthesisError::Validation(format!(
             "invalid stage-2 response for '{}': {}",
             cluster_label, e
         ))
@@ -324,14 +329,14 @@ pub(super) fn parse_stage2_response(
 
     let title = parsed.title.trim().to_string();
     if title.is_empty() {
-        return Err(CompileError::Validation(format!(
+        return Err(SynthesisError::Validation(format!(
             "invalid stage-2 response for '{}': empty title",
             cluster_label
         )));
     }
     let body = parsed.body.trim().to_string();
     if body.is_empty() {
-        return Err(CompileError::Validation(format!(
+        return Err(SynthesisError::Validation(format!(
             "invalid stage-2 response for '{}': empty body",
             cluster_label
         )));
@@ -348,15 +353,15 @@ pub(super) fn parse_stage2_response(
     })
 }
 
-/// Wrap stage-2 results into a CompilePlan that can feed into the existing
+/// Wrap stage-2 results into a SynthesisPlan that can feed into the existing
 /// execute path.
-pub(in crate::cli::compile) fn plan_from_stage2(
+pub(in crate::cli::synthesize) fn plan_from_stage2(
     updated: Vec<ValidatedBranch>,
     new: Vec<ValidatedBranch>,
-) -> CompilePlan {
+) -> SynthesisPlan {
     let mut branches = updated;
     branches.extend(new);
-    CompilePlan { branches }
+    SynthesisPlan { branches }
 }
 
 #[cfg(test)]
@@ -431,7 +436,7 @@ mod tests {
 
     #[test]
     fn parse_stage2_response_llm_error_propagates() {
-        let response: Result<String, CompileError> = Err(CompileError::Truncated);
+        let response: Result<String, SynthesisError> = Err(SynthesisError::Truncated);
         let leaf_files = vec!["a.md".to_string(), "b.md".to_string()];
         let result = parse_stage2_response(&response, "test-cluster", &leaf_files);
         assert!(result.is_err());

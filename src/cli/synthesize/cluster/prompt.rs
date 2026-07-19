@@ -1,8 +1,8 @@
-// ── two-stage compile: cluster prompt constants and builders ─────────────────
+// ── two-stage synthesis: cluster prompt constants and builders ───────────────
 
 use std::collections::HashSet;
 
-use crate::cli::compile::plan::LoadedLeaf;
+use crate::cli::synthesize::plan::LoadedLeaf;
 use crate::domain::state::TreeState;
 use crate::engine::config::SeededConfig;
 
@@ -10,7 +10,7 @@ use super::discovery::{compute_candidate_clusters, CandidateCluster};
 
 // ── prompt constants ─────────────────────────────────────────────────────────
 
-pub(in crate::cli::compile) const CLUSTER_SYSTEM_PROMPT: &str = "\
+pub(in crate::cli::synthesize) const CLUSTER_SYSTEM_PROMPT: &str = "\
 You are clustering documents for a knowledge tree compilation. Below are document \
 titles and summaries.
 
@@ -27,7 +27,7 @@ can adjust, split, or merge them.
 - Prefer splitting over forcing unrelated documents into a cluster.
 ";
 
-pub(in crate::cli::compile) const INCREMENTAL_CLUSTER_SYSTEM_PROMPT: &str = "\
+pub(in crate::cli::synthesize) const INCREMENTAL_CLUSTER_SYSTEM_PROMPT: &str = "\
 You are clustering new documents into an existing knowledge tree. Below are new \
 document titles and summaries, plus existing branch titles and summaries.
 
@@ -52,14 +52,14 @@ can adjust, split, or merge them.
 // ── prompts ──────────────────────────────────────────────────────────────────
 
 /// Build the cluster user message for Full mode.
-pub(in crate::cli::compile) fn build_cluster_user_message(leaves: &[LoadedLeaf]) -> String {
+pub(in crate::cli::synthesize) fn build_cluster_user_message(leaves: &[LoadedLeaf]) -> String {
     let leaf_refs: Vec<&LoadedLeaf> = leaves.iter().collect();
     let candidates = compute_candidate_clusters(&leaf_refs);
     build_cluster_message(&leaf_refs, &candidates, false)
 }
 
 /// Build the cluster user message for Incremental mode.
-pub(in crate::cli::compile) fn build_incremental_cluster_user_message(
+pub(in crate::cli::synthesize) fn build_incremental_cluster_user_message(
     cfg: &SeededConfig,
     state: &TreeState,
     leaves: &[LoadedLeaf],

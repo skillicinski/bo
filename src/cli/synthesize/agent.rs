@@ -1,7 +1,7 @@
-//! Compile-specific agent orchestration and tools.
+//! Synthesis-specific agent orchestration and tools.
 //!
 //! The generic turn loop lives in `engine::agent`; this module wires it to the
-//! compile pipeline: the read-only inspection tools, the `submit_compile`
+//! synthesis pipeline: the read-only inspection tools, the `submit_compile`
 //! terminal tool that reuses the existing validation gate, and the system
 //! prompt that labels tool output as data. Nothing here writes to the tree —
 //! the dry-run wrapper guarantees zero writes.
@@ -25,8 +25,8 @@ use crate::engine::retrieval;
 use crate::engine::schema::inline_schema_for;
 
 use super::plan::LoadedLeaf;
-use super::validation::CompilePlan;
-use super::{parse, CompileError, CompileRunMode};
+use super::validation::SynthesisPlan;
+use super::{parse, SynthesisError, SynthesisMode};
 
 // ── telemetry ────────────────────────────────────────────────────────────────
 
@@ -65,17 +65,17 @@ then call submit_compile exactly once with the full plan. A branch must referenc
 at least two leaves. Every leaf reference must match a real leaf slug or filename \
 returned by list_leaves.";
 
-fn build_agent_user_message(state: &TreeState, run_mode: CompileRunMode) -> String {
+fn build_agent_user_message(state: &TreeState, run_mode: SynthesisMode) -> String {
     let leaf_count = state.leaves.len();
     let branch_count = state.branches.len();
     let mode = match run_mode {
-        CompileRunMode::Full => "full (rebuild the whole branch graph)",
-        CompileRunMode::Incremental => "incremental (fit new leaves into existing branches)",
+        SynthesisMode::Full => "full (rebuild the whole branch graph)",
+        SynthesisMode::Incremental => "incremental (fit new leaves into existing branches)",
     };
     let mut msg = format!(
         "Tree has {leaf_count} leaves and {branch_count} existing branch(es). Run mode: {mode}.\n\nInspect the leaves and submit a compile plan with submit_compile."
     );
-    if run_mode == CompileRunMode::Incremental {
+    if run_mode == SynthesisMode::Incremental {
         msg.push_str(
             " In incremental mode, updated_branches must preserve all existing leaves and add at \
              least one new leaf; new_branches must include a newly processed leaf.",
@@ -86,7 +86,7 @@ fn build_agent_user_message(state: &TreeState, run_mode: CompileRunMode) -> Stri
 
 // ── shared plan slot ─────────────────────────────────────────────────────────
 
-type PlanSlot = Arc<Mutex<Option<(CompilePlan, Vec<String>)>>>;
+type PlanSlot = Arc<Mutex<Option<(SynthesisPlan, Vec<String>)>>>;
 
 // ── tool argument schemas ────────────────────────────────────────────────────
 
@@ -431,7 +431,7 @@ impl Tool for SearchCorpusTool {
 }
 
 struct SubmitCompileTool {
-    run_mode: CompileRunMode,
+    run_mode: SynthesisMode,
     cfg: SeededConfig,
     loaded_leaves: Vec<LoadedLeaf>,
     input_body_bytes: usize,
@@ -445,16 +445,17 @@ impl Tool for SubmitCompileTool {
     }
     fn schema(&self) -> ToolSchema {
         let (parameters, description) = match self.run_mode {
-            CompileRunMode::Full => (
-                serde_json::to_value(inline_schema_for::<parse::CompileResponse>()).unwrap(),
+            SynthesisMode::Full => (
+                serde_json::to_value(inline_schema_for::<parse::BranchSynthesisResponse>())
+                    .unwrap(),
                 "Submit the full compile plan: branches with title, body, and leaf references. \
                  Must be the only tool call in its turn. A valid submission ends the run. \
                  Leaf references in leaves[] must be bare leaf slugs/filenames from list_leaves, \
                  not branch identifiers (which are prefixed branch/)."
                     .to_string(),
             ),
-            CompileRunMode::Incremental => (
-                serde_json::to_value(inline_schema_for::<parse::IncrementalCompileResponse>())
+            SynthesisMode::Incremental => (
+                serde_json::to_value(inline_schema_for::<parse::IncrementalSynthesisResponse>())
                     .unwrap(),
                 "Submit the incremental compile plan: updated_branches and new_branches. Must be \
                  the only tool call in its turn. A valid submission ends the run. \
@@ -477,13 +478,13 @@ impl Tool for SubmitCompileTool {
     fn execute(&self, arguments: &str) -> Result<ToolOutcome, ToolError> {
         let mut warnings = Vec::new();
         let plan = match self.run_mode {
-            CompileRunMode::Full => parse::parse_and_validate_with_input_size(
+            SynthesisMode::Full => parse::parse_and_validate_with_input_size(
                 arguments,
                 &self.loaded_leaves,
                 self.input_body_bytes,
                 &mut warnings,
             ),
-            CompileRunMode::Incremental => {
+            SynthesisMode::Incremental => {
                 parse::parse_incremental_response(arguments).and_then(|mut parsed| {
                     for branch in &mut parsed.updated_branches {
                         if let Some(slug) = strip_branch_prefix(&branch.slug).map(str::to_owned) {
@@ -507,7 +508,7 @@ impl Tool for SubmitCompileTool {
                     "compile plan submitted and validated".to_string(),
                 ))
             }
-            Err(CompileError::Validation(message)) => {
+            Err(SynthesisError::Validation(message)) => {
                 let message = annotate_unknown_leaf_error(&message, &self.branch_slugs);
                 Err(ToolError(message))
             }
@@ -544,20 +545,20 @@ fn parse_args<'a, T: Deserialize<'a>>(arguments: &'a str) -> Result<T, ToolError
 
 // ── orchestration ────────────────────────────────────────────────────────────
 
-/// Run the agent loop against the compile tools and return the validated plan.
+/// Run the agent loop against the synthesis tools and return the validated plan.
 ///
 /// Builds the read-only tools plus the terminal `submit_compile`, drives the
 /// generic loop, and maps the outcome. The plan is stashed by the
 /// `submit_compile` tool into a shared slot — the generic loop never sees a
-/// compile type.
+/// synthesis type.
 pub(super) fn run_agent_dry_run(
     cfg: &SeededConfig,
     provider: &dyn LlmProvider,
     model: &Model,
     state: &TreeState,
     loaded_leaves: &[LoadedLeaf],
-    run_mode: CompileRunMode,
-) -> Result<(CompilePlan, AgentRunStats, Vec<String>), CompileError> {
+    run_mode: SynthesisMode,
+) -> Result<(SynthesisPlan, AgentRunStats, Vec<String>), SynthesisError> {
     let slot: PlanSlot = Arc::new(Mutex::new(None));
     let input_body_bytes: usize = loaded_leaves.iter().map(|l| l.body.len()).sum();
 
@@ -643,8 +644,8 @@ pub(super) fn run_agent_dry_run(
 
 /// Build an `AgentFailed` error carrying the run's resource diagnostics so the
 /// error envelope matches the success envelope's telemetry.
-fn agent_failed(message: &str, diag: &agent::AgentDiagnostics) -> CompileError {
-    CompileError::AgentFailed {
+fn agent_failed(message: &str, diag: &agent::AgentDiagnostics) -> SynthesisError {
+    SynthesisError::AgentFailed {
         message: message.to_string(),
         turns: diag.turns,
         tool_calls: diag.tool_calls,
@@ -655,5 +656,5 @@ fn agent_failed(message: &str, diag: &agent::AgentDiagnostics) -> CompileError {
 }
 
 #[cfg(test)]
-#[path = "../../tests/cli_compile_agent_tests.rs"]
+#[path = "../../tests/cli_synthesize_agent_tests.rs"]
 mod agent_tests;

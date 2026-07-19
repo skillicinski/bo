@@ -1,4 +1,4 @@
-// ── compile dry-run: read-only preflight and preview ───────────────────────
+// ── synthesis dry-run: read-only preflight and preview ───────────────────────
 
 use crate::domain::state;
 use crate::domain::tree::TreeLoadState;
@@ -11,8 +11,8 @@ use super::agent;
 use super::plan;
 use super::repair;
 use super::types::{
-    CompileDryRunOutcome, CompileError, CompileOptions, CompilePreview, CompileRunMode,
-    PreviewBranch, NO_NEW_LEAVES_REASON,
+    PreviewBranch, SynthesisDryRunOutcome, SynthesisError, SynthesisMode, SynthesisOptions,
+    SynthesisPreview, NO_NEW_LEAVES_REASON,
 };
 
 struct DryRunRequest {
@@ -20,49 +20,49 @@ struct DryRunRequest {
     loaded_leaves: Vec<plan::LoadedLeaf>,
     skipped_leaves: Vec<String>,
     new_leaf_slugs: Vec<String>,
-    run_mode: CompileRunMode,
+    run_mode: SynthesisMode,
     starting_hash: String,
 }
 
 enum DryRunPreflight {
-    Noop(CompilePreview),
+    Noop(SynthesisPreview),
     NeedsLlm(DryRunRequest),
 }
 
 /// Public dry-run entry point. Resolves the provider lazily — only when an
 /// LLM call is needed. Zero tree writes in every path.
-pub fn run_compile_dry_run(cfg: &SeededConfig, options: CompileOptions) -> CompileDryRunOutcome {
+pub fn run_dry_run(cfg: &SeededConfig, options: SynthesisOptions) -> SynthesisDryRunOutcome {
     let mut warnings = Vec::new();
     let preflight = dry_run_preflight(cfg, options);
     let preflight = match preflight {
         Ok(DryRunPreflight::Noop(preview)) => {
-            return CompileDryRunOutcome {
+            return SynthesisDryRunOutcome {
                 result: Ok(preview),
                 warnings,
             }
         }
         Ok(DryRunPreflight::NeedsLlm(req)) => req,
         Err(error) => {
-            return CompileDryRunOutcome {
+            return SynthesisDryRunOutcome {
                 result: Err(error),
                 warnings,
             }
         }
     };
 
-    let result = (|| -> Result<CompilePreview, CompileError> {
+    let result = (|| -> Result<SynthesisPreview, SynthesisError> {
         let api_key = auth::resolve_api_key(cfg.config.provider)
-            .map_err(|e| CompileError::Llm(e.to_string()))?;
+            .map_err(|e| SynthesisError::Llm(e.to_string()))?;
         let provider = crate::engine::llm::create_provider(
             cfg.config.provider,
             &api_key,
             cfg.config.base_url.as_deref(),
         )
-        .map_err(|e| CompileError::Llm(e.to_string()))?;
+        .map_err(|e| SynthesisError::Llm(e.to_string()))?;
         let model = cfg
             .config
             .effective_compile_model()
-            .map_err(|e| CompileError::Llm(e.to_string()))?;
+            .map_err(|e| SynthesisError::Llm(e.to_string()))?;
         dry_run_build_plan(
             cfg,
             options,
@@ -75,12 +75,12 @@ pub fn run_compile_dry_run(cfg: &SeededConfig, options: CompileOptions) -> Compi
     match result {
         Ok(mut preview) => {
             preview.warnings = warnings;
-            CompileDryRunOutcome {
+            SynthesisDryRunOutcome {
                 result: Ok(preview),
                 warnings: Vec::new(),
             }
         }
-        Err(error) => CompileDryRunOutcome {
+        Err(error) => SynthesisDryRunOutcome {
             result: Err(error),
             warnings,
         },
@@ -88,24 +88,24 @@ pub fn run_compile_dry_run(cfg: &SeededConfig, options: CompileOptions) -> Compi
 }
 
 /// Testable dry-run seam with an injected provider and model.
-pub fn run_compile_dry_run_with_provider(
+pub fn run_dry_run_with_provider(
     cfg: &SeededConfig,
-    options: CompileOptions,
+    options: SynthesisOptions,
     provider: &dyn LlmProvider,
     model: &Model,
-) -> CompileDryRunOutcome {
+) -> SynthesisDryRunOutcome {
     let mut warnings = Vec::new();
     let preflight = dry_run_preflight(cfg, options);
     let preflight = match preflight {
         Ok(DryRunPreflight::Noop(preview)) => {
-            return CompileDryRunOutcome {
+            return SynthesisDryRunOutcome {
                 result: Ok(preview),
                 warnings,
             }
         }
         Ok(DryRunPreflight::NeedsLlm(req)) => req,
         Err(error) => {
-            return CompileDryRunOutcome {
+            return SynthesisDryRunOutcome {
                 result: Err(error),
                 warnings,
             }
@@ -115,12 +115,12 @@ pub fn run_compile_dry_run_with_provider(
     match result {
         Ok(mut preview) => {
             preview.warnings = warnings;
-            CompileDryRunOutcome {
+            SynthesisDryRunOutcome {
                 result: Ok(preview),
                 warnings: Vec::new(),
             }
         }
-        Err(error) => CompileDryRunOutcome {
+        Err(error) => SynthesisDryRunOutcome {
             result: Err(error),
             warnings,
         },
@@ -129,14 +129,14 @@ pub fn run_compile_dry_run_with_provider(
 
 fn dry_run_preflight(
     cfg: &SeededConfig,
-    options: CompileOptions,
-) -> Result<DryRunPreflight, CompileError> {
+    options: SynthesisOptions,
+) -> Result<DryRunPreflight, SynthesisError> {
     let tree = cfg.tree();
     let tree_dir = tree.path();
 
     // ZERO writes: read-only pending check. Do not recover.
     if transaction::read(&transaction::pending_path(tree_dir))?.is_some() {
-        return Err(CompileError::DryRunBlocked(
+        return Err(SynthesisError::DryRunBlocked(
             "an unfinished transaction exists; run `bo compile` (without --dry-run) to recover it before previewing".to_string(),
         ));
     }
@@ -152,19 +152,22 @@ fn dry_run_preflight(
             )));
         }
         Ok(TreeLoadState::MissingState) => {
-            return Err(CompileError::Io(format!(
+            return Err(SynthesisError::Io(format!(
                 "failed to read state: {}",
                 state::TreeStateError::TreeNotInitialized
             )));
         }
         Err(error) => {
-            return Err(CompileError::Io(format!("failed to read state: {}", error)));
+            return Err(SynthesisError::Io(format!(
+                "failed to read state: {}",
+                error
+            )));
         }
     };
 
     // ZERO writes: read-only stale-repair check. Do not repair.
     if repair::requires_repair(cfg, &state)? {
-        return Err(CompileError::DryRunBlocked(
+        return Err(SynthesisError::DryRunBlocked(
             "stale branches require repair; run `bo compile` (without --dry-run) to repair before previewing".to_string(),
         ));
     }
@@ -220,12 +223,12 @@ fn dry_run_preflight(
 
 fn dry_run_build_plan(
     cfg: &SeededConfig,
-    options: CompileOptions,
+    options: SynthesisOptions,
     provider: &dyn LlmProvider,
     model: &Model,
     req: DryRunRequest,
     warnings: &mut Vec<String>,
-) -> Result<CompilePreview, CompileError> {
+) -> Result<SynthesisPreview, SynthesisError> {
     let DryRunRequest {
         state,
         loaded_leaves,
@@ -240,7 +243,7 @@ fn dry_run_build_plan(
             agent::run_agent_dry_run(cfg, provider, model, &state, &loaded_leaves, run_mode)?;
         (plan, stats, vw)
     } else {
-        let (plan, compile_stages) = plan::build_compile_plan(
+        let (plan, stages) = plan::build_plan(
             cfg,
             provider,
             model,
@@ -251,7 +254,7 @@ fn dry_run_build_plan(
             warnings,
         )?;
         let stats = agent::AgentRunStats {
-            turns: 1 + compile_stages.as_ref().map_or(0, |s| s.stage2_calls),
+            turns: 1 + stages.as_ref().map_or(0, |s| s.stage2_calls),
             tool_calls: 0,
             usage: None,
         };
@@ -263,11 +266,11 @@ fn dry_run_build_plan(
     let current_hash = transaction::state_hash(cfg.tree().path())?;
     let state_unchanged = current_hash == starting_hash;
     if !state_unchanged {
-        return Err(CompileError::DryRunBlocked(
+        return Err(SynthesisError::DryRunBlocked(
             "state changed during dry-run; rerun `bo compile --dry-run`".to_string(),
         ));
     }
-    Ok(CompilePreview {
+    Ok(SynthesisPreview {
         status: "preview".to_string(),
         reason: None,
         mode: Some(run_mode),
@@ -301,13 +304,13 @@ fn noop_preview(
     cfg: &SeededConfig,
     starting_hash: &str,
     is_agent: bool,
-) -> CompilePreview {
+) -> SynthesisPreview {
     let model_str = cfg
         .config
         .compile_model
         .as_deref()
         .unwrap_or(&cfg.config.model);
-    CompilePreview {
+    SynthesisPreview {
         status: "noop".to_string(),
         reason: Some(reason.to_string()),
         mode: None,

@@ -1,4 +1,4 @@
-// ── compile prompt construction ───────────────────────────────────────────────
+// ── synthesis prompt construction ────────────────────────────────────────────
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -9,7 +9,7 @@ use crate::engine::config::SeededConfig;
 
 use super::plan::LoadedLeaf;
 
-pub(super) const COMPILE_SYSTEM_PROMPT: &str = "\
+pub(super) const SYNTHESIS_SYSTEM_PROMPT: &str = "\
 You are a knowledge compilation engine for a personal document collection.
 
 Your task: identify recurring concepts and themes that appear across multiple \
@@ -35,7 +35,7 @@ documents, then produce structured output describing each concept.
 
 pub(super) fn build_user_message(leaves: &[LoadedLeaf]) -> String {
     let mut msg = format!(
-        "Please compile my knowledge base. There are {} documents.\n\n",
+        "Please synthesize my knowledge base. There are {} documents.\n\n",
         leaves.len()
     );
 
@@ -63,7 +63,7 @@ pub(super) fn build_incremental_user_message(
     let new_leaf_slugs: HashSet<&str> = new_leaf_slugs.iter().map(String::as_str).collect();
 
     let mut msg = String::from(
-        "Please incrementally compile my knowledge base.\n\n\
+        "Please incrementally synthesize my knowledge base.\n\n\
          INCREMENTAL RULES:\n\
          - You are integrating NEW leaves (listed in <full_leaf_bodies>) into an existing branch structure.\n\
          - Use `updated_branches` to modify an existing branch — include its slug, updated body, and full leaf list (existing + new).\n\

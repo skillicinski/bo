@@ -2,7 +2,6 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 pub mod collect;
-pub mod compile;
 pub mod config;
 pub mod journal;
 pub mod json;
@@ -12,6 +11,7 @@ pub mod raze;
 pub mod seed;
 pub mod show;
 pub mod status;
+pub mod synthesize;
 
 fn resolve_leaf_path(
     tree_dir: &Path,
