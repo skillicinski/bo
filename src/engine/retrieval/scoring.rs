@@ -166,8 +166,8 @@ fn read_body(tree_dir: &Path, file: &str) -> Option<String> {
 }
 
 /// Retrieve top-k documents (leaves and branches) scored by term density
-/// (OR semantics). Branches are synthesized concept pages from `bo compile`;
-/// including them makes compile's output reachable at retrieval time.
+/// (OR semantics). Branches are synthesized concept pages from `bo synthesize`;
+/// including them makes synthesize's output reachable at retrieval time.
 pub fn retrieve_docs(
     tree_dir: &Path,
     terms: &[String],

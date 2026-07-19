@@ -27,7 +27,7 @@ fn state_record(leaves: Vec<Leaf>) -> TreeState {
         tree: TreeMetadata {
             name: "test".to_string(),
             created_at: Timestamp::now(),
-            last_compiled_at: None,
+            last_synthesized_at: None,
         },
         leaves,
         branches: Vec::new(),

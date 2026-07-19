@@ -1,4 +1,4 @@
-// bo status — tree health and compile readiness at a glance.
+// bo status — tree health and synthesis readiness at a glance.
 //
 // Pipeline: read state → derive metrics → scan filesystem for size and
 //           orphan/missing checks → return StatusResult.
@@ -32,24 +32,24 @@ pub struct StatusResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub compile_model: Option<String>,
+    pub synthesis_model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_context_tokens: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub compile_model_context_tokens: Option<usize>,
+    pub synthesis_model_context_tokens: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LeafStatus {
     pub total: usize,
-    pub uncompiled: usize,
-    pub uncompiled_slugs: Vec<String>,
+    pub unsynthesized: usize,
+    pub unsynthesized_slugs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BranchStatus {
     pub total: usize,
-    pub last_compiled_at: Option<String>,
+    pub last_synthesized_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -123,7 +123,7 @@ pub fn compute_status(
             tree: state::TreeMetadata {
                 name: tree_name.to_string(),
                 created_at: Timestamp::now(),
-                last_compiled_at: None,
+                last_synthesized_at: None,
             },
             leaves: Vec::new(),
             branches: Vec::new(),
@@ -137,23 +137,23 @@ pub fn compute_status(
     };
 
     // Leaf metrics straight from the state.
-    let uncompiled_slugs: Vec<String> = state
-        .uncompiled_leaves()
+    let unsynthesized_slugs: Vec<String> = state
+        .unsynthesized_leaves()
         .iter()
         .map(|l| l.slug.as_str().to_string())
         .collect();
 
     let leaves = LeafStatus {
         total: state.leaves.len(),
-        uncompiled: uncompiled_slugs.len(),
-        uncompiled_slugs,
+        unsynthesized: unsynthesized_slugs.len(),
+        unsynthesized_slugs,
     };
 
     let branches = BranchStatus {
         total: state.branches.len(),
-        last_compiled_at: state
+        last_synthesized_at: state
             .tree
-            .last_compiled_at
+            .last_synthesized_at
             .as_ref()
             .map(|t| t.to_rfc3339_millis()),
     };
@@ -164,7 +164,7 @@ pub fn compute_status(
     let health = compute_health(tree_dir, &state);
     let hints = generate_hints(&leaves, &branches, &health);
 
-    let (provider, model, compile_model, model_ctx, compile_ctx) = config_fields(config);
+    let (provider, model, synthesis_model, model_ctx, synthesis_ctx) = config_fields(config);
 
     Ok(StatusResult {
         tree_name: tree_name.to_string(),
@@ -175,9 +175,9 @@ pub fn compute_status(
         hints,
         provider,
         model,
-        compile_model,
+        synthesis_model,
         model_context_tokens: model_ctx,
-        compile_model_context_tokens: compile_ctx,
+        synthesis_model_context_tokens: synthesis_ctx,
     })
 }
 
@@ -198,32 +198,32 @@ fn config_fields(
     };
     let provider = cfg.provider.to_string();
     let model_ctx = models::context_window_tokens(cfg.provider, &cfg.model);
-    let compile_ctx = cfg
-        .compile_model
+    let synthesis_ctx = cfg
+        .synthesis_model
         .as_deref()
         .and_then(|m| models::context_window_tokens(cfg.provider, m));
     (
         provider,
         Some(cfg.model.clone()),
-        cfg.compile_model.clone(),
+        cfg.synthesis_model.clone(),
         model_ctx,
-        compile_ctx,
+        synthesis_ctx,
     )
 }
 
 /// Return a StatusResult when the tree hasn't been seeded yet — config fields only.
 fn config_only_status(config: Option<&Config>) -> StatusResult {
-    let (provider, model, compile_model, model_ctx, compile_ctx) = config_fields(config);
+    let (provider, model, synthesis_model, model_ctx, synthesis_ctx) = config_fields(config);
     StatusResult {
         tree_name: String::new(),
         leaves: LeafStatus {
             total: 0,
-            uncompiled: 0,
-            uncompiled_slugs: Vec::new(),
+            unsynthesized: 0,
+            unsynthesized_slugs: Vec::new(),
         },
         branches: BranchStatus {
             total: 0,
-            last_compiled_at: None,
+            last_synthesized_at: None,
         },
         size: SizeStatus {
             bytes: 0,
@@ -236,9 +236,9 @@ fn config_only_status(config: Option<&Config>) -> StatusResult {
         hints: vec!["run 'bo seed --path <path>' to create a tree".to_string()],
         provider,
         model,
-        compile_model,
+        synthesis_model,
         model_context_tokens: model_ctx,
-        compile_model_context_tokens: compile_ctx,
+        synthesis_model_context_tokens: synthesis_ctx,
     }
 }
 
@@ -335,15 +335,15 @@ fn generate_hints(
 
     if leaves.total == 0 {
         hints.push("run 'bo collect <url>' to add your first source".to_string());
-    } else if leaves.uncompiled > 0 && branches.total == 0 {
+    } else if leaves.unsynthesized > 0 && branches.total == 0 {
         hints.push(format!(
-            "run 'bo compile' to create your first branch from {} leaves",
+            "run 'bo synthesize' to create your first branch from {} leaves",
             leaves.total
         ));
-    } else if leaves.uncompiled > 0 {
+    } else if leaves.unsynthesized > 0 {
         hints.push(format!(
-            "run 'bo compile' to process {} new leaves",
-            leaves.uncompiled
+            "run 'bo synthesize' to process {} new leaves",
+            leaves.unsynthesized
         ));
     }
 
@@ -359,7 +359,7 @@ fn generate_hints(
     if !health.untracked_leaf_files.is_empty() {
         let n = health.untracked_leaf_files.len();
         hints.push(format!(
-            "{} leaf {} untracked \u{2014} they won't appear in search or compile",
+            "{} leaf {} untracked \u{2014} they won't appear in search or synthesis",
             n,
             if n == 1 { "file" } else { "files" }
         ));
@@ -370,7 +370,7 @@ fn generate_hints(
 
 // ── output formatting ─────────────────────────────────────────────────────────
 
-const UNCOMPILED_DISPLAY_CAP: usize = 10;
+const UNSYNTHESIZED_DISPLAY_CAP: usize = 10;
 
 pub fn render_human(result: &StatusResult) -> String {
     let mut out = String::new();
@@ -389,20 +389,20 @@ pub fn render_human(result: &StatusResult) -> String {
             .unwrap_or_default();
         out.push_str(&format!("  model:         {}{}\n", model, ctx));
     }
-    if let Some(ref cm) = result.compile_model {
+    if let Some(ref cm) = result.synthesis_model {
         let ctx = result
-            .compile_model_context_tokens
+            .synthesis_model_context_tokens
             .map(|t| format!(" ({}K context)", t / 1000))
             .unwrap_or_default();
-        out.push_str(&format!("  compile_model: {}{}\n", cm, ctx));
+        out.push_str(&format!("  synthesis_model: {}{}\n", cm, ctx));
     }
 
     out.push('\n');
 
-    if result.leaves.uncompiled > 0 {
+    if result.leaves.unsynthesized > 0 {
         out.push_str(&format!(
-            "  Leaves:      {} ({} uncompiled)\n",
-            result.leaves.total, result.leaves.uncompiled
+            "  Leaves:      {} ({} unsynthesized)\n",
+            result.leaves.total, result.leaves.unsynthesized
         ));
     } else {
         out.push_str(&format!("  Leaves:      {}\n", result.leaves.total));
@@ -410,8 +410,8 @@ pub fn render_human(result: &StatusResult) -> String {
 
     out.push_str(&format!("  Branches:    {}\n", result.branches.total));
 
-    if let Some(ref ts) = result.branches.last_compiled_at {
-        out.push_str(&format!("  Last compile: {}\n", ts));
+    if let Some(ref ts) = result.branches.last_synthesized_at {
+        out.push_str(&format!("  Last synthesis: {}\n", ts));
     }
 
     let kb = result.size.bytes / 1024;
@@ -426,18 +426,18 @@ pub fn render_human(result: &StatusResult) -> String {
         format_number(result.size.estimated_tokens)
     ));
 
-    if !result.leaves.uncompiled_slugs.is_empty() {
+    if !result.leaves.unsynthesized_slugs.is_empty() {
         out.push('\n');
-        out.push_str("  Uncompiled:\n");
+        out.push_str("  Unsynthesized:\n");
         let display_count = result
             .leaves
-            .uncompiled_slugs
+            .unsynthesized_slugs
             .len()
-            .min(UNCOMPILED_DISPLAY_CAP);
-        for slug in &result.leaves.uncompiled_slugs[..display_count] {
+            .min(UNSYNTHESIZED_DISPLAY_CAP);
+        for slug in &result.leaves.unsynthesized_slugs[..display_count] {
             out.push_str(&format!("    \u{2022} {}\n", slug));
         }
-        let remaining = result.leaves.uncompiled_slugs.len() - display_count;
+        let remaining = result.leaves.unsynthesized_slugs.len() - display_count;
         if remaining > 0 {
             out.push_str(&format!("    \u{2026} and {} more\n", remaining));
         }

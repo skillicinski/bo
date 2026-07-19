@@ -91,7 +91,7 @@ impl fmt::Display for ShowError {
             }
             ShowError::MissingFile { file } => write!(
                 f,
-                "cannot show '{file}': file is missing \u{2014} the file was deleted or moved.\nrun `bo compile` to clean up the stale state record."
+                "cannot show '{file}': file is missing \u{2014} the file was deleted or moved.\nrun `bo synthesize` to clean up the stale state record."
             ),
             ShowError::UnreadableFile { file, source } => {
                 write!(f, "cannot show '{file}': unreadable file: {source}")

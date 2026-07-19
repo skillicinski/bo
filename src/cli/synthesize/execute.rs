@@ -154,7 +154,7 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
     let current_state_hash = transaction::state_hash(tree_dir)?;
     if current_state_hash != expected_state_hash {
         return Err(SynthesisError::Io(
-            "state changed during compile planning; rerun `bo compile`".to_string(),
+            "state changed during synthesis planning; rerun `bo synthesize`".to_string(),
         ));
     }
 
@@ -190,12 +190,12 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
         staged.iter().map(|(pw, b)| (pw, b.as_slice())).collect();
     transaction::commit_with_state(
         tree_dir,
-        TransactionKind::Compile { mode: txn_mode },
+        TransactionKind::Synthesize { mode: txn_mode },
         &delta.new_state,
         &staged_refs,
         &delta.branch_deletes,
     )
-    .map_err(|e| SynthesisError::Io(format!("failed to commit compile: {}", e)))?;
+    .map_err(|e| SynthesisError::Io(format!("failed to commit synthesis: {}", e)))?;
 
     let branch_results: Vec<BranchResult> = delta
         .branches_created

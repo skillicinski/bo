@@ -19,14 +19,14 @@ use serde_json::Value;
 use crate::domain::tree::infra_dir;
 use crate::domain::Timestamp;
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Operation kind recorded in the journal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Op {
     Collect,
-    Compile,
+    Synthesize,
     Repair,
     Query,
 }
@@ -110,6 +110,7 @@ pub fn read_recent(tree_dir: &Path, limit: usize) -> Vec<Event> {
         .lines()
         .filter(|line| !line.is_empty())
         .filter_map(|line| serde_json::from_str(line).ok())
+        .filter(|event: &Event| event.schema_version == SCHEMA_VERSION)
         .collect();
     let start = events.len().saturating_sub(limit);
     events.drain(..start);

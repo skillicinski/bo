@@ -44,7 +44,7 @@ pub fn render_human(result: &JournalResult) -> String {
 fn render_event_line(event: &Event) -> String {
     let detail = match event.op {
         journal::Op::Collect => render_collect(&event.payload),
-        journal::Op::Compile => render_compile(&event.payload),
+        journal::Op::Synthesize => render_synthesize(&event.payload),
         journal::Op::Repair => render_repair(&event.payload),
         journal::Op::Query => render_query(&event.payload),
     };
@@ -65,7 +65,7 @@ fn render_event_line(event: &Event) -> String {
 fn op_label(op: journal::Op) -> &'static str {
     match op {
         journal::Op::Collect => "collect",
-        journal::Op::Compile => "compile",
+        journal::Op::Synthesize => "synthesize",
         journal::Op::Repair => "repair",
         journal::Op::Query => "query",
     }
@@ -90,7 +90,7 @@ fn render_collect(payload: &Value) -> String {
     )
 }
 
-fn render_compile(payload: &Value) -> String {
+fn render_synthesize(payload: &Value) -> String {
     let mode = payload.get("mode").and_then(|v| v.as_str()).unwrap_or("?");
     let failures = payload
         .get("validation_failures")

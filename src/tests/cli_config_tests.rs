@@ -25,7 +25,7 @@ fn seeded_config() -> Config {
             created_at: test_timestamp(),
         }),
         model: "gpt-4.1-mini".to_string(),
-        compile_model: None,
+        synthesis_model: None,
         base_url: None,
     }
 }
@@ -39,7 +39,7 @@ fn seeded_config_with_models() -> Config {
             created_at: test_timestamp(),
         }),
         model: "gpt-4o-mini".to_string(),
-        compile_model: Some("gpt-4.1-mini".to_string()),
+        synthesis_model: Some("gpt-4.1-mini".to_string()),
         base_url: None,
     }
 }
@@ -53,7 +53,7 @@ fn write_absent_config_creates_default_with_model() {
         WriteConfigOptions {
             provider: None,
             model: Some("gpt-4.1-mini".to_string()),
-            compile_model: None,
+            synthesis_model: None,
             base_url: None,
         },
         &path,
@@ -75,7 +75,7 @@ fn write_creates_config() {
         WriteConfigOptions {
             provider: None,
             model: Some("gpt-4.1-mini".to_string()),
-            compile_model: None,
+            synthesis_model: None,
             base_url: None,
         },
         &path,
@@ -85,12 +85,12 @@ fn write_creates_config() {
     assert_eq!(result.status, "ok");
     let loaded = engine_config::read_config(&path).unwrap();
     assert_eq!(loaded.model, "gpt-4.1-mini");
-    assert!(loaded.compile_model.is_none());
+    assert!(loaded.synthesis_model.is_none());
     assert!(loaded.tree.is_none());
 }
 
 #[test]
-fn write_model_with_existing_compile_model_preserves_fallback() {
+fn write_model_with_existing_synthesis_model_preserves_fallback() {
     let dir = TempDir::new().unwrap();
     let path = temp_config_path(&dir);
     engine_config::write_config(
@@ -98,19 +98,19 @@ fn write_model_with_existing_compile_model_preserves_fallback() {
             provider: Provider::OpenAI,
             tree: None,
             model: "gpt-4o-mini".to_string(),
-            compile_model: None,
+            synthesis_model: None,
             base_url: None,
         },
         &path,
     )
     .unwrap();
 
-    // Writing only model should keep model=..., compile_model unchanged
+    // Writing only model should keep model=..., synthesis_model unchanged
     let result = write_config(
         WriteConfigOptions {
             provider: None,
             model: Some("gpt-4o".to_string()),
-            compile_model: None,
+            synthesis_model: None,
             base_url: None,
         },
         &path,
@@ -120,11 +120,11 @@ fn write_model_with_existing_compile_model_preserves_fallback() {
     assert_eq!(result.status, "ok");
     let loaded = engine_config::read_config(&path).unwrap();
     assert_eq!(loaded.model, "gpt-4o");
-    assert_eq!(loaded.compile_model.as_deref(), None);
+    assert_eq!(loaded.synthesis_model.as_deref(), None);
 }
 
 #[test]
-fn write_compile_model_persists_only_compile_model() {
+fn write_synthesis_model_persists_only_synthesis_model() {
     let dir = TempDir::new().unwrap();
     let path = temp_config_path(&dir);
 
@@ -132,7 +132,7 @@ fn write_compile_model_persists_only_compile_model() {
         WriteConfigOptions {
             provider: None,
             model: None,
-            compile_model: Some("gpt-4.1-mini".to_string()),
+            synthesis_model: Some("gpt-4.1-mini".to_string()),
             base_url: None,
         },
         &path,
@@ -142,7 +142,7 @@ fn write_compile_model_persists_only_compile_model() {
     assert_eq!(result.status, "ok");
     let loaded = engine_config::read_config(&path).unwrap();
     assert!(loaded.model.is_empty());
-    assert_eq!(loaded.compile_model.as_deref(), Some("gpt-4.1-mini"));
+    assert_eq!(loaded.synthesis_model.as_deref(), Some("gpt-4.1-mini"));
     assert!(loaded.tree.is_none());
 }
 
@@ -155,7 +155,7 @@ fn write_trims_model_value() {
         WriteConfigOptions {
             provider: None,
             model: Some(" gpt-4.1-mini ".to_string()),
-            compile_model: None,
+            synthesis_model: None,
             base_url: None,
         },
         &path,
@@ -176,7 +176,7 @@ fn write_preserves_tree_metadata() {
         WriteConfigOptions {
             provider: None,
             model: Some("gpt-4.1-mini".to_string()),
-            compile_model: None,
+            synthesis_model: None,
             base_url: None,
         },
         &path,
@@ -191,7 +191,7 @@ fn write_preserves_tree_metadata() {
 }
 
 #[test]
-fn write_model_preserves_compile_model_and_tree_metadata() {
+fn write_model_preserves_synthesis_model_and_tree_metadata() {
     let dir = TempDir::new().unwrap();
     let path = temp_config_path(&dir);
     engine_config::write_config(&seeded_config_with_models(), &path).unwrap();
@@ -200,7 +200,7 @@ fn write_model_preserves_compile_model_and_tree_metadata() {
         WriteConfigOptions {
             provider: None,
             model: Some("gpt-4.1".to_string()),
-            compile_model: None,
+            synthesis_model: None,
             base_url: None,
         },
         &path,
@@ -209,7 +209,7 @@ fn write_model_preserves_compile_model_and_tree_metadata() {
 
     let loaded = engine_config::read_config(&path).unwrap();
     assert_eq!(loaded.model, "gpt-4.1");
-    assert_eq!(loaded.compile_model.as_deref(), Some("gpt-4.1-mini"));
+    assert_eq!(loaded.synthesis_model.as_deref(), Some("gpt-4.1-mini"));
     let tree = loaded.tree.unwrap();
     assert_eq!(tree.path, PathBuf::from("/tmp/tree"));
     assert_eq!(tree.name, "tree");
@@ -224,7 +224,7 @@ fn write_unsupported_model_is_usage_error() {
         WriteConfigOptions {
             provider: None,
             model: Some("unknown-model".to_string()),
-            compile_model: None,
+            synthesis_model: None,
             base_url: None,
         },
         &path,
@@ -244,7 +244,7 @@ fn write_unsupported_model_for_deepseek_is_usage_error() {
         WriteConfigOptions {
             provider: Some(Provider::Deepseek),
             model: Some("gpt-4o".to_string()),
-            compile_model: None,
+            synthesis_model: None,
             base_url: None,
         },
         &path,
@@ -256,7 +256,7 @@ fn write_unsupported_model_for_deepseek_is_usage_error() {
 }
 
 #[test]
-fn write_unsupported_compile_model_is_usage_error() {
+fn write_unsupported_synthesis_model_is_usage_error() {
     let dir = TempDir::new().unwrap();
     let path = temp_config_path(&dir);
 
@@ -264,7 +264,7 @@ fn write_unsupported_compile_model_is_usage_error() {
         WriteConfigOptions {
             provider: None,
             model: None,
-            compile_model: Some("unknown-model".to_string()),
+            synthesis_model: Some("unknown-model".to_string()),
             base_url: None,
         },
         &path,
@@ -286,7 +286,7 @@ fn write_malformed_config_is_not_overwritten() {
         WriteConfigOptions {
             provider: None,
             model: Some("gpt-4.1-mini".to_string()),
-            compile_model: None,
+            synthesis_model: None,
             base_url: None,
         },
         &path,
@@ -307,7 +307,7 @@ fn write_deepseek_provider() {
         WriteConfigOptions {
             provider: Some(Provider::Deepseek),
             model: Some("deepseek-v4-flash".to_string()),
-            compile_model: None,
+            synthesis_model: None,
             base_url: None,
         },
         &path,
@@ -324,7 +324,7 @@ fn render_human_includes_provider() {
         status: "ok".to_string(),
         provider: "openai".to_string(),
         model: "gpt-4.1-mini".to_string(),
-        compile_model: None,
+        synthesis_model: None,
         base_url: None,
     });
 
@@ -333,16 +333,16 @@ fn render_human_includes_provider() {
 }
 
 #[test]
-fn render_human_omits_none_compile_model() {
+fn render_human_omits_none_synthesis_model() {
     let rendered = render_human(&ConfigWriteResult {
         status: "ok".to_string(),
         provider: "openai".to_string(),
         model: "gpt-4.1-mini".to_string(),
-        compile_model: None,
+        synthesis_model: None,
         base_url: None,
     });
 
-    assert!(!rendered.contains("compile_model"));
+    assert!(!rendered.contains("synthesis_model"));
 }
 
 // ── custom provider / base_url ───────────────────────────────────────────────
@@ -478,7 +478,7 @@ fn render_human_includes_base_url() {
         status: "ok".to_string(),
         provider: "custom".to_string(),
         model: "my-fine-tune".to_string(),
-        compile_model: None,
+        synthesis_model: None,
         base_url: Some("https://api.example.com/v1".to_string()),
     });
 

@@ -11,7 +11,7 @@ use super::discovery::{compute_candidate_clusters, CandidateCluster};
 // ── prompt constants ─────────────────────────────────────────────────────────
 
 pub(in crate::cli::synthesize) const CLUSTER_SYSTEM_PROMPT: &str = "\
-You are clustering documents for a knowledge tree compilation. Below are document \
+You are clustering documents for a knowledge tree synthesis. Below are document \
 titles and summaries.
 
 Candidate groupings (computed from term similarity) are provided as hints — you \

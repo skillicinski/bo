@@ -43,12 +43,12 @@ fn leaf_record(slug: &str, file: &str, title: &str, collected_at: &str) -> Leaf 
     }
 }
 
-fn fresh_state(name: &str, created_at: &str, last_compiled_at: Option<&str>) -> TreeState {
+fn fresh_state(name: &str, created_at: &str, last_synthesized_at: Option<&str>) -> TreeState {
     TreeState {
         tree: TreeMetadata {
             name: name.to_string(),
             created_at: Timestamp::parse(created_at).unwrap(),
-            last_compiled_at: last_compiled_at.map(|s| Timestamp::parse(s).unwrap()),
+            last_synthesized_at: last_synthesized_at.map(|s| Timestamp::parse(s).unwrap()),
         },
         leaves: Vec::new(),
         branches: Vec::new(),

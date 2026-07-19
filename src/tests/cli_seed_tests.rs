@@ -271,7 +271,7 @@ fn render_human_is_readable_for_new_and_existing_seed() {
         created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         provider: Provider::OpenAI,
         model: "gpt-4.1-mini".to_string(),
-        compile_model: None,
+        synthesis_model: None,
     };
 
     let rendered = render_human(&result);

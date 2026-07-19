@@ -477,7 +477,7 @@ fn seed_after_config_only_writes_seed_config() {
 fn config_only_file_still_counts_as_not_seeded_for_tree_commands() {
     let cases: Vec<Vec<&str>> = vec![
         vec!["collect", "https://example.com"],
-        vec!["compile"],
+        vec!["synthesize"],
         vec!["list"],
         vec!["show", "Rust"],
         vec!["query", "what", "is", "rust"],
@@ -540,17 +540,17 @@ fn config_get_unknown_key_exits_two_and_lists_valid_key() {
 }
 
 #[test]
-fn config_set_compile_model_succeeds() {
+fn config_set_synthesis_model_succeeds() {
     let home = TempDir::new().unwrap();
 
     let out = bo(home.path())
-        .args(["config", "--compile-model", "gpt-4.1-mini"])
+        .args(["config", "--synthesis-model", "gpt-4.1-mini"])
         .output()
         .unwrap();
 
     assert_eq!(out.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("compile_model"), "stdout: {stdout}");
+    assert!(stdout.contains("synthesis_model"), "stdout: {stdout}");
     assert!(stdout.contains("gpt-4.1-mini"), "stdout: {stdout}");
 }
 

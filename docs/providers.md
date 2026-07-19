@@ -2,9 +2,9 @@
 
 bo supports OpenAI-compatible providers. Each built-in provider enumerates a fixed set of models; the `custom` provider accepts any OpenAI-compatible endpoint and model.
 
-## Choosing a compile model
+## Choosing a synthesis model
 
-Compile — especially the cluster pass that two-stage compile runs on large corpora — is the highest-leverage LLM call bo makes: it decides the topic structure every later compile anchors to. Measured cluster quality varies sharply by model under an identical prompt (66-document full compile, share of documents organized into branches):
+Synthesis — especially the cluster pass that two-stage synthesis runs on large corpora — is the highest-leverage LLM call bo makes: it decides the topic structure every later synthesis anchors to. Measured cluster quality varies sharply by model under an identical prompt (66-document full synthesis, share of documents organized into branches):
 
 | Model | Coverage |
 |---|---|
@@ -15,13 +15,13 @@ Compile — especially the cluster pass that two-stage compile runs on large cor
 | `gpt-4.1` | 30% — over-conservative micro-clusters |
 | `gpt-4.1-mini` | 17% — collapses to a single catch-all branch |
 
-For corpora beyond ~40 documents, pin a validated model for the compile step and keep a cheap model for everything else:
+For corpora beyond ~40 documents, pin a validated model for the synthesis step and keep a cheap model for everything else:
 
 ```bash
-bo config --compile-model gpt-5.5
+bo config --synthesis-model gpt-5.5
 ```
 
-The `gpt-4.1` family is not recommended for compile at scale. bo warns (`degenerate_result`) when a compile produces implausibly few branches, but the better tree is the one that never needed the warning.
+The `gpt-4.1` family is not recommended for synthesis at scale. bo warns (`degenerate_result`) when a synthesis produces implausibly few branches, but the better tree is the one that never needed the warning.
 
 ---
 
@@ -29,17 +29,17 @@ The `gpt-4.1` family is not recommended for compile at scale. bo warns (`degener
 
 | Model | Notes |
 |---|---|
-| `gpt-5.5` | Frontier. Best measured compile quality; use as `--compile-model`. |
-| `gpt-5.4` | Strong all-round choice, compile included. |
-| `gpt-4.1-mini` | Cheap default for collect/query. Not recommended for compile at scale (see above). |
-| `gpt-4.1` | Not recommended for compile at scale (see above). |
-| `gpt-4.1-nano` | Smallest context window. Fast but hits compile limits sooner. |
+| `gpt-5.5` | Frontier. Best measured synthesis quality; use as `--synthesis-model`. |
+| `gpt-5.4` | Strong all-round choice, synthesis included. |
+| `gpt-4.1-mini` | Cheap default for collect/query. Not recommended for synthesis at scale (see above). |
+| `gpt-4.1` | Not recommended for synthesis at scale (see above). |
+| `gpt-4.1-nano` | Smallest context window. Fast but hits synthesis limits sooner. |
 | `gpt-4o` | Legacy. Prefer `gpt-4.1`. |
 | `gpt-4o-mini` | Legacy. Prefer `gpt-4.1-mini` or `gpt-4.1-nano`. |
 
 ### Notes
 
-- **Structured output mode** — bo uses OpenAI's `response_format: json_schema` to guarantee well-formed compile responses. Provider schema mapping is enforced at the type level.
+- **Structured output mode** — bo uses OpenAI's `response_format: json_schema` to guarantee well-formed synthesis responses. Provider schema mapping is enforced at the type level.
 - **Model selection** — choose at seed time (flag or interactive prompt). No silent default; `bo seed` always requires an explicit `--model` or prompts for one.
 
 ---
@@ -67,11 +67,11 @@ bo targets the Z.ai **GLM Coding Plan** (subscription) endpoint, not the pay-per
 | `glm-4.5-air` | 200K | Lightweight text model. |
 | `glm-5.1` | 200K | Flagship-class. |
 | `glm-5-turbo` | 200K | Fast flagship-class, 2–3x quota. |
-| `glm-5.2` | 1M | Flagship. Complex/large compiles, 2–3x quota. |
+| `glm-5.2` | 1M | Flagship. Complex/large syntheses, 2–3x quota. |
 
 ### Notes
 
-- **Coding Plan endpoint** — bo hits `https://api.z.ai/api/coding/paas/v4/chat/completions` with Bearer auth. Requires a GLM Coding Plan subscription; a pay-per-token PaaS key returns `code 1113` (insufficient balance). Pin a compile model (`bo config --compile-model glm-5.2`) for heavier work.
+- **Coding Plan endpoint** — bo hits `https://api.z.ai/api/coding/paas/v4/chat/completions` with Bearer auth. Requires a GLM Coding Plan subscription; a pay-per-token PaaS key returns `code 1113` (insufficient balance). Pin a synthesis model (`bo config --synthesis-model glm-5.2`) for heavier work.
 - **Quota** — glm-5.2 / glm-5-turbo consume 2–3x quota (3x peak 14:00–18:00 UTC+8); glm-4.7 consumes 1x. Prefer glm-4.7 for routine queries.
 - **No structured output mode** — like DeepSeek, Z.ai has no `response_format: json_schema`. bo falls back to JSON-mode prompting (system message instructions + `response_format: json_object`).
 - **reasoning toggle** — `{"thinking": {"type": "disabled"}}` suppresses reasoning tokens (same parameter shape as DeepSeek).
@@ -100,8 +100,8 @@ API's own 404 is the authoritative error for retired models.
 ### Notes
 
 - **Native API** — bo uses the Gemini native `generateContent` endpoint, not the OpenAI compatibility layer. Auth goes via `x-goog-api-key` header.
-- **Structured output** — Gemini supports `responseSchema` with `responseMimeType: application/json`. bo uses this for compile responses.
-- **Thinking** — Gemini models think by default and thoughts count against `maxOutputTokens`. Ensure `--model` and `--compile-model` selections have enough token budget to accommodate both thoughts and output.
+- **Structured output** — Gemini supports `responseSchema` with `responseMimeType: application/json`. bo uses this for synthesis responses.
+- **Thinking** — Gemini models think by default and thoughts count against `maxOutputTokens`. Ensure `--model` and `--synthesis-model` selections have enough token budget to accommodate both thoughts and output.
 - **System instructions** — System messages are mapped to Gemini's `systemInstruction` field rather than inserted as conversation turns.
 - **Auth** — set `GEMINI_API_KEY` or store `google_api_key` in `~/.bo/auth.json`.
 

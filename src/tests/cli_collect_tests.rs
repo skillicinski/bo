@@ -86,7 +86,7 @@ fn batch_collect_skips_existing_state_duplicates_without_fetching() {
             tree: state::TreeMetadata {
                 name: "test".to_string(),
                 created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
-                last_compiled_at: None,
+                last_synthesized_at: None,
             },
             leaves: vec![crate::domain::Leaf {
                 slug: Slug::parse("already").unwrap(),
@@ -535,7 +535,7 @@ fn seed_for_collect(dir: &TempDir, name: &str) {
         tree: TreeMetadata {
             name: name.to_string(),
             created_at: Timestamp::parse("2026-05-19T12:00:00Z").unwrap(),
-            last_compiled_at: None,
+            last_synthesized_at: None,
         },
         leaves: Vec::new(),
         branches: Vec::new(),
@@ -588,7 +588,7 @@ fn collect_appends_leaf_record_to_state_with_full_metadata() {
     assert_eq!(rec.summary.as_deref(), Some("A summary of the article."));
     // Tree metadata preserved across the dual-write.
     assert_eq!(m.tree.name, "state-collect-tree");
-    assert!(m.tree.last_compiled_at.is_none());
+    assert!(m.tree.last_synthesized_at.is_none());
 }
 
 #[test]

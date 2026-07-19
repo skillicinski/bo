@@ -4,7 +4,7 @@
 // branches and leaves. The hierarchy is:
 //
 //   Tree
-//    ├── branch/   (Branch files written by `bo compile`)
+//    ├── branch/   (Branch files written by `bo synthesize`)
 //    ├── leaf/     (Leaf files written by `bo collect`)
 //    └── .bo/      (state.json + pending.json runtime state)
 //
@@ -51,7 +51,7 @@ impl Tree {
             tree: TreeMetadata {
                 name: self.name.clone(),
                 created_at: self.created_at.clone(),
-                last_compiled_at: None,
+                last_synthesized_at: None,
             },
             leaves: Vec::new(),
             branches: Vec::new(),

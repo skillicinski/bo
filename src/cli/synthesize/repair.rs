@@ -291,7 +291,7 @@ fn repair_branch_files(
                         if let Ok(new_content) = frontmatter::render(&mapping, &body) {
                             let _ = fs::write(&branch_path, &new_content);
                             let note = format!(
-                                "branch '{}' frontmatter repaired (body may reference removed leaves; recompile with --all to resynthesize)",
+                                "branch '{}' frontmatter repaired (body may reference removed leaves; re-synthesize with --all to resynthesize)",
                                 branch.slug.as_str()
                             );
                             frontmatter_notes.push(note);

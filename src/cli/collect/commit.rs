@@ -213,7 +213,7 @@ pub(super) fn load_or_bootstrap_state(
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "unnamed".to_string()),
                 created_at: now.clone(),
-                last_compiled_at: None,
+                last_synthesized_at: None,
             },
             leaves: Vec::new(),
             branches: Vec::new(),

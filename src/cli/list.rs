@@ -1,4 +1,4 @@
-// bo list — deterministic tree inspection for collected leaves and compiled branches.
+// bo list — deterministic tree inspection for collected leaves and synthesized branches.
 
 use crate::cli::json::{JsonError, JsonWarning};
 use crate::cli::resolve_leaf_path;
@@ -528,7 +528,7 @@ pub fn render_human(result: &ListResult) -> String {
                     Some(b) => format!("no branches matched '{b}'\n"),
                     None => {
                         if result.total_branches == 0 {
-                            "no branches compiled yet\n".to_string()
+                            "no branches synthesized yet\n".to_string()
                         } else {
                             "no leaves matched\n".to_string()
                         }
@@ -581,7 +581,7 @@ pub fn render_human(result: &ListResult) -> String {
         ListView::Branches { items: rows } => {
             if rows.is_empty() {
                 if result.total_branches == 0 {
-                    return "no branches compiled yet\n".to_string();
+                    return "no branches synthesized yet\n".to_string();
                 }
                 return "no branches matched\n".to_string();
             }

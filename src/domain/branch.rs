@@ -1,6 +1,6 @@
 // Domain entity and I/O for branch documents.
 //
-// A branch is a synthesised concept file written by `bo compile`.
+// A branch is a synthesised concept file written by `bo synthesize`.
 // It lives at {output_dir}/branch/{slug}.md and has YAML frontmatter
 // followed by a markdown body beginning with a heading matching the title.
 
@@ -15,9 +15,9 @@ pub struct Branch {
     pub slug: Slug,
     pub file: String,
     pub title: Title,
-    /// First compile run that produced this branch. Preserved across recompiles.
+    /// First synthesis run that produced this branch. Preserved across re-synthesis.
     pub created_at: Timestamp,
-    /// Most recent compile run that touched this branch. Updated every recompile.
+    /// Most recent synthesis run that touched this branch. Updated every re-synthesis.
     pub updated_at: Timestamp,
     /// Slugs of leaves assigned to this branch. Canonical direction of the
     /// cross-reference.

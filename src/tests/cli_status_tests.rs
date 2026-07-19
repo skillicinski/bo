@@ -13,13 +13,18 @@ fn setup_tree(dir: &Path) {
     write_state(dir, &[], &[], None);
 }
 
-fn write_state(dir: &Path, leaves: &[Leaf], branches: &[Branch], last_compiled_at: Option<&str>) {
+fn write_state(
+    dir: &Path,
+    leaves: &[Leaf],
+    branches: &[Branch],
+    last_synthesized_at: Option<&str>,
+) {
     fs::create_dir_all(dir.join(".bo")).unwrap();
     let m = TreeState {
         tree: TreeMetadata {
             name: "test".to_string(),
             created_at: Timestamp::parse("2026-05-14T09:00:00Z").unwrap(),
-            last_compiled_at: last_compiled_at.map(|s| Timestamp::parse(s).unwrap()),
+            last_synthesized_at: last_synthesized_at.map(|s| Timestamp::parse(s).unwrap()),
         },
         leaves: leaves.to_vec(),
         branches: branches.to_vec(),
@@ -70,15 +75,15 @@ fn empty_tree_reports_zero_leaves() {
     let result = compute_status(dir.path(), "test-tree", None).unwrap();
 
     assert_eq!(result.leaves.total, 0);
-    assert_eq!(result.leaves.uncompiled, 0);
+    assert_eq!(result.leaves.unsynthesized, 0);
     assert_eq!(result.branches.total, 0);
-    assert!(result.branches.last_compiled_at.is_none());
+    assert!(result.branches.last_synthesized_at.is_none());
     assert_eq!(result.size.bytes, 0);
     assert!(result.hints.iter().any(|h| h.contains("bo collect")));
 }
 
 #[test]
-fn uncompiled_leaves_detected() {
+fn unsynthesized_leaves_detected() {
     let dir = TempDir::new().unwrap();
     setup_tree(dir.path());
 
@@ -90,7 +95,7 @@ fn uncompiled_leaves_detected() {
             leaf("c", "https://c.com", "2026-05-14T10:00:00Z"),
         ],
         &[],
-        None, // never compiled → all uncompiled
+        None, // never synthesized → all unsynthesized
     );
     write_leaf_file(dir.path(), "a.md", "https://a.com");
     write_leaf_file(dir.path(), "b.md", "https://b.com");
@@ -99,18 +104,18 @@ fn uncompiled_leaves_detected() {
     let result = compute_status(dir.path(), "test", None).unwrap();
 
     assert_eq!(result.leaves.total, 3);
-    assert_eq!(result.leaves.uncompiled, 3);
-    assert_eq!(result.leaves.uncompiled_slugs, vec!["a", "b", "c"]);
-    assert!(result.hints.iter().any(|h| h.contains("compile")));
+    assert_eq!(result.leaves.unsynthesized, 3);
+    assert_eq!(result.leaves.unsynthesized_slugs, vec!["a", "b", "c"]);
+    assert!(result.hints.iter().any(|h| h.contains("synthesize")));
 }
 
 #[test]
-fn compiled_leaves_not_flagged() {
+fn synthesized_leaves_not_flagged() {
     let dir = TempDir::new().unwrap();
     setup_tree(dir.path());
 
-    // 'a' was collected before last_compiled_at → compiled.
-    // 'b' was collected after  → uncompiled.
+    // 'a' was collected before last_synthesized_at → synthesized.
+    // 'b' was collected after  → unsynthesized.
     write_state(
         dir.path(),
         &[
@@ -126,12 +131,12 @@ fn compiled_leaves_not_flagged() {
     let result = compute_status(dir.path(), "test", None).unwrap();
 
     assert_eq!(result.leaves.total, 2);
-    assert_eq!(result.leaves.uncompiled, 1);
-    assert_eq!(result.leaves.uncompiled_slugs, vec!["b"]);
+    assert_eq!(result.leaves.unsynthesized, 1);
+    assert_eq!(result.leaves.unsynthesized_slugs, vec!["b"]);
 }
 
 #[test]
-fn branch_count_and_last_compiled() {
+fn branch_count_and_last_synthesized() {
     let dir = TempDir::new().unwrap();
     setup_tree(dir.path());
     write_state(
@@ -148,7 +153,7 @@ fn branch_count_and_last_compiled() {
 
     assert_eq!(result.branches.total, 2);
     assert_eq!(
-        result.branches.last_compiled_at.as_deref(),
+        result.branches.last_synthesized_at.as_deref(),
         Some("2026-05-14T20:00:00.000Z")
     );
 }
@@ -229,7 +234,7 @@ fn size_computed_correctly() {
 }
 
 #[test]
-fn single_uncompiled_leaf_produces_correct_result() {
+fn single_unsynthesized_leaf_produces_correct_result() {
     let dir = TempDir::new().unwrap();
     setup_tree(dir.path());
 
@@ -245,10 +250,10 @@ fn single_uncompiled_leaf_produces_correct_result() {
 
     assert_eq!(result.tree_name, "my-research");
     assert_eq!(result.leaves.total, 1);
-    assert_eq!(result.leaves.uncompiled, 1);
-    assert_eq!(result.leaves.uncompiled_slugs, vec!["a"]);
+    assert_eq!(result.leaves.unsynthesized, 1);
+    assert_eq!(result.leaves.unsynthesized_slugs, vec!["a"]);
     assert_eq!(result.branches.total, 0);
-    assert!(result.branches.last_compiled_at.is_none());
+    assert!(result.branches.last_synthesized_at.is_none());
     assert!(result.size.bytes > 0);
-    assert!(result.hints.iter().any(|h| h.contains("compile")));
+    assert!(result.hints.iter().any(|h| h.contains("synthesize")));
 }

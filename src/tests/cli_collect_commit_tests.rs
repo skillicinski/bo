@@ -21,7 +21,7 @@ fn dedup_reads_state_not_legacy_index() {
         tree: TreeMetadata {
             name: "state-dedup-tree".to_string(),
             created_at: Timestamp::parse("2026-05-19T12:00:00Z").unwrap(),
-            last_compiled_at: None,
+            last_synthesized_at: None,
         },
         leaves: vec![crate::domain::Leaf {
             slug: Slug::parse("already-collected").unwrap(),

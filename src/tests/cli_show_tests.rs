@@ -341,7 +341,7 @@ fn write_state(tree: &Path, entries: &[(&str, &str)]) {
         tree: crate::domain::state::TreeMetadata {
             name: "test".to_string(),
             created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
-            last_compiled_at: None,
+            last_synthesized_at: None,
         },
         leaves,
         branches: Vec::new(),

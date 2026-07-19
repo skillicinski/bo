@@ -69,7 +69,7 @@ fn make_state(dir: &Path, entries: &[(&str, &str, &str)]) {
             tree: TreeMetadata {
                 name: "query".to_string(),
                 created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
-                last_compiled_at: None,
+                last_synthesized_at: None,
             },
             leaves,
             branches: Vec::new(),
@@ -206,10 +206,10 @@ fn retrieve_missing_summary_uses_body_fallback() {
     assert!(results[0].summary.contains("Rust programming"));
 }
 
-// Retrieval must reach compiled branches, not just raw leaves — otherwise
-// `bo compile`'s synthesized output is invisible at retrieval time.
+// Retrieval must reach synthesized branches, not just raw leaves — otherwise
+// `bo synthesize`'s synthesized output is invisible at retrieval time.
 #[test]
-fn retrieve_returns_compiled_branch_when_no_leaf_matches() {
+fn retrieve_returns_synthesized_branch_when_no_leaf_matches() {
     let dir = TempDir::new().unwrap();
     let tree = dir.path();
 
@@ -231,7 +231,7 @@ fn retrieve_returns_compiled_branch_when_no_leaf_matches() {
         "The team won the final. Goals were scored in each half.",
     );
 
-    // A compiled branch synthesizing the concept the user asks about. Its body
+    // A synthesized branch synthesizing the concept the user asks about. Its body
     // mentions the query terms; no individual leaf does.
     fs::create_dir_all(tree.join("branch")).unwrap();
     fs::write(
@@ -252,7 +252,7 @@ fn retrieve_returns_compiled_branch_when_no_leaf_matches() {
         tree: TreeMetadata {
             name: "query".to_string(),
             created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
-            last_compiled_at: Some(Timestamp::parse("2025-01-01T00:00:00Z").unwrap()),
+            last_synthesized_at: Some(Timestamp::parse("2025-01-01T00:00:00Z").unwrap()),
         },
         leaves: vec![
             Leaf {
@@ -293,7 +293,7 @@ fn retrieve_returns_compiled_branch_when_no_leaf_matches() {
     assert_eq!(
         results[0].kind,
         DocKind::Branch,
-        "the matching document must be the compiled branch"
+        "the matching document must be the synthesized branch"
     );
 
     // The branch must be a citable source after synthesis.
@@ -344,7 +344,7 @@ fn scorer_leaf_and_branch_equal_scores_for_identical_content() {
         tree: TreeMetadata {
             name: "test".to_string(),
             created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
-            last_compiled_at: Some(Timestamp::parse("2025-01-01T00:00:00Z").unwrap()),
+            last_synthesized_at: Some(Timestamp::parse("2025-01-01T00:00:00Z").unwrap()),
         },
         leaves: vec![Leaf {
             slug: Slug::generate("topic", ""),

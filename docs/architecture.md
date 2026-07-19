@@ -48,7 +48,7 @@ Dependencies within one layer are allowed, but cycles should be removed when the
 ### Layer ownership
 
 - **`main.rs` — process shell and composition root.** Owns argument parsing, process-wide tracing, stdout/stderr, exit codes, and construction of command dependencies. Keep domain policy out of it.
-- **`cli` — command application layer.** Owns command-specific orchestration, policy, intermediate stage contracts, and human/JSON rendering. "A stale branch must be repaired during compile" belongs here. Command-specific I/O may remain here.
+- **`cli` — command application layer.** Owns command-specific orchestration, policy, intermediate stage contracts, and human/JSON rendering. "A stale branch must be repaired during synthesis" belongs here. Command-specific I/O may remain here.
 - **`adapters` — source-specific integrations.** Translates external protocols that do not belong to a generic engine capability. The current top-level adapter is YouTube ingestion, selected by `cli::collect`. It has no bo-layer dependencies today.
 - **`engine` — reusable capabilities.** Owns command-neutral fetching, extraction, persistence, retrieval, LLM transport, retry policy, and other shared operations. A function belongs here only when its name and signature contain no command-specific vocabulary. Engine never imports CLI or top-level adapters.
 - **`domain` — side-effect-free model and format contracts.** Owns entities, validated values, topology rules, serialization shapes, path naming, and document formatting. It performs no filesystem, network, or process I/O and imports no outer bo layer.

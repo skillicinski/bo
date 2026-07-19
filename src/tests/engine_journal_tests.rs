@@ -13,6 +13,29 @@ fn missing_journal_reads_as_empty() {
 }
 
 #[test]
+fn old_schema_events_are_not_read() {
+    let dir = tree_dir();
+    let path = journal_path(dir.path());
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        r#"{"schema_version":1,"ts":"2026-01-01T00:00:00.000Z","op":"collect","actor":"system","payload":{}}
+"#,
+    )
+    .unwrap();
+    append(
+        dir.path(),
+        &Event::system(Op::Query, None, serde_json::json!({})),
+    );
+
+    let events = read_recent(dir.path(), 20);
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].schema_version, 2);
+    assert_eq!(events[0].op, Op::Query);
+}
+
+#[test]
 fn append_then_read_roundtrip_preserves_order() {
     let dir = tree_dir();
     append(
@@ -135,13 +158,13 @@ fn append_payload_serializes_typed_struct() {
     }
     append_payload(
         dir.path(),
-        Op::Compile,
+        Op::Synthesize,
         Some("gpt-4.1".into()),
         &Payload { mode: "full", n: 3 },
     );
     let events = read_recent(dir.path(), 20);
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].op, Op::Compile);
+    assert_eq!(events[0].op, Op::Synthesize);
     assert_eq!(events[0].model.as_deref(), Some("gpt-4.1"));
     assert_eq!(events[0].payload["mode"], "full");
     assert_eq!(events[0].payload["n"], serde_json::json!(3));
@@ -156,4 +179,19 @@ fn model_is_omitted_when_none() {
     );
     let raw = std::fs::read_to_string(journal_path(dir.path())).unwrap();
     assert!(!raw.contains("model"), "raw line was: {raw}");
+}
+
+#[test]
+fn synthesize_event_serializes_schema_2_and_snake_case_op() {
+    // The serialized journal line is the public on-disk contract: schema_version
+    // must be 2 and the synthesize op must serialize as the snake_case "synthesize".
+    let dir = tree_dir();
+    append(
+        dir.path(),
+        &Event::system(Op::Synthesize, None, serde_json::json!({})),
+    );
+    let raw = std::fs::read_to_string(journal_path(dir.path())).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
+    assert_eq!(parsed["schema_version"], 2);
+    assert_eq!(parsed["op"], "synthesize");
 }

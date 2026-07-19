@@ -178,7 +178,7 @@ impl Tool for EchoTool {
 }
 
 /// A terminal tool. Fails (validation feedback) when arguments contain "fail",
-/// otherwise terminates the loop. Mirrors submit_compile's contract.
+/// otherwise terminates the loop. Mirrors submit_synthesis's contract.
 struct TerminalTool {
     calls: Counter,
 }

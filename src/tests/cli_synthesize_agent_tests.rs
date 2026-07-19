@@ -46,12 +46,12 @@ fn leaf_record(slug: &str, file: &str, title: &str, collected_at: &str) -> Leaf 
     }
 }
 
-fn fresh_state(name: &str, created_at: &str, last_compiled_at: Option<&str>) -> TreeState {
+fn fresh_state(name: &str, created_at: &str, last_synthesized_at: Option<&str>) -> TreeState {
     TreeState {
         tree: TreeMetadata {
             name: name.to_string(),
             created_at: Timestamp::parse(created_at).unwrap(),
-            last_compiled_at: last_compiled_at.map(|s| Timestamp::parse(s).unwrap()),
+            last_synthesized_at: last_synthesized_at.map(|s| Timestamp::parse(s).unwrap()),
         },
         leaves: Vec::new(),
         branches: Vec::new(),
@@ -302,7 +302,7 @@ fn agent_provides_six_tools_including_read_branch() {
         let (cfg, state, loaded) = setup_incremental_tree(dir.path());
         let provider = ScriptedAgentProvider::new(vec![agent_tool_response(
             "submit",
-            "submit_compile",
+            "submit_synthesis",
             &submission,
         )]);
         let model = agent_model();
@@ -323,7 +323,7 @@ fn agent_provides_six_tools_including_read_branch() {
                 "read_branch",
                 "read_leaf",
                 "search_corpus",
-                "submit_compile",
+                "submit_synthesis",
             ]
             .into_iter()
             .collect(),
@@ -383,7 +383,7 @@ fn agent_read_branch_returns_body_leaves_and_handles_pagination() {
         agent_tool_response("rb1", "read_branch", r#"{"slug":"branch/existing"}"#),
         agent_tool_response("rb2", "read_branch", r#"{"slug":"existing"}"#),
         agent_tool_response("rb3", "read_branch", &pagination_args),
-        agent_tool_response("submit", "submit_compile", &submission),
+        agent_tool_response("submit", "submit_synthesis", &submission),
     ]);
     let model = agent_model();
 
@@ -432,7 +432,7 @@ fn agent_read_branch_rejects_unknown_slugs() {
         let args = serde_json::json!({"slug": identifier}).to_string();
         let provider = ScriptedAgentProvider::new(vec![
             agent_tool_response("rb", "read_branch", &args),
-            agent_tool_response("submit", "submit_compile", &submission),
+            agent_tool_response("submit", "submit_synthesis", &submission),
         ]);
         let model = agent_model();
 
@@ -464,7 +464,7 @@ fn agent_read_leaf_rejects_branch_identifiers_with_hint() {
         let args = serde_json::json!({"slug": identifier}).to_string();
         let provider = ScriptedAgentProvider::new(vec![
             agent_tool_response("rl", "read_leaf", &args),
-            agent_tool_response("submit", "submit_compile", &submission),
+            agent_tool_response("submit", "submit_synthesis", &submission),
         ]);
         let model = agent_model();
 
@@ -494,7 +494,7 @@ fn agent_incremental_branch_identifier_round_trips_from_list_branches() {
         incremental_update_submission("branch/existing", &["leaf-c", "leaf-d", "leaf-a"]);
     let provider = ScriptedAgentProvider::new(vec![
         agent_tool_response("list_branches", "list_branches", "{}"),
-        agent_tool_response("submit", "submit_compile", &submission),
+        agent_tool_response("submit", "submit_synthesis", &submission),
     ]);
     let model = agent_model();
 
@@ -531,7 +531,7 @@ fn agent_incremental_bare_branch_slug_still_validates() {
     let submission = incremental_update_submission("existing", &["leaf-c", "leaf-d", "leaf-a"]);
     let provider = ScriptedAgentProvider::new(vec![agent_tool_response(
         "submit",
-        "submit_compile",
+        "submit_synthesis",
         &submission,
     )]);
     let model = agent_model();
@@ -580,7 +580,7 @@ fn agent_rejects_branch_identifiers_in_leaf_lists_with_teaching_hint() {
             incremental_update_submission("existing", &["leaf-c", "leaf-d", identifier]);
         let provider = ScriptedAgentProvider::new(vec![agent_tool_response(
             "submit",
-            "submit_compile",
+            "submit_synthesis",
             &submission,
         )]);
         let model = agent_model();

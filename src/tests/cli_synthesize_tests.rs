@@ -20,7 +20,7 @@ fn degenerate_warning_when_single_branch_for_many_leaves() {
         64,
     );
     let msg = warning.expect("expected a degenerate warning");
-    assert!(msg.contains("degenerate compile result"));
+    assert!(msg.contains("degenerate synthesis result"));
     assert!(msg.contains("1 branch"));
     assert!(msg.contains("64 leaves"));
 }
@@ -37,7 +37,7 @@ fn degenerate_warning_when_most_leaves_unbranched() {
         30,
     );
     let msg = warning.expect("expected a degenerate warning");
-    assert!(msg.contains("degenerate compile result"));
+    assert!(msg.contains("degenerate synthesis result"));
     assert!(msg.contains("25 of 30 leaves unbranched"));
 }
 
@@ -79,7 +79,7 @@ fn degenerate_warning_low_coverage_ratio() {
         66,
     );
     let msg = warning.expect("expected a degenerate warning from low coverage ratio");
-    assert!(msg.contains("degenerate compile result"));
+    assert!(msg.contains("degenerate synthesis result"));
     assert!(msg.contains("only 15 of 66 leaves placed in branches"));
 }
 

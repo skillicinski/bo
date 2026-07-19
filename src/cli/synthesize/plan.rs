@@ -63,18 +63,9 @@ pub(super) fn select_run_mode(options: SynthesisOptions, state: &TreeState) -> S
 }
 
 pub(super) fn select_new_leaf_slugs(state: &TreeState) -> Result<Vec<String>, SynthesisError> {
-    let Some(last_compiled_at) = &state.tree.last_compiled_at else {
-        return Ok(state
-            .leaves
-            .iter()
-            .map(|leaf| leaf.slug.as_str().to_string())
-            .collect());
-    };
-
     Ok(state
-        .leaves
-        .iter()
-        .filter(|leaf| &leaf.collected_at > last_compiled_at)
+        .unsynthesized_leaves()
+        .into_iter()
         .map(|leaf| leaf.slug.as_str().to_string())
         .collect())
 }
@@ -297,7 +288,7 @@ fn finalize_state_delta(
         tree: TreeMetadata {
             name: current.tree.name.clone(),
             created_at: current.tree.created_at.clone(),
-            last_compiled_at: Some(run_timestamp.clone()),
+            last_synthesized_at: Some(run_timestamp.clone()),
         },
         leaves: current.leaves.clone(),
         branches: new_branches,

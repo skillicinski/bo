@@ -31,8 +31,8 @@ pub fn render_human<W: Write>(
         match result.reason.as_deref() {
             Some("empty_tree") => writeln!(stdout, "{} is empty", tree_name)?,
             Some("single_leaf") => writeln!(stdout, "{} only has 1 leaf", tree_name)?,
-            Some(NO_NEW_LEAVES_REASON) => writeln!(stdout, "nothing new to compile")?,
-            _ => writeln!(stdout, "compiled: no work to do")?,
+            Some(NO_NEW_LEAVES_REASON) => writeln!(stdout, "nothing new to synthesize")?,
+            _ => writeln!(stdout, "synthesized: no work to do")?,
         };
         write_notifications(&result.notifications, stdout)?;
         return Ok(());
@@ -45,9 +45,9 @@ pub fn render_human<W: Write>(
 
 fn render_summary_human<W: Write>(result: &SynthesisResult, stdout: &mut W) -> io::Result<()> {
     if let (Some(mode), Some(model)) = (&result.mode, &result.model) {
-        writeln!(stdout, "compiled ({mode:?}) using {model}")?;
+        writeln!(stdout, "synthesized ({mode:?}) using {model}")?;
     } else {
-        writeln!(stdout, "compiled")?;
+        writeln!(stdout, "synthesized")?;
     }
 
     if result.branches.is_empty() {
@@ -110,7 +110,7 @@ pub fn render_preview_human<W: Write>(
         match preview.reason.as_deref() {
             Some("empty_tree") => writeln!(stdout, "{} is empty", tree_name)?,
             Some("single_leaf") => writeln!(stdout, "{} only has 1 leaf", tree_name)?,
-            Some(NO_NEW_LEAVES_REASON) => writeln!(stdout, "nothing new to compile")?,
+            Some(NO_NEW_LEAVES_REASON) => writeln!(stdout, "nothing new to synthesize")?,
             _ => writeln!(stdout, "nothing to preview")?,
         };
         writeln!(stdout, "dry run: no files were written")?;

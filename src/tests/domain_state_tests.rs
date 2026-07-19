@@ -14,7 +14,7 @@ fn resolution_fixture() -> TreeState {
         tree: TreeMetadata {
             name: "fixture".to_string(),
             created_at: Timestamp::parse("2026-05-19T13:00:00Z").unwrap(),
-            last_compiled_at: Some(Timestamp::parse("2026-05-19T15:00:00Z").unwrap()),
+            last_synthesized_at: Some(Timestamp::parse("2026-05-19T15:00:00Z").unwrap()),
         },
         leaves: vec![
             Leaf {
@@ -77,27 +77,27 @@ fn branch_by_slug_returns_none_for_unknown_slug() {
 }
 
 #[test]
-fn uncompiled_leaves_returns_only_those_collected_after_last_compile() {
+fn unsynthesized_leaves_returns_only_those_collected_after_last_synthesis() {
     let m = resolution_fixture();
-    let uncompiled = m.uncompiled_leaves();
-    assert_eq!(uncompiled.len(), 1);
-    assert_eq!(uncompiled[0].slug.as_str(), "gamma");
+    let unsynthesized = m.unsynthesized_leaves();
+    assert_eq!(unsynthesized.len(), 1);
+    assert_eq!(unsynthesized[0].slug.as_str(), "gamma");
 }
 
 #[test]
-fn uncompiled_leaves_returns_all_when_never_compiled() {
+fn unsynthesized_leaves_returns_all_when_never_synthesized() {
     let mut m = resolution_fixture();
-    m.tree.last_compiled_at = None;
-    let uncompiled = m.uncompiled_leaves();
-    assert_eq!(uncompiled.len(), 3);
+    m.tree.last_synthesized_at = None;
+    let unsynthesized = m.unsynthesized_leaves();
+    assert_eq!(unsynthesized.len(), 3);
 }
 
 #[test]
-fn uncompiled_leaves_empty_when_all_predate_last_compile() {
+fn unsynthesized_leaves_empty_when_all_predate_last_synthesis() {
     let mut m = resolution_fixture();
     m.leaves.retain(|l| l.slug.as_str() != "gamma");
-    let uncompiled = m.uncompiled_leaves();
-    assert!(uncompiled.is_empty());
+    let unsynthesized = m.unsynthesized_leaves();
+    assert!(unsynthesized.is_empty());
 }
 
 #[test]

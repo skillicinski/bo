@@ -39,9 +39,9 @@ fn collect_renders_item_counts() {
 }
 
 #[test]
-fn compile_success_renders_branch_counts() {
+fn synthesize_success_renders_branch_counts() {
     let e = event(
-        Op::Compile,
+        Op::Synthesize,
         Some("gpt-4.1"),
         json!({
             "mode": "full",
@@ -60,9 +60,9 @@ fn compile_success_renders_branch_counts() {
 }
 
 #[test]
-fn compile_failure_renders_validation_message() {
+fn synthesize_failure_renders_validation_message() {
     let e = event(
-        Op::Compile,
+        Op::Synthesize,
         Some("gpt-4.1"),
         json!({
             "mode": "incremental",
@@ -79,9 +79,9 @@ fn compile_failure_renders_validation_message() {
 }
 
 #[test]
-fn compile_error_renders_code_and_message() {
+fn synthesize_error_renders_code_and_message() {
     let e = event(
-        Op::Compile,
+        Op::Synthesize,
         Some("gpt-4.1"),
         json!({
             "mode": "full",
@@ -90,12 +90,12 @@ fn compile_error_renders_code_and_message() {
             "branches_updated": [],
             "branches_deleted": [],
             "validation_failures": [],
-            "error": {"code": "truncated", "message": "compile output was truncated"},
+            "error": {"code": "truncated", "message": "synthesis output was truncated"},
             "duration_ms": 5000
         }),
     );
     let out = render_human(&JournalResult { events: vec![e] });
-    assert!(out.contains("full  error: truncated: compile output was truncated"));
+    assert!(out.contains("full  error: truncated: synthesis output was truncated"));
 }
 
 #[test]
