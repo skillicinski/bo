@@ -1,6 +1,6 @@
 use super::*;
-use crate::cli::compile::types::{CompileOptions, CompileRunMode};
-use crate::cli::compile::validation::{CompilePlan, ValidatedBranch};
+use crate::cli::synthesize::types::{SynthesisMode, SynthesisOptions};
+use crate::cli::synthesize::validation::{SynthesisPlan, ValidatedBranch};
 use crate::domain::slug::Slug;
 use crate::domain::state::TreeState;
 use crate::domain::{Branch, Timestamp, Title};
@@ -26,14 +26,14 @@ fn select_run_mode_forces_full_when_no_branches_exist() {
     let state = fresh_state("t", "2026-01-01T00:00:00Z", None);
     assert_eq!(
         select_run_mode(
-            CompileOptions {
+            SynthesisOptions {
                 all: false,
                 ..Default::default()
             },
             &state
         ),
-        CompileRunMode::Full,
-        "fresh tree with no branches must compile full even without --all"
+        SynthesisMode::Full,
+        "fresh tree with no branches must use full synthesis even without --all"
     );
 }
 
@@ -51,24 +51,24 @@ fn select_run_mode_incremental_only_with_branches_and_no_all() {
 
     assert_eq!(
         select_run_mode(
-            CompileOptions {
+            SynthesisOptions {
                 all: false,
                 ..Default::default()
             },
             &state
         ),
-        CompileRunMode::Incremental,
+        SynthesisMode::Incremental,
         "tree with branches and no --all runs incremental"
     );
     assert_eq!(
         select_run_mode(
-            CompileOptions {
+            SynthesisOptions {
                 all: true,
                 ..Default::default()
             },
             &state
         ),
-        CompileRunMode::Full,
+        SynthesisMode::Full,
         "--all always forces full"
     );
 }
@@ -77,7 +77,7 @@ fn select_run_mode_incremental_only_with_branches_and_no_all() {
 
 #[test]
 fn build_state_delta_allows_one_leaf_in_multiple_branches() {
-    let plan = CompilePlan {
+    let plan = SynthesisPlan {
         branches: vec![
             ValidatedBranch {
                 slug: "concept-a".to_string(),
@@ -96,7 +96,7 @@ fn build_state_delta_allows_one_leaf_in_multiple_branches() {
 
     let current = fresh_state("t", "2026-01-01T00:00:00Z", None);
     let ts = Timestamp::parse("2026-06-28T00:00:00Z").unwrap();
-    let delta = build_state_delta(&current, &plan, CompileRunMode::Full, &ts).unwrap();
+    let delta = build_state_delta(&current, &plan, SynthesisMode::Full, &ts).unwrap();
 
     assert_eq!(delta.new_state.branches.len(), 2);
     assert_eq!(

@@ -6,7 +6,7 @@
 
 mod common;
 
-use bo::cli::compile;
+use bo::cli::synthesize;
 use bo::domain::Timestamp;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -252,9 +252,9 @@ fn dry_run_blocked_by_unfinished_transaction_writes_zero() {
 
     let before = common::snapshot_tree(tree_dir);
 
-    let outcome = compile::run_compile_dry_run(
+    let outcome = synthesize::run_dry_run(
         &cfg,
-        compile::CompileOptions {
+        synthesize::SynthesisOptions {
             all: false,
             agent: false,
             dry_run: true,
@@ -262,7 +262,7 @@ fn dry_run_blocked_by_unfinished_transaction_writes_zero() {
     );
 
     match outcome.result {
-        Err(compile::CompileError::DryRunBlocked(msg)) => {
+        Err(synthesize::SynthesisError::DryRunBlocked(msg)) => {
             assert!(
                 msg.contains("unfinished transaction"),
                 "expected transaction message, got: {msg}"
@@ -302,9 +302,9 @@ fn dry_run_blocked_by_stale_repair_writes_zero() {
     let state_hash = bo::engine::transaction::state_hash(tree_dir).unwrap();
     let before = common::snapshot_tree(tree_dir);
 
-    let outcome = compile::run_compile_dry_run(
+    let outcome = synthesize::run_dry_run(
         &cfg,
-        compile::CompileOptions {
+        synthesize::SynthesisOptions {
             all: false,
             agent: false,
             dry_run: true,
@@ -312,7 +312,7 @@ fn dry_run_blocked_by_stale_repair_writes_zero() {
     );
 
     match outcome.result {
-        Err(compile::CompileError::DryRunBlocked(msg)) => {
+        Err(synthesize::SynthesisError::DryRunBlocked(msg)) => {
             assert!(
                 msg.contains("repair"),
                 "expected repair message, got: {msg}"
@@ -375,9 +375,9 @@ fn agent_dry_run_with_scripted_provider_produces_preview_and_zero_writes() {
     ];
     let provider = ScriptedAgentProvider::new(script);
 
-    let outcome = compile::run_compile_dry_run_with_provider(
+    let outcome = synthesize::run_dry_run_with_provider(
         &cfg,
-        compile::CompileOptions {
+        synthesize::SynthesisOptions {
             all: false,
             agent: true,
             dry_run: true,
@@ -438,9 +438,9 @@ fn one_shot_dry_run_with_scripted_provider_produces_preview() {
         response: valid_plan,
     };
 
-    let outcome = compile::run_compile_dry_run_with_provider(
+    let outcome = synthesize::run_dry_run_with_provider(
         &cfg,
-        compile::CompileOptions {
+        synthesize::SynthesisOptions {
             all: false,
             agent: false,
             dry_run: true,
@@ -508,9 +508,9 @@ fn agent_dry_run_validation_feedback_then_success() {
     ];
     let provider = ScriptedAgentProvider::new(script);
 
-    let outcome = compile::run_compile_dry_run_with_provider(
+    let outcome = synthesize::run_dry_run_with_provider(
         &cfg,
-        compile::CompileOptions {
+        synthesize::SynthesisOptions {
             all: false,
             agent: true,
             dry_run: true,
@@ -553,9 +553,9 @@ fn agent_dry_run_unsupported_provider_errors_with_actionable_message() {
         response: "irrelevant".to_string(),
     };
 
-    let outcome = compile::run_compile_dry_run_with_provider(
+    let outcome = synthesize::run_dry_run_with_provider(
         &cfg,
-        compile::CompileOptions {
+        synthesize::SynthesisOptions {
             all: false,
             agent: true,
             dry_run: true,
@@ -568,7 +568,7 @@ fn agent_dry_run_unsupported_provider_errors_with_actionable_message() {
         .result
         .expect_err("expected an error for an unsupported provider");
     assert!(
-        matches!(err, compile::CompileError::AgentFailed { .. }),
+        matches!(err, synthesize::SynthesisError::AgentFailed { .. }),
         "expected AgentFailed, got {err:?}"
     );
     let msg = err.to_string();
@@ -608,9 +608,9 @@ fn agent_dry_run_limit_failure_surfaces_diagnostics_in_json() {
         .collect();
     let provider = ScriptedAgentProvider::new(script);
 
-    let outcome = compile::run_compile_dry_run_with_provider(
+    let outcome = synthesize::run_dry_run_with_provider(
         &cfg,
-        compile::CompileOptions {
+        synthesize::SynthesisOptions {
             all: false,
             agent: true,
             dry_run: true,

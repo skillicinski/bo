@@ -1,9 +1,9 @@
-// ── compile output rendering ──────────────────────────────────────────────────
+// ── synthesis output rendering ───────────────────────────────────────────────
 
 use std::io::{self, Write};
 
 use super::types::NO_NEW_LEAVES_REASON;
-use super::{CompilePreview, CompileResult};
+use super::{SynthesisPreview, SynthesisResult};
 
 /// Render stderr-bound diagnostic/progress lines (title-collision warnings,
 /// transaction-recovery notices, per-branch write progress) collected during the
@@ -23,7 +23,7 @@ fn write_notifications<W: Write>(notifications: &[String], stdout: &mut W) -> io
 }
 
 pub fn render_human<W: Write>(
-    result: &CompileResult,
+    result: &SynthesisResult,
     stdout: &mut W,
     tree_name: &str,
 ) -> io::Result<()> {
@@ -43,7 +43,7 @@ pub fn render_human<W: Write>(
     Ok(())
 }
 
-fn render_summary_human<W: Write>(result: &CompileResult, stdout: &mut W) -> io::Result<()> {
+fn render_summary_human<W: Write>(result: &SynthesisResult, stdout: &mut W) -> io::Result<()> {
     if let (Some(mode), Some(model)) = (&result.mode, &result.model) {
         writeln!(stdout, "compiled ({mode:?}) using {model}")?;
     } else {
@@ -102,7 +102,7 @@ fn render_summary_human<W: Write>(result: &CompileResult, stdout: &mut W) -> io:
 // ── dry-run preview rendering ────────────────────────────────────────────────
 
 pub fn render_preview_human<W: Write>(
-    preview: &CompilePreview,
+    preview: &SynthesisPreview,
     stdout: &mut W,
     tree_name: &str,
 ) -> io::Result<()> {
@@ -125,7 +125,7 @@ pub fn render_preview_human<W: Write>(
 }
 
 fn render_preview_summary_human<W: Write>(
-    preview: &CompilePreview,
+    preview: &SynthesisPreview,
     stdout: &mut W,
 ) -> io::Result<()> {
     if let (Some(mode), Some(model)) = (&preview.mode, Some(&preview.model)) {

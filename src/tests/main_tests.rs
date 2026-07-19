@@ -1,7 +1,7 @@
 use super::*;
 use async_trait::async_trait;
-use bo::cli::compile::{CompileError, CompileResult};
 use bo::cli::json as json_output;
+use bo::cli::synthesize::{SynthesisError, SynthesisResult};
 use bo::domain::tree::TreeConfig;
 use bo::domain::{Slug, Timestamp, Title, Url};
 use bo::engine::llm::LlmProvider;
@@ -52,7 +52,7 @@ fn compile_flags_default_false() {
 
 #[test]
 fn compile_noop_human_output_is_exact_message() {
-    let result = CompileResult {
+    let result = SynthesisResult {
         status: "noop".to_string(),
         reason: Some("no new leaves since last compile".to_string()),
         mode: None,
@@ -65,7 +65,7 @@ fn compile_noop_human_output_is_exact_message() {
     };
     let mut stdout = Vec::new();
 
-    compile::render_human(&result, &mut stdout, "test-tree").unwrap();
+    synthesize::render_human(&result, &mut stdout, "test-tree").unwrap();
 
     assert_eq!(
         String::from_utf8(stdout).unwrap(),
@@ -75,7 +75,7 @@ fn compile_noop_human_output_is_exact_message() {
 
 #[test]
 fn compile_noop_json_data_contains_reason() {
-    let result = CompileResult {
+    let result = SynthesisResult {
         status: "noop".to_string(),
         reason: Some("no new leaves since last compile".to_string()),
         mode: None,
@@ -95,7 +95,7 @@ fn compile_noop_json_data_contains_reason() {
 
 #[test]
 fn compile_context_overflow_json_recommends_compile_model() {
-    let error = CompileError::ContextOverflow {
+    let error = SynthesisError::ContextOverflow {
         model: "gpt-4o-mini".to_string(),
         estimated_tokens: Some(250_000),
         context_tokens: Some(128_000),
@@ -118,13 +118,13 @@ fn compile_context_overflow_json_recommends_compile_model() {
 
 #[test]
 fn compile_validation_json_error_includes_next_action() {
-    let error = CompileError::Validation("invalid compile response".to_string()).json_error();
+    let error = SynthesisError::Validation("invalid compile response".to_string()).json_error();
 
     assert_eq!(error.code, "validation_error");
     assert_eq!(error.message, "invalid compile response");
     assert_eq!(error.details["phase"], "compile_validation");
     assert_eq!(error.details["files_changed"], false);
-    assert_eq!(error.details["next_step"], compile::VALIDATION_NEXT_STEP);
+    assert_eq!(error.details["next_step"], synthesize::VALIDATION_NEXT_STEP);
 }
 
 #[test]

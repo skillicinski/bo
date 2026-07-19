@@ -1,4 +1,4 @@
-// Live DeepSeek smoke tests for the agent compile path.
+// Live DeepSeek smoke tests for the agent synthesis path.
 //
 // Requires DEEPSEEK_API_KEY in the environment.
 // Marked `#[ignore]` so CI stays key-free.
@@ -8,7 +8,7 @@
 
 mod common;
 
-use bo::cli::compile::{self, CompileDryRunOutcome, CompileOptions};
+use bo::cli::synthesize::{self, SynthesisDryRunOutcome, SynthesisOptions};
 use bo::engine::llm::{self, LlmProvider, Model, Provider};
 
 fn run_dry_run_test(model_id: &str, provider: Box<dyn LlmProvider>, model: &Model) {
@@ -18,9 +18,9 @@ fn run_dry_run_test(model_id: &str, provider: Box<dyn LlmProvider>, model: &Mode
     // Snapshot tree before
     let before = common::snapshot_tree(dir.path());
 
-    let CompileDryRunOutcome { result, .. } = compile::run_compile_dry_run_with_provider(
+    let SynthesisDryRunOutcome { result, .. } = synthesize::run_dry_run_with_provider(
         &cfg,
-        CompileOptions {
+        SynthesisOptions {
             all: false,
             agent: true,
             dry_run: true,

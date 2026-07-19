@@ -1,5 +1,5 @@
 use super::*;
-use crate::cli::compile::types::{CompileError, CompileRunMode};
+use crate::cli::synthesize::types::{SynthesisError, SynthesisMode};
 use crate::domain::slug::Slug;
 use crate::domain::state::{TreeMetadata, TreeState};
 use crate::domain::{Branch, Leaf, Timestamp, Title, Url};
@@ -77,8 +77,8 @@ fn branch_record(slug: &str, title: &str, leaf_slugs: &[&str]) -> Branch {
     }
 }
 
-fn loaded_leaf(slug: &str, title: &str) -> crate::cli::compile::plan::LoadedLeaf {
-    crate::cli::compile::plan::LoadedLeaf {
+fn loaded_leaf(slug: &str, title: &str) -> crate::cli::synthesize::plan::LoadedLeaf {
+    crate::cli::synthesize::plan::LoadedLeaf {
         slug: slug.to_string(),
         filename: format!("{}.md", slug),
         title: title.to_string(),
@@ -130,7 +130,7 @@ impl LlmProvider for ScriptedAgentProvider {
         _: Option<&ProviderSchema>,
         _: bool,
     ) -> Result<LlmResponse, LlmError> {
-        unreachable!("agent compile tests only use complete_with_tools")
+        unreachable!("agent synthesis tests only use complete_with_tools")
     }
 
     async fn complete_with_tools(
@@ -203,7 +203,7 @@ fn setup_incremental_tree(
 ) -> (
     SeededConfig,
     TreeState,
-    Vec<crate::cli::compile::plan::LoadedLeaf>,
+    Vec<crate::cli::synthesize::plan::LoadedLeaf>,
 ) {
     let mut state = fresh_state("test", "2026-01-01T00:00:00Z", Some("2026-01-10T00:00:00Z"));
     state.leaves.push(leaf_record(
@@ -281,11 +281,11 @@ fn find_tool_result(
 fn agent_provides_six_tools_including_read_branch() {
     let cases = [
         (
-            CompileRunMode::Incremental,
+            SynthesisMode::Incremental,
             incremental_update_submission("branch/existing", &["leaf-c", "leaf-d", "leaf-a"]),
         ),
         (
-            CompileRunMode::Full,
+            SynthesisMode::Full,
             serde_json::json!({
                 "branches": [{
                     "title": "Full Branch",
@@ -393,7 +393,7 @@ fn agent_read_branch_returns_body_leaves_and_handles_pagination() {
         &model,
         &state,
         &loaded,
-        CompileRunMode::Incremental,
+        SynthesisMode::Incremental,
     )
     .expect("agent run should complete");
     assert_eq!(plan.branches[0].slug, "existing");
@@ -442,7 +442,7 @@ fn agent_read_branch_rejects_unknown_slugs() {
             &model,
             &state,
             &loaded,
-            CompileRunMode::Incremental,
+            SynthesisMode::Incremental,
         )
         .expect("agent run should complete");
         assert_eq!(plan.branches[0].slug, "existing");
@@ -474,7 +474,7 @@ fn agent_read_leaf_rejects_branch_identifiers_with_hint() {
             &model,
             &state,
             &loaded,
-            CompileRunMode::Incremental,
+            SynthesisMode::Incremental,
         )
         .expect("agent run should complete");
         assert_eq!(plan.branches[0].slug, "existing");
@@ -504,7 +504,7 @@ fn agent_incremental_branch_identifier_round_trips_from_list_branches() {
         &model,
         &state,
         &loaded,
-        CompileRunMode::Incremental,
+        SynthesisMode::Incremental,
     )
     .expect("branch/<slug> submission should validate");
 
@@ -542,7 +542,7 @@ fn agent_incremental_bare_branch_slug_still_validates() {
         &model,
         &state,
         &loaded,
-        CompileRunMode::Incremental,
+        SynthesisMode::Incremental,
     )
     .expect("bare branch slug submission should validate");
 
@@ -556,7 +556,7 @@ fn one_shot_incremental_rejects_branch_identifier_prefix() {
     let submission =
         incremental_update_submission("branch/existing", &["leaf-c", "leaf-d", "leaf-a"]);
 
-    let err = crate::cli::compile::parse::parse_and_validate_incremental_with_input_size(
+    let err = crate::cli::synthesize::parse::parse_and_validate_incremental_with_input_size(
         &submission,
         &cfg,
         &loaded,
@@ -566,7 +566,7 @@ fn one_shot_incremental_rejects_branch_identifier_prefix() {
     .expect_err("one-shot incremental validation must retain bare branch slugs");
 
     assert!(
-        matches!(err, CompileError::Validation(ref message) if message.contains("unknown branch 'branch/existing'")),
+        matches!(err, SynthesisError::Validation(ref message) if message.contains("unknown branch 'branch/existing'")),
         "expected bare-slug validation failure, got: {err:?}"
     );
 }
@@ -591,12 +591,12 @@ fn agent_rejects_branch_identifiers_in_leaf_lists_with_teaching_hint() {
             &model,
             &state,
             &loaded,
-            CompileRunMode::Incremental,
+            SynthesisMode::Incremental,
         )
         .expect_err("branch identifiers must not resolve as leaves");
 
         match err {
-            CompileError::AgentFailed {
+            SynthesisError::AgentFailed {
                 last_error: Some(message),
                 ..
             } => {

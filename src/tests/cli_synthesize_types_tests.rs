@@ -2,11 +2,11 @@ use super::*;
 use crate::cli::json;
 
 #[test]
-fn compile_result_notifications_skipped_from_json() {
-    let result = CompileResult {
+fn synthesis_result_notifications_skipped_from_json() {
+    let result = SynthesisResult {
         status: "compiled".to_string(),
         reason: None,
-        mode: Some(CompileRunMode::Full),
+        mode: Some(SynthesisMode::Full),
         model: Some("gpt-4.1".to_string()),
         branches: vec![BranchResult {
             slug: "test-branch".to_string(),
@@ -28,11 +28,11 @@ fn compile_result_notifications_skipped_from_json() {
 }
 
 #[test]
-fn compile_result_warnings_skipped_from_json() {
-    let result = CompileResult {
+fn synthesis_result_warnings_skipped_from_json() {
+    let result = SynthesisResult {
         status: "compiled".to_string(),
         reason: None,
-        mode: Some(CompileRunMode::Full),
+        mode: Some(SynthesisMode::Full),
         model: Some("gpt-4.1".to_string()),
         branches: vec![BranchResult {
             slug: "test-branch".to_string(),

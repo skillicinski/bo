@@ -1,4 +1,4 @@
-// ── compile types: options, outcomes, errors, constants ──────────────────────
+// ── synthesis types: options, outcomes, errors, constants ────────────────────
 
 use std::time::Duration;
 
@@ -12,25 +12,25 @@ use crate::engine::transaction;
 // ── constants ─────────────────────────────────────────────────────────────────
 
 pub(super) const MAX_COMPLETION_TOKENS: u32 = 16384;
-pub(super) const MAX_COMPILED_BODY_BYTES_MIN: usize = 16 * 1024;
-pub(super) const MAX_COMPILED_BODY_BYTES_PER_INPUT_BYTE: usize = 8;
-pub(super) const COMPILE_PROMPT_OVERHEAD_TOKENS: usize = 4096;
+pub(super) const MAX_SYNTHESIZED_BODY_BYTES_MIN: usize = 16 * 1024;
+pub(super) const MAX_SYNTHESIZED_BODY_BYTES_PER_INPUT_BYTE: usize = 8;
+pub(super) const SYNTHESIS_PROMPT_OVERHEAD_TOKENS: usize = 4096;
 pub(super) const TOKEN_ESTIMATE_BYTES_PER_TOKEN: usize = 4;
 pub(super) const NO_NEW_LEAVES_REASON: &str = "no new leaves since last compile";
-const COMPILE_MODEL_NEXT_STEPS: [&str; 2] = [
+const SYNTHESIS_MODEL_NEXT_STEPS: [&str; 2] = [
     "bo config --compile-model gpt-4.1-mini",
     "bo config --compile-model gpt-4.1",
 ];
 
 pub const VALIDATION_NEXT_STEP: &str = "No files were changed. Try `bo compile` again; if this repeats, switch models with `bo config --model <model>` or report the validation message.";
 
-pub(super) const COMPILE_LLM_POLICY: LlmCallPolicy = LlmCallPolicy {
+pub(super) const SYNTHESIS_LLM_POLICY: LlmCallPolicy = LlmCallPolicy {
     timeout: Duration::from_secs(180),
     max_attempts: 3,
     initial_backoff: Duration::from_secs(2),
 };
 
-/// Leaf count threshold above which Full mode switches to two-stage compile.
+/// Leaf count threshold above which Full mode switches to two-stage synthesis.
 pub(super) const TWO_STAGE_FULL_THRESHOLD: usize = 40;
 
 /// New-leaf count threshold above which Incremental mode switches to two-stage.
@@ -39,7 +39,7 @@ pub(super) const TWO_STAGE_INCREMENTAL_THRESHOLD: usize = 15;
 // ── errors ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
-pub enum CompileError {
+pub enum SynthesisError {
     /// Collection exceeds the model's context window.
     ContextOverflow {
         model: String,
@@ -75,43 +75,43 @@ pub enum CompileError {
     },
 }
 
-impl std::fmt::Display for CompileError {
+impl std::fmt::Display for SynthesisError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CompileError::ContextOverflow { model, .. } => write!(
+            SynthesisError::ContextOverflow { model, .. } => write!(
                 f,
                 "compile model context is too small for '{}' — set a larger compile model, for example:\n{}\n{}",
-                model, COMPILE_MODEL_NEXT_STEPS[0], COMPILE_MODEL_NEXT_STEPS[1]
+                model, SYNTHESIS_MODEL_NEXT_STEPS[0], SYNTHESIS_MODEL_NEXT_STEPS[1]
             ),
-            CompileError::Truncated => write!(
+            SynthesisError::Truncated => write!(
                 f,
                 "compile output was truncated — try reducing collection size or \
                  using a model with larger output capacity"
             ),
-            CompileError::ContentFilter => write!(f, "compile was blocked by content filter"),
-            CompileError::Llm(msg) => write!(f, "LLM error: {}", msg),
-            CompileError::Io(msg) => write!(f, "{}", msg),
-            CompileError::Busy(msg) => write!(f, "{}", msg),
-            CompileError::Validation(msg) => write!(f, "{}\n{}", msg, VALIDATION_NEXT_STEP),
-            CompileError::DryRunBlocked(msg) => write!(f, "{}", msg),
-            CompileError::AgentFailed { message, .. } => write!(f, "{}", message),
+            SynthesisError::ContentFilter => write!(f, "compile was blocked by content filter"),
+            SynthesisError::Llm(msg) => write!(f, "LLM error: {}", msg),
+            SynthesisError::Io(msg) => write!(f, "{}", msg),
+            SynthesisError::Busy(msg) => write!(f, "{}", msg),
+            SynthesisError::Validation(msg) => write!(f, "{}\n{}", msg, VALIDATION_NEXT_STEP),
+            SynthesisError::DryRunBlocked(msg) => write!(f, "{}", msg),
+            SynthesisError::AgentFailed { message, .. } => write!(f, "{}", message),
         }
     }
 }
 
-impl From<transaction::TransactionError> for CompileError {
+impl From<transaction::TransactionError> for SynthesisError {
     fn from(error: transaction::TransactionError) -> Self {
         match error {
-            transaction::TransactionError::Busy { .. } => CompileError::Busy(error.to_string()),
-            other => CompileError::Io(other.to_string()),
+            transaction::TransactionError::Busy { .. } => SynthesisError::Busy(error.to_string()),
+            other => SynthesisError::Io(other.to_string()),
         }
     }
 }
 
-impl CompileError {
+impl SynthesisError {
     pub fn json_error(&self) -> JsonError {
         match self {
-            CompileError::ContextOverflow {
+            SynthesisError::ContextOverflow {
                 model,
                 estimated_tokens,
                 context_tokens,
@@ -122,15 +122,15 @@ impl CompileError {
                     "model": model,
                     "estimated_tokens": estimated_tokens,
                     "context_tokens": context_tokens,
-                    "next_steps": COMPILE_MODEL_NEXT_STEPS,
+                    "next_steps": SYNTHESIS_MODEL_NEXT_STEPS,
                 }),
             ),
-            CompileError::Truncated => JsonError::new("truncated", self.to_string()),
-            CompileError::ContentFilter => JsonError::new("content_filter", self.to_string()),
-            CompileError::Llm(_) => JsonError::new("llm_error", self.to_string()),
-            CompileError::Io(_) => JsonError::new("io_error", self.to_string()),
-            CompileError::Busy(_) => JsonError::new("tree_busy", self.to_string()),
-            CompileError::Validation(message) => JsonError::with_details(
+            SynthesisError::Truncated => JsonError::new("truncated", self.to_string()),
+            SynthesisError::ContentFilter => JsonError::new("content_filter", self.to_string()),
+            SynthesisError::Llm(_) => JsonError::new("llm_error", self.to_string()),
+            SynthesisError::Io(_) => JsonError::new("io_error", self.to_string()),
+            SynthesisError::Busy(_) => JsonError::new("tree_busy", self.to_string()),
+            SynthesisError::Validation(message) => JsonError::with_details(
                 "validation_error",
                 message.clone(),
                 json!({
@@ -139,12 +139,12 @@ impl CompileError {
                     "next_step": VALIDATION_NEXT_STEP,
                 }),
             ),
-            CompileError::DryRunBlocked(message) => JsonError::with_details(
+            SynthesisError::DryRunBlocked(message) => JsonError::with_details(
                 "dry_run_blocked",
                 message.clone(),
                 json!({ "files_changed": false }),
             ),
-            CompileError::AgentFailed {
+            SynthesisError::AgentFailed {
                 message,
                 turns,
                 tool_calls,
@@ -170,7 +170,7 @@ impl CompileError {
 // ── public types ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct CompileOptions {
+pub struct SynthesisOptions {
     pub all: bool,
     /// Use the iterative agent path. Requires `dry_run` in this milestone.
     pub agent: bool,
@@ -180,16 +180,16 @@ pub struct CompileOptions {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CompileRunMode {
+pub enum SynthesisMode {
     Incremental,
     Full,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct CompileResult {
+pub struct SynthesisResult {
     pub status: String,
     pub reason: Option<String>,
-    pub mode: Option<CompileRunMode>,
+    pub mode: Option<SynthesisMode>,
     pub model: Option<String>,
     pub branches: Vec<BranchResult>,
     pub leaves_processed: usize,
@@ -203,10 +203,10 @@ pub struct CompileResult {
     pub warnings: Vec<String>,
 }
 
-impl CompileResult {
-    pub fn compiled(
-        summary: CompileSummary,
-        mode: CompileRunMode,
+impl SynthesisResult {
+    pub fn synthesized(
+        summary: SynthesisSummary,
+        mode: SynthesisMode,
         model: &Model,
         notifications: Vec<String>,
     ) -> Self {
@@ -238,18 +238,18 @@ impl CompileResult {
     }
 }
 
-/// Outcome of a compile run: the typed result plus the stderr-bound diagnostic
+/// Outcome of a synthesis run: the typed result plus the stderr-bound diagnostic
 /// lines accumulated along the way. On success the lines also live on
-/// [`CompileResult::warnings`]; on failure they ride here so the CLI can render
+/// [`SynthesisResult::warnings`]; on failure they ride here so the CLI can render
 /// them (e.g. title-collision warnings that preceded a validation error) before
 /// the error itself. The pipeline never prints — the CLI renders post-run.
 #[derive(Debug)]
-pub struct CompileOutcome {
-    pub result: Result<CompileResult, CompileError>,
+pub struct SynthesisOutcome {
+    pub result: Result<SynthesisResult, SynthesisError>,
     pub(super) warnings: Vec<String>,
 }
 
-impl CompileOutcome {
+impl SynthesisOutcome {
     /// Stderr-bound lines, present on both the `Ok` and `Err` paths.
     pub fn stderr_lines(&self) -> &[String] {
         match &self.result {
@@ -261,15 +261,15 @@ impl CompileOutcome {
 
 // ── dry-run preview ──────────────────────────────────────────────────────────
 
-/// A validated, read-only compile preview. Both `--dry-run` paths produce
+/// A validated, read-only synthesis preview. Both `--dry-run` paths produce
 /// this contract: one-shot and agent. No bytes were written to produce it.
 #[derive(Debug, Clone, Serialize)]
-pub struct CompilePreview {
+pub struct SynthesisPreview {
     /// "preview" when a plan was validated, "noop" when there was nothing to
-    /// compile (empty tree, single leaf, no new leaves).
+    /// synthesize (empty tree, single leaf, no new leaves).
     pub status: String,
     pub reason: Option<String>,
-    pub mode: Option<CompileRunMode>,
+    pub mode: Option<SynthesisMode>,
     pub provider: String,
     pub model: String,
     pub starting_state_hash: String,
@@ -296,14 +296,14 @@ pub struct PreviewBranch {
 }
 
 /// Outcome of a dry-run: the typed preview plus stderr-bound diagnostics.
-/// Mirrors `CompileOutcome` so the CLI renders both through the same shape.
+/// Mirrors `SynthesisOutcome` so the CLI renders both through the same shape.
 #[derive(Debug)]
-pub struct CompileDryRunOutcome {
-    pub result: Result<CompilePreview, CompileError>,
+pub struct SynthesisDryRunOutcome {
+    pub result: Result<SynthesisPreview, SynthesisError>,
     pub(super) warnings: Vec<String>,
 }
 
-impl CompileDryRunOutcome {
+impl SynthesisDryRunOutcome {
     pub fn stderr_lines(&self) -> &[String] {
         match &self.result {
             Ok(preview) => &preview.warnings,
@@ -312,7 +312,7 @@ impl CompileDryRunOutcome {
     }
 }
 
-pub struct CompileSummary {
+pub struct SynthesisSummary {
     pub branches: Vec<BranchResult>,
     pub branches_created: Vec<BranchResult>,
     pub branches_updated: Vec<BranchResult>,
@@ -328,14 +328,14 @@ pub struct BranchResult {
     pub leaf_count: usize,
 }
 
-/// Two-stage compile telemetry, journaled in the compile event payload.
+/// Two-stage synthesis telemetry, journaled in the synthesis event payload.
 #[derive(Debug, Clone, Serialize)]
-pub(super) struct CompileStages {
+pub(super) struct SynthesisStages {
     pub(super) stage1_clusters: usize,
     pub(super) stage2_calls: usize,
 }
 
-pub fn result_warnings(result: &CompileResult) -> Vec<JsonWarning> {
+pub fn result_warnings(result: &SynthesisResult) -> Vec<JsonWarning> {
     let mut warnings = Vec::new();
 
     if !result.leaves_skipped.is_empty() {
@@ -358,7 +358,7 @@ pub fn result_warnings(result: &CompileResult) -> Vec<JsonWarning> {
     warnings
 }
 
-pub fn preview_warnings(preview: &CompilePreview) -> Vec<JsonWarning> {
+pub fn preview_warnings(preview: &SynthesisPreview) -> Vec<JsonWarning> {
     let mut warnings = Vec::new();
     if !preview.leaves_skipped.is_empty() {
         warnings.push(JsonWarning::with_details(
@@ -374,5 +374,5 @@ pub fn preview_warnings(preview: &CompilePreview) -> Vec<JsonWarning> {
 }
 
 #[cfg(test)]
-#[path = "../../tests/cli_compile_types_tests.rs"]
+#[path = "../../tests/cli_synthesize_types_tests.rs"]
 mod types_tests;

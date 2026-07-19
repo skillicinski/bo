@@ -10,7 +10,7 @@ use bo::domain::Timestamp;
 use bo::domain::{Title, Url};
 use std::fs;
 
-use bo::cli::compile;
+use bo::cli::synthesize;
 use bo::domain::state::{TreeMetadata, TreeState};
 use bo::domain::{Branch, Leaf};
 use bo::engine::config::SeededConfig;
@@ -65,7 +65,7 @@ fn crash_mid_compile_rollback_cleans_staged_files() {
 
     // Now run compile — should detect stale pending, rollback, then proceed normally
     let cfg = make_config(tree_dir);
-    let outcome = compile::run_compile_with_options(&cfg, Default::default());
+    let outcome = synthesize::run_with_options(&cfg, Default::default());
 
     // The staged file should be gone (rolled back)
     assert!(
@@ -139,7 +139,7 @@ fn crash_mid_compile_roll_forward_applies_staged_writes() {
 
     // Run compile — should roll forward
     let cfg = make_config(tree_dir);
-    let result = compile::run_compile_with_options(&cfg, Default::default()).result;
+    let result = synthesize::run_with_options(&cfg, Default::default()).result;
 
     // The staged file should be renamed to final
     assert!(
@@ -201,7 +201,7 @@ fn crash_mid_collect_rollback_leaves_tree_unchanged() {
 
     // Run compile — should recover (rollback) first, then proceed
     let cfg = make_config(tree_dir);
-    let _result = compile::run_compile_with_options(&cfg, Default::default());
+    let _result = synthesize::run_with_options(&cfg, Default::default());
 
     // Staged file rolled back
     assert!(
@@ -327,7 +327,7 @@ fn compile_full_with_canned_response_creates_branches() {
         response: canned.to_string(),
     };
 
-    let result = compile::run_compile_with_provider_started_at(
+    let result = synthesize::run_with_provider_started_at(
         &cfg,
         Default::default(),
         &provider,
@@ -340,9 +340,9 @@ fn compile_full_with_canned_response_creates_branches() {
         &mut Vec::new(),
     );
 
-    let compile_result = result.unwrap();
-    assert_eq!(compile_result.status, "compiled");
-    assert_eq!(compile_result.branches.len(), 2);
+    let synthesis_result = result.unwrap();
+    assert_eq!(synthesis_result.status, "compiled");
+    assert_eq!(synthesis_result.branches.len(), 2);
 
     // Verify branch files were written to disk
     let branches_dir = dir.path().join("branch");
@@ -546,7 +546,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
         .collect();
     let state_hash = transaction::state_hash(dir.path()).unwrap();
 
-    let result = compile::run_compile_with_provider_started_at(
+    let result = synthesize::run_with_provider_started_at(
         &cfg,
         Default::default(),
         &provider,
@@ -559,8 +559,8 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
         &mut Vec::new(),
     );
 
-    let compile_result = result.unwrap();
-    assert_eq!(compile_result.status, "compiled");
+    let synthesis_result = result.unwrap();
+    assert_eq!(synthesis_result.status, "compiled");
 
     // Both branches should exist on disk
     let branches_dir = dir.path().join("branch");
@@ -657,16 +657,16 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
     assert!(!dir.path().join("deleted.md").exists());
 
     let cfg = make_config(dir.path());
-    let result = compile::run_compile_with_options(&cfg, Default::default()).result;
+    let result = synthesize::run_with_options(&cfg, Default::default()).result;
     assert!(
         result.is_ok(),
         "compile should succeed after repair: {:?}",
         result.err()
     );
 
-    let compile_result = result.unwrap();
+    let synthesis_result = result.unwrap();
     // With only 1 surviving leaf, compile returns noop (single_leaf or empty_tree)
-    assert_eq!(compile_result.status, "noop");
+    assert_eq!(synthesis_result.status, "noop");
 
     // TreeState cleaned: deleted leaf removed, branch removed (only 1 leaf left)
     let m = bo::engine::state::read(&bo_dir.join("state.json")).unwrap();
@@ -716,7 +716,7 @@ fn create_leaf_docs(
 }
 
 #[test]
-fn compile_one_shot_uses_compile_system_prompt() {
+fn compile_one_shot_uses_synthesis_system_prompt() {
     // 4 leaves < 40 threshold → single-pass Full path.
     let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
@@ -743,7 +743,7 @@ fn compile_one_shot_uses_compile_system_prompt() {
     let state = bo::engine::state::read(&dir.path().join(".bo/state.json")).unwrap();
     let mhash = transaction::state_hash(dir.path()).unwrap();
 
-    let result = compile::run_compile_with_provider_started_at(
+    let result = synthesize::run_with_provider_started_at(
         &cfg,
         Default::default(),
         &provider,
@@ -762,7 +762,7 @@ fn compile_one_shot_uses_compile_system_prompt() {
     assert_eq!(prompts.len(), 1, "expected exactly one LLM call");
     assert!(
         prompts[0].contains("knowledge compilation engine for a personal document collection"),
-        "one-shot should send COMPILE system prompt, got: {}",
+        "one-shot should send SYNTHESIS system prompt, got: {}",
         prompts[0]
     );
 }
@@ -823,7 +823,7 @@ fn compile_full_two_stage_uses_cluster_system_prompt() {
     let state = bo::engine::state::read(&bo_dir.join("state.json")).unwrap();
     let mhash = transaction::state_hash(dir.path()).unwrap();
 
-    let result = compile::run_compile_with_provider_started_at(
+    let result = synthesize::run_with_provider_started_at(
         &cfg,
         Default::default(),
         &provider,
@@ -852,7 +852,7 @@ fn compile_full_two_stage_uses_cluster_system_prompt() {
     for (i, p) in prompts.iter().enumerate().skip(1) {
         assert!(
             p.contains("knowledge compilation engine"),
-            "stage 2 call {} should send COMPILE system prompt, got: {}",
+            "stage 2 call {} should send SYNTHESIS system prompt, got: {}",
             i,
             p
         );
@@ -952,7 +952,7 @@ fn compile_incremental_two_stage_uses_incremental_cluster_system_prompt() {
     let state = bo::engine::state::read(&bo_dir.join("state.json")).unwrap();
     let mhash = transaction::state_hash(dir.path()).unwrap();
 
-    let result = compile::run_compile_with_provider_started_at(
+    let result = synthesize::run_with_provider_started_at(
         &cfg,
         Default::default(),
         &provider,
@@ -981,7 +981,7 @@ fn compile_incremental_two_stage_uses_incremental_cluster_system_prompt() {
     for (i, p) in prompts.iter().enumerate().skip(1) {
         assert!(
             p.contains("knowledge compilation engine"),
-            "stage 2 call {} should send COMPILE system prompt, got: {}",
+            "stage 2 call {} should send SYNTHESIS system prompt, got: {}",
             i,
             p
         );

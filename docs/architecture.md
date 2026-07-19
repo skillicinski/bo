@@ -75,7 +75,7 @@ Cargo compiles `lib.rs`, `main.rs`, and integration tests as separate crates. Co
 
 Reusable library code should live in `domain` and `engine`, but bo does not yet promise a stable Rust library API distinct from the CLI product. If real external Rust consumers require one, introduce a deliberate facade and move binary-only implementation behind it. Until then, do not add crate splits or re-export scaffolding for a hypothetical consumer.
 
-Within a layer, use the narrowest practical visibility. Compile stages use `pub(super)` for command-internal contracts; engine internals use `pub(crate)` when the binary does not need them.
+Within a layer, use the narrowest practical visibility. Synthesis stages use `pub(super)` for command-internal contracts; engine internals use `pub(crate)` when the binary does not need them.
 
 ## State and format decisions
 
@@ -97,13 +97,13 @@ The tool-calling split is intentional:
 
 - `engine::llm` owns provider-neutral transport messages, tool-call protocol types, provider serialization, timeout, and retry behavior.
 - `engine::agent` owns the bounded provider-neutral turn loop and generic tool contract.
-- `cli::compile::agent` owns compile-specific tools and orchestration.
+- `cli::synthesize::agent` owns synthesis-specific tools and orchestration.
 
 Tool arguments are untrusted input and become typed, validated values at the tool boundary.
 
 ## Command pipelines
 
-Split a command into stage modules when an intermediate contract is independently meaningful and the split makes the workflow easier to trace. Compile is the exemplar: planning, prompting, parsing, validation, execution, repair, and rendering have distinct contracts.
+Split a command into stage modules when an intermediate contract is independently meaningful and the split makes the workflow easier to trace. Synthesis is the exemplar: planning, prompting, parsing, validation, execution, repair, and rendering have distinct contracts.
 
 Stage count alone is not a rule. A command may stay in one file while its stages remain clear; split it when a contract needs isolated ownership or work in the file has become difficult to trace. Do not scaffold folders for expected future complexity.
 

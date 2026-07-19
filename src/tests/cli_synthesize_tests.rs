@@ -1,4 +1,6 @@
-use super::{degenerate_result_warning, render_human, BranchResult, CompileResult, CompileRunMode};
+use super::{
+    degenerate_result_warning, render_human, BranchResult, SynthesisMode, SynthesisResult,
+};
 
 // ── degenerate result warning ────────────────────────────────────────────
 
@@ -13,7 +15,7 @@ fn branch_result(slug: &str, leaf_count: usize) -> BranchResult {
 #[test]
 fn degenerate_warning_when_single_branch_for_many_leaves() {
     let warning = degenerate_result_warning(
-        Some(CompileRunMode::Full),
+        Some(SynthesisMode::Full),
         &[branch_result("catch-all", 2)],
         64,
     );
@@ -26,7 +28,7 @@ fn degenerate_warning_when_single_branch_for_many_leaves() {
 #[test]
 fn degenerate_warning_when_most_leaves_unbranched() {
     let warning = degenerate_result_warning(
-        Some(CompileRunMode::Full),
+        Some(SynthesisMode::Full),
         &[
             branch_result("a", 2),
             branch_result("b", 2),
@@ -40,9 +42,9 @@ fn degenerate_warning_when_most_leaves_unbranched() {
 }
 
 #[test]
-fn no_degenerate_warning_for_normal_full_compile() {
+fn no_degenerate_warning_for_normal_full_synthesis() {
     let warning = degenerate_result_warning(
-        Some(CompileRunMode::Full),
+        Some(SynthesisMode::Full),
         &[
             branch_result("a", 10),
             branch_result("b", 10),
@@ -55,14 +57,14 @@ fn no_degenerate_warning_for_normal_full_compile() {
 
 #[test]
 fn no_degenerate_warning_for_small_corpus() {
-    let warning = degenerate_result_warning(Some(CompileRunMode::Full), &[], 20);
+    let warning = degenerate_result_warning(Some(SynthesisMode::Full), &[], 20);
     assert!(warning.is_none());
 }
 
 #[test]
 fn no_degenerate_warning_for_incremental_mode() {
     let warning = degenerate_result_warning(
-        Some(CompileRunMode::Incremental),
+        Some(SynthesisMode::Incremental),
         &[branch_result("single", 2)],
         64,
     );
@@ -72,7 +74,7 @@ fn no_degenerate_warning_for_incremental_mode() {
 #[test]
 fn degenerate_warning_low_coverage_ratio() {
     let warning = degenerate_result_warning(
-        Some(CompileRunMode::Full),
+        Some(SynthesisMode::Full),
         &[branch_result("concept-a", 7), branch_result("concept-b", 8)],
         66,
     );
@@ -84,7 +86,7 @@ fn degenerate_warning_low_coverage_ratio() {
 #[test]
 fn no_degenerate_warning_for_healthy_coverage() {
     let warning = degenerate_result_warning(
-        Some(CompileRunMode::Full),
+        Some(SynthesisMode::Full),
         &[
             branch_result("a", 10),
             branch_result("b", 9),
@@ -98,7 +100,7 @@ fn no_degenerate_warning_for_healthy_coverage() {
 #[test]
 fn degenerate_warning_single_branch_regression() {
     let warning = degenerate_result_warning(
-        Some(CompileRunMode::Full),
+        Some(SynthesisMode::Full),
         &[branch_result("catch-all", 2)],
         64,
     );
@@ -108,7 +110,7 @@ fn degenerate_warning_single_branch_regression() {
 #[test]
 fn degenerate_warning_unbranched_regression() {
     let warning = degenerate_result_warning(
-        Some(CompileRunMode::Full),
+        Some(SynthesisMode::Full),
         &[
             branch_result("a", 2),
             branch_result("b", 2),
@@ -121,7 +123,7 @@ fn degenerate_warning_unbranched_regression() {
 
 #[test]
 fn human_output_includes_notifications() {
-    let result = CompileResult {
+    let result = SynthesisResult {
         status: "noop".to_string(),
         reason: Some("empty_tree".to_string()),
         mode: None,
