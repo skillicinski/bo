@@ -133,9 +133,7 @@ pub(super) fn error_code(error: &CollectError) -> &'static str {
         CollectError::Extract(_) => "extract_error",
         CollectError::Youtube(_) => "youtube_error",
         CollectError::Io(_) => "io_error",
-        CollectError::TreeState(_) | CollectError::Pending(pending::PendingError::TreeState(_)) => {
-            "state_error"
-        }
+        CollectError::TreeState(_) => "state_error",
         CollectError::Pending(pending::PendingError::Busy { .. }) => "tree_busy",
         CollectError::Pending(_) => "pending_error",
         CollectError::Note(NoteError::Read { .. }) => "note_read_error",

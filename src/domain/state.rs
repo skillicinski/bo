@@ -42,9 +42,6 @@ pub enum TreeStateError {
     Parse(serde_json::Error),
     /// `state.json` does not exist at the requested path.
     TreeNotInitialized,
-    /// A legacy `.bo/manifest.json` file was found. v0.1.0 is a hard break;
-    /// the user must manually migrate.
-    LegacyManifestFound,
 }
 
 impl fmt::Display for TreeStateError {
@@ -54,14 +51,6 @@ impl fmt::Display for TreeStateError {
             TreeStateError::Parse(e) => write!(f, "tree state parse error: {}", e),
             TreeStateError::TreeNotInitialized => {
                 write!(f, "tree not initialized; run bo seed")
-            }
-            TreeStateError::LegacyManifestFound => {
-                write!(
-                    f,
-                    "found legacy .bo/manifest.json; bo v0.1.0 cannot read it. \
-                     Back up and migrate the tree using the v0.1.0 migration \
-                     procedure before continuing."
-                )
             }
         }
     }

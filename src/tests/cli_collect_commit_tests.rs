@@ -43,38 +43,3 @@ fn dedup_reads_state_not_legacy_index() {
     let none = duplicate_file("https://example.com/other", dir.path()).unwrap();
     assert!(none.is_none());
 }
-
-#[test]
-fn commit_rejects_legacy_state_before_writing_pending_or_state() {
-    let dir = TempDir::new().unwrap();
-    let bo_dir = dir.path().join(".bo");
-    fs::create_dir_all(&bo_dir).unwrap();
-    fs::write(bo_dir.join("manifest.json"), b"legacy").unwrap();
-    let state = TreeState {
-        tree: TreeMetadata {
-            name: "legacy-tree".to_string(),
-            created_at: Timestamp::parse("2026-05-19T12:00:00Z").unwrap(),
-            last_compiled_at: None,
-        },
-        leaves: Vec::new(),
-        branches: Vec::new(),
-    };
-
-    let error = commit_state_and_writes(
-        dir.path(),
-        OpKind::Collect {
-            url: "https://example.com/article".to_string(),
-        },
-        &state,
-        &[],
-        &[],
-    )
-    .unwrap_err();
-
-    assert!(matches!(
-        error,
-        CollectError::TreeState(crate::domain::state::TreeStateError::LegacyManifestFound)
-    ));
-    assert!(!bo_dir.join("pending.json").exists());
-    assert!(!bo_dir.join("state.json").exists());
-}

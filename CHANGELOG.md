@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- **Breaking:** tree metadata and topology now live in `.bo/state.json` instead of `.bo/manifest.json`. Existing trees require manual migration before use with v0.1.0; legacy or conflicting state files are rejected without mutation.
+- **Breaking:** tree metadata and topology now live in `.bo/state.json` instead of `.bo/manifest.json`. Existing trees require manual migration before deploying v0.1.0; there is no automatic migration.
 - **Breaking:** renamed machine-facing JSON fields and error codes to the new state vocabulary (e.g. `bo status` health `orphan_index_entries`/`missing_from_index` → `missing_leaf_files`/`untracked_leaf_files`; status state errors now report code `state_error` instead of `io_error`). The executable JSON envelope `schema_version` bumped from 1 to 2.
 
 ## [0.0.11] - 2026-07-18

@@ -1,9 +1,7 @@
 // Integration tests for state-only reads after the v0.1.0 cutover.
 //
-// `.bo/state.json` is the only tree-state store. A sibling legacy
-// `.bo/manifest.json` is rejected (whether state.json is absent or present);
-// deleting the state is an unrecoverable tree-state loss rather than a
-// reconstruction trigger.
+// `.bo/state.json` is the only tree-state store. Deleting it is an
+// unrecoverable tree-state loss rather than a reconstruction trigger.
 //
 // Tests the full CLI binary with $HOME override. No network/LLM required —
 // fixtures are staged on disk directly so we can invoke `bo status`, `bo list`,
@@ -98,17 +96,6 @@ fn parse_error(output: &Output) -> Value {
     serde_json::from_str(&stderr).expect("stderr is a JSON error envelope")
 }
 
-/// Stage a sibling legacy `.bo/manifest.json` (and optionally a state.json)
-/// without going through the write path (which would refuse the manifest).
-fn stage_legacy_manifest(tree_dir: &Path, with_state: bool) {
-    if with_state {
-        common::ensure_state(tree_dir);
-    }
-    let bo_dir = tree_dir.join(".bo");
-    fs::create_dir_all(&bo_dir).unwrap();
-    fs::write(bo_dir.join("manifest.json"), "{}\n").unwrap();
-}
-
 #[test]
 fn state_reads_work_without_secondary_store() {
     let tmp = TempDir::new().unwrap();
@@ -143,66 +130,4 @@ fn missing_state_is_not_reconstructed() {
 
     // No reconstruction: state.json is still absent.
     assert!(!tree_dir.join(".bo/state.json").exists());
-}
-
-#[test]
-fn legacy_manifest_only_is_rejected_without_mutation() {
-    let tmp = TempDir::new().unwrap();
-    let tree_dir = common::seed(tmp.path(), "tree");
-
-    // Only the legacy manifest is present; no state.json.
-    stage_legacy_manifest(&tree_dir, false);
-    assert!(tree_dir.join(".bo/manifest.json").exists());
-    assert!(!tree_dir.join(".bo/state.json").exists());
-
-    let before = common::snapshot_tree(&tree_dir);
-
-    for args in [["status", "--json"], ["list", "--json"]] {
-        let out = run(tmp.path(), &args);
-        assert!(!out.status.success(), "{args:?} should fail");
-        let json = parse_error(&out);
-        assert_eq!(
-            json["error"]["code"], "state_error",
-            "legacy-only manifest must surface as state_error"
-        );
-    }
-
-    // No state.json reconstructed, no bytes mutated.
-    let after = common::snapshot_tree(&tree_dir);
-    assert_eq!(before, after);
-    assert!(!tree_dir.join(".bo/state.json").exists());
-    assert!(tree_dir.join(".bo/manifest.json").exists());
-}
-
-#[test]
-fn both_state_and_legacy_manifest_are_rejected_without_mutation() {
-    let tmp = TempDir::new().unwrap();
-    let tree_dir = stage_tree(tmp.path());
-
-    // Add a legacy manifest alongside the healthy state.json.
-    let state_before = fs::read_to_string(tree_dir.join(".bo/state.json")).unwrap();
-    fs::write(tree_dir.join(".bo/manifest.json"), "{}\n").unwrap();
-    assert!(tree_dir.join(".bo/manifest.json").exists());
-    assert!(tree_dir.join(".bo/state.json").exists());
-
-    let before = common::snapshot_tree(&tree_dir);
-
-    let out = run(tmp.path(), &["status", "--json"]);
-    assert!(!out.status.success());
-
-    let json = parse_error(&out);
-    assert_eq!(
-        json["error"]["code"], "state_error",
-        "split-brain (both files) must surface as state_error"
-    );
-
-    // No mutation: state.json bytes unchanged, both files still present.
-    let after = common::snapshot_tree(&tree_dir);
-    assert_eq!(before, after);
-    assert_eq!(
-        fs::read_to_string(tree_dir.join(".bo/state.json")).unwrap(),
-        state_before,
-        "state.json must not be modified"
-    );
-    assert!(tree_dir.join(".bo/manifest.json").exists());
 }

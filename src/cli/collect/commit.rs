@@ -230,12 +230,8 @@ pub(super) fn commit_state_and_writes(
     staged: &[(&PendingWrite, &[u8])],
     deletes: &[String],
 ) -> Result<(), CollectError> {
-    pending::commit_with_state(output_dir, op, state, staged, deletes).map_err(
-        |error| match error {
-            pending::PendingError::TreeState(error) => CollectError::TreeState(error),
-            other => CollectError::Io(std::io::Error::other(other.to_string())),
-        },
-    )
+    pending::commit_with_state(output_dir, op, state, staged, deletes)
+        .map_err(|error| CollectError::Io(std::io::Error::other(error.to_string())))
 }
 
 // ── phase 3: sequential commit ──────────────────────────────────────────────

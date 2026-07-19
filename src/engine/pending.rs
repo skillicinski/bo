@@ -62,7 +62,6 @@ pub struct RecoveryReport {
 pub enum PendingError {
     Io(io::Error),
     Parse(serde_json::Error),
-    TreeState(crate::domain::state::TreeStateError),
     Busy {
         tree_dir: PathBuf,
     },
@@ -84,7 +83,6 @@ impl fmt::Display for PendingError {
         match self {
             PendingError::Io(e) => write!(f, "pending I/O error: {e}"),
             PendingError::Parse(e) => write!(f, "pending parse error: {e}"),
-            PendingError::TreeState(e) => write!(f, "{e}"),
             PendingError::Busy { tree_dir } => write!(
                 f,
                 "another bo process is already interacting with {}",
@@ -171,8 +169,6 @@ pub fn new_operation(
 /// Returns `Ok(Some(report))` only when a stale pending file existed and was
 /// resolved. Callers should surface the report as a one-line warning.
 pub fn recover_or_refuse(tree_dir: &Path) -> Result<Option<RecoveryReport>, PendingError> {
-    crate::engine::state::ensure_current_format(&crate::domain::tree::state_path(tree_dir))
-        .map_err(PendingError::TreeState)?;
     let path = pending_path(tree_dir);
     let Some(pending) = read(&path)? else {
         return Ok(None);
@@ -205,9 +201,7 @@ pub fn content_hash(bytes: &[u8]) -> String {
 }
 
 pub fn state_hash(tree_dir: &Path) -> Result<String, PendingError> {
-    let path = crate::domain::tree::state_path(tree_dir);
-    crate::engine::state::ensure_current_format(&path).map_err(PendingError::TreeState)?;
-    hash_file_or_missing(&path)
+    hash_file_or_missing(&crate::domain::tree::state_path(tree_dir))
 }
 
 pub fn write_staged(
@@ -304,7 +298,11 @@ pub fn commit_with_state(
         write_staged(tree_dir, pw, bytes)?;
     }
     let state_path = crate::domain::tree::state_path(tree_dir);
-    crate::engine::state::write(&state_path, state).map_err(PendingError::TreeState)?;
+    crate::engine::state::write(&state_path, state).map_err(
+        |error: crate::domain::state::TreeStateError| {
+            PendingError::Io(std::io::Error::other(error.to_string()))
+        },
+    )?;
     apply_writes(tree_dir, &writes)?;
     apply_deletes(tree_dir, deletes)?;
     clear(&pending_path)?;
