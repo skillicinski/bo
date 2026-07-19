@@ -5,7 +5,7 @@ use crate::domain::tree::TreeLoadState;
 use crate::engine::auth;
 use crate::engine::config::SeededConfig;
 use crate::engine::llm::{LlmProvider, Model};
-use crate::engine::pending;
+use crate::engine::transaction;
 
 use super::agent;
 use super::plan;
@@ -135,9 +135,9 @@ fn dry_run_preflight(
     let tree_dir = tree.path();
 
     // ZERO writes: read-only pending check. Do not recover.
-    if pending::read(&pending::pending_path(tree_dir))?.is_some() {
+    if transaction::read(&transaction::pending_path(tree_dir))?.is_some() {
         return Err(CompileError::DryRunBlocked(
-            "a pending operation exists; run `bo compile` (without --dry-run) to recover it before previewing".to_string(),
+            "an unfinished transaction exists; run `bo compile` (without --dry-run) to recover it before previewing".to_string(),
         ));
     }
 
@@ -170,7 +170,7 @@ fn dry_run_preflight(
     }
 
     // Capture the state hash at start; recheck before accepting the preview.
-    let starting_hash = pending::state_hash(tree_dir)?;
+    let starting_hash = transaction::state_hash(tree_dir)?;
 
     let run_mode = plan::select_run_mode(options, &state);
     if state.leaves.is_empty() {
@@ -260,7 +260,7 @@ fn dry_run_build_plan(
     warnings.extend(validation_warnings);
 
     // Recheck the state hash; abort if the tree changed mid-run.
-    let current_hash = pending::state_hash(cfg.tree().path())?;
+    let current_hash = transaction::state_hash(cfg.tree().path())?;
     let state_unchanged = current_hash == starting_hash;
     if !state_unchanged {
         return Err(CompileError::DryRunBlocked(

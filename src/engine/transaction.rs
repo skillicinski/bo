@@ -3,7 +3,7 @@
 // `{tree}/.bo/pending.json` is both an intent log and an advisory lock. A
 // mutating command writes it before staging content, commits by rewriting or
 // deleting `state.json`, then renames staged files / applies deletes and
-// clears pending. On the next mutating command, a stale pending file is rolled
+// clears the pending transaction. On the next mutating command, a stale pending file is rolled
 // back or rolled forward according to whether the state hash changed.
 
 use chrono::{DateTime, Utc};
@@ -21,8 +21,8 @@ const MISSING_STATE_HASH: &str = "<missing>";
 // ── public types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PendingOperation {
-    pub op: OpKind,
+pub struct PendingTransaction {
+    pub op: TransactionKind,
     pub started_at: String,
     pub pid: u32,
     pub pre_state_hash: String,
@@ -33,14 +33,14 @@ pub struct PendingOperation {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type")]
-pub enum OpKind {
+pub enum TransactionKind {
     Collect { url: String },
-    Compile { mode: CompileMode },
+    Compile { mode: SynthesisMode },
     Raze { include_auth: bool },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum CompileMode {
+pub enum SynthesisMode {
     Incremental,
     Full,
 }
@@ -59,7 +59,7 @@ pub struct RecoveryReport {
 }
 
 #[derive(Debug)]
-pub enum PendingError {
+pub enum TransactionError {
     Io(io::Error),
     Parse(serde_json::Error),
     Busy {
@@ -78,20 +78,20 @@ pub enum PendingError {
     },
 }
 
-impl fmt::Display for PendingError {
+impl fmt::Display for TransactionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PendingError::Io(e) => write!(f, "pending I/O error: {e}"),
-            PendingError::Parse(e) => write!(f, "pending parse error: {e}"),
-            PendingError::Busy { tree_dir } => write!(
+            TransactionError::Io(e) => write!(f, "transaction I/O error: {e}"),
+            TransactionError::Parse(e) => write!(f, "transaction parse error: {e}"),
+            TransactionError::Busy { tree_dir } => write!(
                 f,
                 "another bo process is already interacting with {}",
                 tree_dir.display()
             ),
-            PendingError::SuspiciousPath { path } => {
-                write!(f, "pending operation contains suspicious path: {path}")
+            TransactionError::SuspiciousPath { path } => {
+                write!(f, "transaction contains suspicious path: {path}")
             }
-            PendingError::HashMismatch {
+            TransactionError::HashMismatch {
                 path,
                 expected,
                 actual,
@@ -99,22 +99,22 @@ impl fmt::Display for PendingError {
                 f,
                 "staged write hash mismatch for {path}: expected {expected}, got {actual}"
             ),
-            PendingError::MissingStagedWrite { path } => {
-                write!(f, "missing staged write for pending path: {path}")
+            TransactionError::MissingStagedWrite { path } => {
+                write!(f, "missing staged write for transaction path: {path}")
             }
         }
     }
 }
 
-impl From<io::Error> for PendingError {
+impl From<io::Error> for TransactionError {
     fn from(e: io::Error) -> Self {
-        PendingError::Io(e)
+        TransactionError::Io(e)
     }
 }
 
-impl From<serde_json::Error> for PendingError {
+impl From<serde_json::Error> for TransactionError {
     fn from(e: serde_json::Error) -> Self {
-        PendingError::Parse(e)
+        TransactionError::Parse(e)
     }
 }
 
@@ -124,37 +124,37 @@ pub fn pending_path(tree_dir: &Path) -> PathBuf {
     tree_dir.join(".bo").join("pending.json")
 }
 
-pub fn read(path: &Path) -> Result<Option<PendingOperation>, PendingError> {
+pub fn read(path: &Path) -> Result<Option<PendingTransaction>, TransactionError> {
     match fs::read_to_string(path) {
         Ok(contents) => serde_json::from_str(&contents)
             .map(Some)
-            .map_err(PendingError::Parse),
+            .map_err(TransactionError::Parse),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(PendingError::Io(e)),
+        Err(e) => Err(TransactionError::Io(e)),
     }
 }
 
-pub fn write(path: &Path, pending: &PendingOperation) -> Result<(), PendingError> {
-    let json = serde_json::to_string_pretty(pending)?;
+pub fn write(path: &Path, transaction: &PendingTransaction) -> Result<(), TransactionError> {
+    let json = serde_json::to_string_pretty(transaction)?;
     crate::engine::state::atomic_write(path, json.as_bytes())?;
     Ok(())
 }
 
-pub fn clear(path: &Path) -> Result<(), PendingError> {
+pub fn clear(path: &Path) -> Result<(), TransactionError> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(PendingError::Io(e)),
+        Err(e) => Err(TransactionError::Io(e)),
     }
 }
 
-pub fn new_operation(
+pub fn new_transaction(
     tree_dir: &Path,
-    op: OpKind,
+    op: TransactionKind,
     writes: Vec<PendingWrite>,
     deletes: Vec<String>,
-) -> Result<PendingOperation, PendingError> {
-    Ok(PendingOperation {
+) -> Result<PendingTransaction, TransactionError> {
+    Ok(PendingTransaction {
         op,
         started_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         pid: std::process::id(),
@@ -164,32 +164,32 @@ pub fn new_operation(
     })
 }
 
-/// Recover a stale pending operation or refuse if it belongs to a live process.
+/// Recover a stale pending transaction or refuse if it belongs to a live process.
 ///
 /// Returns `Ok(Some(report))` only when a stale pending file existed and was
 /// resolved. Callers should surface the report as a one-line warning.
-pub fn recover_or_refuse(tree_dir: &Path) -> Result<Option<RecoveryReport>, PendingError> {
+pub fn recover_or_refuse(tree_dir: &Path) -> Result<Option<RecoveryReport>, TransactionError> {
     let path = pending_path(tree_dir);
-    let Some(pending) = read(&path)? else {
+    let Some(transaction) = read(&path)? else {
         return Ok(None);
     };
 
-    if is_live_lock(&pending) {
-        return Err(PendingError::Busy {
+    if is_live_lock(&transaction) {
+        return Err(TransactionError::Busy {
             tree_dir: tree_dir.to_path_buf(),
         });
     }
 
     let current_hash = state_hash(tree_dir)?;
-    let changes = if current_hash == pending.pre_state_hash {
-        rollback(tree_dir, &pending)?
+    let changes = if current_hash == transaction.pre_state_hash {
+        rollback(tree_dir, &transaction)?
     } else {
-        roll_forward(tree_dir, &pending)?
+        roll_forward(tree_dir, &transaction)?
     };
     clear(&path)?;
 
     Ok(Some(RecoveryReport {
-        op: op_label(&pending.op).to_string(),
+        op: kind_label(&transaction.op).to_string(),
         changes,
     }))
 }
@@ -200,7 +200,7 @@ pub fn content_hash(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-pub fn state_hash(tree_dir: &Path) -> Result<String, PendingError> {
+pub fn state_hash(tree_dir: &Path) -> Result<String, TransactionError> {
     hash_file_or_missing(&crate::domain::tree::state_path(tree_dir))
 }
 
@@ -208,9 +208,9 @@ pub fn write_staged(
     tree_dir: &Path,
     write: &PendingWrite,
     bytes: &[u8],
-) -> Result<(), PendingError> {
+) -> Result<(), TransactionError> {
     if content_hash(bytes) != write.content_hash {
-        return Err(PendingError::HashMismatch {
+        return Err(TransactionError::HashMismatch {
             path: write.path.clone(),
             expected: write.content_hash.clone(),
             actual: content_hash(bytes),
@@ -227,7 +227,7 @@ pub fn write_staged(
     Ok(())
 }
 
-pub fn apply_writes(tree_dir: &Path, writes: &[PendingWrite]) -> Result<usize, PendingError> {
+pub fn apply_writes(tree_dir: &Path, writes: &[PendingWrite]) -> Result<usize, TransactionError> {
     let mut changes = 0usize;
     for write in writes {
         let staged = staged_path(tree_dir, &write.path)?;
@@ -248,21 +248,21 @@ pub fn apply_writes(tree_dir: &Path, writes: &[PendingWrite]) -> Result<usize, P
             if actual == write.content_hash {
                 continue;
             }
-            return Err(PendingError::HashMismatch {
+            return Err(TransactionError::HashMismatch {
                 path: write.path.clone(),
                 expected: write.content_hash.clone(),
                 actual,
             });
         }
 
-        return Err(PendingError::MissingStagedWrite {
+        return Err(TransactionError::MissingStagedWrite {
             path: write.path.clone(),
         });
     }
     Ok(changes)
 }
 
-pub fn apply_deletes(tree_dir: &Path, deletes: &[String]) -> Result<usize, PendingError> {
+pub fn apply_deletes(tree_dir: &Path, deletes: &[String]) -> Result<usize, TransactionError> {
     let mut changes = 0usize;
     for delete in deletes {
         let path = resolve_relative(tree_dir, delete)?;
@@ -274,33 +274,33 @@ pub fn apply_deletes(tree_dir: &Path, deletes: &[String]) -> Result<usize, Pendi
         match fs::remove_file(&path) {
             Ok(()) => changes += 1,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(PendingError::Io(e)),
+            Err(e) => return Err(TransactionError::Io(e)),
         }
     }
     Ok(changes)
 }
 
-/// Atomic commit: write pending, stage content, write tree state, apply writes
-/// and deletes, clear pending. Used by collect and compile — they share
+/// Atomic commit: write the pending transaction, stage content, write tree state,
+/// apply writes and deletes, then clear the transaction. Used by collect and compile — they share
 /// the same 6-step transaction idiom.
 pub fn commit_with_state(
     tree_dir: &Path,
-    op: OpKind,
+    op: TransactionKind,
     state: &crate::domain::state::TreeState,
     staged: &[(&PendingWrite, &[u8])],
     deletes: &[String],
-) -> Result<(), PendingError> {
+) -> Result<(), TransactionError> {
     let writes: Vec<PendingWrite> = staged.iter().map(|(pw, _)| (*pw).clone()).collect();
-    let operation = new_operation(tree_dir, op, writes.clone(), deletes.to_vec())?;
+    let transaction = new_transaction(tree_dir, op, writes.clone(), deletes.to_vec())?;
     let pending_path = pending_path(tree_dir);
-    write(&pending_path, &operation)?;
+    write(&pending_path, &transaction)?;
     for (pw, bytes) in staged {
         write_staged(tree_dir, pw, bytes)?;
     }
     let state_path = crate::domain::tree::state_path(tree_dir);
     crate::engine::state::write(&state_path, state).map_err(
         |error: crate::domain::state::TreeStateError| {
-            PendingError::Io(std::io::Error::other(error.to_string()))
+            TransactionError::Io(std::io::Error::other(error.to_string()))
         },
     )?;
     apply_writes(tree_dir, &writes)?;
@@ -309,7 +309,7 @@ pub fn commit_with_state(
     Ok(())
 }
 
-pub fn staged_path(tree_dir: &Path, relative: &str) -> Result<PathBuf, PendingError> {
+pub fn staged_path(tree_dir: &Path, relative: &str) -> Result<PathBuf, TransactionError> {
     let final_path = resolve_relative(tree_dir, relative)?;
     let mut staged = final_path.as_os_str().to_owned();
     staged.push(".tmp");
@@ -318,39 +318,42 @@ pub fn staged_path(tree_dir: &Path, relative: &str) -> Result<PathBuf, PendingEr
 
 // ── recovery internals ───────────────────────────────────────────────────────
 
-fn rollback(tree_dir: &Path, pending: &PendingOperation) -> Result<usize, PendingError> {
+fn rollback(tree_dir: &Path, transaction: &PendingTransaction) -> Result<usize, TransactionError> {
     let mut changes = 0usize;
-    for write in &pending.writes {
+    for write in &transaction.writes {
         let staged = staged_path(tree_dir, &write.path)?;
         match fs::remove_file(&staged) {
             Ok(()) => changes += 1,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(PendingError::Io(e)),
+            Err(e) => return Err(TransactionError::Io(e)),
         }
     }
     Ok(changes)
 }
 
-fn roll_forward(tree_dir: &Path, pending: &PendingOperation) -> Result<usize, PendingError> {
-    let writes = apply_writes(tree_dir, &pending.writes)?;
-    let deletes = apply_deletes(tree_dir, &pending.deletes)?;
+fn roll_forward(
+    tree_dir: &Path,
+    transaction: &PendingTransaction,
+) -> Result<usize, TransactionError> {
+    let writes = apply_writes(tree_dir, &transaction.writes)?;
+    let deletes = apply_deletes(tree_dir, &transaction.deletes)?;
     Ok(writes + deletes)
 }
 
-fn verify_file_hash(path: &Path, write: &PendingWrite) -> Result<(), PendingError> {
+fn verify_file_hash(path: &Path, write: &PendingWrite) -> Result<(), TransactionError> {
     let actual = hash_file_or_missing(path)?;
     if actual == write.content_hash {
         return Ok(());
     }
-    Err(PendingError::HashMismatch {
+    Err(TransactionError::HashMismatch {
         path: write.path.clone(),
         expected: write.content_hash.clone(),
         actual,
     })
 }
 
-fn is_live_lock(pending: &PendingOperation) -> bool {
-    is_process_alive(pending.pid) && is_recent(&pending.started_at)
+fn is_live_lock(transaction: &PendingTransaction) -> bool {
+    is_process_alive(transaction.pid) && is_recent(&transaction.started_at)
 }
 
 fn is_recent(started_at: &str) -> bool {
@@ -374,15 +377,15 @@ fn is_process_alive(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
-fn op_label(op: &OpKind) -> &'static str {
-    match op {
-        OpKind::Collect { .. } => "collect",
-        OpKind::Compile { .. } => "compile",
-        OpKind::Raze { .. } => "raze",
+fn kind_label(kind: &TransactionKind) -> &'static str {
+    match kind {
+        TransactionKind::Collect { .. } => "collect",
+        TransactionKind::Compile { .. } => "compile",
+        TransactionKind::Raze { .. } => "raze",
     }
 }
 
-fn resolve_relative(tree_dir: &Path, relative: &str) -> Result<PathBuf, PendingError> {
+fn resolve_relative(tree_dir: &Path, relative: &str) -> Result<PathBuf, TransactionError> {
     let path = Path::new(relative);
     if path.as_os_str().is_empty()
         || path.is_absolute()
@@ -390,21 +393,21 @@ fn resolve_relative(tree_dir: &Path, relative: &str) -> Result<PathBuf, PendingE
             .components()
             .any(|c| matches!(c, Component::ParentDir | Component::Prefix(_)))
     {
-        return Err(PendingError::SuspiciousPath {
+        return Err(TransactionError::SuspiciousPath {
             path: relative.to_string(),
         });
     }
     Ok(tree_dir.join(path))
 }
 
-fn hash_file_or_missing(path: &Path) -> Result<String, PendingError> {
+fn hash_file_or_missing(path: &Path) -> Result<String, TransactionError> {
     match fs::read(path) {
         Ok(bytes) => Ok(content_hash(&bytes)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(MISSING_STATE_HASH.to_string()),
-        Err(e) => Err(PendingError::Io(e)),
+        Err(e) => Err(TransactionError::Io(e)),
     }
 }
 
 #[cfg(test)]
-#[path = "../tests/engine_pending_tests.rs"]
+#[path = "../tests/engine_transaction_tests.rs"]
 mod tests;

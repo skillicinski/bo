@@ -14,7 +14,7 @@ use bo::cli::compile;
 use bo::domain::state::{TreeMetadata, TreeState};
 use bo::domain::{Branch, Leaf};
 use bo::engine::config::SeededConfig;
-use bo::engine::pending;
+use bo::engine::transaction;
 
 fn make_config(output_dir: &std::path::Path) -> SeededConfig {
     common::seeded_config(output_dir, bo::engine::llm::Provider::OpenAI, "gpt-4o-mini")
@@ -38,7 +38,7 @@ fn crash_mid_compile_rollback_cleans_staged_files() {
     bo::engine::state::write(&state_path, &m).unwrap();
 
     // Record state hash before "crash"
-    let state_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
+    let state_hash = bo::engine::transaction::state_hash(tree_dir).unwrap();
 
     // Write a staged .tmp file (simulating a branch about to be written)
     fs::create_dir_all(tree_dir.join("branch")).unwrap();
@@ -47,21 +47,21 @@ fn crash_mid_compile_rollback_cleans_staged_files() {
     fs::write(&staged_path, staged_content).unwrap();
 
     // Write pending.json with a dead PID and old timestamp (not a live lock)
-    let pending = bo::engine::pending::PendingOperation {
-        op: bo::engine::pending::OpKind::Compile {
-            mode: bo::engine::pending::CompileMode::Full,
+    let transaction = bo::engine::transaction::PendingTransaction {
+        op: bo::engine::transaction::TransactionKind::Compile {
+            mode: bo::engine::transaction::SynthesisMode::Full,
         },
         started_at: "2020-01-01T00:00:00Z".to_string(),
         pid: 99999,
         pre_state_hash: state_hash,
-        writes: vec![bo::engine::pending::PendingWrite {
+        writes: vec![bo::engine::transaction::PendingWrite {
             path: "branch/fake-branch.md".to_string(),
-            content_hash: bo::engine::pending::content_hash(staged_content),
+            content_hash: bo::engine::transaction::content_hash(staged_content),
         }],
         deletes: vec![],
     };
     let pending_path = bo_dir.join("pending.json");
-    bo::engine::pending::write(&pending_path, &pending).unwrap();
+    bo::engine::transaction::write(&pending_path, &transaction).unwrap();
 
     // Now run compile — should detect stale pending, rollback, then proceed normally
     let cfg = make_config(tree_dir);
@@ -121,21 +121,21 @@ fn crash_mid_compile_roll_forward_applies_staged_writes() {
     // Use a DIFFERENT hash than current state (simulating that state was already committed)
     let fake_pre_hash = "deadbeef".to_string();
 
-    let pending = bo::engine::pending::PendingOperation {
-        op: bo::engine::pending::OpKind::Compile {
-            mode: bo::engine::pending::CompileMode::Full,
+    let transaction = bo::engine::transaction::PendingTransaction {
+        op: bo::engine::transaction::TransactionKind::Compile {
+            mode: bo::engine::transaction::SynthesisMode::Full,
         },
         started_at: "2020-01-01T00:00:00Z".to_string(),
         pid: 99999,
         pre_state_hash: fake_pre_hash,
-        writes: vec![bo::engine::pending::PendingWrite {
+        writes: vec![bo::engine::transaction::PendingWrite {
             path: "branch/recovered-branch.md".to_string(),
-            content_hash: bo::engine::pending::content_hash(branch_content),
+            content_hash: bo::engine::transaction::content_hash(branch_content),
         }],
         deletes: vec![],
     };
     let pending_path = bo_dir.join("pending.json");
-    bo::engine::pending::write(&pending_path, &pending).unwrap();
+    bo::engine::transaction::write(&pending_path, &transaction).unwrap();
 
     // Run compile — should roll forward
     let cfg = make_config(tree_dir);
@@ -176,7 +176,7 @@ fn crash_mid_collect_rollback_leaves_tree_unchanged() {
     m.tree.last_compiled_at = Some(Timestamp::parse("2099-01-01T00:00:00Z").unwrap());
     bo::engine::state::write(&state_path, &m).unwrap();
 
-    let state_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
+    let state_hash = bo::engine::transaction::state_hash(tree_dir).unwrap();
 
     // Staged leaf file from interrupted collect
     let staged_leaf =
@@ -184,20 +184,20 @@ fn crash_mid_collect_rollback_leaves_tree_unchanged() {
     let staged_path = tree_dir.join("interrupted.md.tmp");
     fs::write(&staged_path, staged_leaf).unwrap();
 
-    let pending = bo::engine::pending::PendingOperation {
-        op: bo::engine::pending::OpKind::Collect {
+    let transaction = bo::engine::transaction::PendingTransaction {
+        op: bo::engine::transaction::TransactionKind::Collect {
             url: "https://example.com/interrupted".to_string(),
         },
         started_at: "2020-01-01T00:00:00Z".to_string(),
         pid: 99999,
         pre_state_hash: state_hash,
-        writes: vec![bo::engine::pending::PendingWrite {
+        writes: vec![bo::engine::transaction::PendingWrite {
             path: "interrupted.md".to_string(),
-            content_hash: bo::engine::pending::content_hash(staged_leaf),
+            content_hash: bo::engine::transaction::content_hash(staged_leaf),
         }],
         deletes: vec![],
     };
-    bo::engine::pending::write(&bo_dir.join("pending.json"), &pending).unwrap();
+    bo::engine::transaction::write(&bo_dir.join("pending.json"), &transaction).unwrap();
 
     // Run compile — should recover (rollback) first, then proceed
     let cfg = make_config(tree_dir);
@@ -336,7 +336,7 @@ fn compile_full_with_canned_response_creates_branches() {
         Vec::new(),
         &bo::engine::state::read(&dir.path().join(".bo/state.json")).unwrap(),
         &[], // ponytail: Full mode doesn't use new_leaf_slugs
-        &pending::state_hash(dir.path()).unwrap(),
+        &transaction::state_hash(dir.path()).unwrap(),
         &mut Vec::new(),
     );
 
@@ -544,7 +544,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
         })
         .map(|l| l.slug.as_str().to_string())
         .collect();
-    let state_hash = pending::state_hash(dir.path()).unwrap();
+    let state_hash = transaction::state_hash(dir.path()).unwrap();
 
     let result = compile::run_compile_with_provider_started_at(
         &cfg,
@@ -741,7 +741,7 @@ fn compile_one_shot_uses_compile_system_prompt() {
 
     let provider = CapturingProvider::new(vec![canned]);
     let state = bo::engine::state::read(&dir.path().join(".bo/state.json")).unwrap();
-    let mhash = pending::state_hash(dir.path()).unwrap();
+    let mhash = transaction::state_hash(dir.path()).unwrap();
 
     let result = compile::run_compile_with_provider_started_at(
         &cfg,
@@ -821,7 +821,7 @@ fn compile_full_two_stage_uses_cluster_system_prompt() {
 
     let provider = CapturingProvider::new(vec![stage1, stage2_a, stage2_b]);
     let state = bo::engine::state::read(&bo_dir.join("state.json")).unwrap();
-    let mhash = pending::state_hash(dir.path()).unwrap();
+    let mhash = transaction::state_hash(dir.path()).unwrap();
 
     let result = compile::run_compile_with_provider_started_at(
         &cfg,
@@ -950,7 +950,7 @@ fn compile_incremental_two_stage_uses_incremental_cluster_system_prompt() {
 
     let provider = CapturingProvider::new(vec![stage1, stage2_update, stage2_new]);
     let state = bo::engine::state::read(&bo_dir.join("state.json")).unwrap();
-    let mhash = pending::state_hash(dir.path()).unwrap();
+    let mhash = transaction::state_hash(dir.path()).unwrap();
 
     let result = compile::run_compile_with_provider_started_at(
         &cfg,

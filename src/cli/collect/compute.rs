@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use crate::adapters::youtube::{self, YoutubeError, YoutubeUrlMatch};
 use crate::engine::auth;
-use crate::engine::pending;
 use crate::engine::quality;
+use crate::engine::transaction;
 use crate::engine::{extract, fetch, summary};
 
 use super::{CollectError, NoteError};
@@ -194,7 +194,7 @@ pub(super) fn compute_leaf_note(path: &str) -> Result<ComputedLeaf, CollectError
     // notes dedup and edits mint a fresh leaf. sha256[:16] = 64 bits.
     let url = format!(
         "bo://note/{}",
-        &pending::content_hash(body_after_frontmatter.as_bytes())[..16]
+        &transaction::content_hash(body_after_frontmatter.as_bytes())[..16]
     );
     let (title, body_markdown) = extract_note_title(&body_after_frontmatter);
     Ok(ComputedLeaf {

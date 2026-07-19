@@ -15,7 +15,7 @@
 //   journal — collect journal payload (engine journal append).
 //   render  — human-readable output.
 //
-// Dependency direction: collect → adapters, fetch, quality, extract, leaf, slug, state, pending.
+// Dependency direction: collect → adapters, fetch, quality, extract, leaf, slug, state, transaction.
 
 use serde::Serialize;
 use serde_json::json;
@@ -27,8 +27,8 @@ use std::thread;
 use crate::adapters::youtube::YoutubeError;
 use crate::cli::json::JsonError;
 use crate::domain::state;
-use crate::engine::pending;
 use crate::engine::quality::RejectReason;
+use crate::engine::transaction;
 use crate::engine::{extract, fetch};
 
 mod commit;
@@ -41,7 +41,7 @@ pub(crate) use input::is_single_bare_url;
 pub use render::{render_batch_human, render_human};
 
 use commit::{
-    commit_computed, dedup_inputs, recover_pending_if_needed, shape_item, shape_single,
+    commit_computed, dedup_inputs, recover_transaction_if_needed, shape_item, shape_single,
     summarize_collect_items, DedupPlan, Outcome,
 };
 use compute::{compute_leaf, ComputedLeaf, SummaryProvider};
@@ -65,7 +65,7 @@ pub enum CollectError {
     },
     Io(std::io::Error),
     TreeState(state::TreeStateError),
-    Pending(pending::PendingError),
+    Transaction(transaction::TransactionError),
     Note(NoteError),
 }
 
@@ -83,7 +83,7 @@ impl fmt::Display for CollectError {
             }
             CollectError::Io(e) => write!(f, "I/O error: {}", e),
             CollectError::TreeState(e) => write!(f, "{}", e),
-            CollectError::Pending(e) => write!(f, "{}", e),
+            CollectError::Transaction(e) => write!(f, "{}", e),
             CollectError::Note(e) => write!(f, "{}", e),
         }
     }
@@ -119,9 +119,9 @@ impl From<state::TreeStateError> for CollectError {
     }
 }
 
-impl From<pending::PendingError> for CollectError {
-    fn from(e: pending::PendingError) -> Self {
-        CollectError::Pending(e)
+impl From<transaction::TransactionError> for CollectError {
+    fn from(e: transaction::TransactionError) -> Self {
+        CollectError::Transaction(e)
     }
 }
 
@@ -134,8 +134,8 @@ pub(super) fn error_code(error: &CollectError) -> &'static str {
         CollectError::Youtube(_) => "youtube_error",
         CollectError::Io(_) => "io_error",
         CollectError::TreeState(_) => "state_error",
-        CollectError::Pending(pending::PendingError::Busy { .. }) => "tree_busy",
-        CollectError::Pending(_) => "pending_error",
+        CollectError::Transaction(transaction::TransactionError::Busy { .. }) => "tree_busy",
+        CollectError::Transaction(_) => "transaction_error",
         CollectError::Note(NoteError::Read { .. }) => "note_read_error",
         CollectError::Note(NoteError::Empty { .. }) => "empty_note",
         CollectError::Note(NoteError::MalformedFrontmatter { .. }) => "malformed_frontmatter",
@@ -267,7 +267,7 @@ fn run_pipeline<F>(
 where
     F: Fn(&str) -> Result<ComputedLeaf, CollectError> + Send + Sync + 'static,
 {
-    recover_pending_if_needed(output_dir, warnings)?;
+    recover_transaction_if_needed(output_dir, warnings)?;
     let expanded = expand_collect_inputs(&inputs);
     let model_applicable = input::has_external_source(&expanded);
 

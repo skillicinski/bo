@@ -12,7 +12,7 @@ use bo::cli::status::{self, StatusError};
 use bo::engine::auth;
 use bo::engine::config::{self, Config, ConfigError, SeededConfig};
 use bo::engine::llm::{self as llm_mod, LlmProvider};
-use bo::engine::pending::PendingError;
+use bo::engine::transaction::TransactionError;
 use clap::{error::ErrorKind as ClapErrorKind, Parser, Subcommand};
 use serde::Serialize;
 use std::ffi::OsString;
@@ -173,7 +173,7 @@ impl CliError {
         match self {
             CliError::Seed(error) => error.exit_code(),
             CliError::ConfigWrite(error) => error.exit_code(),
-            CliError::Collect(CollectError::Pending(PendingError::Busy { .. }))
+            CliError::Collect(CollectError::Transaction(TransactionError::Busy { .. }))
             | CliError::Compile(CompileError::Busy(_))
             | CliError::Raze(RazeError::Busy(_)) => 2,
             _ => 1,

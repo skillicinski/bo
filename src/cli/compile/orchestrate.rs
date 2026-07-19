@@ -9,7 +9,7 @@ use crate::engine::auth;
 use crate::engine::config::SeededConfig;
 use crate::engine::journal;
 use crate::engine::llm::{LlmProvider, Model};
-use crate::engine::pending;
+use crate::engine::transaction;
 
 use super::dry_run::run_compile_dry_run;
 use super::execute;
@@ -102,7 +102,7 @@ fn run_compile(
 
     // Stale repair runs before preflight so preflight sees repaired state.
     let tree = cfg.tree();
-    execute::recover_pending_if_needed(tree.path(), warnings)?;
+    execute::recover_transaction_if_needed(tree.path(), warnings)?;
     let state = match crate::engine::state::load_state(tree.path()) {
         Ok(TreeLoadState::Loaded(state)) => state,
         Ok(TreeLoadState::FreshSeeded) => {
@@ -144,7 +144,7 @@ fn run_compile(
         return Ok(CompileResult::noop(NO_NEW_LEAVES_REASON, notifications));
     }
 
-    let expected_state_hash = pending::state_hash(tree.path())?;
+    let expected_state_hash = transaction::state_hash(tree.path())?;
 
     let api_key =
         auth::resolve_api_key(cfg.config.provider).map_err(|e| CompileError::Llm(e.to_string()))?;

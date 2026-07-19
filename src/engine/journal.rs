@@ -2,7 +2,7 @@
 // undergoes.
 //
 // One JSON event per line in `{tree}/.bo/journal.jsonl`. Lives outside the
-// state file and outside the pending/commit transaction: appending is not a
+// state file and outside the mutation transaction: appending is not a
 // corpus mutation. Writes are best-effort — a journal failure must never fail
 // or abort the user's command (warned to stderr at most). Readers tolerate a
 // torn/partial final line. A missing file is an empty journal.
