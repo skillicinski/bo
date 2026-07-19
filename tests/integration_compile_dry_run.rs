@@ -1,6 +1,6 @@
 // Integration tests for `bo compile --dry-run`.
 //
-// Covers the zero-write dry-run surface: empty-tree/noop paths, pending/repair
+// Covers the zero-write dry-run surface: empty-tree/noop paths, transaction/repair
 // block, agent-without-dry-run rejection, and scripted-provider agent and
 // one-shot previews with validation feedback.
 
@@ -228,18 +228,18 @@ fn agent_without_dry_run_is_rejected() {
 }
 
 #[test]
-fn dry_run_blocked_by_pending_writes_zero() {
+fn dry_run_blocked_by_unfinished_transaction_writes_zero() {
     let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
     let tree_dir = dir.path();
     let bo_dir = tree_dir.join(".bo");
 
-    let state_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
+    let state_hash = bo::engine::transaction::state_hash(tree_dir).unwrap();
 
     // Write a pending.json with a dead PID (99999) and no staged files
-    let pending = bo::engine::pending::PendingOperation {
-        op: bo::engine::pending::OpKind::Compile {
-            mode: bo::engine::pending::CompileMode::Full,
+    let transaction = bo::engine::transaction::PendingTransaction {
+        op: bo::engine::transaction::TransactionKind::Compile {
+            mode: bo::engine::transaction::SynthesisMode::Full,
         },
         started_at: "2020-01-01T00:00:00Z".to_string(),
         pid: 99999,
@@ -248,7 +248,7 @@ fn dry_run_blocked_by_pending_writes_zero() {
         deletes: Vec::new(),
     };
     let pending_path = bo_dir.join("pending.json");
-    bo::engine::pending::write(&pending_path, &pending).unwrap();
+    bo::engine::transaction::write(&pending_path, &transaction).unwrap();
 
     let before = common::snapshot_tree(tree_dir);
 
@@ -264,8 +264,8 @@ fn dry_run_blocked_by_pending_writes_zero() {
     match outcome.result {
         Err(compile::CompileError::DryRunBlocked(msg)) => {
             assert!(
-                msg.contains("pending"),
-                "expected pending message, got: {msg}"
+                msg.contains("unfinished transaction"),
+                "expected transaction message, got: {msg}"
             );
         }
         other => panic!("expected DryRunBlocked, got: {other:?}"),
@@ -299,7 +299,7 @@ fn dry_run_blocked_by_stale_repair_writes_zero() {
     m.tree.last_compiled_at = Some(Timestamp::parse("2025-06-02T00:00:00Z").unwrap());
     bo::engine::state::write(&bo_dir.join("state.json"), &m).unwrap();
 
-    let state_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
+    let state_hash = bo::engine::transaction::state_hash(tree_dir).unwrap();
     let before = common::snapshot_tree(tree_dir);
 
     let outcome = compile::run_compile_dry_run(
@@ -322,7 +322,7 @@ fn dry_run_blocked_by_stale_repair_writes_zero() {
     }
 
     // TreeState hash must be unchanged
-    let after_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
+    let after_hash = bo::engine::transaction::state_hash(tree_dir).unwrap();
     assert_eq!(
         state_hash, after_hash,
         "state hash changed during blocked dry-run"
@@ -347,7 +347,7 @@ fn agent_dry_run_with_scripted_provider_produces_preview_and_zero_writes() {
     let tree_dir = dir.path();
 
     let before = common::snapshot_tree(tree_dir);
-    let before_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
+    let before_hash = bo::engine::transaction::state_hash(tree_dir).unwrap();
 
     // Turn 1: list_leaves (no args needed; the tool defaults offset/limit)
     // Turn 2: read_leaf with a real slug
@@ -405,7 +405,7 @@ fn agent_dry_run_with_scripted_provider_produces_preview_and_zero_writes() {
     let after = common::snapshot_tree(tree_dir);
     assert_eq!(before, after, "tree was modified by agent dry-run");
 
-    let after_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
+    let after_hash = bo::engine::transaction::state_hash(tree_dir).unwrap();
     assert_eq!(before_hash, after_hash, "state hash changed");
 }
 
@@ -417,7 +417,7 @@ fn one_shot_dry_run_with_scripted_provider_produces_preview() {
     let tree_dir = dir.path();
 
     let before = common::snapshot_tree(tree_dir);
-    let before_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
+    let before_hash = bo::engine::transaction::state_hash(tree_dir).unwrap();
 
     let valid_plan = serde_json::json!({
         "branches": [
@@ -459,7 +459,7 @@ fn one_shot_dry_run_with_scripted_provider_produces_preview() {
     let after = common::snapshot_tree(tree_dir);
     assert_eq!(before, after, "tree was modified by one-shot dry-run");
 
-    let after_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
+    let after_hash = bo::engine::transaction::state_hash(tree_dir).unwrap();
     assert_eq!(before_hash, after_hash, "state hash changed");
 }
 
@@ -471,7 +471,7 @@ fn agent_dry_run_validation_feedback_then_success() {
     let tree_dir = dir.path();
 
     let before = common::snapshot_tree(tree_dir);
-    let before_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
+    let before_hash = bo::engine::transaction::state_hash(tree_dir).unwrap();
 
     // Turn 1: invalid submit_compile (branch references unknown leaf)
     let invalid_plan = serde_json::json!({
@@ -530,7 +530,7 @@ fn agent_dry_run_validation_feedback_then_success() {
         "tree was modified by agent validation-feedback dry-run"
     );
 
-    let after_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
+    let after_hash = bo::engine::transaction::state_hash(tree_dir).unwrap();
     assert_eq!(before_hash, after_hash, "state hash changed");
 }
 

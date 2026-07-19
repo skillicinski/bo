@@ -7,7 +7,7 @@ use serde_json::json;
 
 use crate::cli::json::{JsonError, JsonWarning};
 use crate::engine::llm::{LlmCallPolicy, Model, Usage};
-use crate::engine::pending;
+use crate::engine::transaction;
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
@@ -52,7 +52,7 @@ pub enum CompileError {
     ContentFilter,
     /// LLM API or network error.
     Llm(String),
-    /// I/O or state/pending error.
+    /// I/O, state, or transaction error.
     Io(String),
     /// Another bo process is mutating this tree.
     Busy(String),
@@ -99,10 +99,10 @@ impl std::fmt::Display for CompileError {
     }
 }
 
-impl From<pending::PendingError> for CompileError {
-    fn from(error: pending::PendingError) -> Self {
+impl From<transaction::TransactionError> for CompileError {
+    fn from(error: transaction::TransactionError) -> Self {
         match error {
-            pending::PendingError::Busy { .. } => CompileError::Busy(error.to_string()),
+            transaction::TransactionError::Busy { .. } => CompileError::Busy(error.to_string()),
             other => CompileError::Io(other.to_string()),
         }
     }
@@ -196,7 +196,7 @@ pub struct CompileResult {
     pub leaves_skipped: Vec<String>,
     #[serde(skip)]
     pub notifications: Vec<String>,
-    /// Stderr-bound lines (title-collision warnings, pending-recovery notices,
+    /// Stderr-bound lines (title-collision warnings, transaction-recovery notices,
     /// per-branch write progress). Skipped from JSON — these are presentation,
     /// never part of the data envelope. Populated by the entry point.
     #[serde(skip)]

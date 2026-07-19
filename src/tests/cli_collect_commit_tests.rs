@@ -1,4 +1,4 @@
-// Commit-stage tests: dedup/slug/state/pending helpers exercised directly,
+// Commit-stage tests: dedup/slug/state/transaction helpers exercised directly,
 // without driving the full pipeline. Stage-unit tests for input/compute/journal
 // live in their own files.
 

@@ -11,7 +11,7 @@ use crate::domain::slug::Slug;
 use crate::domain::state::{self, TreeMetadata, TreeState};
 use crate::domain::tree::TreeLoadState;
 use crate::domain::{leaf, slug, Leaf, Timestamp, Title, Url};
-use crate::engine::pending::{self, OpKind, PendingWrite};
+use crate::engine::transaction::{self, PendingWrite, TransactionKind};
 
 use super::compute::{compute_leaf_note, ComputedLeaf};
 use super::error_code;
@@ -163,11 +163,11 @@ pub(super) fn dedup_inputs(expanded: Vec<ExpandedCollectInput>, output_dir: &Pat
 
 /// Recovery notices are stderr-bound diagnostics: the pipeline collects them,
 /// the CLI renders post-run (#138 presentation-purity contract).
-pub(super) fn recover_pending_if_needed(
+pub(super) fn recover_transaction_if_needed(
     output_dir: &Path,
     warnings: &mut Vec<String>,
 ) -> Result<(), CollectError> {
-    if let Some(report) = pending::recover_or_refuse(output_dir)? {
+    if let Some(report) = transaction::recover_or_refuse(output_dir)? {
         warnings.push(format!(
             "recovered {} changes from interrupted {}",
             report.changes, report.op
@@ -227,17 +227,17 @@ pub(super) fn load_or_bootstrap_state(
 
 /// Atomically commit a state update with staged writes and deletes.
 ///
-/// Writes the pending operation, stages content, writes the state, then
+/// Writes the pending transaction, stages content, writes the state, then
 /// applies writes/deletes and clears the pending file. The entire sequence
-/// is guarded by the pending lock so a crash mid-commit is recoverable.
+/// is guarded by the transaction lock so a crash mid-commit is recoverable.
 pub(super) fn commit_state_and_writes(
     output_dir: &Path,
-    op: OpKind,
+    op: TransactionKind,
     state: &TreeState,
     staged: &[(&PendingWrite, &[u8])],
     deletes: &[String],
 ) -> Result<(), CollectError> {
-    pending::commit_with_state(output_dir, op, state, staged, deletes)
+    transaction::commit_with_state(output_dir, op, state, staged, deletes)
         .map_err(|error| CollectError::Io(std::io::Error::other(error.to_string())))
 }
 
@@ -246,7 +246,7 @@ pub(super) fn commit_state_and_writes(
 /// Commit computed leaves in input order: allocate disambiguated slugs, stage
 /// leaf writes through the pending transaction, and single-atomically commit.
 /// Failures and same-batch duplicates append to `outcomes`; note warnings land
-/// in `warnings`. TreeState/slug/pending logic is unchanged from the inlined loop.
+/// in `warnings`. TreeState/slug/transaction logic is unchanged from the inlined loop.
 pub(super) fn commit_computed(
     compute_results: Vec<(String, String, Result<ComputedLeaf, CollectError>)>,
     output_dir: &Path,
@@ -297,7 +297,7 @@ pub(super) fn commit_computed(
                 let leaf_bytes = leaf_content.into_bytes();
                 let leaf_write = PendingWrite {
                     path: leaf_file.clone(),
-                    content_hash: pending::content_hash(&leaf_bytes),
+                    content_hash: transaction::content_hash(&leaf_bytes),
                 };
 
                 state.leaves.push(Leaf {
@@ -340,7 +340,7 @@ pub(super) fn commit_computed(
             staged.iter().map(|(pw, b)| (pw, b.as_slice())).collect();
         commit_state_and_writes(
             output_dir,
-            OpKind::Collect {
+            TransactionKind::Collect {
                 url: format!("batch of {} urls", staged_refs.len()),
             },
             &state,

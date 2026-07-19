@@ -10,7 +10,7 @@ use crate::engine::config::SeededConfig;
 use crate::engine::llm::{
     complete_with_policy, FinishReason, LlmCallPolicy, LlmError, LlmProvider, Message, Model,
 };
-use crate::engine::pending::{self, CompileMode, OpKind, PendingWrite};
+use crate::engine::transaction::{self, PendingWrite, SynthesisMode, TransactionKind};
 
 use super::plan::build_state_delta;
 use super::types::{
@@ -113,13 +113,13 @@ pub(super) fn map_compile_llm_error(error: LlmError) -> CompileError {
     }
 }
 
-// ── pending/recovery ──────────────────────────────────────────────────────────
+// ── transaction recovery ─────────────────────────────────────────────────────
 
-pub(super) fn recover_pending_if_needed(
+pub(super) fn recover_transaction_if_needed(
     path: &std::path::Path,
     warnings: &mut Vec<String>,
 ) -> Result<(), CompileError> {
-    if let Some(report) = pending::recover_or_refuse(path)? {
+    if let Some(report) = transaction::recover_or_refuse(path)? {
         warnings.push(format!(
             "recovered {} changes from interrupted {}",
             report.changes, report.op
@@ -144,14 +144,14 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
 ) -> Result<CompileSummary, CompileError> {
     let tree = cfg.tree();
     let tree_dir = tree.path();
-    recover_pending_if_needed(tree_dir, warnings)?;
+    recover_transaction_if_needed(tree_dir, warnings)?;
 
     // Load current state. Used to preserve branch `created_at` and carry
     // leaf records / tree metadata forward into the new state.
     let current = crate::engine::state::state_or_empty_if_fresh(&tree)
         .map_err(|e| CompileError::Io(format!("failed to read state: {}", e)))?;
 
-    let current_state_hash = pending::state_hash(tree_dir)?;
+    let current_state_hash = transaction::state_hash(tree_dir)?;
     if current_state_hash != expected_state_hash {
         return Err(CompileError::Io(
             "state changed during compile planning; rerun `bo compile`".to_string(),
@@ -174,7 +174,7 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
         staged.push((
             PendingWrite {
                 path: planned_write.record.file.clone(),
-                content_hash: pending::content_hash(&bytes),
+                content_hash: transaction::content_hash(&bytes),
             },
             bytes,
         ));
@@ -183,14 +183,14 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
     let leaves_processed = valid_filenames.len();
 
     let compile_mode = match run_mode {
-        CompileRunMode::Incremental => CompileMode::Incremental,
-        CompileRunMode::Full => CompileMode::Full,
+        CompileRunMode::Incremental => SynthesisMode::Incremental,
+        CompileRunMode::Full => SynthesisMode::Full,
     };
     let staged_refs: Vec<(&PendingWrite, &[u8])> =
         staged.iter().map(|(pw, b)| (pw, b.as_slice())).collect();
-    pending::commit_with_state(
+    transaction::commit_with_state(
         tree_dir,
-        OpKind::Compile { mode: compile_mode },
+        TransactionKind::Compile { mode: compile_mode },
         &delta.new_state,
         &staged_refs,
         &delta.branch_deletes,

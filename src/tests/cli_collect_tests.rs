@@ -685,28 +685,28 @@ fn fresh_collect_after_3b_does_not_write_legacy_secondary() {
 
 #[test]
 fn recovery_notice_lands_in_warnings_not_stderr() {
-    use crate::engine::pending;
+    use crate::engine::transaction;
 
     let dir = TempDir::new().unwrap();
     seed_for_collect(&dir, "recovery-warnings-tree");
 
-    // Stage a stale pending op (dead pid, matching state hash → rollback path).
+    // Stage an unfinished transaction (dead pid, matching state hash → rollback path).
     let staged = b"rolled back";
     fs::write(dir.path().join("stale-leaf.md.tmp"), staged).unwrap();
-    let op = pending::PendingOperation {
-        op: pending::OpKind::Collect {
+    let pending_transaction = transaction::PendingTransaction {
+        op: transaction::TransactionKind::Collect {
             url: "https://example.com/interrupted".to_string(),
         },
         started_at: "2020-01-01T00:00:00Z".to_string(),
         pid: 99999,
-        pre_state_hash: pending::state_hash(dir.path()).unwrap(),
-        writes: vec![pending::PendingWrite {
+        pre_state_hash: transaction::state_hash(dir.path()).unwrap(),
+        writes: vec![transaction::PendingWrite {
             path: "stale-leaf.md".to_string(),
-            content_hash: pending::content_hash(staged),
+            content_hash: transaction::content_hash(staged),
         }],
         deletes: vec![],
     };
-    pending::write(&dir.path().join(".bo/pending.json"), &op).unwrap();
+    transaction::write(&dir.path().join(".bo/pending.json"), &pending_transaction).unwrap();
 
     let mut warnings = Vec::new();
     collect_batch_parallel_with_compute(
@@ -840,4 +840,17 @@ fn empty_mixed_case_txt_list_is_batch_failure_not_panic() {
     assert_eq!(batch.summary.total, 1);
     assert_eq!(batch.summary.failed, 1);
     assert_eq!(batch.items[0].code.as_deref(), Some("empty_url_list"));
+}
+
+#[test]
+fn transaction_errors_keep_distinct_json_codes() {
+    let transaction_error = CollectError::Transaction(transaction::TransactionError::Io(
+        std::io::Error::other("failed"),
+    ));
+    let busy_error = CollectError::Transaction(transaction::TransactionError::Busy {
+        tree_dir: std::path::PathBuf::from("/tmp/tree"),
+    });
+
+    assert_eq!(error_code(&transaction_error), "transaction_error");
+    assert_eq!(error_code(&busy_error), "tree_busy");
 }

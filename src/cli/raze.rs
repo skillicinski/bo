@@ -2,7 +2,7 @@ use crate::cli::json::JsonWarning;
 use crate::domain::tree::TreeLoadState;
 use crate::domain::{state, tree};
 use crate::engine::config::Config;
-use crate::engine::pending::{self, OpKind};
+use crate::engine::transaction::{self, TransactionKind};
 
 use serde::Serialize;
 use serde_json::json;
@@ -128,7 +128,7 @@ pub fn raze_with_auth(
     auth_path: &Path,
     auth_cleanup: AuthCleanup,
 ) -> Result<RazeOutput, RazeError> {
-    recover_pending_if_needed(output_dir)?;
+    recover_transaction_if_needed(output_dir)?;
 
     let state_path = tree::state_path(output_dir);
     let state = match crate::engine::state::load_state(output_dir) {
@@ -186,17 +186,17 @@ pub fn raze_with_auth(
     }
     deletes.push(".bo".to_string());
 
-    let operation = pending::new_operation(
+    let transaction = transaction::new_transaction(
         output_dir,
-        OpKind::Raze {
+        TransactionKind::Raze {
             include_auth: auth_cleanup.deletes_auth(),
         },
         Vec::new(),
         deletes.clone(),
     )
-    .map_err(map_pending_error)?;
-    let pending_path = pending::pending_path(output_dir);
-    pending::write(&pending_path, &operation).map_err(map_pending_error)?;
+    .map_err(map_transaction_error)?;
+    let pending_path = transaction::pending_path(output_dir);
+    transaction::write(&pending_path, &transaction).map_err(map_transaction_error)?;
 
     match std::fs::remove_file(&state_path) {
         Ok(()) => {}
@@ -206,8 +206,8 @@ pub fn raze_with_auth(
         }
     }
 
-    pending::apply_deletes(output_dir, &deletes).map_err(map_pending_error)?;
-    pending::clear(&pending_path).map_err(map_pending_error)?;
+    transaction::apply_deletes(output_dir, &deletes).map_err(map_transaction_error)?;
+    transaction::clear(&pending_path).map_err(map_transaction_error)?;
     let deleted_state = true;
 
     let (removed_output_dir, output_dir_left_in_place) = match std::fs::remove_dir(output_dir) {
@@ -396,8 +396,10 @@ fn confirm_raze(
     Ok(buf == "yes\n")
 }
 
-fn recover_pending_if_needed(output_dir: &Path) -> Result<(), RazeError> {
-    if let Some(report) = pending::recover_or_refuse(output_dir).map_err(map_pending_error)? {
+fn recover_transaction_if_needed(output_dir: &Path) -> Result<(), RazeError> {
+    if let Some(report) =
+        transaction::recover_or_refuse(output_dir).map_err(map_transaction_error)?
+    {
         eprintln!(
             "recovered {} changes from interrupted {}",
             report.changes, report.op
@@ -406,9 +408,9 @@ fn recover_pending_if_needed(output_dir: &Path) -> Result<(), RazeError> {
     Ok(())
 }
 
-fn map_pending_error(error: pending::PendingError) -> RazeError {
+fn map_transaction_error(error: transaction::TransactionError) -> RazeError {
     match error {
-        pending::PendingError::Busy { .. } => RazeError::Busy(error.to_string()),
+        transaction::TransactionError::Busy { .. } => RazeError::Busy(error.to_string()),
         other => RazeError::Io(other.to_string()),
     }
 }

@@ -3,8 +3,12 @@ use super::*;
 use std::fs;
 use tempfile::TempDir;
 
-fn pending(op: OpKind, pre_state_hash: String, writes: Vec<PendingWrite>) -> PendingOperation {
-    PendingOperation {
+fn transaction(
+    op: TransactionKind,
+    pre_state_hash: String,
+    writes: Vec<PendingWrite>,
+) -> PendingTransaction {
+    PendingTransaction {
         op,
         started_at: "2026-05-19T00:00:00Z".to_string(),
         pid: 0,
@@ -18,8 +22,8 @@ fn pending(op: OpKind, pre_state_hash: String, writes: Vec<PendingWrite>) -> Pen
 fn write_read_clear_round_trip() {
     let dir = TempDir::new().unwrap();
     let path = pending_path(dir.path());
-    let op = pending(
-        OpKind::Collect {
+    let transaction = transaction(
+        TransactionKind::Collect {
             url: "https://example.com".to_string(),
         },
         "abc".to_string(),
@@ -29,10 +33,30 @@ fn write_read_clear_round_trip() {
         }],
     );
 
-    write(&path, &op).unwrap();
-    assert_eq!(read(&path).unwrap(), Some(op));
+    write(&path, &transaction).unwrap();
+    assert_eq!(read(&path).unwrap(), Some(transaction));
     clear(&path).unwrap();
     assert!(read(&path).unwrap().is_none());
+}
+
+#[test]
+fn transaction_serialization_preserves_pending_file_shape() {
+    let transaction = PendingTransaction {
+        op: TransactionKind::Compile {
+            mode: SynthesisMode::Full,
+        },
+        started_at: "2026-05-19T00:00:00Z".to_string(),
+        pid: 42,
+        pre_state_hash: "abc".to_string(),
+        writes: Vec::new(),
+        deletes: Vec::new(),
+    };
+
+    let value = serde_json::to_value(transaction).unwrap();
+
+    assert_eq!(value["op"]["type"], "Compile");
+    assert_eq!(value["op"]["mode"], "Full");
+    assert_eq!(value["pre_state_hash"], "abc");
 }
 
 #[test]
@@ -46,14 +70,14 @@ fn rollback_removes_staged_write_when_state_unchanged() {
         path: "leaf.md".to_string(),
         content_hash: content_hash(body),
     };
-    let op = pending(
-        OpKind::Collect {
+    let transaction = transaction(
+        TransactionKind::Collect {
             url: "https://example.com".to_string(),
         },
         pre,
         vec![write.clone()],
     );
-    super::write(&pending_path(dir.path()), &op).unwrap();
+    super::write(&pending_path(dir.path()), &transaction).unwrap();
     write_staged(dir.path(), &write, body).unwrap();
 
     let report = recover_or_refuse(dir.path()).unwrap().unwrap();
@@ -76,14 +100,14 @@ fn roll_forward_renames_staged_write_when_state_changed() {
         path: "leaf.md".to_string(),
         content_hash: content_hash(body),
     };
-    let op = pending(
-        OpKind::Collect {
+    let transaction = transaction(
+        TransactionKind::Collect {
             url: "https://example.com".to_string(),
         },
         pre,
         vec![write.clone()],
     );
-    super::write(&pending_path(dir.path()), &op).unwrap();
+    super::write(&pending_path(dir.path()), &transaction).unwrap();
     write_staged(dir.path(), &write, body).unwrap();
     fs::write(dir.path().join(".bo/state.json"), b"state-after").unwrap();
 
@@ -100,9 +124,9 @@ fn live_pending_refuses() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
     fs::write(dir.path().join(".bo/state.json"), b"state").unwrap();
-    let op = PendingOperation {
-        op: OpKind::Compile {
-            mode: CompileMode::Full,
+    let transaction = PendingTransaction {
+        op: TransactionKind::Compile {
+            mode: SynthesisMode::Full,
         },
         started_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         pid: std::process::id(),
@@ -110,8 +134,8 @@ fn live_pending_refuses() {
         writes: Vec::new(),
         deletes: Vec::new(),
     };
-    write(&pending_path(dir.path()), &op).unwrap();
+    write(&pending_path(dir.path()), &transaction).unwrap();
 
     let err = recover_or_refuse(dir.path()).unwrap_err();
-    assert!(matches!(err, PendingError::Busy { .. }));
+    assert!(matches!(err, TransactionError::Busy { .. }));
 }
