@@ -210,7 +210,7 @@ fn read_returns_tree_not_initialized_when_file_absent() {
 // ── runtime state ────────────────────────────────────────────────────────────
 
 #[test]
-fn runtime_state_distinguishes_fresh_missing_and_initialized() {
+fn load_state_distinguishes_fresh_missing_and_loaded() {
     let dir = TempDir::new().unwrap();
 
     assert!(matches!(
@@ -218,7 +218,15 @@ fn runtime_state_distinguishes_fresh_missing_and_initialized() {
         TreeLoadState::FreshSeeded
     ));
 
+    // Runtime metadata alone can remain after a rolled-back first collect.
     std::fs::create_dir_all(dir.path().join(".bo")).unwrap();
+    assert!(matches!(
+        load_state(dir.path()).unwrap(),
+        TreeLoadState::FreshSeeded
+    ));
+
+    std::fs::create_dir_all(dir.path().join("leaf")).unwrap();
+    std::fs::write(dir.path().join("leaf/existing.md"), "content").unwrap();
     assert!(matches!(
         load_state(dir.path()).unwrap(),
         TreeLoadState::MissingState
@@ -234,6 +242,18 @@ fn runtime_state_distinguishes_fresh_missing_and_initialized() {
         load_state(dir.path()).unwrap(),
         TreeLoadState::Loaded(_)
     ));
+}
+
+#[test]
+fn state_or_empty_if_fresh_rejects_missing_state_with_content() {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join("branch")).unwrap();
+    std::fs::write(dir.path().join("branch/existing.md"), "content").unwrap();
+    let tree = Tree::from_config(&temp_config(&dir));
+
+    let error = state_or_empty_if_fresh(&tree).unwrap_err();
+
+    assert!(matches!(error, TreeStateError::TreeNotInitialized));
 }
 
 #[test]

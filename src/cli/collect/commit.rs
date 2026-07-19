@@ -9,6 +9,7 @@ use std::path::Path;
 
 use crate::domain::slug::Slug;
 use crate::domain::state::{self, TreeMetadata, TreeState};
+use crate::domain::tree::TreeLoadState;
 use crate::domain::{leaf, slug, Leaf, Timestamp, Title, Url};
 use crate::engine::pending::{self, OpKind, PendingWrite};
 
@@ -20,11 +21,15 @@ use super::{
 };
 
 pub(super) fn duplicate_file(url: &str, output_dir: &Path) -> Result<Option<String>, CollectError> {
-    let state_path = output_dir.join(".bo").join("state.json");
-    let state = match crate::engine::state::read(&state_path) {
-        Ok(m) => m,
-        Err(state::TreeStateError::TreeNotInitialized) => return Ok(None),
-        Err(e) => return Err(CollectError::TreeState(e)),
+    let state = match crate::engine::state::load_state(output_dir) {
+        Ok(TreeLoadState::Loaded(state)) => state,
+        Ok(TreeLoadState::FreshSeeded) => return Ok(None),
+        Ok(TreeLoadState::MissingState) => {
+            return Err(CollectError::TreeState(
+                state::TreeStateError::TreeNotInitialized,
+            ));
+        }
+        Err(error) => return Err(CollectError::TreeState(error)),
     };
     Ok(state
         .leaves
@@ -199,10 +204,9 @@ pub(super) fn load_or_bootstrap_state(
     output_dir: &Path,
     now: &Timestamp,
 ) -> Result<TreeState, CollectError> {
-    let state_path = output_dir.join(".bo").join("state.json");
-    match crate::engine::state::read(&state_path) {
-        Ok(m) => Ok(m),
-        Err(state::TreeStateError::TreeNotInitialized) => Ok(TreeState {
+    match crate::engine::state::load_state(output_dir) {
+        Ok(TreeLoadState::Loaded(state)) => Ok(state),
+        Ok(TreeLoadState::FreshSeeded) => Ok(TreeState {
             tree: TreeMetadata {
                 name: output_dir
                     .file_name()
@@ -214,7 +218,10 @@ pub(super) fn load_or_bootstrap_state(
             leaves: Vec::new(),
             branches: Vec::new(),
         }),
-        Err(e) => Err(CollectError::TreeState(e)),
+        Ok(TreeLoadState::MissingState) => Err(CollectError::TreeState(
+            state::TreeStateError::TreeNotInitialized,
+        )),
+        Err(error) => Err(CollectError::TreeState(error)),
     }
 }
 

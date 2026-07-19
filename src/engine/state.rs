@@ -4,7 +4,7 @@
 // the filesystem operations so domain stays free of I/O.
 
 use crate::domain::state::{TreeState, TreeStateError};
-use crate::domain::tree::{infra_dir, state_path, Tree, TreeLoadState};
+use crate::domain::tree::{branch_dir, leaf_dir, state_path, Tree, TreeLoadState};
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Write};
@@ -82,12 +82,22 @@ fn debug_assert_unique_slugs(s: &TreeState) {
 pub fn load_state(tree_dir: &Path) -> Result<TreeLoadState, TreeStateError> {
     match read(&state_path(tree_dir)) {
         Ok(state) => Ok(TreeLoadState::Loaded(state)),
-        Err(TreeStateError::TreeNotInitialized) if infra_dir(tree_dir).exists() => {
+        Err(TreeStateError::TreeNotInitialized) if has_tree_content(tree_dir) => {
             Ok(TreeLoadState::MissingState)
         }
         Err(TreeStateError::TreeNotInitialized) => Ok(TreeLoadState::FreshSeeded),
         Err(error) => Err(error),
     }
+}
+
+fn has_tree_content(tree_dir: &Path) -> bool {
+    [leaf_dir(tree_dir), branch_dir(tree_dir)]
+        .into_iter()
+        .any(|dir| match fs::read_dir(dir) {
+            Ok(mut entries) => entries.next().is_some(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(_) => true,
+        })
 }
 
 pub fn state_or_empty_if_fresh(tree: &Tree) -> Result<TreeState, TreeStateError> {

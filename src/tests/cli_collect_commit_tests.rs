@@ -43,3 +43,25 @@ fn dedup_reads_state_not_legacy_index() {
     let none = duplicate_file("https://example.com/other", dir.path()).unwrap();
     assert!(none.is_none());
 }
+
+#[test]
+fn missing_state_with_existing_content_is_not_bootstrapped() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join("leaf")).unwrap();
+    fs::write(dir.path().join("leaf/existing.md"), "content").unwrap();
+
+    let duplicate_error = duplicate_file("https://example.com/article", dir.path()).unwrap_err();
+    let bootstrap_error = load_or_bootstrap_state(
+        dir.path(),
+        &Timestamp::parse("2026-05-19T12:00:00Z").unwrap(),
+    )
+    .unwrap_err();
+
+    for error in [duplicate_error, bootstrap_error] {
+        assert!(matches!(
+            error,
+            CollectError::TreeState(crate::domain::state::TreeStateError::TreeNotInitialized)
+        ));
+    }
+    assert!(!dir.path().join(".bo/state.json").exists());
+}

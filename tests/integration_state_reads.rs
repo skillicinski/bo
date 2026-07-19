@@ -37,11 +37,13 @@ fn stage_tree(home: &Path) -> std::path::PathBuf {
     ];
 
     // Leaf .md files
+    let leaves_dir = tree_dir.join("leaf");
+    fs::create_dir_all(&leaves_dir).unwrap();
     for (slug, title, url) in &leaves {
         let content = format!(
             "---\ntitle: \"{title}\"\nurl: {url}\ncollected_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\n# {title}\n\nBody for {slug}.\n"
         );
-        fs::write(tree_dir.join(format!("{slug}.md")), content).unwrap();
+        fs::write(leaves_dir.join(format!("{slug}.md")), content).unwrap();
     }
 
     // Branch .md file
@@ -63,7 +65,7 @@ fn stage_tree(home: &Path) -> std::path::PathBuf {
             .iter()
             .map(|(slug, title, url)| bo::domain::Leaf {
                 slug: Slug::parse(slug).unwrap(),
-                file: format!("{slug}.md"),
+                file: format!("leaf/{slug}.md"),
                 title: Title::parse(title).ok(),
                 url: Url::parse(url).unwrap(),
                 collected_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
@@ -111,7 +113,7 @@ fn state_reads_work_without_secondary_store() {
 
     assert_eq!(status["leaves"]["total"], 3);
     assert_eq!(list["total_leaves"], 3);
-    assert_eq!(show["file"], "alpha.md");
+    assert_eq!(show["file"], "leaf/alpha.md");
 }
 
 #[test]

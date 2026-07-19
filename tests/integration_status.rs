@@ -158,6 +158,7 @@ fn status_detects_missing_leaf_file() {
 fn status_detects_untracked_leaf_file() {
     let tmp = TempDir::new().unwrap();
     let tree_dir = common::seed(tmp.path(), "tree");
+    common::ensure_state(&tree_dir);
 
     // Write a leaf file directly without going through collect (not tracked in state)
     let content = "---\ntitle: \"stray\"\nurl: https://stray.com\ncollected_at: 2026-05-14T10:00:00Z\nupdated_at: 2026-05-14T10:00:00Z\n---\n\n# stray\n\nOrphaned leaf.\n";
