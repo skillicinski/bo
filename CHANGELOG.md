@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-19
+
 ### Changed
 
 - **Breaking:** renamed the `bo compile` command to `bo synthesize`. The old command name is rejected; there is no alias.
@@ -19,6 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Breaking:** tree metadata and topology now live in `.bo/state.json` instead of `.bo/manifest.json`. Existing trees require manual migration before deploying v0.1.0; there is no automatic migration.
 - **Breaking:** renamed machine-facing JSON fields and error codes to the new state vocabulary (e.g. `bo status` health `orphan_index_entries`/`missing_from_index` → `missing_leaf_files`/`untracked_leaf_files`; status state errors now report code `state_error` instead of `io_error`). The executable JSON envelope `schema_version` bumped from 1 to 2.
 - **Breaking:** renamed JSON error code `pending_error` to `transaction_error` in collect responses. The `tree_busy` code is unchanged.
+
+### Fixed
+
+- Synthesis now resolves canonical `leaf/` paths and collision-disambiguated leaf slugs consistently when validating and recording branch membership, preventing false incremental drops and `leaf-`-prefixed stored slugs.
 
 ## [0.0.11] - 2026-07-18
 
