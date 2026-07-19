@@ -7,9 +7,9 @@
 // knowledge graph.
 //
 // Frontmatter is serialized via serde_yaml_ng, mirroring branch.rs. The
-// leaf→branch relationship is not written into leaf frontmatter; the manifest
-// is the sole source of truth (see `Manifest::branches_for_leaf`). Likewise,
-// `summary` lives only in the manifest — it is never written to leaf
+// leaf→branch relationship is not written into leaf frontmatter; the state
+// is the sole source of truth (see `TreeState::branches_for_leaf`). Likewise,
+// `summary` lives only in the state — it is never written to leaf
 // frontmatter.
 
 use crate::domain::title::deserialize_option_title;
@@ -48,7 +48,7 @@ pub(crate) struct LeafFrontmatter {
 /// Format leaf document content — frontmatter block followed by body.
 ///
 /// Only `title`, `url`, and `collected_at` are written to frontmatter.
-/// `summary` and `updated_at` are deliberately omitted — the manifest is the
+/// `summary` and `updated_at` are deliberately omitted — the state is the
 /// single source of truth for both.
 pub fn format_content(
     title: Option<&Title>,

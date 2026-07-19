@@ -1,7 +1,7 @@
 use super::*;
 use crate::cli::compile::types::{CompileError, CompileRunMode};
-use crate::domain::manifest::{Manifest, TreeMeta};
 use crate::domain::slug::Slug;
+use crate::domain::state::{TreeMetadata, TreeState};
 use crate::domain::{Branch, Leaf, Timestamp, Title, Url};
 use crate::engine::config::SeededConfig;
 use crate::engine::llm::{
@@ -26,14 +26,13 @@ fn seeded_config(dir: &Path) -> SeededConfig {
     SeededConfig::new(crate::engine::config::Config::default(), tree_cfg)
 }
 
-fn write_manifest(dir: &Path, manifest: &Manifest) {
+fn write_state(dir: &Path, state: &TreeState) {
     let tree = crate::domain::tree::Tree::from_config(&crate::domain::tree::TreeConfig {
         path: dir.to_path_buf(),
         name: "test-tree".to_string(),
         created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
     });
-    crate::engine::manifest::write(&crate::domain::tree::manifest_path(&tree.path), manifest)
-        .unwrap();
+    crate::engine::state::write(&crate::domain::tree::state_path(&tree.path), state).unwrap();
 }
 
 fn leaf_record(slug: &str, file: &str, title: &str, collected_at: &str) -> Leaf {
@@ -47,9 +46,9 @@ fn leaf_record(slug: &str, file: &str, title: &str, collected_at: &str) -> Leaf 
     }
 }
 
-fn fresh_manifest(name: &str, created_at: &str, last_compiled_at: Option<&str>) -> Manifest {
-    Manifest {
-        tree: TreeMeta {
+fn fresh_state(name: &str, created_at: &str, last_compiled_at: Option<&str>) -> TreeState {
+    TreeState {
+        tree: TreeMetadata {
             name: name.to_string(),
             created_at: Timestamp::parse(created_at).unwrap(),
             last_compiled_at: last_compiled_at.map(|s| Timestamp::parse(s).unwrap()),
@@ -203,35 +202,35 @@ fn setup_incremental_tree(
     dir: &Path,
 ) -> (
     SeededConfig,
-    Manifest,
+    TreeState,
     Vec<crate::cli::compile::plan::LoadedLeaf>,
 ) {
-    let mut manifest = fresh_manifest("test", "2026-01-01T00:00:00Z", Some("2026-01-10T00:00:00Z"));
-    manifest.leaves.push(leaf_record(
+    let mut state = fresh_state("test", "2026-01-01T00:00:00Z", Some("2026-01-10T00:00:00Z"));
+    state.leaves.push(leaf_record(
         "leaf-a",
         "leaf-a.md",
         "Leaf A",
         "2026-01-15T00:00:00Z",
     ));
-    manifest.leaves.push(leaf_record(
+    state.leaves.push(leaf_record(
         "leaf-b",
         "leaf-b.md",
         "Leaf B",
         "2026-01-15T00:00:00Z",
     ));
-    manifest.leaves.push(leaf_record(
+    state.leaves.push(leaf_record(
         "leaf-c",
         "leaf-c.md",
         "Leaf C",
         "2026-01-05T00:00:00Z",
     ));
-    manifest.leaves.push(leaf_record(
+    state.leaves.push(leaf_record(
         "leaf-d",
         "leaf-d.md",
         "Leaf D",
         "2026-01-05T00:00:00Z",
     ));
-    manifest.branches.push(branch_record(
+    state.branches.push(branch_record(
         "existing",
         "Existing Branch",
         &["leaf-c", "leaf-d"],
@@ -249,7 +248,7 @@ fn setup_incremental_tree(
     )
     .unwrap();
 
-    write_manifest(dir, &manifest);
+    write_state(dir, &state);
 
     let cfg = seeded_config(dir);
     let loaded = vec![
@@ -258,7 +257,7 @@ fn setup_incremental_tree(
         loaded_leaf("leaf-c", "Leaf C"),
         loaded_leaf("leaf-d", "Leaf D"),
     ];
-    (cfg, manifest, loaded)
+    (cfg, state, loaded)
 }
 
 fn find_tool_result(
@@ -300,7 +299,7 @@ fn agent_provides_six_tools_including_read_branch() {
 
     for (run_mode, submission) in cases {
         let dir = TempDir::new().unwrap();
-        let (cfg, manifest, loaded) = setup_incremental_tree(dir.path());
+        let (cfg, state, loaded) = setup_incremental_tree(dir.path());
         let provider = ScriptedAgentProvider::new(vec![agent_tool_response(
             "submit",
             "submit_compile",
@@ -308,7 +307,7 @@ fn agent_provides_six_tools_including_read_branch() {
         )]);
         let model = agent_model();
 
-        run_agent_dry_run(&cfg, &provider, &model, &manifest, &loaded, run_mode)
+        run_agent_dry_run(&cfg, &provider, &model, &state, &loaded, run_mode)
             .unwrap_or_else(|error| panic!("{run_mode:?} agent run should complete: {error}"));
 
         let schemas = provider
@@ -365,7 +364,7 @@ fn agent_provides_six_tools_including_read_branch() {
 #[test]
 fn agent_read_branch_returns_body_leaves_and_handles_pagination() {
     let dir = TempDir::new().unwrap();
-    let (cfg, manifest, loaded) = setup_incremental_tree(dir.path());
+    let (cfg, state, loaded) = setup_incremental_tree(dir.path());
     let heading = "# Existing Branch\n\n";
     let body = format!("{heading}{}\u{2014}{}", "a".repeat(8190), "z".repeat(12000));
     let em_dash_offset = heading.len() + 8190;
@@ -392,7 +391,7 @@ fn agent_read_branch_returns_body_leaves_and_handles_pagination() {
         &cfg,
         &provider,
         &model,
-        &manifest,
+        &state,
         &loaded,
         CompileRunMode::Incremental,
     )
@@ -428,7 +427,7 @@ fn agent_read_branch_returns_body_leaves_and_handles_pagination() {
 fn agent_read_branch_rejects_unknown_slugs() {
     for identifier in ["nonexistent", "branch/nonexistent", "branch/"] {
         let dir = TempDir::new().unwrap();
-        let (cfg, manifest, loaded) = setup_incremental_tree(dir.path());
+        let (cfg, state, loaded) = setup_incremental_tree(dir.path());
         let submission = incremental_update_submission("existing", &["leaf-c", "leaf-d", "leaf-a"]);
         let args = serde_json::json!({"slug": identifier}).to_string();
         let provider = ScriptedAgentProvider::new(vec![
@@ -441,7 +440,7 @@ fn agent_read_branch_rejects_unknown_slugs() {
             &cfg,
             &provider,
             &model,
-            &manifest,
+            &state,
             &loaded,
             CompileRunMode::Incremental,
         )
@@ -459,7 +458,7 @@ fn agent_read_branch_rejects_unknown_slugs() {
 fn agent_read_leaf_rejects_branch_identifiers_with_hint() {
     for identifier in ["existing", "branch/existing"] {
         let dir = TempDir::new().unwrap();
-        let (cfg, manifest, loaded) = setup_incremental_tree(dir.path());
+        let (cfg, state, loaded) = setup_incremental_tree(dir.path());
         let submission = incremental_update_submission("existing", &["leaf-c", "leaf-d", "leaf-a"]);
 
         let args = serde_json::json!({"slug": identifier}).to_string();
@@ -473,7 +472,7 @@ fn agent_read_leaf_rejects_branch_identifiers_with_hint() {
             &cfg,
             &provider,
             &model,
-            &manifest,
+            &state,
             &loaded,
             CompileRunMode::Incremental,
         )
@@ -490,7 +489,7 @@ fn agent_read_leaf_rejects_branch_identifiers_with_hint() {
 #[test]
 fn agent_incremental_branch_identifier_round_trips_from_list_branches() {
     let dir = TempDir::new().unwrap();
-    let (cfg, manifest, loaded) = setup_incremental_tree(dir.path());
+    let (cfg, state, loaded) = setup_incremental_tree(dir.path());
     let submission =
         incremental_update_submission("branch/existing", &["leaf-c", "leaf-d", "leaf-a"]);
     let provider = ScriptedAgentProvider::new(vec![
@@ -503,7 +502,7 @@ fn agent_incremental_branch_identifier_round_trips_from_list_branches() {
         &cfg,
         &provider,
         &model,
-        &manifest,
+        &state,
         &loaded,
         CompileRunMode::Incremental,
     )
@@ -528,7 +527,7 @@ fn agent_incremental_branch_identifier_round_trips_from_list_branches() {
 #[test]
 fn agent_incremental_bare_branch_slug_still_validates() {
     let dir = TempDir::new().unwrap();
-    let (cfg, manifest, loaded) = setup_incremental_tree(dir.path());
+    let (cfg, state, loaded) = setup_incremental_tree(dir.path());
     let submission = incremental_update_submission("existing", &["leaf-c", "leaf-d", "leaf-a"]);
     let provider = ScriptedAgentProvider::new(vec![agent_tool_response(
         "submit",
@@ -541,7 +540,7 @@ fn agent_incremental_bare_branch_slug_still_validates() {
         &cfg,
         &provider,
         &model,
-        &manifest,
+        &state,
         &loaded,
         CompileRunMode::Incremental,
     )
@@ -576,7 +575,7 @@ fn one_shot_incremental_rejects_branch_identifier_prefix() {
 fn agent_rejects_branch_identifiers_in_leaf_lists_with_teaching_hint() {
     for identifier in ["branch/existing", "existing"] {
         let dir = TempDir::new().unwrap();
-        let (cfg, manifest, loaded) = setup_incremental_tree(dir.path());
+        let (cfg, state, loaded) = setup_incremental_tree(dir.path());
         let submission =
             incremental_update_submission("existing", &["leaf-c", "leaf-d", identifier]);
         let provider = ScriptedAgentProvider::new(vec![agent_tool_response(
@@ -590,7 +589,7 @@ fn agent_rejects_branch_identifiers_in_leaf_lists_with_teaching_hint() {
             &cfg,
             &provider,
             &model,
-            &manifest,
+            &state,
             &loaded,
             CompileRunMode::Incremental,
         )

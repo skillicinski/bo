@@ -79,9 +79,9 @@ Within a layer, use the narrowest practical visibility. Compile stages use `pub(
 
 ## State and format decisions
 
-### Manifest is the topology source of truth
+### Tree state is the topology source of truth
 
-`{tree}/.bo/manifest.json` is the only topology record. Branches store leaf slugs; `Manifest::branches_for_leaf` computes the inverse in memory. `pending.json` is transaction recovery state and `journal.jsonl` is an operational log, not a second topology model.
+`{tree}/.bo/state.json` is the only topology record. Branches store leaf slugs; `TreeState::branches_for_leaf` computes the inverse in memory. `pending.json` is transaction recovery state and `journal.jsonl` is an operational log, not a second topology model.
 
 ### The domain vocabulary is typed
 

@@ -1,14 +1,15 @@
 // Collect stage: the single-atomic-commit boundary.
 //
-// Dedup against the on-disk manifest, allocate disambiguated slugs, stage
+// Dedup against the on-disk state, allocate disambiguated slugs, stage
 // writes through the pending transaction, and shape pipeline outcomes into
 // the public `CollectItemResult`/`CollectResult` records.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::domain::manifest::{self, Manifest, TreeMeta};
 use crate::domain::slug::Slug;
+use crate::domain::state::{self, TreeMetadata, TreeState};
+use crate::domain::tree::TreeLoadState;
 use crate::domain::{leaf, slug, Leaf, Timestamp, Title, Url};
 use crate::engine::pending::{self, OpKind, PendingWrite};
 
@@ -20,13 +21,17 @@ use super::{
 };
 
 pub(super) fn duplicate_file(url: &str, output_dir: &Path) -> Result<Option<String>, CollectError> {
-    let manifest_path = output_dir.join(".bo").join("manifest.json");
-    let manifest = match crate::engine::manifest::read(&manifest_path) {
-        Ok(m) => m,
-        Err(manifest::ManifestError::TreeNotInitialized) => return Ok(None),
-        Err(e) => return Err(CollectError::Manifest(e)),
+    let state = match crate::engine::state::load_state(output_dir) {
+        Ok(TreeLoadState::Loaded(state)) => state,
+        Ok(TreeLoadState::FreshSeeded) => return Ok(None),
+        Ok(TreeLoadState::MissingState) => {
+            return Err(CollectError::TreeState(
+                state::TreeStateError::TreeNotInitialized,
+            ));
+        }
+        Err(error) => return Err(CollectError::TreeState(error)),
     };
-    Ok(manifest
+    Ok(state
         .leaves
         .iter()
         .find(|l| l.url.as_str() == url)
@@ -194,16 +199,15 @@ pub(super) fn existing_slug_stems(output_dir: &Path) -> HashSet<String> {
     stems
 }
 
-/// Load the manifest from disk, or return an empty one if the tree is freshly seeded.
-pub(super) fn load_or_bootstrap_manifest(
+/// Load the state from disk, or return an empty one if the tree is freshly seeded.
+pub(super) fn load_or_bootstrap_state(
     output_dir: &Path,
     now: &Timestamp,
-) -> Result<Manifest, CollectError> {
-    let manifest_path = output_dir.join(".bo").join("manifest.json");
-    match crate::engine::manifest::read(&manifest_path) {
-        Ok(m) => Ok(m),
-        Err(manifest::ManifestError::TreeNotInitialized) => Ok(Manifest {
-            tree: TreeMeta {
+) -> Result<TreeState, CollectError> {
+    match crate::engine::state::load_state(output_dir) {
+        Ok(TreeLoadState::Loaded(state)) => Ok(state),
+        Ok(TreeLoadState::FreshSeeded) => Ok(TreeState {
+            tree: TreeMetadata {
                 name: output_dir
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
@@ -214,24 +218,27 @@ pub(super) fn load_or_bootstrap_manifest(
             leaves: Vec::new(),
             branches: Vec::new(),
         }),
-        Err(e) => Err(CollectError::Manifest(e)),
+        Ok(TreeLoadState::MissingState) => Err(CollectError::TreeState(
+            state::TreeStateError::TreeNotInitialized,
+        )),
+        Err(error) => Err(CollectError::TreeState(error)),
     }
 }
 
-/// Atomically commit a manifest update with staged writes and deletes.
+/// Atomically commit a state update with staged writes and deletes.
 ///
-/// Writes the pending operation, stages content, writes the manifest, then
+/// Writes the pending operation, stages content, writes the state, then
 /// applies writes/deletes and clears the pending file. The entire sequence
 /// is guarded by the pending lock so a crash mid-commit is recoverable.
-pub(super) fn commit_manifest_and_writes(
+pub(super) fn commit_state_and_writes(
     output_dir: &Path,
     op: OpKind,
-    manifest: &Manifest,
+    state: &TreeState,
     staged: &[(&PendingWrite, &[u8])],
     deletes: &[String],
 ) -> Result<(), CollectError> {
-    pending::commit_with_manifest(output_dir, op, manifest, staged, deletes)
-        .map_err(|e| CollectError::Io(std::io::Error::other(e.to_string())))
+    pending::commit_with_state(output_dir, op, state, staged, deletes)
+        .map_err(|error| CollectError::Io(std::io::Error::other(error.to_string())))
 }
 
 // ── phase 3: sequential commit ──────────────────────────────────────────────
@@ -239,7 +246,7 @@ pub(super) fn commit_manifest_and_writes(
 /// Commit computed leaves in input order: allocate disambiguated slugs, stage
 /// leaf writes through the pending transaction, and single-atomically commit.
 /// Failures and same-batch duplicates append to `outcomes`; note warnings land
-/// in `warnings`. Manifest/slug/pending logic is unchanged from the inlined loop.
+/// in `warnings`. TreeState/slug/pending logic is unchanged from the inlined loop.
 pub(super) fn commit_computed(
     compute_results: Vec<(String, String, Result<ComputedLeaf, CollectError>)>,
     output_dir: &Path,
@@ -247,7 +254,7 @@ pub(super) fn commit_computed(
     warnings: &mut Vec<String>,
 ) -> Result<(), CollectError> {
     let now = Timestamp::now();
-    let mut manifest = load_or_bootstrap_manifest(output_dir, &now)?;
+    let mut state = load_or_bootstrap_state(output_dir, &now)?;
     let mut staged: Vec<(PendingWrite, Vec<u8>)> = Vec::new();
     // Track claimed slug stems so intra-batch collisions are resolved
     // before writes hit disk. Snapshot on-disk stems first, then track
@@ -263,10 +270,7 @@ pub(super) fn commit_computed(
                 // Same-batch duplicate: two inputs that fetched the same canonical
                 // URL. Skip before reserving a slug, reporting the already-written
                 // leaf's file rather than a freshly-resolved (and never-written) one.
-                if let Some(existing) = manifest
-                    .leaves
-                    .iter()
-                    .find(|l| l.url.as_str() == computed.url)
+                if let Some(existing) = state.leaves.iter().find(|l| l.url.as_str() == computed.url)
                 {
                     outcomes.push(Outcome::Errored {
                         input: input_label,
@@ -296,7 +300,7 @@ pub(super) fn commit_computed(
                     content_hash: pending::content_hash(&leaf_bytes),
                 };
 
-                manifest.leaves.push(Leaf {
+                state.leaves.push(Leaf {
                     slug: filename.clone(),
                     file: leaf_file.clone(),
                     title: domain_title,
@@ -334,12 +338,12 @@ pub(super) fn commit_computed(
     if !staged.is_empty() {
         let staged_refs: Vec<(&PendingWrite, &[u8])> =
             staged.iter().map(|(pw, b)| (pw, b.as_slice())).collect();
-        commit_manifest_and_writes(
+        commit_state_and_writes(
             output_dir,
             OpKind::Collect {
                 url: format!("batch of {} urls", staged_refs.len()),
             },
-            &manifest,
+            &state,
             &staged_refs,
             &[],
         )?;

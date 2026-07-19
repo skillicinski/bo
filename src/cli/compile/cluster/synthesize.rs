@@ -10,7 +10,7 @@ use crate::cli::compile::plan::LoadedLeaf;
 use crate::cli::compile::prompt::COMPILE_SYSTEM_PROMPT;
 use crate::cli::compile::validation::{CompilePlan, ValidatedBranch};
 use crate::cli::compile::CompileError;
-use crate::domain::manifest::Manifest;
+use crate::domain::state::TreeState;
 use crate::engine::config::SeededConfig;
 use crate::engine::schema::inline_schema_for;
 
@@ -114,7 +114,7 @@ pub(in crate::cli::compile) fn run_stage2_synthesize_incremental(
     provider: &dyn crate::engine::llm::LlmProvider,
     model: &crate::engine::llm::Model,
     clusters: &ValidatedClusters,
-    manifest: &Manifest,
+    state: &TreeState,
     all_leaves: &[LoadedLeaf],
     warnings: &mut Vec<String>,
 ) -> Result<(Vec<ValidatedBranch>, Vec<ValidatedBranch>), CompileError> {
@@ -134,7 +134,7 @@ pub(in crate::cli::compile) fn run_stage2_synthesize_incremental(
 
         if cluster.is_existing_branch() {
             // Read existing branch body for the update prompt.
-            let existing = match manifest.branch_by_slug_str(&cluster.existing_branch_slug) {
+            let existing = match state.branch_by_slug_str(&cluster.existing_branch_slug) {
                 Some(b) => b,
                 None => {
                     warnings.push(format!(
@@ -170,7 +170,7 @@ pub(in crate::cli::compile) fn run_stage2_synthesize_incremental(
             // Merge cluster leaves with existing branch leaves.
             let mut all_leaf_files: Vec<String> = cluster.leaf_files.clone();
             for leaf_slug in &existing.leaves {
-                if let Some(leaf) = manifest.leaves.iter().find(|l| l.slug == *leaf_slug) {
+                if let Some(leaf) = state.leaves.iter().find(|l| l.slug == *leaf_slug) {
                     let f = leaf.file.clone();
                     if !all_leaf_files.contains(&f) {
                         all_leaf_files.push(f);

@@ -1,8 +1,8 @@
 // retrieve_docs integration tests: the combined leaf+branch ranking pipeline
 // (document loading, scoring, diagnostics, top-k truncation, error paths).
 
-use crate::domain::manifest::{Manifest, TreeMeta};
 use crate::domain::slug::Slug;
+use crate::domain::state::{TreeMetadata, TreeState};
 use crate::domain::timestamp::Timestamp;
 use crate::domain::{Branch, Leaf, Title, Url};
 use crate::engine::retrieval::{
@@ -13,7 +13,7 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
-// ── on-disk tree builders (retrieve_docs reads .bo/manifest.json) ─────
+// ── on-disk tree builders (retrieve_docs reads .bo/state.json) ─────
 
 fn make_leaf(
     dir: &Path,
@@ -38,7 +38,7 @@ fn make_leaf(
     fs::write(leaves_dir.join(filename), content).unwrap()
 }
 
-fn make_manifest(dir: &Path, entries: &[(&str, &str, &str)]) {
+fn make_state(dir: &Path, entries: &[(&str, &str, &str)]) {
     let leaves: Vec<_> = entries
         .iter()
         .map(|(file, title, url)| {
@@ -63,10 +63,10 @@ fn make_manifest(dir: &Path, entries: &[(&str, &str, &str)]) {
         .collect();
     let bo_dir = dir.join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    crate::engine::manifest::write(
-        &bo_dir.join("manifest.json"),
-        &Manifest {
-            tree: TreeMeta {
+    crate::engine::state::write(
+        &bo_dir.join("state.json"),
+        &TreeState {
+            tree: TreeMetadata {
                 name: "query".to_string(),
                 created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                 last_compiled_at: None,
@@ -108,7 +108,7 @@ fn retrieve_or_semantics_scores_partial_matches() {
         "Boil water and add salt. Cook pasta for 10 minutes.",
     );
 
-    make_manifest(
+    make_state(
         tree,
         &[
             (
@@ -144,7 +144,7 @@ fn retrieve_or_semantics_scores_partial_matches() {
 fn retrieve_empty_tree_returns_error() {
     let dir = TempDir::new().unwrap();
     let tree = dir.path();
-    make_manifest(tree, &[]);
+    make_state(tree, &[]);
 
     let err = retrieve_docs(tree, &["rust".to_string()]).unwrap_err();
     assert!(matches!(err, RetrievalError::EmptyTree));
@@ -163,7 +163,7 @@ fn retrieve_no_matches_returns_error() {
         Some("How to cook"),
         "Boil water.",
     );
-    make_manifest(
+    make_state(
         tree,
         &[(
             "leaves/cooking.md",
@@ -189,7 +189,7 @@ fn retrieve_missing_summary_uses_body_fallback() {
         None,
         "This leaf has no summary field but has a body about Rust programming.",
     );
-    make_manifest(
+    make_state(
         tree,
         &[(
             "leaves/nosummary.md",
@@ -248,8 +248,8 @@ fn retrieve_returns_compiled_branch_when_no_leaf_matches() {
     )
     .unwrap();
 
-    let manifest = Manifest {
-        tree: TreeMeta {
+    let state = TreeState {
+        tree: TreeMetadata {
             name: "query".to_string(),
             created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             last_compiled_at: Some(Timestamp::parse("2025-01-01T00:00:00Z").unwrap()),
@@ -283,7 +283,7 @@ fn retrieve_returns_compiled_branch_when_no_leaf_matches() {
     };
     let bo_dir = tree.join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    crate::engine::manifest::write(&bo_dir.join("manifest.json"), &manifest).unwrap();
+    crate::engine::state::write(&bo_dir.join("state.json"), &state).unwrap();
 
     // Only the branch matches "ownership"; neither leaf does.
     let results = retrieve_docs(tree, &["ownership".to_string()]).unwrap();
@@ -340,8 +340,8 @@ fn scorer_leaf_and_branch_equal_scores_for_identical_content() {
     )
     .unwrap();
 
-    let manifest = Manifest {
-        tree: TreeMeta {
+    let state = TreeState {
+        tree: TreeMetadata {
             name: "test".to_string(),
             created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             last_compiled_at: Some(Timestamp::parse("2025-01-01T00:00:00Z").unwrap()),
@@ -365,7 +365,7 @@ fn scorer_leaf_and_branch_equal_scores_for_identical_content() {
     };
     let bo_dir = tree.join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    crate::engine::manifest::write(&bo_dir.join("manifest.json"), &manifest).unwrap();
+    crate::engine::state::write(&bo_dir.join("state.json"), &state).unwrap();
 
     let terms = vec!["lorem".to_string()];
     let results = retrieve_docs(tree, &terms).unwrap();

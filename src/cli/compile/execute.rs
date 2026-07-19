@@ -12,7 +12,7 @@ use crate::engine::llm::{
 };
 use crate::engine::pending::{self, CompileMode, OpKind, PendingWrite};
 
-use super::plan::build_manifest_delta;
+use super::plan::build_state_delta;
 use super::types::{
     COMPILE_LLM_POLICY, COMPILE_PROMPT_OVERHEAD_TOKENS, MAX_COMPLETION_TOKENS,
     TOKEN_ESTIMATE_BYTES_PER_TOKEN,
@@ -139,27 +139,27 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
     run_timestamp: &Timestamp,
     skipped_leaves: &[String],
     run_mode: CompileRunMode,
-    expected_manifest_hash: &str,
+    expected_state_hash: &str,
     warnings: &mut Vec<String>,
 ) -> Result<CompileSummary, CompileError> {
     let tree = cfg.tree();
     let tree_dir = tree.path();
     recover_pending_if_needed(tree_dir, warnings)?;
 
-    // Load current manifest. Used to preserve branch `created_at` and carry
-    // leaf records / tree metadata forward into the new manifest.
-    let current = crate::engine::manifest::manifest_or_empty_if_fresh(&tree)
-        .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
+    // Load current state. Used to preserve branch `created_at` and carry
+    // leaf records / tree metadata forward into the new state.
+    let current = crate::engine::state::state_or_empty_if_fresh(&tree)
+        .map_err(|e| CompileError::Io(format!("failed to read state: {}", e)))?;
 
-    let current_manifest_hash = pending::manifest_hash(tree_dir)?;
-    if current_manifest_hash != expected_manifest_hash {
+    let current_state_hash = pending::state_hash(tree_dir)?;
+    if current_state_hash != expected_state_hash {
         return Err(CompileError::Io(
-            "manifest changed during compile planning; rerun `bo compile`".to_string(),
+            "state changed during compile planning; rerun `bo compile`".to_string(),
         ));
     }
 
     // Stale branches already repaired in pre-LLM pass; no deleted leaves remain.
-    let delta = build_manifest_delta(&current, plan, run_mode, run_timestamp)?;
+    let delta = build_state_delta(&current, plan, run_mode, run_timestamp)?;
 
     let mut staged: Vec<(PendingWrite, Vec<u8>)> = Vec::new();
     for planned_write in &delta.branch_writes {
@@ -188,10 +188,10 @@ pub(super) fn execute_plan_with_mode_and_expected_hash(
     };
     let staged_refs: Vec<(&PendingWrite, &[u8])> =
         staged.iter().map(|(pw, b)| (pw, b.as_slice())).collect();
-    pending::commit_with_manifest(
+    pending::commit_with_state(
         tree_dir,
         OpKind::Compile { mode: compile_mode },
-        &delta.new_manifest,
+        &delta.new_state,
         &staged_refs,
         &delta.branch_deletes,
     )

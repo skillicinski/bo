@@ -1,14 +1,14 @@
-// Manifest — the single source of truth for a tree's topology.
+// TreeState — the single source of truth for a tree's topology.
 //
-// `{tree}/.bo/manifest.json` holds tree metadata, the leaf roster, and the
+// `{tree}/.bo/state.json` holds tree metadata, the leaf roster, and the
 // branch roster. Cross-references are unidirectional: branches list their
 // leaf slugs; the inverse (which branches contain a given leaf) is computed
-// in-memory at call time. The manifest is the only tree-state store. Missing
-// or corrupt manifests are surfaced as errors; there is no secondary
+// in-memory at call time. The tree state is the only topology record. Missing
+// or corrupt state files are surfaced as errors; there is no secondary
 // reconstruction path.
 //
 // Pure types and resolution logic live here. Filesystem I/O lives in
-// `engine::manifest` so domain stays free of I/O.
+// `engine::state` so domain stays free of I/O.
 
 use crate::domain::{Branch, Leaf, Slug, Timestamp};
 use serde::{Deserialize, Serialize};
@@ -18,8 +18,8 @@ use std::io;
 // ── types ─────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Manifest {
-    pub tree: TreeMeta,
+pub struct TreeState {
+    pub tree: TreeMetadata,
     /// All collected leaves, in collection order.
     pub leaves: Vec<Leaf>,
     /// All compiled branches, in compile order.
@@ -27,7 +27,7 @@ pub struct Manifest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TreeMeta {
+pub struct TreeMetadata {
     pub name: String,
     pub created_at: Timestamp,
     /// Set on successful compile. `None` until the first compile run.
@@ -37,40 +37,40 @@ pub struct TreeMeta {
 // ── errors ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
-pub enum ManifestError {
+pub enum TreeStateError {
     Io(io::Error),
     Parse(serde_json::Error),
-    /// `manifest.json` does not exist at the requested path.
+    /// `state.json` does not exist at the requested path.
     TreeNotInitialized,
 }
 
-impl fmt::Display for ManifestError {
+impl fmt::Display for TreeStateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ManifestError::Io(e) => write!(f, "manifest I/O error: {}", e),
-            ManifestError::Parse(e) => write!(f, "manifest parse error: {}", e),
-            ManifestError::TreeNotInitialized => {
+            TreeStateError::Io(e) => write!(f, "tree state I/O error: {}", e),
+            TreeStateError::Parse(e) => write!(f, "tree state parse error: {}", e),
+            TreeStateError::TreeNotInitialized => {
                 write!(f, "tree not initialized; run bo seed")
             }
         }
     }
 }
 
-impl From<io::Error> for ManifestError {
+impl From<io::Error> for TreeStateError {
     fn from(e: io::Error) -> Self {
-        ManifestError::Io(e)
+        TreeStateError::Io(e)
     }
 }
 
-impl From<serde_json::Error> for ManifestError {
+impl From<serde_json::Error> for TreeStateError {
     fn from(e: serde_json::Error) -> Self {
-        ManifestError::Parse(e)
+        TreeStateError::Parse(e)
     }
 }
 
 // ── resolution helpers ────────────────────────────────────────────────────────
 
-impl Manifest {
+impl TreeState {
     /// Look up a branch by slug string (convenience).
     pub fn branch_by_slug_str(&self, slug: &str) -> Option<&Branch> {
         self.branches.iter().find(|b| b.slug.as_str() == slug)
@@ -92,7 +92,7 @@ impl Manifest {
     }
 
     /// Inverse of cross-reference: which branches contain a given leaf.
-    /// Computed in-memory at call time; the manifest does not persist this
+    /// Computed in-memory at call time; the tree state does not persist this
     /// direction.
     pub fn branches_for_leaf(&self, leaf_slug: &Slug) -> Vec<&Branch> {
         self.branches
@@ -103,5 +103,5 @@ impl Manifest {
 }
 
 #[cfg(test)]
-#[path = "../tests/domain_manifest_tests.rs"]
+#[path = "../tests/domain_state_tests.rs"]
 mod tests;

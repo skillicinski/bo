@@ -1,5 +1,5 @@
 use crate::cli::compile::plan::LoadedLeaf;
-use crate::domain::manifest::{Manifest, TreeMeta};
+use crate::domain::state::{TreeMetadata, TreeState};
 use crate::domain::{Branch, Leaf, Title, Url};
 use crate::domain::{Slug, Timestamp};
 
@@ -234,8 +234,8 @@ fn validate_incremental_clusters_accepts_assignment_and_new_cluster() {
         updated_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         leaves: vec![Slug::generate("old-leaf", "")],
     };
-    let manifest = Manifest {
-        tree: TreeMeta {
+    let state = TreeState {
+        tree: TreeMetadata {
             name: "test".to_string(),
             created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             last_compiled_at: Some(Timestamp::parse("2026-01-02T00:00:00Z").unwrap()),
@@ -271,7 +271,7 @@ fn validate_incremental_clusters_accepts_assignment_and_new_cluster() {
         }],
     };
     let mut warnings = Vec::new();
-    let result = validate_incremental_clusters(&response, &manifest, &leaves, &mut warnings);
+    let result = validate_incremental_clusters(&response, &state, &leaves, &mut warnings);
     assert!(
         result.is_ok(),
         "valid incremental clusters should pass: {:?}",
@@ -291,8 +291,8 @@ fn validate_incremental_clusters_accepts_assignment_and_new_cluster() {
 
 #[test]
 fn validate_incremental_clusters_repairs_unknown_branch() {
-    let manifest = Manifest {
-        tree: TreeMeta {
+    let state = TreeState {
+        tree: TreeMetadata {
             name: "test".to_string(),
             created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             last_compiled_at: Some(Timestamp::parse("2026-01-02T00:00:00Z").unwrap()),
@@ -315,7 +315,7 @@ fn validate_incremental_clusters_repairs_unknown_branch() {
         new_clusters: vec![],
     };
     let mut warnings = Vec::new();
-    let result = validate_incremental_clusters(&response, &manifest, &leaves, &mut warnings);
+    let result = validate_incremental_clusters(&response, &state, &leaves, &mut warnings);
     // Unknown branch → assignment dropped. No clusters remain → error.
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
@@ -340,8 +340,8 @@ fn validate_incremental_clusters_rejects_new_cluster_title_collision() {
         updated_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
         leaves: vec![Slug::generate("old", "")],
     };
-    let manifest = Manifest {
-        tree: TreeMeta {
+    let state = TreeState {
+        tree: TreeMetadata {
             name: "test".to_string(),
             created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             last_compiled_at: Some(Timestamp::parse("2026-01-02T00:00:00Z").unwrap()),
@@ -364,7 +364,7 @@ fn validate_incremental_clusters_rejects_new_cluster_title_collision() {
         }],
     };
     let mut warnings = Vec::new();
-    let result = validate_incremental_clusters(&response, &manifest, &leaves, &mut warnings);
+    let result = validate_incremental_clusters(&response, &state, &leaves, &mut warnings);
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(

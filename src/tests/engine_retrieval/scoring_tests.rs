@@ -1,7 +1,7 @@
 // score_corpus unit tests: IDF scoring, token-level matching, density ranking.
 
-use crate::domain::manifest::{Manifest, TreeMeta};
 use crate::domain::slug::Slug;
+use crate::domain::state::{TreeMetadata, TreeState};
 use crate::domain::timestamp::Timestamp;
 use crate::domain::{Leaf, Title, Url};
 use crate::engine::retrieval::scoring::score_corpus;
@@ -22,9 +22,9 @@ fn leaf_record(slug: &str, title: &str, url: &str, summary: Option<&str>) -> Lea
     }
 }
 
-fn manifest_record(leaves: Vec<Leaf>) -> Manifest {
-    Manifest {
-        tree: TreeMeta {
+fn state_record(leaves: Vec<Leaf>) -> TreeState {
+    TreeState {
+        tree: TreeMetadata {
             name: "test".to_string(),
             created_at: Timestamp::now(),
             last_compiled_at: None,
@@ -80,10 +80,10 @@ fn any_term_counts_returns_partial_matches() {
             Some("chocolate cake"),
         ),
     ];
-    let manifest = manifest_record(leaves);
+    let state = state_record(leaves);
 
     let terms = vec!["rust".to_string(), "async".to_string()];
-    let results = score_corpus(dir, &manifest, &terms);
+    let results = score_corpus(dir, &state, &terms);
 
     // Both rust leaves match (OR semantics); cooking does not
     assert_eq!(results.len(), 2);
@@ -127,11 +127,11 @@ fn missing_and_malformed_files_are_skipped() {
             Some("missing leaf"),
         ),
     ];
-    let manifest = manifest_record(leaves);
+    let state = state_record(leaves);
 
     let terms = vec!["rust".to_string()];
 
-    let results = score_corpus(dir, &manifest, &terms);
+    let results = score_corpus(dir, &state, &terms);
     // malformed and missing are skipped; only valid matches
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].slug, "valid");
@@ -153,10 +153,10 @@ fn scorer_token_matching_does_not_match_substrings() {
         leaf_record("rust", "Rust", "http://x.com/2", Some("rust")),
         leaf_record("cooking", "Cooking", "http://x.com/3", Some("cooking")),
     ];
-    let manifest = manifest_record(leaves);
+    let state = state_record(leaves);
 
     let terms = vec!["rust".to_string()];
-    let results = score_corpus(dir, &manifest, &terms);
+    let results = score_corpus(dir, &state, &terms);
 
     // only rust.md should match; trust.md must NOT match
     assert_eq!(results.len(), 1);
@@ -182,10 +182,10 @@ fn scorer_idf_rare_term_outranks_common_term_at_equal_hits() {
         leaf_record("rust-c", "Rust C", "http://x.com/4", Some("rust")),
         leaf_record("rust-d", "Rust D", "http://x.com/5", Some("rust")),
     ];
-    let manifest = manifest_record(leaves);
+    let state = state_record(leaves);
 
     let terms = vec!["async".to_string(), "rust".to_string()];
-    let results = score_corpus(dir, &manifest, &terms);
+    let results = score_corpus(dir, &state, &terms);
 
     assert!(!results.is_empty());
     assert_eq!(results[0].slug, "async-only");
@@ -207,10 +207,10 @@ fn scorer_short_focused_doc_outranks_long_sparse_doc() {
         leaf_record("short", "Rust", "http://x.com/1", Some("short")),
         leaf_record("long", "Rust Long", "http://x.com/2", Some("long")),
     ];
-    let manifest = manifest_record(leaves);
+    let state = state_record(leaves);
 
     let terms = vec!["rust".to_string()];
-    let results = score_corpus(dir, &manifest, &terms);
+    let results = score_corpus(dir, &state, &terms);
 
     // Short doc has higher density → higher normalized score
     assert_eq!(results.len(), 2);

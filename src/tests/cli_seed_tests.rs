@@ -49,7 +49,7 @@ fn options(path: PathBuf) -> SeedOptions {
 }
 
 #[test]
-fn fresh_seed_writes_config_without_manifest() {
+fn fresh_seed_writes_config_without_state() {
     let tmp = TempDir::new().unwrap();
     let tree_dir = tmp.path().join("tree");
     let config_path = tmp.path().join("config.json");
@@ -62,7 +62,7 @@ fn fresh_seed_writes_config_without_manifest() {
     assert_eq!(result.name, "tree");
     assert_eq!(result.provider, Provider::OpenAI);
     assert_eq!(result.model, "gpt-4.1-mini");
-    assert!(!tree_dir.join(".bo/manifest.json").exists());
+    assert!(!tree_dir.join(".bo/state.json").exists());
 
     let cfg = config::read_config(&config_path).unwrap();
     let tree = cfg.tree.unwrap();

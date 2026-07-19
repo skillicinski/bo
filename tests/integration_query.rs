@@ -78,7 +78,7 @@ fn make_leaf(
     fs::write(leaves_dir.join(filename), content).unwrap();
 }
 
-fn make_manifest(dir: &std::path::Path, entries: &[(&str, &str, &str)]) {
+fn make_state(dir: &std::path::Path, entries: &[(&str, &str, &str)]) {
     let leaves: Vec<_> = entries
         .iter()
         .map(|(file, title, url)| {
@@ -110,10 +110,10 @@ fn make_manifest(dir: &std::path::Path, entries: &[(&str, &str, &str)]) {
             }
         })
         .collect();
-    common::write_manifest(
+    common::write_state(
         dir,
-        &bo::domain::manifest::Manifest {
-            tree: bo::domain::manifest::TreeMeta {
+        &bo::domain::state::TreeState {
+            tree: bo::domain::state::TreeMetadata {
                 name: "query-test".to_string(),
                 created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                 last_compiled_at: None,
@@ -178,7 +178,7 @@ fn setup_test_tree() -> TempDir {
         "Traits define shared behavior. A trait tells the Rust compiler about functionality a type must provide. Trait bounds constrain generic types to those implementing specific traits.",
     );
 
-    make_manifest(
+    make_state(
         tree,
         &[
             (
@@ -351,7 +351,7 @@ fn single_leaf_tree_works() {
         Some("This is the only document in the tree about Rust"),
         "Rust is a systems programming language focused on safety and performance.",
     );
-    make_manifest(
+    make_state(
         tree,
         &[(
             "leaves/only-leaf.md",

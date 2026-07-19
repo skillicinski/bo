@@ -5,8 +5,8 @@ use crate::cli::compile::parse::{
 use crate::cli::compile::plan::LoadedLeaf;
 use crate::cli::compile::types::CompileError;
 use crate::cli::compile::validation::leaf_resolver;
-use crate::domain::manifest::{Manifest, TreeMeta};
 use crate::domain::slug::Slug;
+use crate::domain::state::{TreeMetadata, TreeState};
 use crate::domain::{Branch, Leaf, Timestamp, Title, Url};
 use crate::engine::config::SeededConfig;
 use std::path::Path;
@@ -23,14 +23,13 @@ fn seeded_config(dir: &Path) -> SeededConfig {
     SeededConfig::new(crate::engine::config::Config::default(), tree_cfg)
 }
 
-fn write_manifest(dir: &Path, manifest: &Manifest) {
+fn write_state(dir: &Path, state: &TreeState) {
     let tree = crate::domain::tree::Tree::from_config(&crate::domain::tree::TreeConfig {
         path: dir.to_path_buf(),
         name: "test-tree".to_string(),
         created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
     });
-    crate::engine::manifest::write(&crate::domain::tree::manifest_path(&tree.path), manifest)
-        .unwrap();
+    crate::engine::state::write(&crate::domain::tree::state_path(&tree.path), state).unwrap();
 }
 
 fn leaf_record(slug: &str, file: &str, title: &str, collected_at: &str) -> Leaf {
@@ -44,9 +43,9 @@ fn leaf_record(slug: &str, file: &str, title: &str, collected_at: &str) -> Leaf 
     }
 }
 
-fn fresh_manifest(name: &str, created_at: &str, last_compiled_at: Option<&str>) -> Manifest {
-    Manifest {
-        tree: TreeMeta {
+fn fresh_state(name: &str, created_at: &str, last_compiled_at: Option<&str>) -> TreeState {
+    TreeState {
+        tree: TreeMetadata {
             name: name.to_string(),
             created_at: Timestamp::parse(created_at).unwrap(),
             last_compiled_at: last_compiled_at.map(|s| Timestamp::parse(s).unwrap()),
@@ -108,33 +107,33 @@ fn incremental_response(updated: &str, new: &str) -> String {
 }
 
 /// Set up a tree on disk with 4 leaves, 1 existing branch, and fresh leaf files.
-fn setup_incremental_tree(dir: &Path) -> (SeededConfig, Manifest, Vec<LoadedLeaf>) {
-    let mut manifest = fresh_manifest("test", "2026-01-01T00:00:00Z", Some("2026-01-10T00:00:00Z"));
-    manifest.leaves.push(leaf_record(
+fn setup_incremental_tree(dir: &Path) -> (SeededConfig, TreeState, Vec<LoadedLeaf>) {
+    let mut state = fresh_state("test", "2026-01-01T00:00:00Z", Some("2026-01-10T00:00:00Z"));
+    state.leaves.push(leaf_record(
         "leaf-a",
         "leaf-a.md",
         "Leaf A",
         "2026-01-15T00:00:00Z",
     ));
-    manifest.leaves.push(leaf_record(
+    state.leaves.push(leaf_record(
         "leaf-b",
         "leaf-b.md",
         "Leaf B",
         "2026-01-15T00:00:00Z",
     ));
-    manifest.leaves.push(leaf_record(
+    state.leaves.push(leaf_record(
         "leaf-c",
         "leaf-c.md",
         "Leaf C",
         "2026-01-05T00:00:00Z",
     ));
-    manifest.leaves.push(leaf_record(
+    state.leaves.push(leaf_record(
         "leaf-d",
         "leaf-d.md",
         "Leaf D",
         "2026-01-05T00:00:00Z",
     ));
-    manifest.branches.push(branch_record(
+    state.branches.push(branch_record(
         "existing",
         "Existing Branch",
         &["leaf-c", "leaf-d"],
@@ -152,7 +151,7 @@ fn setup_incremental_tree(dir: &Path) -> (SeededConfig, Manifest, Vec<LoadedLeaf
     )
     .unwrap();
 
-    write_manifest(dir, &manifest);
+    write_state(dir, &state);
 
     let cfg = seeded_config(dir);
     let loaded = vec![
@@ -161,7 +160,7 @@ fn setup_incremental_tree(dir: &Path) -> (SeededConfig, Manifest, Vec<LoadedLeaf
         loaded_leaf("leaf-c", "Leaf C"),
         loaded_leaf("leaf-d", "Leaf D"),
     ];
-    (cfg, manifest, loaded)
+    (cfg, state, loaded)
 }
 
 // ── schema derivation ────────────────────────────────────────────────────────

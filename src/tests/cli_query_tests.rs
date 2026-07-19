@@ -87,7 +87,7 @@ fn make_leaf(
     fs::write(leaves_dir.join(filename), content).unwrap()
 }
 
-fn make_manifest(dir: &Path, entries: &[(&str, &str, &str)]) {
+fn make_state(dir: &Path, entries: &[(&str, &str, &str)]) {
     let leaves: Vec<_> = entries
         .iter()
         .map(|(file, title, url)| {
@@ -112,10 +112,10 @@ fn make_manifest(dir: &Path, entries: &[(&str, &str, &str)]) {
         .collect();
     let bo_dir = dir.join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    crate::engine::manifest::write(
-        &bo_dir.join("manifest.json"),
-        &crate::domain::manifest::Manifest {
-            tree: crate::domain::manifest::TreeMeta {
+    crate::engine::state::write(
+        &bo_dir.join("state.json"),
+        &crate::domain::state::TreeState {
+            tree: crate::domain::state::TreeMetadata {
                 name: "query".to_string(),
                 created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                 last_compiled_at: None,
@@ -216,7 +216,7 @@ fn single_leaf_query_tree() -> TempDir {
         Some("Rust safety"),
         "Rust is a language focused on safety.",
     );
-    make_manifest(
+    make_state(
         dir.path(),
         &[(
             "leaves/only-leaf.md",

@@ -4,8 +4,8 @@ use super::relevance::compute_retrieval_diagnostics;
 use super::terms::{count_term_hits_in_tokens, tokenize};
 use super::{DocKind, RetrievalError, RetrievedDoc, ScoredDoc};
 use crate::domain::frontmatter;
-use crate::domain::manifest::Manifest;
-use crate::domain::tree::TreeRuntimeState;
+use crate::domain::state::TreeState;
+use crate::domain::tree::TreeLoadState;
 use crate::engine::summary;
 use std::fs;
 use std::path::Path;
@@ -102,9 +102,9 @@ fn score_candidates(
 
 fn iter_leaves<'a>(
     tree_dir: &'a Path,
-    manifest: &'a Manifest,
+    state: &'a TreeState,
 ) -> impl Iterator<Item = Scorable> + 'a {
-    manifest.leaves.iter().filter_map(move |leaf| {
+    state.leaves.iter().filter_map(move |leaf| {
         let body = read_body(tree_dir, &leaf.file)?;
         let title = leaf
             .title
@@ -129,9 +129,9 @@ fn iter_leaves<'a>(
 
 fn iter_branches<'a>(
     tree_dir: &'a Path,
-    manifest: &'a Manifest,
+    state: &'a TreeState,
 ) -> impl Iterator<Item = Scorable> + 'a {
-    manifest.branches.iter().filter_map(move |branch| {
+    state.branches.iter().filter_map(move |branch| {
         let body = read_body(tree_dir, &branch.file)?;
         let title = branch.title.as_str().to_string();
         let summary = summary::generate_fallback(&body);
@@ -147,19 +147,15 @@ fn iter_branches<'a>(
     })
 }
 
-/// Score all leaves in a manifest against the given terms.
+/// Score all leaves in a state against the given terms.
 ///
 /// Reads leaf files from `tree_dir`. Skips missing/unreadable/malformed files.
 ///
 /// Uses per-call IDF — scores are corpus-relative; use `retrieve_docs` for
 /// combined leaf+branch scoring.
 #[cfg(test)]
-pub(crate) fn score_corpus(
-    tree_dir: &Path,
-    manifest: &Manifest,
-    terms: &[String],
-) -> Vec<ScoredDoc> {
-    score_candidates(iter_leaves(tree_dir, manifest), terms)
+pub(crate) fn score_corpus(tree_dir: &Path, state: &TreeState, terms: &[String]) -> Vec<ScoredDoc> {
+    score_candidates(iter_leaves(tree_dir, state), terms)
 }
 
 /// Read a file under `tree_dir` and return its post-frontmatter body, or None
@@ -176,24 +172,24 @@ pub fn retrieve_docs(
     tree_dir: &Path,
     terms: &[String],
 ) -> Result<Vec<RetrievedDoc>, RetrievalError> {
-    let manifest = match crate::engine::manifest::runtime_state(tree_dir) {
-        Ok(TreeRuntimeState::Initialized(manifest)) => manifest,
-        Ok(TreeRuntimeState::FreshSeeded) => return Err(RetrievalError::EmptyTree),
-        Ok(TreeRuntimeState::MissingManifest) => {
+    let state = match crate::engine::state::load_state(tree_dir) {
+        Ok(TreeLoadState::Loaded(state)) => state,
+        Ok(TreeLoadState::FreshSeeded) => return Err(RetrievalError::EmptyTree),
+        Ok(TreeLoadState::MissingState) => {
             return Err(RetrievalError::Io(format!(
-                "manifest: {}",
-                crate::domain::manifest::ManifestError::TreeNotInitialized
+                "state: {}",
+                crate::domain::state::TreeStateError::TreeNotInitialized
             )));
         }
-        Err(e) => return Err(RetrievalError::Io(format!("manifest: {}", e))),
+        Err(e) => return Err(RetrievalError::Io(format!("state: {}", e))),
     };
 
-    if manifest.leaves.is_empty() {
+    if state.leaves.is_empty() {
         return Err(RetrievalError::EmptyTree);
     }
 
     let scored = score_candidates(
-        iter_leaves(tree_dir, &manifest).chain(iter_branches(tree_dir, &manifest)),
+        iter_leaves(tree_dir, &state).chain(iter_branches(tree_dir, &state)),
         terms,
     );
 

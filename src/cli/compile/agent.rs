@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::domain::frontmatter;
-use crate::domain::manifest::Manifest;
+use crate::domain::state::TreeState;
 use crate::engine::agent::{
     self, AgentOutcome, AgentRun, Tool, ToolError, ToolOutcome, MAX_TOOL_CALLS_PER_RESPONSE,
     MAX_TOTAL_TOOL_CALLS, MAX_TURNS,
@@ -65,9 +65,9 @@ then call submit_compile exactly once with the full plan. A branch must referenc
 at least two leaves. Every leaf reference must match a real leaf slug or filename \
 returned by list_leaves.";
 
-fn build_agent_user_message(manifest: &Manifest, run_mode: CompileRunMode) -> String {
-    let leaf_count = manifest.leaves.len();
-    let branch_count = manifest.branches.len();
+fn build_agent_user_message(state: &TreeState, run_mode: CompileRunMode) -> String {
+    let leaf_count = state.leaves.len();
+    let branch_count = state.branches.len();
     let mode = match run_mode {
         CompileRunMode::Full => "full (rebuild the whole branch graph)",
         CompileRunMode::Incremental => "incremental (fit new leaves into existing branches)",
@@ -154,7 +154,7 @@ fn strip_branch_prefix(identifier: &str) -> Option<&str> {
 // ── tools ────────────────────────────────────────────────────────────────────
 
 struct ListLeavesTool {
-    manifest: Manifest,
+    state: TreeState,
 }
 
 impl Tool for ListLeavesTool {
@@ -172,7 +172,7 @@ impl Tool for ListLeavesTool {
         let args: PaginationArgs = parse_args(arguments)?;
         let (offset, count) = page_bounds(args.offset, args.limit, MAX_PAGE, DEFAULT_PAGE);
         let rows: Vec<Value> = self
-            .manifest
+            .state
             .leaves
             .iter()
             .skip(offset)
@@ -188,7 +188,7 @@ impl Tool for ListLeavesTool {
         Ok(ToolOutcome::Content(
             json!({
                 "leaves": rows,
-                "total": self.manifest.leaves.len(),
+                "total": self.state.leaves.len(),
                 "offset": offset,
             })
             .to_string(),
@@ -197,7 +197,7 @@ impl Tool for ListLeavesTool {
 }
 
 struct ListBranchesTool {
-    manifest: Manifest,
+    state: TreeState,
 }
 
 impl Tool for ListBranchesTool {
@@ -217,7 +217,7 @@ impl Tool for ListBranchesTool {
         let args: PaginationArgs = parse_args(arguments)?;
         let (offset, count) = page_bounds(args.offset, args.limit, MAX_PAGE, DEFAULT_PAGE);
         let rows: Vec<Value> = self
-            .manifest
+            .state
             .branches
             .iter()
             .skip(offset)
@@ -233,7 +233,7 @@ impl Tool for ListBranchesTool {
         Ok(ToolOutcome::Content(
             json!({
                 "branches": rows,
-                "total": self.manifest.branches.len(),
+                "total": self.state.branches.len(),
                 "offset": offset,
             })
             .to_string(),
@@ -243,7 +243,7 @@ impl Tool for ListBranchesTool {
 
 struct ReadLeafTool {
     cfg: SeededConfig,
-    manifest: Manifest,
+    state: TreeState,
 }
 
 impl Tool for ReadLeafTool {
@@ -261,12 +261,12 @@ impl Tool for ReadLeafTool {
     fn execute(&self, arguments: &str) -> Result<ToolOutcome, ToolError> {
         let args: ReadLeafArgs = parse_args(arguments)?;
         let leaf = self
-            .manifest
+            .state
             .leaves
             .iter()
             .find(|l| l.slug.as_str() == args.slug || l.file == args.slug)
             .or_else(|| {
-                self.manifest.leaves.iter().find(|l| {
+                self.state.leaves.iter().find(|l| {
                     l.file
                         .strip_suffix(".md")
                         .is_some_and(|stem| stem == args.slug)
@@ -274,7 +274,7 @@ impl Tool for ReadLeafTool {
             })
             .ok_or_else(|| {
                 let branch_slug = strip_branch_prefix(&args.slug).unwrap_or(&args.slug);
-                if self.manifest.branch_by_slug_str(branch_slug).is_some() {
+                if self.state.branch_by_slug_str(branch_slug).is_some() {
                     ToolError(format!("{} is a branch; use read_branch", args.slug))
                 } else {
                     ToolError(format!("unknown leaf: {}", args.slug))
@@ -313,7 +313,7 @@ impl Tool for ReadLeafTool {
 
 struct ReadBranchTool {
     cfg: SeededConfig,
-    manifest: Manifest,
+    state: TreeState,
 }
 
 impl Tool for ReadBranchTool {
@@ -334,7 +334,7 @@ impl Tool for ReadBranchTool {
 
         let bare = strip_branch_prefix(&args.slug).unwrap_or(&args.slug);
         let branch = self
-            .manifest
+            .state
             .branch_by_slug_str(bare)
             .ok_or_else(|| ToolError(format!("unknown branch: {}", args.slug)))?;
 
@@ -554,7 +554,7 @@ pub(super) fn run_agent_dry_run(
     cfg: &SeededConfig,
     provider: &dyn LlmProvider,
     model: &Model,
-    manifest: &Manifest,
+    state: &TreeState,
     loaded_leaves: &[LoadedLeaf],
     run_mode: CompileRunMode,
 ) -> Result<(CompilePlan, AgentRunStats, Vec<String>), CompileError> {
@@ -563,18 +563,18 @@ pub(super) fn run_agent_dry_run(
 
     let tools: Vec<Box<dyn Tool>> = vec![
         Box::new(ListLeavesTool {
-            manifest: manifest.clone(),
+            state: state.clone(),
         }),
         Box::new(ListBranchesTool {
-            manifest: manifest.clone(),
+            state: state.clone(),
         }),
         Box::new(ReadBranchTool {
             cfg: cfg.clone(),
-            manifest: manifest.clone(),
+            state: state.clone(),
         }),
         Box::new(ReadLeafTool {
             cfg: cfg.clone(),
-            manifest: manifest.clone(),
+            state: state.clone(),
         }),
         Box::new(SearchCorpusTool { cfg: cfg.clone() }),
         Box::new(SubmitCompileTool {
@@ -583,11 +583,7 @@ pub(super) fn run_agent_dry_run(
             loaded_leaves: loaded_leaves.to_vec(),
             input_body_bytes,
             slot: slot.clone(),
-            branch_slugs: manifest
-                .branches
-                .iter()
-                .map(|b| b.slug.to_string())
-                .collect(),
+            branch_slugs: state.branches.iter().map(|b| b.slug.to_string()).collect(),
         }),
     ];
 
@@ -598,7 +594,7 @@ pub(super) fn run_agent_dry_run(
             "{}\n\nResource limits: {} turns, {} tool calls per turn, {} total tool calls.",
             AGENT_SYSTEM_PROMPT, MAX_TURNS, MAX_TOOL_CALLS_PER_RESPONSE, MAX_TOTAL_TOOL_CALLS
         ),
-        user_message: build_agent_user_message(manifest, run_mode),
+        user_message: build_agent_user_message(state, run_mode),
         tools,
         reasoning_disabled: agent_reasoning_disabled(model, cfg.config.provider),
     };

@@ -72,10 +72,10 @@ pub(super) fn validate_incremental_response_with_input_size(
     warnings: &mut Vec<String>,
 ) -> Result<validation::CompilePlan, CompileError> {
     let tree = cfg.tree();
-    let manifest_path = crate::domain::tree::manifest_path(tree.path());
-    let manifest = crate::engine::manifest::read(&manifest_path)
-        .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
-    validation::validate_incremental(parsed, &manifest, loaded_leaves, input_body_bytes, warnings)
+    let state_path = crate::domain::tree::state_path(tree.path());
+    let state = crate::engine::state::read(&state_path)
+        .map_err(|e| CompileError::Io(format!("failed to read state: {}", e)))?;
+    validation::validate_incremental(parsed, &state, loaded_leaves, input_body_bytes, warnings)
 }
 
 pub(super) fn parse_and_validate_incremental_with_input_size(

@@ -1,8 +1,7 @@
-// Integration tests for manifest-only reads after the 3b cutover.
+// Integration tests for state-only reads after the v0.1.0 cutover.
 //
-// With 3b, `.bo/manifest.json` is the only tree-state store. Legacy
-// `index.jsonl`/`state.json` mirrors are not written, and deleting the manifest
-// is an unrecoverable tree-state loss rather than a reconstruction trigger.
+// `.bo/state.json` is the only tree-state store. Deleting it is an
+// unrecoverable tree-state loss rather than a reconstruction trigger.
 //
 // Tests the full CLI binary with $HOME override. No network/LLM required —
 // fixtures are staged on disk directly so we can invoke `bo status`, `bo list`,
@@ -25,9 +24,9 @@ fn run(home: &Path, args: &[&str]) -> Output {
         .expect("failed to run bo command")
 }
 
-/// Stage a tree containing a fully populated manifest, three leaf files,
-/// and one branch file. The fixture mimics the manifest-only outcome of
-/// normal seed → collect → compile.
+/// Stage a tree containing a fully populated state, three leaf files,
+/// and one branch file. The fixture mimics the state-only outcome of
+/// normal seed -> collect -> compile.
 fn stage_tree(home: &Path) -> std::path::PathBuf {
     let tree_dir = common::seed(home, "tree");
 
@@ -38,11 +37,13 @@ fn stage_tree(home: &Path) -> std::path::PathBuf {
     ];
 
     // Leaf .md files
+    let leaves_dir = tree_dir.join("leaf");
+    fs::create_dir_all(&leaves_dir).unwrap();
     for (slug, title, url) in &leaves {
         let content = format!(
             "---\ntitle: \"{title}\"\nurl: {url}\ncollected_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\n# {title}\n\nBody for {slug}.\n"
         );
-        fs::write(tree_dir.join(format!("{slug}.md")), content).unwrap();
+        fs::write(leaves_dir.join(format!("{slug}.md")), content).unwrap();
     }
 
     // Branch .md file
@@ -51,10 +52,11 @@ fn stage_tree(home: &Path) -> std::path::PathBuf {
     let branch_content = "---\ntitle: \"topic-x\"\ncreated_at: 2026-01-02T10:00:00Z\nupdated_at: 2026-01-02T10:00:00Z\nleaves:\n  - alpha.md\n  - beta.md\n---\n\n# topic-x\n\nBranch body.\n";
     fs::write(branches_dir.join("topic-x.md"), branch_content).unwrap();
 
-    // manifest.json — primary. Mirrors leaves + the one branch above with
-    // last_compiled_at set so 'gamma' (collected 2026-01-01) shows as compiled.
-    let m = bo::domain::manifest::Manifest {
-        tree: bo::domain::manifest::TreeMeta {
+    // state.json — the only tree-state store. Mirrors leaves + the one branch
+    // above with last_compiled_at set so 'gamma' (collected 2026-01-01) shows
+    // as compiled.
+    let state = bo::domain::state::TreeState {
+        tree: bo::domain::state::TreeMetadata {
             name: "tree".to_string(),
             created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
             last_compiled_at: Some(Timestamp::parse("2026-01-02T10:00:00Z").unwrap()),
@@ -63,7 +65,7 @@ fn stage_tree(home: &Path) -> std::path::PathBuf {
             .iter()
             .map(|(slug, title, url)| bo::domain::Leaf {
                 slug: Slug::parse(slug).unwrap(),
-                file: format!("{slug}.md"),
+                file: format!("leaf/{slug}.md"),
                 title: Title::parse(title).ok(),
                 url: Url::parse(url).unwrap(),
                 collected_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
@@ -79,7 +81,7 @@ fn stage_tree(home: &Path) -> std::path::PathBuf {
             leaves: vec![Slug::parse("alpha").unwrap(), Slug::parse("beta").unwrap()],
         }],
     };
-    common::write_manifest(&tree_dir, &m);
+    common::write_state(&tree_dir, &state);
 
     tree_dir
 }
@@ -90,13 +92,20 @@ fn parse_data(output: &Output) -> Value {
     json["data"].clone()
 }
 
+/// Parse the JSON error envelope emitted on stderr for a failing --json command.
+fn parse_error(output: &Output) -> Value {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    serde_json::from_str(&stderr).expect("stderr is a JSON error envelope")
+}
+
 #[test]
-fn manifest_only_reads_work_without_secondary_store() {
+fn state_reads_work_without_secondary_store() {
     let tmp = TempDir::new().unwrap();
     let tree_dir = stage_tree(tmp.path());
 
+    // No legacy secondary store is written.
     assert!(!tree_dir.join(".bo/index.jsonl").exists());
-    assert!(!tree_dir.join(".bo/state.json").exists());
+    assert!(tree_dir.join(".bo/state.json").exists());
 
     let status = parse_data(&run(tmp.path(), &["status", "--json"]));
     let list = parse_data(&run(tmp.path(), &["list", "--json"]));
@@ -104,22 +113,23 @@ fn manifest_only_reads_work_without_secondary_store() {
 
     assert_eq!(status["leaves"]["total"], 3);
     assert_eq!(list["total_leaves"], 3);
-    assert_eq!(show["file"], "alpha.md");
+    assert_eq!(show["file"], "leaf/alpha.md");
 }
 
 #[test]
-fn missing_manifest_is_not_reconstructed() {
+fn missing_state_is_not_reconstructed() {
     let tmp = TempDir::new().unwrap();
     let tree_dir = stage_tree(tmp.path());
 
-    fs::remove_file(tree_dir.join(".bo/manifest.json")).unwrap();
-    assert!(!tree_dir.join(".bo/manifest.json").exists());
+    fs::remove_file(tree_dir.join(".bo/state.json")).unwrap();
+    assert!(!tree_dir.join(".bo/state.json").exists());
 
     let out = run(tmp.path(), &["status", "--json"]);
     assert!(!out.status.success());
 
-    let stdout = String::from_utf8_lossy(&out.stderr);
-    let json: Value = serde_json::from_str(&stdout).expect("output is JSON");
-    assert_eq!(json["error"]["code"], "io_error");
-    assert!(!tree_dir.join(".bo/manifest.json").exists());
+    let json = parse_error(&out);
+    assert_eq!(json["error"]["code"], "state_error");
+
+    // No reconstruction: state.json is still absent.
+    assert!(!tree_dir.join(".bo/state.json").exists());
 }

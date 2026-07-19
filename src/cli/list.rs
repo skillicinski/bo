@@ -2,8 +2,8 @@
 
 use crate::cli::json::{JsonError, JsonWarning};
 use crate::cli::resolve_leaf_path;
-use crate::domain::manifest::{self, Manifest};
-use crate::domain::tree::TreeRuntimeState;
+use crate::domain::state::{self, TreeState};
+use crate::domain::tree::TreeLoadState;
 use crate::domain::Leaf;
 use crate::engine::config::SeededConfig;
 use chrono::{DateTime, FixedOffset};
@@ -76,7 +76,7 @@ pub struct ListLeafRow {
     pub degradation_reasons: Vec<String>,
 
     #[serde(skip)]
-    pub index_position: usize,
+    pub state_position: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -101,7 +101,7 @@ impl ListResult {
                     .chain(unbranched.iter())
                     .filter(|r| r.degraded)
                     .collect();
-                rows.sort_by_key(|r| r.index_position);
+                rows.sort_by_key(|r| r.state_position);
                 rows
             }
             ListView::Branches { .. } => Vec::new(),
@@ -113,14 +113,14 @@ impl ListResult {
 #[derive(Debug)]
 pub enum ListError {
     Io(std::io::Error),
-    Manifest(manifest::ManifestError),
+    TreeState(state::TreeStateError),
 }
 
 impl fmt::Display for ListError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ListError::Io(e) => write!(f, "I/O error: {}", e),
-            ListError::Manifest(e) => write!(f, "{}", e),
+            ListError::TreeState(e) => write!(f, "{}", e),
         }
     }
 }
@@ -131,9 +131,9 @@ impl From<std::io::Error> for ListError {
     }
 }
 
-impl From<manifest::ManifestError> for ListError {
-    fn from(e: manifest::ManifestError) -> Self {
-        ListError::Manifest(e)
+impl From<state::TreeStateError> for ListError {
+    fn from(e: state::TreeStateError) -> Self {
+        ListError::TreeState(e)
     }
 }
 
@@ -141,7 +141,7 @@ impl ListError {
     pub fn code(&self) -> &'static str {
         match self {
             ListError::Io(_) => "io_error",
-            ListError::Manifest(_) => "manifest_error",
+            ListError::TreeState(_) => "state_error",
         }
     }
 
@@ -199,9 +199,9 @@ pub fn warnings(result: &ListResult) -> Vec<JsonWarning> {
 // ── list_tree ────────────────────────────────────────────────────────────────
 
 pub fn list_tree(tree_dir: &Path, options: &ListOptions) -> Result<ListResult, ListError> {
-    let m = match crate::engine::manifest::runtime_state(tree_dir) {
-        Ok(TreeRuntimeState::Initialized(manifest)) => manifest,
-        Ok(TreeRuntimeState::FreshSeeded) => {
+    let m = match crate::engine::state::load_state(tree_dir) {
+        Ok(TreeLoadState::Loaded(state)) => state,
+        Ok(TreeLoadState::FreshSeeded) => {
             return Ok(ListResult {
                 view: ListView::BranchCentric {
                     branches: Vec::new(),
@@ -212,12 +212,12 @@ pub fn list_tree(tree_dir: &Path, options: &ListOptions) -> Result<ListResult, L
                 branch_filter: options.branch.clone(),
             });
         }
-        Ok(TreeRuntimeState::MissingManifest) => {
-            return Err(ListError::Manifest(
-                manifest::ManifestError::TreeNotInitialized,
+        Ok(TreeLoadState::MissingState) => {
+            return Err(ListError::TreeState(
+                state::TreeStateError::TreeNotInitialized,
             ));
         }
-        Err(e) => return Err(ListError::Manifest(e)),
+        Err(e) => return Err(ListError::TreeState(e)),
     };
     let total_branches = m.branches.len();
     let total_leaves = m.leaves.len();
@@ -246,7 +246,7 @@ pub fn list_tree(tree_dir: &Path, options: &ListOptions) -> Result<ListResult, L
 }
 
 fn build_branch_centric(
-    manifest: &Manifest,
+    state: &TreeState,
     leaf_rows: &[ListLeafRow],
     options: &ListOptions,
 ) -> ListView {
@@ -256,7 +256,7 @@ fn build_branch_centric(
 
     let mut branch_slugs_with_leaves: Vec<&str> = Vec::new();
 
-    let mut branches: Vec<BranchWithLeaves> = manifest
+    let mut branches: Vec<BranchWithLeaves> = state
         .branches
         .iter()
         .map(|b| {
@@ -306,7 +306,7 @@ fn build_branch_centric(
         .iter()
         .filter(|r| {
             let in_any_branch = branch_slugs_with_leaves.iter().any(|bs| {
-                manifest
+                state
                     .branch_by_slug_str(bs)
                     .map(|b| b.leaves.iter().any(|s| s.as_str() == r.slug))
                     .unwrap_or(false)
@@ -335,8 +335,8 @@ fn build_branch_centric(
     }
 }
 
-fn build_branches_view(manifest: &Manifest, options: &ListOptions) -> ListView {
-    let mut rows: Vec<BranchRow> = manifest
+fn build_branches_view(state: &TreeState, options: &ListOptions) -> ListView {
+    let mut rows: Vec<BranchRow> = state
         .branches
         .iter()
         .map(|b| BranchRow {
@@ -414,8 +414,8 @@ fn build_row(
     tree_dir: &Path,
     canonical_tree_dir: Option<&Path>,
     leaf: &Leaf,
-    manifest: &Manifest,
-    index_position: usize,
+    state: &TreeState,
+    state_position: usize,
 ) -> ListLeafRow {
     let display_title = leaf
         .title
@@ -427,7 +427,7 @@ fn build_row(
     } else {
         Some(leaf.collected_at.to_rfc3339_millis())
     };
-    let branch_slugs: Vec<String> = manifest
+    let branch_slugs: Vec<String> = state
         .branches_for_leaf(&leaf.slug)
         .iter()
         .map(|b| b.slug.as_str().to_string())
@@ -443,12 +443,12 @@ fn build_row(
         branch_count,
         degraded: false,
         degradation_reasons: Vec::new(),
-        index_position,
+        state_position,
     };
 
     // Path safety + file-existence checks remain the only degradation signals
-    // post-manifest. Frontmatter-derived issues are obsolete; if invalid data
-    // ever reached the manifest, it indicates a writer bug, not a runtime
+    // post-state. Frontmatter-derived issues are obsolete; if invalid data
+    // ever reached the state, it indicates a writer bug, not a runtime
     // condition list should soft-handle.
     let path = match resolve_leaf_path(tree_dir, canonical_tree_dir, &leaf.file) {
         Ok(path) => path,
@@ -497,10 +497,10 @@ fn sort_rows_recent(rows: &mut [ListLeafRow]) {
         |left, right| match (parsed_collected_at(left), parsed_collected_at(right)) {
             (Some(left_date), Some(right_date)) => right_date
                 .cmp(&left_date)
-                .then_with(|| left.index_position.cmp(&right.index_position)),
+                .then_with(|| left.state_position.cmp(&right.state_position)),
             (Some(_), None) => Ordering::Less,
             (None, Some(_)) => Ordering::Greater,
-            (None, None) => left.index_position.cmp(&right.index_position),
+            (None, None) => left.state_position.cmp(&right.state_position),
         },
     );
 }

@@ -190,7 +190,10 @@ impl CliError {
             CliError::List(error) => error.json_error(),
             CliError::Show(error) => error.json_error(),
             CliError::Compile(error) => error.json_error(),
-            CliError::Status(error) => JsonError::new("io_error", error.to_string()),
+            CliError::Status(error) => match error {
+                StatusError::Io(msg) => JsonError::new("io_error", msg),
+                StatusError::TreeState(e) => JsonError::new("state_error", e.to_string()),
+            },
             CliError::ConfigWrite(error) => {
                 JsonError::with_details(error.code(), error.to_string(), error.details())
             }

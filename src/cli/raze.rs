@@ -1,6 +1,6 @@
 use crate::cli::json::JsonWarning;
-use crate::domain::tree::TreeRuntimeState;
-use crate::domain::{manifest, tree};
+use crate::domain::tree::TreeLoadState;
+use crate::domain::{state, tree};
 use crate::engine::config::Config;
 use crate::engine::pending::{self, OpKind};
 
@@ -15,7 +15,7 @@ pub struct RazeResult {
     #[serde(default)]
     pub cancelled: bool,
     pub deleted_files: usize,
-    pub deleted_manifest: bool,
+    pub deleted_state: bool,
     pub removed_output_dir: bool,
     pub output_dir_left_in_place: bool,
     pub deleted_config: bool,
@@ -130,23 +130,23 @@ pub fn raze_with_auth(
 ) -> Result<RazeOutput, RazeError> {
     recover_pending_if_needed(output_dir)?;
 
-    let manifest_path = tree::manifest_path(output_dir);
-    let manifest = match crate::engine::manifest::runtime_state(output_dir) {
-        Ok(TreeRuntimeState::Initialized(manifest)) => Some(manifest),
-        Ok(TreeRuntimeState::FreshSeeded | TreeRuntimeState::MissingManifest) => None,
-        Err(error) => return Err(RazeError::Io(format!("failed to read manifest: {error}"))),
+    let state_path = tree::state_path(output_dir);
+    let state = match crate::engine::state::load_state(output_dir) {
+        Ok(TreeLoadState::Loaded(state)) => Some(state),
+        Ok(TreeLoadState::FreshSeeded | TreeLoadState::MissingState) => None,
+        Err(error) => return Err(RazeError::Io(format!("failed to read state: {error}"))),
     };
 
     // There is no non-interactive bypass; integration tests verify the refusal.
     #[cfg(not(test))]
     {
         let include_auth = auth_cleanup.deletes_auth();
-        if confirm_raze_interactive(output_dir, manifest.as_ref(), include_auth)? {
+        if confirm_raze_interactive(output_dir, state.as_ref(), include_auth)? {
             return Ok(RazeOutput {
                 result: RazeResult {
                     cancelled: true,
                     deleted_files: 0,
-                    deleted_manifest: false,
+                    deleted_state: false,
                     removed_output_dir: false,
                     output_dir_left_in_place: false,
                     deleted_config: false,
@@ -164,12 +164,12 @@ pub fn raze_with_auth(
     let mut warnings = Vec::new();
     let mut deletes: Vec<String> = Vec::new();
 
-    if let Some(manifest) = &manifest {
-        for leaf in &manifest.leaves {
-            push_manifest_delete(&mut deletes, &mut warnings, &leaf.file);
+    if let Some(state) = &state {
+        for leaf in &state.leaves {
+            push_state_delete(&mut deletes, &mut warnings, &leaf.file);
         }
-        for branch in &manifest.branches {
-            push_manifest_delete(&mut deletes, &mut warnings, &branch.file);
+        for branch in &state.branches {
+            push_state_delete(&mut deletes, &mut warnings, &branch.file);
         }
     }
 
@@ -198,20 +198,17 @@ pub fn raze_with_auth(
     let pending_path = pending::pending_path(output_dir);
     pending::write(&pending_path, &operation).map_err(map_pending_error)?;
 
-    match std::fs::remove_file(&manifest_path) {
+    match std::fs::remove_file(&state_path) {
         Ok(()) => {}
         Err(error) if error.kind() == IoErrorKind::NotFound => {}
         Err(error) => {
-            return Err(RazeError::Io(format!(
-                "failed to delete manifest: {}",
-                error
-            )));
+            return Err(RazeError::Io(format!("failed to delete state: {}", error)));
         }
     }
 
     pending::apply_deletes(output_dir, &deletes).map_err(map_pending_error)?;
     pending::clear(&pending_path).map_err(map_pending_error)?;
-    let deleted_manifest = true;
+    let deleted_state = true;
 
     let (removed_output_dir, output_dir_left_in_place) = match std::fs::remove_dir(output_dir) {
         Ok(()) => (true, false),
@@ -242,7 +239,7 @@ pub fn raze_with_auth(
         result: RazeResult {
             cancelled: false,
             deleted_files,
-            deleted_manifest,
+            deleted_state,
             removed_output_dir,
             output_dir_left_in_place,
             deleted_config,
@@ -266,7 +263,7 @@ pub fn raze_auth_only(auth_path: &Path) -> Result<Option<RazeOutput>, RazeError>
         result: RazeResult {
             cancelled: false,
             deleted_files: 0,
-            deleted_manifest: false,
+            deleted_state: false,
             removed_output_dir: false,
             output_dir_left_in_place: false,
             deleted_config: false,
@@ -287,7 +284,7 @@ pub fn raze_auth_only(auth_path: &Path) -> Result<Option<RazeOutput>, RazeError>
 #[cfg(not(test))]
 fn confirm_raze_interactive(
     tree_root: &Path,
-    manifest: Option<&manifest::Manifest>,
+    state: Option<&state::TreeState>,
     include_auth: bool,
 ) -> Result<bool, RazeError> {
     use std::io::IsTerminal;
@@ -299,7 +296,7 @@ fn confirm_raze_interactive(
     }
     let confirmed = confirm_raze(
         tree_root,
-        manifest,
+        state,
         include_auth,
         &mut std::io::BufReader::new(std::io::stdin()),
         &mut std::io::stderr(),
@@ -356,7 +353,7 @@ fn map_io_error(error: std::io::Error) -> RazeError {
 /// Returns `true` for exact "yes\n", `false` for anything else.
 fn confirm_raze(
     tree_root: &Path,
-    manifest: Option<&manifest::Manifest>,
+    state: Option<&state::TreeState>,
     include_auth: bool,
     reader: &mut impl BufRead,
     writer: &mut impl Write,
@@ -367,7 +364,7 @@ fn confirm_raze(
         tree_root.display()
     )
     .map_err(map_io_error)?;
-    if let Some(m) = manifest {
+    if let Some(m) = state {
         writeln!(
             writer,
             "  {} leaves, {} branches",
@@ -378,7 +375,7 @@ fn confirm_raze(
     } else {
         writeln!(
             writer,
-            "  unable to read manifest \u{2014} cannot determine leaf/branch count"
+            "  unable to read state \u{2014} cannot determine leaf/branch count"
         )
         .map_err(map_io_error)?;
     }
@@ -416,11 +413,11 @@ fn map_pending_error(error: pending::PendingError) -> RazeError {
     }
 }
 
-fn push_manifest_delete(deletes: &mut Vec<String>, warnings: &mut Vec<JsonWarning>, file: &str) {
+fn push_state_delete(deletes: &mut Vec<String>, warnings: &mut Vec<JsonWarning>, file: &str) {
     if is_suspicious_relative_path(file) {
         warnings.push(JsonWarning::with_details(
-            "suspicious_manifest_entry",
-            format!("skipping manifest entry with suspicious path: {file}"),
+            "suspicious_state_entry",
+            format!("skipping state entry with suspicious path: {file}"),
             json!({ "file": file }),
         ));
         return;
@@ -453,8 +450,8 @@ pub fn render_human(result: &RazeResult) -> String {
         ));
     }
 
-    if result.deleted_manifest {
-        out.push_str("deleted manifest\n");
+    if result.deleted_state {
+        out.push_str("deleted state\n");
     }
 
     if result.removed_output_dir {

@@ -12,7 +12,7 @@ struct FileSnapshot {
 }
 
 #[test]
-fn empty_index_returns_not_found_with_list_suggestion() {
+fn empty_state_returns_not_found_with_list_suggestion() {
     let dir = TempDir::new().unwrap();
     let err = show_leaf(dir.path(), "Missing", false).unwrap_err();
 
@@ -26,7 +26,7 @@ fn suspicious_path_is_rejected_and_never_read() {
     let sandbox = TempDir::new().unwrap();
     let tree_dir = sandbox.path().join("tree");
     fs::create_dir_all(&tree_dir).unwrap();
-    write_index(&tree_dir, &[("../outside.md", "Outside Title")]);
+    write_state(&tree_dir, &[("../outside.md", "Outside Title")]);
     fs::write(
         sandbox.path().join("outside.md"),
         "---\ntitle: Outside Title\n---\n\noutside\n",
@@ -42,7 +42,7 @@ fn suspicious_path_is_rejected_and_never_read() {
 #[test]
 fn show_leaf_card_view_returns_frontmatter_only() {
     let dir = TempDir::new().unwrap();
-    write_index(dir.path(), &[("raw.md", "Raw: Title")]);
+    write_state(dir.path(), &[("raw.md", "Raw: Title")]);
     write_raw_file(
         dir.path(),
         "raw.md",
@@ -66,7 +66,7 @@ fn show_leaf_card_view_returns_frontmatter_only() {
 #[test]
 fn show_leaf_full_returns_body() {
     let dir = TempDir::new().unwrap();
-    write_index(dir.path(), &[("raw.md", "Raw: Title")]);
+    write_state(dir.path(), &[("raw.md", "Raw: Title")]);
     write_raw_file(
         dir.path(),
         "raw.md",
@@ -80,13 +80,13 @@ fn show_leaf_full_returns_body() {
 }
 
 #[test]
-fn title_uses_frontmatter_then_index_fallback() {
+fn title_uses_frontmatter_then_state_fallback() {
     let dir = TempDir::new().unwrap();
-    write_index(
+    write_state(
         dir.path(),
         &[
-            ("frontmatter.md", "Stale Index Title"),
-            ("index.md", "Index Fallback Title"),
+            ("frontmatter.md", "Stale State Title"),
+            ("fallback.md", "State Fallback Title"),
         ],
     );
     write_leaf(
@@ -95,21 +95,21 @@ fn title_uses_frontmatter_then_index_fallback() {
         "title: Frontmatter Title\n",
         "body\n",
     );
-    write_leaf(dir.path(), "index.md", "title: \"\"\n", "body\n");
+    write_leaf(dir.path(), "fallback.md", "title: \"\"\n", "body\n");
 
     let frontmatter = show_leaf(dir.path(), "frontmatter title", false).unwrap();
-    let index = show_leaf(dir.path(), "index fallback title", false).unwrap();
+    let fallback = show_leaf(dir.path(), "state fallback title", false).unwrap();
 
     assert_eq!(frontmatter.title.as_str(), "Frontmatter Title");
     assert_eq!(frontmatter.file, "frontmatter.md");
-    assert_eq!(index.title.as_str(), "Index Fallback Title");
-    assert_eq!(index.file, "index.md");
+    assert_eq!(fallback.title.as_str(), "State Fallback Title");
+    assert_eq!(fallback.file, "fallback.md");
 }
 
 #[test]
 fn matching_is_case_insensitive_and_exact() {
     let dir = TempDir::new().unwrap();
-    write_index(dir.path(), &[("leaf.md", "Some Title")]);
+    write_state(dir.path(), &[("leaf.md", "Some Title")]);
     write_leaf(dir.path(), "leaf.md", "title: Some Title\n", "body\n");
 
     let result = show_leaf(dir.path(), "sOmE tItLe", false).unwrap();
@@ -125,7 +125,7 @@ fn matching_is_case_insensitive_and_exact() {
 #[test]
 fn not_found_mentions_requested_title_and_list() {
     let dir = TempDir::new().unwrap();
-    write_index(dir.path(), &[("leaf.md", "Available")]);
+    write_state(dir.path(), &[("leaf.md", "Available")]);
     write_leaf(dir.path(), "leaf.md", "title: Available\n", "body\n");
 
     let err = show_leaf(dir.path(), "Missing Title", false).unwrap_err();
@@ -138,7 +138,7 @@ fn not_found_mentions_requested_title_and_list() {
 #[test]
 fn duplicate_titles_return_ambiguity_with_candidate_details() {
     let dir = TempDir::new().unwrap();
-    write_index(
+    write_state(
         dir.path(),
         &[("one.md", "Duplicate"), ("two.md", "Duplicate")],
     );
@@ -162,7 +162,7 @@ fn duplicate_titles_return_ambiguity_with_candidate_details() {
 #[test]
 fn selected_leaf_failures_are_clear() {
     let dir = TempDir::new().unwrap();
-    write_index(
+    write_state(
         dir.path(),
         &[
             ("missing.md", "Missing"),
@@ -193,7 +193,7 @@ fn selected_leaf_failures_are_clear() {
 #[test]
 fn show_leaf_card_view_has_no_body() {
     let dir = TempDir::new().unwrap();
-    write_index(dir.path(), &[("leaf.md", "Leaf")]);
+    write_state(dir.path(), &[("leaf.md", "Leaf")]);
     write_leaf(dir.path(), "leaf.md", "title: Leaf\n", "body content");
 
     let result = show_leaf(dir.path(), "Leaf", false).unwrap();
@@ -206,7 +206,7 @@ fn show_leaf_card_view_has_no_body() {
 fn show_leaf_full_option_returns_full_body() {
     let dir = TempDir::new().unwrap();
     let long_body = "Body content with no truncation.".to_string();
-    write_index(dir.path(), &[("leaf.md", "Long")]);
+    write_state(dir.path(), &[("leaf.md", "Long")]);
     write_leaf(dir.path(), "leaf.md", "title: Long\n", &long_body);
 
     let card = show_leaf(dir.path(), "Long", false).unwrap();
@@ -220,7 +220,7 @@ fn show_leaf_full_option_returns_full_body() {
 #[test]
 fn show_leaf_is_read_only() {
     let dir = TempDir::new().unwrap();
-    write_index(dir.path(), &[("leaf.md", "Leaf")]);
+    write_state(dir.path(), &[("leaf.md", "Leaf")]);
     write_leaf(dir.path(), "leaf.md", "title: Leaf\n", "body\n");
     let before = snapshot_tree(dir.path());
 
@@ -253,21 +253,21 @@ fn render_human_full_includes_body() {
 }
 
 #[test]
-fn title_numeric_value_falls_back_to_manifest_title() {
+fn title_numeric_value_falls_back_to_state_title() {
     let dir = TempDir::new().unwrap();
-    write_index(dir.path(), &[("leaf.md", "Manifest Title")]);
+    write_state(dir.path(), &[("leaf.md", "State Title")]);
     write_raw_file(
         dir.path(),
         "leaf.md",
         "---\ntitle: 123\nurl: https://example.com\n---\n\n# Body\n",
     );
 
-    let result = show_leaf(dir.path(), "manifest title", false).unwrap();
+    let result = show_leaf(dir.path(), "state title", false).unwrap();
 
     assert_eq!(
         result.title.as_str(),
-        "Manifest Title",
-        "numeric title should fall back to manifest title"
+        "State Title",
+        "numeric title should fall back to state title"
     );
     assert_eq!(result.url.as_deref(), Some("https://example.com"));
 }
@@ -275,7 +275,7 @@ fn title_numeric_value_falls_back_to_manifest_title() {
 #[test]
 fn unknown_frontmatter_keys_preserved_in_result() {
     let dir = TempDir::new().unwrap();
-    write_index(dir.path(), &[("leaf.md", "Leaf")]);
+    write_state(dir.path(), &[("leaf.md", "Leaf")]);
     write_raw_file(
         dir.path(),
         "leaf.md",
@@ -320,7 +320,7 @@ fn fixture_result(body: Option<&str>, full: bool) -> ShowResult {
     }
 }
 
-fn write_index(tree: &Path, entries: &[(&str, &str)]) {
+fn write_state(tree: &Path, entries: &[(&str, &str)]) {
     fs::create_dir_all(tree).unwrap();
     let leaves: Vec<crate::domain::Leaf> = entries
         .iter()
@@ -337,8 +337,8 @@ fn write_index(tree: &Path, entries: &[(&str, &str)]) {
             }
         })
         .collect();
-    let m = crate::domain::manifest::Manifest {
-        tree: crate::domain::manifest::TreeMeta {
+    let m = crate::domain::state::TreeState {
+        tree: crate::domain::state::TreeMetadata {
             name: "test".to_string(),
             created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             last_compiled_at: None,
@@ -348,7 +348,7 @@ fn write_index(tree: &Path, entries: &[(&str, &str)]) {
     };
     let bo_dir = tree.join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    crate::engine::manifest::write(&bo_dir.join("manifest.json"), &m).unwrap();
+    crate::engine::state::write(&bo_dir.join("state.json"), &m).unwrap();
 }
 
 fn write_leaf(tree: &Path, file: &str, frontmatter_fields: &str, body: &str) {

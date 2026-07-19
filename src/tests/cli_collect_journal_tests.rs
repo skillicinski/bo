@@ -5,7 +5,7 @@
 
 use crate::cli::collect::compute::ComputedLeaf;
 use crate::cli::collect::{collect_with_compute, CollectError, CollectOutput};
-use crate::domain::manifest;
+use crate::domain::state;
 use crate::domain::{Slug, Timestamp, Title, Url};
 use std::fs;
 use tempfile::TempDir;
@@ -42,11 +42,11 @@ fn single_url_success_journals_one_collect_event_with_model() {
 fn single_url_duplicate_errors_without_journaling() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
-    let manifest_path = dir.path().join(".bo/manifest.json");
-    crate::engine::manifest::write(
-        &manifest_path,
-        &manifest::Manifest {
-            tree: manifest::TreeMeta {
+    let state_path = dir.path().join(".bo/state.json");
+    crate::engine::state::write(
+        &state_path,
+        &state::TreeState {
+            tree: state::TreeMetadata {
                 name: "t".to_string(),
                 created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                 last_compiled_at: None,

@@ -34,22 +34,12 @@ fn infra_dir_is_path_slash_bo() {
 }
 
 #[test]
-fn manifest_path_is_path_slash_bo_manifest_json() {
+fn state_path_is_path_slash_bo_state_json() {
     let tree = Tree::from_config(&full_config());
 
     assert_eq!(
-        crate::domain::tree::manifest_path(&tree.path),
-        PathBuf::from("/tmp/my-research/.bo/manifest.json")
-    );
-}
-
-#[test]
-fn free_manifest_path_matches_tree_method() {
-    let tree = Tree::from_config(&full_config());
-
-    assert_eq!(
-        crate::domain::tree::manifest_path(&tree.path),
-        super::manifest_path(&tree.path)
+        crate::domain::tree::state_path(&tree.path),
+        PathBuf::from("/tmp/my-research/.bo/state.json")
     );
 }
 
@@ -80,8 +70,8 @@ fn tree_meta_round_trip_preserves_json_shape() {
   "last_compiled_at": "2026-04-14T10:00:00.000Z"
 }"#;
 
-    use crate::domain::manifest::TreeMeta;
-    let meta: TreeMeta = serde_json::from_str(json).unwrap();
+    use crate::domain::state::TreeMetadata;
+    let meta: TreeMetadata = serde_json::from_str(json).unwrap();
     assert_eq!(meta.name, "my-research");
     assert_eq!(meta.created_at.to_string(), "2026-04-14T09:00:00.000Z");
     assert_eq!(

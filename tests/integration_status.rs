@@ -38,8 +38,8 @@ fn write_leaf(tree_dir: &Path, slug: &str, url: &str) {
     fs::create_dir_all(&leaf_dir).unwrap();
     fs::write(leaf_dir.join(&filename), content).unwrap();
 
-    // Append to manifest so reads see the leaf.
-    common::ensure_manifest(tree_dir);
+    // Append to state so reads see the leaf.
+    common::ensure_state(tree_dir);
     common::append_leaf(
         tree_dir,
         bo::domain::Leaf {
@@ -61,9 +61,9 @@ fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
     );
     fs::write(branches_dir.join(format!("{}.md", slug)), content).unwrap();
 
-    // Append to manifest and stamp last_compiled_at.
-    common::ensure_manifest(tree_dir);
-    let mut m = common::read_manifest(tree_dir);
+    // Append to state and stamp last_compiled_at.
+    common::ensure_state(tree_dir);
+    let mut m = common::read_state(tree_dir);
     m.branches.push(bo::domain::Branch {
         slug: Slug::parse(slug).unwrap(),
         file: format!("branch/{}.md", slug),
@@ -73,7 +73,7 @@ fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
         leaves: vec![Slug::parse("some-leaf").unwrap()],
     });
     m.tree.last_compiled_at = Some(Timestamp::parse(created_at).unwrap());
-    common::write_manifest(tree_dir, &m);
+    common::write_state(tree_dir, &m);
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -120,7 +120,7 @@ fn status_after_compile_shows_zero_uncompiled() {
     write_leaf(&tree_dir, "leaf-a", "https://a.com");
     write_leaf(&tree_dir, "leaf-b", "https://b.com");
 
-    // Simulate compile: write branch + update manifest timestamp.
+    // Simulate compile: write branch + update state timestamp.
     write_branch(&tree_dir, "topic-one", "2026-05-15T10:00:00Z");
 
     let out = status(tmp.path());
@@ -133,14 +133,14 @@ fn status_after_compile_shows_zero_uncompiled() {
 }
 
 #[test]
-fn status_detects_orphan_manifest_entry() {
+fn status_detects_missing_leaf_file() {
     let tmp = TempDir::new().unwrap();
     let tree_dir = common::seed(tmp.path(), "tree");
 
     write_leaf(&tree_dir, "exists", "https://exists.com");
     write_leaf(&tree_dir, "will-delete", "https://deleted.com");
 
-    // Now delete the file but leave the manifest entry
+    // Now delete the file but leave the state entry
     fs::remove_file(tree_dir.join("leaf/will-delete.md")).unwrap();
 
     let out = status_json(tmp.path());
@@ -149,17 +149,18 @@ fn status_detects_orphan_manifest_entry() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let json: Value = serde_json::from_str(&stdout).unwrap();
 
-    let orphans = &json["data"]["health"]["orphan_index_entries"];
-    assert_eq!(orphans.as_array().unwrap().len(), 1);
-    assert_eq!(orphans[0]["file"], "leaf/will-delete.md");
+    let missing = &json["data"]["health"]["missing_leaf_files"];
+    assert_eq!(missing.as_array().unwrap().len(), 1);
+    assert_eq!(missing[0]["file"], "leaf/will-delete.md");
 }
 
 #[test]
-fn status_detects_missing_from_index() {
+fn status_detects_untracked_leaf_file() {
     let tmp = TempDir::new().unwrap();
     let tree_dir = common::seed(tmp.path(), "tree");
+    common::ensure_state(&tree_dir);
 
-    // Write a leaf file directly without going through collect (not in index)
+    // Write a leaf file directly without going through collect (not tracked in state)
     let content = "---\ntitle: \"stray\"\nurl: https://stray.com\ncollected_at: 2026-05-14T10:00:00Z\nupdated_at: 2026-05-14T10:00:00Z\n---\n\n# stray\n\nOrphaned leaf.\n";
     let leaf_dir = tree_dir.join("leaf");
     fs::create_dir_all(&leaf_dir).unwrap();
@@ -171,9 +172,9 @@ fn status_detects_missing_from_index() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let json: Value = serde_json::from_str(&stdout).unwrap();
 
-    let missing = &json["data"]["health"]["missing_from_index"];
-    assert_eq!(missing.as_array().unwrap().len(), 1);
-    assert_eq!(missing[0], "stray.md");
+    let untracked = &json["data"]["health"]["untracked_leaf_files"];
+    assert_eq!(untracked.as_array().unwrap().len(), 1);
+    assert_eq!(untracked[0], "stray.md");
 }
 
 #[test]
@@ -189,7 +190,8 @@ fn status_json_is_valid_and_complete() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let json: Value = serde_json::from_str(&stdout).unwrap();
 
-    // Verify all top-level fields exist
+    // Verify the complete status schema
+    assert_eq!(json["schema_version"], 2);
     assert_eq!(json["ok"], true);
     assert_eq!(json["command"], "status");
     assert!(json["data"]["tree_name"].is_string());
@@ -197,11 +199,13 @@ fn status_json_is_valid_and_complete() {
     assert!(json["data"]["leaves"]["uncompiled"].is_number());
     assert!(json["data"]["leaves"]["uncompiled_slugs"].is_array());
     assert!(json["data"]["branches"]["total"].is_number());
+    assert!(json["data"]["branches"]["last_compiled_at"].is_null());
     assert!(json["data"]["size"]["bytes"].is_number());
     assert!(json["data"]["size"]["estimated_tokens"].is_number());
-    assert!(json["data"]["health"]["orphan_index_entries"].is_array());
-    assert!(json["data"]["health"]["missing_from_index"].is_array());
+    assert!(json["data"]["health"]["missing_leaf_files"].is_array());
+    assert!(json["data"]["health"]["untracked_leaf_files"].is_array());
     assert!(json["data"]["hints"].is_array());
+    assert!(json["data"]["provider"].is_string());
 }
 
 #[test]

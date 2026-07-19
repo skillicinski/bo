@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::time::SystemTime;
 use tempfile::TempDir;
 
-use crate::domain::manifest::{Manifest, TreeMeta};
+use crate::domain::state::{TreeMetadata, TreeState};
 use crate::domain::{Branch, Leaf, Title, Url};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -15,7 +15,7 @@ struct FileSnapshot {
 }
 
 #[test]
-fn empty_index_returns_empty_result() {
+fn empty_state_returns_empty_result() {
     let dir = TempDir::new().unwrap();
     let result = list_tree(dir.path(), &ListOptions::default()).unwrap();
     assert!(
@@ -28,7 +28,7 @@ fn empty_index_returns_empty_result() {
 #[test]
 fn default_order_follows_collection_order() {
     let dir = TempDir::new().unwrap();
-    write_manifest(
+    write_state(
         dir.path(),
         &[
             leaf("second", "Second Leaf", "2025-01-02T00:00:00Z"),
@@ -45,9 +45,9 @@ fn default_order_follows_collection_order() {
     assert_eq!(
         files(&leaves),
         vec!["second.md", "first.md", "third.md"],
-        "leaves preserve manifest insertion order"
+        "leaves preserve state insertion order"
     );
-    assert_eq!(index_positions(&leaves), vec![0, 1, 2]);
+    assert_eq!(state_positions(&leaves), vec![0, 1, 2]);
 }
 
 #[test]
@@ -56,7 +56,7 @@ fn suspicious_path_is_degraded_and_never_read() {
     let tree_dir = sandbox.path().join("tree");
     fs::create_dir_all(&tree_dir).unwrap();
     // Leaf.file traverses out of the tree.
-    write_manifest(
+    write_state(
         &tree_dir,
         &[Leaf {
             slug: Slug::parse("outside").unwrap(),
@@ -86,9 +86,9 @@ fn suspicious_path_is_degraded_and_never_read() {
 #[test]
 fn missing_file_yields_degraded_row() {
     let dir = TempDir::new().unwrap();
-    write_manifest(
+    write_state(
         dir.path(),
-        &[leaf("missing", "Index Title", "2025-01-01T00:00:00Z")],
+        &[leaf("missing", "State Title", "2025-01-01T00:00:00Z")],
         &[],
     );
     // Note: no leaf .md file written.
@@ -98,15 +98,15 @@ fn missing_file_yields_degraded_row() {
     let row = &leaves[0];
 
     assert_eq!(row.file, "missing.md");
-    assert_eq!(row.display_title, "Index Title");
+    assert_eq!(row.display_title, "State Title");
     assert!(row.degraded);
     assert_eq!(row.degradation_reasons, vec!["missing file"]);
 }
 
 #[test]
-fn display_title_falls_back_to_filename_when_manifest_title_empty() {
+fn display_title_falls_back_to_filename_when_state_title_empty() {
     let dir = TempDir::new().unwrap();
-    write_manifest(
+    write_state(
         dir.path(),
         &[
             leaf("with-title", "Has Title", "2025-01-01T00:00:00Z"),
@@ -124,9 +124,9 @@ fn display_title_falls_back_to_filename_when_manifest_title_empty() {
 }
 
 #[test]
-fn collected_at_is_taken_directly_from_manifest() {
+fn collected_at_is_taken_directly_from_state() {
     let dir = TempDir::new().unwrap();
-    write_manifest(
+    write_state(
         dir.path(),
         &[leaf("only", "Only", "2025-06-01T10:00:00Z")],
         &[],
@@ -144,9 +144,9 @@ fn collected_at_is_taken_directly_from_manifest() {
 }
 
 #[test]
-fn branches_for_leaf_come_from_manifest_inverse() {
+fn branches_for_leaf_come_from_state_inverse() {
     let dir = TempDir::new().unwrap();
-    write_manifest(
+    write_state(
         dir.path(),
         &[
             leaf("alpha", "Alpha", "2025-01-01T00:00:00Z"),
@@ -174,7 +174,7 @@ fn branches_for_leaf_come_from_manifest_inverse() {
 #[test]
 fn branch_filter_is_exact() {
     let dir = TempDir::new().unwrap();
-    write_manifest(
+    write_state(
         dir.path(),
         &[
             leaf("exact", "Exact", "2025-01-01T00:00:00Z"),
@@ -207,7 +207,7 @@ fn branch_filter_is_exact() {
 #[test]
 fn branch_filter_can_return_no_matches() {
     let dir = TempDir::new().unwrap();
-    write_manifest(
+    write_state(
         dir.path(),
         &[leaf("only", "Only", "2025-01-01T00:00:00Z")],
         &[("rust", &["only"])],
@@ -232,9 +232,9 @@ fn branch_filter_can_return_no_matches() {
 }
 
 #[test]
-fn recent_sorting_puts_newest_first_and_preserves_index_ties() {
+fn recent_sorting_puts_newest_first_and_preserves_state_ties() {
     let dir = TempDir::new().unwrap();
-    write_manifest(
+    write_state(
         dir.path(),
         &[
             leaf("old-a", "Old A", "2025-01-01T00:00:00Z"),
@@ -258,7 +258,7 @@ fn recent_sorting_puts_newest_first_and_preserves_index_ties() {
     .unwrap();
 
     let leaves = leaves_from_result(&result);
-    // Newest first, then ties broken by index position (old-a before old-b)
+    // Newest first, then ties broken by state position (old-a before old-b)
     assert_eq!(
         files(&leaves),
         vec!["newest.md", "middle.md", "old-a.md", "old-b.md",]
@@ -268,7 +268,7 @@ fn recent_sorting_puts_newest_first_and_preserves_index_ties() {
 #[test]
 fn limit_is_applied_after_filtering_and_sorting() {
     let dir = TempDir::new().unwrap();
-    write_manifest(
+    write_state(
         dir.path(),
         &[
             leaf("mid", "Mid", "2025-01-02T00:00:00Z"),
@@ -302,7 +302,7 @@ fn limit_is_applied_after_filtering_and_sorting() {
 #[test]
 fn list_tree_is_read_only() {
     let dir = TempDir::new().unwrap();
-    write_manifest(
+    write_state(
         dir.path(),
         &[
             leaf("one", "One", "2025-01-01T00:00:00Z"),
@@ -530,7 +530,7 @@ fn render_human_branch_centric_no_branches_no_matches_message() {
 #[test]
 fn terms_filters_leaves_by_title_and_slug() {
     let dir = TempDir::new().unwrap();
-    write_manifest(
+    write_state(
         dir.path(),
         &[
             leaf("rust-basics", "Rust Basics", "2025-01-01T00:00:00Z"),
@@ -560,7 +560,7 @@ fn terms_filters_leaves_by_title_and_slug() {
 #[test]
 fn terms_filters_branches_by_title_and_slug() {
     let dir = TempDir::new().unwrap();
-    write_manifest(
+    write_state(
         dir.path(),
         &[
             leaf("a", "A", "2025-01-01T00:00:00Z"),
@@ -597,7 +597,7 @@ fn terms_filters_branches_by_title_and_slug() {
 #[test]
 fn terms_filters_branch_centric_by_branch_and_leaf_match() {
     let dir = TempDir::new().unwrap();
-    write_manifest(
+    write_state(
         dir.path(),
         &[
             leaf("rust-leaf", "Rust Leaf", "2025-01-01T00:00:00Z"),
@@ -705,7 +705,7 @@ fn leaf(slug: &str, title: &str, collected_at: &str) -> Leaf {
     }
 }
 
-fn write_manifest(tree_dir: &Path, leaves: &[Leaf], branches: &[(&str, &[&str])]) {
+fn write_state(tree_dir: &Path, leaves: &[Leaf], branches: &[(&str, &[&str])]) {
     fs::create_dir_all(tree_dir.join(".bo")).unwrap();
     let branch_records: Vec<Branch> = branches
         .iter()
@@ -718,8 +718,8 @@ fn write_manifest(tree_dir: &Path, leaves: &[Leaf], branches: &[(&str, &[&str])]
             leaves: leaf_slugs.iter().map(|s| Slug::parse(s).unwrap()).collect(),
         })
         .collect();
-    let m = Manifest {
-        tree: TreeMeta {
+    let m = TreeState {
+        tree: TreeMetadata {
             name: "test".to_string(),
             created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             last_compiled_at: None,
@@ -727,7 +727,7 @@ fn write_manifest(tree_dir: &Path, leaves: &[Leaf], branches: &[(&str, &[&str])]
         leaves: leaves.to_vec(),
         branches: branch_records,
     };
-    crate::engine::manifest::write(&tree_dir.join(".bo/manifest.json"), &m).unwrap();
+    crate::engine::state::write(&tree_dir.join(".bo/state.json"), &m).unwrap();
 }
 
 fn write_leaf_files(tree_dir: &Path, slugs: &[&str]) {
@@ -744,8 +744,8 @@ fn files(rows: &[ListLeafRow]) -> Vec<&str> {
     rows.iter().map(|row| row.file.as_str()).collect()
 }
 
-fn index_positions(rows: &[ListLeafRow]) -> Vec<usize> {
-    rows.iter().map(|row| row.index_position).collect()
+fn state_positions(rows: &[ListLeafRow]) -> Vec<usize> {
+    rows.iter().map(|row| row.state_position).collect()
 }
 
 fn leaves_options() -> ListOptions {
@@ -772,7 +772,7 @@ fn leaf_row(
     branches: &[&str],
     degraded: bool,
     degradation_reasons: &[&str],
-    index_position: usize,
+    state_position: usize,
 ) -> ListLeafRow {
     let branch_slugs: Vec<String> = branches.iter().map(|b| b.to_string()).collect();
     let branch_count = branch_slugs.len();
@@ -788,7 +788,7 @@ fn leaf_row(
             .iter()
             .map(|reason| reason.to_string())
             .collect(),
-        index_position,
+        state_position,
     }
 }
 

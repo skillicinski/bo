@@ -11,7 +11,7 @@ use bo::domain::{Title, Url};
 use std::fs;
 
 use bo::cli::compile;
-use bo::domain::manifest::{Manifest, TreeMeta};
+use bo::domain::state::{TreeMetadata, TreeState};
 use bo::domain::{Branch, Leaf};
 use bo::engine::config::SeededConfig;
 use bo::engine::pending;
@@ -25,20 +25,20 @@ fn make_config(output_dir: &std::path::Path) -> SeededConfig {
 #[test]
 fn crash_mid_compile_rollback_cleans_staged_files() {
     // Simulate: compile started, pending.json written, staged .tmp exists,
-    // but manifest was NOT updated (crash before commit).
+    // but state was NOT updated (crash before commit).
     // Next invocation should rollback: delete .tmp, clear pending.
     let dir = common::setup_fixture_collection();
     let tree_dir = dir.path();
     let bo_dir = tree_dir.join(".bo");
 
     // Mark all leaves as compiled so compile returns noop after recovery
-    let manifest_path = bo_dir.join("manifest.json");
-    let mut m = bo::engine::manifest::read(&manifest_path).unwrap();
+    let state_path = bo_dir.join("state.json");
+    let mut m = bo::engine::state::read(&state_path).unwrap();
     m.tree.last_compiled_at = Some(Timestamp::parse("2099-01-01T00:00:00Z").unwrap());
-    bo::engine::manifest::write(&manifest_path, &m).unwrap();
+    bo::engine::state::write(&state_path, &m).unwrap();
 
-    // Record manifest hash before "crash"
-    let manifest_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
+    // Record state hash before "crash"
+    let state_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
 
     // Write a staged .tmp file (simulating a branch about to be written)
     fs::create_dir_all(tree_dir.join("branch")).unwrap();
@@ -53,7 +53,7 @@ fn crash_mid_compile_rollback_cleans_staged_files() {
         },
         started_at: "2020-01-01T00:00:00Z".to_string(),
         pid: 99999,
-        pre_manifest_hash: manifest_hash,
+        pre_state_hash: state_hash,
         writes: vec![bo::engine::pending::PendingWrite {
             path: "branch/fake-branch.md".to_string(),
             content_hash: bo::engine::pending::content_hash(staged_content),
@@ -98,17 +98,17 @@ fn crash_mid_compile_rollback_cleans_staged_files() {
 #[test]
 fn crash_mid_compile_roll_forward_applies_staged_writes() {
     // Simulate: compile started, pending.json written, staged .tmp exists,
-    // AND manifest WAS updated (crash after commit but before rename).
+    // AND state WAS updated (crash after commit but before rename).
     // Next invocation should roll forward: rename .tmp to final, clear pending.
     let dir = common::setup_fixture_collection();
     let tree_dir = dir.path();
     let bo_dir = tree_dir.join(".bo");
 
     // Mark all leaves as compiled
-    let manifest_path = bo_dir.join("manifest.json");
-    let mut m = bo::engine::manifest::read(&manifest_path).unwrap();
+    let state_path = bo_dir.join("state.json");
+    let mut m = bo::engine::state::read(&state_path).unwrap();
     m.tree.last_compiled_at = Some(Timestamp::parse("2099-01-01T00:00:00Z").unwrap());
-    bo::engine::manifest::write(&manifest_path, &m).unwrap();
+    bo::engine::state::write(&state_path, &m).unwrap();
 
     // Write a staged .tmp file
     fs::create_dir_all(tree_dir.join("branch")).unwrap();
@@ -118,7 +118,7 @@ fn crash_mid_compile_roll_forward_applies_staged_writes() {
     let final_path = tree_dir.join("branch/recovered-branch.md");
     fs::write(&staged_path, branch_content).unwrap();
 
-    // Use a DIFFERENT hash than current manifest (simulating that manifest was already committed)
+    // Use a DIFFERENT hash than current state (simulating that state was already committed)
     let fake_pre_hash = "deadbeef".to_string();
 
     let pending = bo::engine::pending::PendingOperation {
@@ -127,7 +127,7 @@ fn crash_mid_compile_roll_forward_applies_staged_writes() {
         },
         started_at: "2020-01-01T00:00:00Z".to_string(),
         pid: 99999,
-        pre_manifest_hash: fake_pre_hash,
+        pre_state_hash: fake_pre_hash,
         writes: vec![bo::engine::pending::PendingWrite {
             path: "branch/recovered-branch.md".to_string(),
             content_hash: bo::engine::pending::content_hash(branch_content),
@@ -164,19 +164,19 @@ fn crash_mid_compile_roll_forward_applies_staged_writes() {
 #[test]
 fn crash_mid_collect_rollback_leaves_tree_unchanged() {
     // Simulate: collect started, pending.json written for a collect op,
-    // staged leaf .tmp exists, manifest NOT updated.
+    // staged leaf .tmp exists, state NOT updated.
     // Next compile invocation should rollback the stale collect.
     let dir = common::setup_fixture_collection();
     let tree_dir = dir.path();
     let bo_dir = tree_dir.join(".bo");
 
     // Mark all leaves as compiled
-    let manifest_path = bo_dir.join("manifest.json");
-    let mut m = bo::engine::manifest::read(&manifest_path).unwrap();
+    let state_path = bo_dir.join("state.json");
+    let mut m = bo::engine::state::read(&state_path).unwrap();
     m.tree.last_compiled_at = Some(Timestamp::parse("2099-01-01T00:00:00Z").unwrap());
-    bo::engine::manifest::write(&manifest_path, &m).unwrap();
+    bo::engine::state::write(&state_path, &m).unwrap();
 
-    let manifest_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
+    let state_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
 
     // Staged leaf file from interrupted collect
     let staged_leaf =
@@ -190,7 +190,7 @@ fn crash_mid_collect_rollback_leaves_tree_unchanged() {
         },
         started_at: "2020-01-01T00:00:00Z".to_string(),
         pid: 99999,
-        pre_manifest_hash: manifest_hash,
+        pre_state_hash: state_hash,
         writes: vec![bo::engine::pending::PendingWrite {
             path: "interrupted.md".to_string(),
             content_hash: bo::engine::pending::content_hash(staged_leaf),
@@ -212,10 +212,10 @@ fn crash_mid_collect_rollback_leaves_tree_unchanged() {
         !tree_dir.join("interrupted.md").exists(),
         "interrupted leaf should not appear"
     );
-    // Manifest unchanged by the failed collect
-    let _manifest_after = fs::read_to_string(bo_dir.join("manifest.json")).unwrap();
-    // Note: compile may update manifest (last_compiled_at), so just verify no interrupted leaf
-    let m = bo::engine::manifest::read(&bo_dir.join("manifest.json")).unwrap();
+    // TreeState unchanged by the failed collect
+    let _state_after = fs::read_to_string(bo_dir.join("state.json")).unwrap();
+    // Note: compile may update state (last_compiled_at), so just verify no interrupted leaf
+    let m = bo::engine::state::read(&bo_dir.join("state.json")).unwrap();
     assert!(!m
         .leaves
         .iter()
@@ -334,9 +334,9 @@ fn compile_full_with_canned_response_creates_branches() {
         &model,
         &started_at,
         Vec::new(),
-        &bo::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap(),
+        &bo::engine::state::read(&dir.path().join(".bo/state.json")).unwrap(),
         &[], // ponytail: Full mode doesn't use new_leaf_slugs
-        &pending::manifest_hash(dir.path()).unwrap(),
+        &pending::state_hash(dir.path()).unwrap(),
         &mut Vec::new(),
     );
 
@@ -375,7 +375,7 @@ fn compile_full_with_canned_response_creates_branches() {
     );
     assert!(!body.trim().is_empty(), "branch body is empty");
 
-    // No index store (migrated from dropped live test)
+    // No legacy index store (migrated from dropped live test)
     assert!(
         !dir.path().join(".bo/index.jsonl").exists(),
         "compile must not write .bo/index.jsonl"
@@ -386,8 +386,8 @@ fn compile_full_with_canned_response_creates_branches() {
     let content_b = fs::read_to_string(&branch_b).unwrap();
     assert!(content_b.contains("Systems Design in Rust"));
 
-    // Manifest updated with branches
-    let m = bo::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    // TreeState updated with branches
+    let m = bo::engine::state::read(&dir.path().join(".bo/state.json")).unwrap();
     assert_eq!(m.branches.len(), 2);
     assert!(m.tree.last_compiled_at.is_some());
 }
@@ -450,10 +450,10 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
     )
     .unwrap();
 
-    bo::engine::manifest::write(
-        &bo_dir.join("manifest.json"),
-        &Manifest {
-            tree: TreeMeta {
+    bo::engine::state::write(
+        &bo_dir.join("state.json"),
+        &TreeState {
+            tree: TreeMetadata {
                 name: "incremental-fixture".to_string(),
                 created_at: ts_old.clone(),
                 last_compiled_at: Some(ts_last_compile.clone()),
@@ -532,7 +532,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
     .to_string();
     let provider = FakeLlmProvider { response: canned };
 
-    let m = bo::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = bo::engine::state::read(&dir.path().join(".bo/state.json")).unwrap();
     let new_slugs: Vec<String> = m
         .leaves
         .iter()
@@ -544,7 +544,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
         })
         .map(|l| l.slug.as_str().to_string())
         .collect();
-    let manifest_hash = pending::manifest_hash(dir.path()).unwrap();
+    let state_hash = pending::state_hash(dir.path()).unwrap();
 
     let result = compile::run_compile_with_provider_started_at(
         &cfg,
@@ -555,7 +555,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
         Vec::new(),
         &m,
         &new_slugs,
-        &manifest_hash,
+        &state_hash,
         &mut Vec::new(),
     );
 
@@ -567,8 +567,8 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
     assert!(branches_dir.join("memory-model.md").exists());
     assert!(branches_dir.join("type-system.md").exists());
 
-    // Manifest reflects both branches
-    let m = bo::engine::manifest::read(&bo_dir.join("manifest.json")).unwrap();
+    // TreeState reflects both branches
+    let m = bo::engine::state::read(&bo_dir.join("state.json")).unwrap();
     assert_eq!(m.branches.len(), 2);
     let slugs: Vec<&str> = m.branches.iter().map(|b| b.slug.as_str()).collect();
     assert!(slugs.contains(&"memory-model"));
@@ -598,7 +598,7 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
 
     let ts = Timestamp::parse("2025-06-01T10:00:00Z").unwrap();
 
-    // Only write one leaf file; record two in manifest.
+    // Only write one leaf file; record two in state.
     let title = Title::parse("Survivor").unwrap();
     let url = Url::parse("https://example.com/survivor").unwrap();
     let content =
@@ -612,10 +612,10 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
     )
     .unwrap();
 
-    bo::engine::manifest::write(
-        &bo_dir.join("manifest.json"),
-        &Manifest {
-            tree: TreeMeta {
+    bo::engine::state::write(
+        &bo_dir.join("state.json"),
+        &TreeState {
+            tree: TreeMetadata {
                 name: "repair-fixture".to_string(),
                 created_at: ts.clone(),
                 last_compiled_at: Some(Timestamp::parse("2025-06-01T11:00:00Z").unwrap()),
@@ -668,11 +668,11 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
     // With only 1 surviving leaf, compile returns noop (single_leaf or empty_tree)
     assert_eq!(compile_result.status, "noop");
 
-    // Manifest cleaned: deleted leaf removed, branch removed (only 1 leaf left)
-    let m = bo::engine::manifest::read(&bo_dir.join("manifest.json")).unwrap();
+    // TreeState cleaned: deleted leaf removed, branch removed (only 1 leaf left)
+    let m = bo::engine::state::read(&bo_dir.join("state.json")).unwrap();
     assert!(
         !m.leaves.iter().any(|l| l.slug.as_str() == "deleted"),
-        "deleted leaf should be pruned from manifest"
+        "deleted leaf should be pruned from state"
     );
     // Branch is removed because it fell below 2 leaves
     let branch_slugs: Vec<&str> = m.branches.iter().map(|b| b.slug.as_str()).collect();
@@ -686,7 +686,7 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
 
 // ── system-prompt assertion tests ─────────────────────────────────────────
 
-/// Generate `count` leaf files and return manifest `Leaf` records.
+/// Generate `count` leaf files and return state `Leaf` records.
 fn create_leaf_docs(
     dir: &std::path::Path,
     count: usize,
@@ -740,8 +740,8 @@ fn compile_one_shot_uses_compile_system_prompt() {
     .to_string();
 
     let provider = CapturingProvider::new(vec![canned]);
-    let manifest = bo::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
-    let mhash = pending::manifest_hash(dir.path()).unwrap();
+    let state = bo::engine::state::read(&dir.path().join(".bo/state.json")).unwrap();
+    let mhash = pending::state_hash(dir.path()).unwrap();
 
     let result = compile::run_compile_with_provider_started_at(
         &cfg,
@@ -750,7 +750,7 @@ fn compile_one_shot_uses_compile_system_prompt() {
         &model,
         &started_at,
         Vec::new(),
-        &manifest,
+        &state,
         &[],
         &mhash,
         &mut Vec::new(),
@@ -777,10 +777,10 @@ fn compile_full_two_stage_uses_cluster_system_prompt() {
     let ts = Timestamp::parse("2025-06-01T10:00:00Z").unwrap();
     let leaves = create_leaf_docs(dir.path(), 40, "leaf", &ts);
 
-    bo::engine::manifest::write(
-        &bo_dir.join("manifest.json"),
-        &Manifest {
-            tree: TreeMeta {
+    bo::engine::state::write(
+        &bo_dir.join("state.json"),
+        &TreeState {
+            tree: TreeMetadata {
                 name: "two-stage-full-fixture".to_string(),
                 created_at: ts.clone(),
                 last_compiled_at: None,
@@ -820,8 +820,8 @@ fn compile_full_two_stage_uses_cluster_system_prompt() {
     .to_string();
 
     let provider = CapturingProvider::new(vec![stage1, stage2_a, stage2_b]);
-    let manifest = bo::engine::manifest::read(&bo_dir.join("manifest.json")).unwrap();
-    let mhash = pending::manifest_hash(dir.path()).unwrap();
+    let state = bo::engine::state::read(&bo_dir.join("state.json")).unwrap();
+    let mhash = pending::state_hash(dir.path()).unwrap();
 
     let result = compile::run_compile_with_provider_started_at(
         &cfg,
@@ -830,7 +830,7 @@ fn compile_full_two_stage_uses_cluster_system_prompt() {
         &model,
         &started_at,
         Vec::new(),
-        &manifest,
+        &state,
         &[],
         &mhash,
         &mut Vec::new(),
@@ -889,10 +889,10 @@ fn compile_incremental_two_stage_uses_incremental_cluster_system_prompt() {
         .chain(new_leaves.clone())
         .collect();
 
-    bo::engine::manifest::write(
-        &bo_dir.join("manifest.json"),
-        &Manifest {
-            tree: TreeMeta {
+    bo::engine::state::write(
+        &bo_dir.join("state.json"),
+        &TreeState {
+            tree: TreeMetadata {
                 name: "incremental-two-stage-fixture".to_string(),
                 created_at: ts_old.clone(),
                 last_compiled_at: Some(ts_last_compile.clone()),
@@ -949,8 +949,8 @@ fn compile_incremental_two_stage_uses_incremental_cluster_system_prompt() {
     .to_string();
 
     let provider = CapturingProvider::new(vec![stage1, stage2_update, stage2_new]);
-    let manifest = bo::engine::manifest::read(&bo_dir.join("manifest.json")).unwrap();
-    let mhash = pending::manifest_hash(dir.path()).unwrap();
+    let state = bo::engine::state::read(&bo_dir.join("state.json")).unwrap();
+    let mhash = pending::state_hash(dir.path()).unwrap();
 
     let result = compile::run_compile_with_provider_started_at(
         &cfg,
@@ -959,7 +959,7 @@ fn compile_incremental_two_stage_uses_incremental_cluster_system_prompt() {
         &model,
         &started_at,
         Vec::new(),
-        &manifest,
+        &state,
         &new_slug_values,
         &mhash,
         &mut Vec::new(),

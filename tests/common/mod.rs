@@ -4,7 +4,7 @@
 //!
 //! Repeated environment construction only: launch the installed `bo` binary
 //! against an isolated HOME, seed a named tree, bootstrap/read/write a
-//! manifest, append typed leaf records, and the canonical fixture
+//! state, append typed leaf records, and the canonical fixture
 //! collection shared by the compile suites.
 //!
 //! No assertions on command output, no fixture-builder hierarchy, and no
@@ -15,7 +15,7 @@
 //! Included by each integration test file via `mod common;`. Cargo does not
 //! compile this as a standalone test target.
 
-use bo::domain::manifest::{Manifest, TreeMeta};
+use bo::domain::state::{TreeMetadata, TreeState};
 use bo::domain::tree::TreeConfig;
 use bo::domain::{Leaf, Slug, Timestamp, Title, Url};
 use bo::engine::config::{Config, SeededConfig};
@@ -69,43 +69,43 @@ pub fn seed_with(home: &Path, name: &str, provider: &str, model: &str) -> PathBu
     dir
 }
 
-// ── manifest ─────────────────────────────────────────────────────────────────
+// ── state ─────────────────────────────────────────────────────────────────
 
-/// Path to a tree's manifest.
-fn manifest_path(tree: &Path) -> PathBuf {
-    tree.join(".bo").join("manifest.json")
+/// Path to a tree's state.
+fn state_path(tree: &Path) -> PathBuf {
+    tree.join(".bo").join("state.json")
 }
 
-/// Ensure an empty manifest exists; no-op if one is already present.
-pub fn ensure_manifest(tree: &Path) {
-    if !manifest_path(tree).exists() {
-        write_manifest(tree, &empty_manifest("tree"));
+/// Ensure an empty state exists; no-op if one is already present.
+pub fn ensure_state(tree: &Path) {
+    if !state_path(tree).exists() {
+        write_state(tree, &empty_state("tree"));
     }
 }
 
-/// Read the tree manifest. Panics if absent or invalid.
-pub fn read_manifest(tree: &Path) -> Manifest {
-    bo::engine::manifest::read(&manifest_path(tree)).unwrap()
+/// Read the tree state. Panics if absent or invalid.
+pub fn read_state(tree: &Path) -> TreeState {
+    bo::engine::state::read(&state_path(tree)).unwrap()
 }
 
-/// Write the tree manifest, creating `.bo/` if needed.
-pub fn write_manifest(tree: &Path, manifest: &Manifest) {
-    let path = manifest_path(tree);
+/// Write the tree state, creating `.bo/` if needed.
+pub fn write_state(tree: &Path, state: &TreeState) {
+    let path = state_path(tree);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    bo::engine::manifest::write(&path, manifest).unwrap();
+    bo::engine::state::write(&path, state).unwrap();
 }
 
-/// Append a leaf record to the manifest (does not touch files on disk).
+/// Append a leaf record to the state (does not touch files on disk).
 pub fn append_leaf(tree: &Path, leaf: Leaf) {
-    let mut m = read_manifest(tree);
+    let mut m = read_state(tree);
     m.leaves.push(leaf);
-    write_manifest(tree, &m);
+    write_state(tree, &m);
 }
 
-/// An empty manifest named `name` stamped at the harness epoch.
-fn empty_manifest(name: &str) -> Manifest {
-    Manifest {
-        tree: TreeMeta {
+/// An empty state named `name` stamped at the harness epoch.
+fn empty_state(name: &str) -> TreeState {
+    TreeState {
+        tree: TreeMetadata {
             name: name.to_string(),
             created_at: ts(EPOCH),
             last_compiled_at: None,
@@ -176,10 +176,10 @@ pub fn setup_fixture_collection() -> TempDir {
             summary: None,
         });
     }
-    write_manifest(
+    write_state(
         dir.path(),
-        &Manifest {
-            tree: TreeMeta {
+        &TreeState {
+            tree: TreeMetadata {
                 name: "compile-fixture".to_string(),
                 created_at: ts("2025-06-01T09:00:00Z"),
                 last_compiled_at: None,

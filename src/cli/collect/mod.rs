@@ -10,12 +10,12 @@
 // Stage layout (this module holds the command API types + orchestrator):
 //   input   — classify/expand URLs, URL-list files, local notes.
 //   compute — acquire/normalize web/YouTube/note content into a `ComputedLeaf`.
-//   commit  — dedup, slug allocation, manifest mutation, pending transaction,
+//   commit  — dedup, slug allocation, state mutation, pending transaction,
 //             item constructors, and `Outcome`/output shaping.
 //   journal — collect journal payload (engine journal append).
 //   render  — human-readable output.
 //
-// Dependency direction: collect → adapters, fetch, quality, extract, leaf, slug, manifest, pending.
+// Dependency direction: collect → adapters, fetch, quality, extract, leaf, slug, state, pending.
 
 use serde::Serialize;
 use serde_json::json;
@@ -26,7 +26,7 @@ use std::thread;
 
 use crate::adapters::youtube::YoutubeError;
 use crate::cli::json::JsonError;
-use crate::domain::manifest;
+use crate::domain::state;
 use crate::engine::pending;
 use crate::engine::quality::RejectReason;
 use crate::engine::{extract, fetch};
@@ -64,7 +64,7 @@ pub enum CollectError {
         reason: RejectReason,
     },
     Io(std::io::Error),
-    Manifest(manifest::ManifestError),
+    TreeState(state::TreeStateError),
     Pending(pending::PendingError),
     Note(NoteError),
 }
@@ -82,7 +82,7 @@ impl fmt::Display for CollectError {
                 write!(f, "{} was not collected: {}", url, reason)
             }
             CollectError::Io(e) => write!(f, "I/O error: {}", e),
-            CollectError::Manifest(e) => write!(f, "{}", e),
+            CollectError::TreeState(e) => write!(f, "{}", e),
             CollectError::Pending(e) => write!(f, "{}", e),
             CollectError::Note(e) => write!(f, "{}", e),
         }
@@ -113,9 +113,9 @@ impl From<std::io::Error> for CollectError {
     }
 }
 
-impl From<manifest::ManifestError> for CollectError {
-    fn from(e: manifest::ManifestError) -> Self {
-        CollectError::Manifest(e)
+impl From<state::TreeStateError> for CollectError {
+    fn from(e: state::TreeStateError) -> Self {
+        CollectError::TreeState(e)
     }
 }
 
@@ -133,7 +133,7 @@ pub(super) fn error_code(error: &CollectError) -> &'static str {
         CollectError::Extract(_) => "extract_error",
         CollectError::Youtube(_) => "youtube_error",
         CollectError::Io(_) => "io_error",
-        CollectError::Manifest(_) => "manifest_error",
+        CollectError::TreeState(_) => "state_error",
         CollectError::Pending(pending::PendingError::Busy { .. }) => "tree_busy",
         CollectError::Pending(_) => "pending_error",
         CollectError::Note(NoteError::Read { .. }) => "note_read_error",

@@ -44,10 +44,7 @@ fn run_dry_run_test(model_id: &str, provider: Box<dyn LlmProvider>, model: &Mode
         preview.tool_calls
     );
     assert!(!preview.branches.is_empty(), "expected non-empty branches");
-    assert!(
-        preview.manifest_unchanged,
-        "expected manifest_unchanged=true"
-    );
+    assert!(preview.state_unchanged, "expected state_unchanged=true");
     assert_eq!(preview.model, model_id, "unexpected model in preview");
 
     // Snapshot tree after

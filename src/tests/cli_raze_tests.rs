@@ -16,7 +16,7 @@ fn url(s: &str) -> crate::domain::Url {
     crate::domain::Url::parse(s).expect("invalid test url")
 }
 
-/// Create a minimal seeded tree with an empty manifest inside `tmp`.
+/// Create a minimal seeded tree with an empty state inside `tmp`.
 /// Returns `(tree_dir, config_path)`.
 fn setup_tree(tmp: &TempDir) -> (PathBuf, PathBuf) {
     let tree_dir = tmp.path().join("tree");
@@ -24,10 +24,10 @@ fn setup_tree(tmp: &TempDir) -> (PathBuf, PathBuf) {
     fs::create_dir_all(&tree_dir).unwrap();
     let bo_dir = tree_dir.join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
-    crate::engine::manifest::write(
-        &bo_dir.join("manifest.json"),
-        &crate::domain::manifest::Manifest {
-            tree: crate::domain::manifest::TreeMeta {
+    crate::engine::state::write(
+        &bo_dir.join("state.json"),
+        &crate::domain::state::TreeState {
+            tree: crate::domain::state::TreeMetadata {
                 name: "tree".to_string(),
                 created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
                 last_compiled_at: None,
@@ -61,9 +61,9 @@ fn auth_path_for_config(config_path: &Path) -> PathBuf {
     config_path.with_file_name("auth.json")
 }
 
-/// Add a leaf file (`.md`) and a corresponding manifest entry.
+/// Add a leaf file (`.md`) and a corresponding state entry.
 fn add_leaf(tree_dir: &Path, file: &str) {
-    add_manifest_leaf(tree_dir, file);
+    add_state_leaf(tree_dir, file);
     let path = tree_dir.join(file);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).unwrap();
@@ -71,14 +71,14 @@ fn add_leaf(tree_dir: &Path, file: &str) {
     fs::write(path, "# content\n").unwrap();
 }
 
-/// Add a manifest entry for a leaf without creating the file on disk.
-fn add_manifest_leaf(tree_dir: &Path, file: &str) {
+/// Add a state entry for a leaf without creating the file on disk.
+fn add_state_leaf(tree_dir: &Path, file: &str) {
     static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let manifest_path = tree_dir.join(".bo/manifest.json");
-    let mut manifest = crate::engine::manifest::read(&manifest_path).unwrap();
+    let state_path = tree_dir.join(".bo/state.json");
+    let mut state = crate::engine::state::read(&state_path).unwrap();
     let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let slug = crate::domain::Slug::parse(&format!("leaf-{}", idx)).unwrap();
-    manifest.leaves.push(crate::domain::Leaf {
+    state.leaves.push(crate::domain::Leaf {
         slug,
         file: file.to_string(),
         title: Some(title(file.trim_end_matches(".md"))),
@@ -86,7 +86,7 @@ fn add_manifest_leaf(tree_dir: &Path, file: &str) {
         collected_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
         summary: None,
     });
-    crate::engine::manifest::write(&manifest_path, &manifest).unwrap();
+    crate::engine::state::write(&state_path, &state).unwrap();
 }
 
 /// Construct a `Leaf` with sensible defaults for tests.
@@ -101,13 +101,10 @@ fn make_leaf_record(slug: &str, file: &str) -> crate::domain::Leaf {
     }
 }
 
-/// Construct a `Manifest` with the given leaves and empty branches.
-fn make_manifest(
-    name: &str,
-    leaves: Vec<crate::domain::Leaf>,
-) -> crate::domain::manifest::Manifest {
-    crate::domain::manifest::Manifest {
-        tree: crate::domain::manifest::TreeMeta {
+/// Construct a `TreeState` with the given leaves and empty branches.
+fn make_state(name: &str, leaves: Vec<crate::domain::Leaf>) -> crate::domain::state::TreeState {
+    crate::domain::state::TreeState {
+        tree: crate::domain::state::TreeMetadata {
             name: name.to_string(),
             created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             last_compiled_at: None,
@@ -118,7 +115,7 @@ fn make_manifest(
 }
 
 #[test]
-fn deletes_indexed_files() {
+fn deletes_tracked_files() {
     let tmp = TempDir::new().unwrap();
     let (tree_dir, config_path) = setup_tree(&tmp);
     add_leaf(&tree_dir, "a.md");
@@ -132,28 +129,28 @@ fn deletes_indexed_files() {
 }
 
 #[test]
-fn deletes_index_file() {
+fn deletes_state_file() {
     let tmp = TempDir::new().unwrap();
     let (tree_dir, config_path) = setup_tree(&tmp);
 
     let output = raze(&tree_dir, &config_path).unwrap();
 
-    assert!(output.result.deleted_manifest);
+    assert!(output.result.deleted_state);
     assert!(!tree_dir.join(".bo").exists());
 }
 
 #[test]
-fn deletes_manifest_alongside_other_infra() {
+fn deletes_state_alongside_other_infra() {
     let tmp = TempDir::new().unwrap();
     let (tree_dir, config_path) = setup_tree(&tmp);
     // Pre-T6.1, raze removes the entire .bo/ directory which incidentally
-    // wipes the manifest. This test pins the behaviour and guards against
-    // anyone reintroducing a manifest path that escapes infra teardown.
-    let manifest_path = tree_dir.join(".bo/manifest.json");
-    crate::engine::manifest::write(
-        &manifest_path,
-        &crate::domain::manifest::Manifest {
-            tree: crate::domain::manifest::TreeMeta {
+    // wipes the state. This test pins the behaviour and guards against
+    // anyone reintroducing a state path that escapes infra teardown.
+    let state_path = tree_dir.join(".bo/state.json");
+    crate::engine::state::write(
+        &state_path,
+        &crate::domain::state::TreeState {
+            tree: crate::domain::state::TreeMetadata {
                 name: "raze-test".to_string(),
                 created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                 last_compiled_at: None,
@@ -163,14 +160,11 @@ fn deletes_manifest_alongside_other_infra() {
         },
     )
     .unwrap();
-    assert!(manifest_path.exists());
+    assert!(state_path.exists());
 
     let _ = raze(&tree_dir, &config_path).unwrap();
 
-    assert!(
-        !manifest_path.exists(),
-        "manifest.json must be deleted by raze"
-    );
+    assert!(!state_path.exists(), "state.json must be deleted by raze");
 }
 
 #[test]
@@ -280,7 +274,7 @@ fn auth_only_cleanup_deletes_auth_without_tree_config() {
 fn skips_missing_files_without_error() {
     let tmp = TempDir::new().unwrap();
     let (tree_dir, config_path) = setup_tree(&tmp);
-    add_manifest_leaf(&tree_dir, "ghost.md");
+    add_state_leaf(&tree_dir, "ghost.md");
 
     let output = raze(&tree_dir, &config_path).unwrap();
 
@@ -292,25 +286,25 @@ fn skips_missing_files_without_error() {
 fn warns_on_suspicious_path_traversal() {
     let tmp = TempDir::new().unwrap();
     let (tree_dir, config_path) = setup_tree(&tmp);
-    add_manifest_leaf(&tree_dir, "../escape.md");
+    add_state_leaf(&tree_dir, "../escape.md");
 
     let output = raze(&tree_dir, &config_path).unwrap();
 
     assert_eq!(output.warnings.len(), 1);
-    assert_eq!(output.warnings[0].code, "suspicious_manifest_entry");
+    assert_eq!(output.warnings[0].code, "suspicious_state_entry");
     assert_eq!(output.result.deleted_files, 0);
 }
 
 #[test]
-fn warns_on_absolute_path_in_manifest() {
+fn warns_on_absolute_path_in_state_entry() {
     let tmp = TempDir::new().unwrap();
     let (tree_dir, config_path) = setup_tree(&tmp);
-    add_manifest_leaf(&tree_dir, "/etc/passwd");
+    add_state_leaf(&tree_dir, "/etc/passwd");
 
     let output = raze(&tree_dir, &config_path).unwrap();
 
     assert_eq!(output.warnings.len(), 1);
-    assert_eq!(output.warnings[0].code, "suspicious_manifest_entry");
+    assert_eq!(output.warnings[0].code, "suspicious_state_entry");
 }
 
 #[test]
@@ -321,7 +315,7 @@ fn empty_tree_produces_zero_deletes() {
     let output = raze(&tree_dir, &config_path).unwrap();
 
     assert_eq!(output.result.deleted_files, 0);
-    assert!(output.result.deleted_manifest);
+    assert!(output.result.deleted_state);
 }
 
 #[test]
@@ -329,7 +323,7 @@ fn render_human_includes_file_count() {
     let result = RazeResult {
         cancelled: false,
         deleted_files: 3,
-        deleted_manifest: true,
+        deleted_state: true,
         removed_output_dir: true,
         output_dir_left_in_place: false,
         deleted_config: true,
@@ -341,7 +335,7 @@ fn render_human_includes_file_count() {
     };
     let output = render_human(&result);
     assert!(output.contains("3 markdown file(s)"));
-    assert!(output.contains("deleted manifest"));
+    assert!(output.contains("deleted state"));
     assert!(output.contains("removed output directory"));
     assert!(output.contains("deleted config"));
     assert!(output.contains("deleted auth"));
@@ -352,7 +346,7 @@ fn render_human_shows_dir_left_in_place() {
     let result = RazeResult {
         cancelled: false,
         deleted_files: 0,
-        deleted_manifest: false,
+        deleted_state: false,
         removed_output_dir: false,
         output_dir_left_in_place: true,
         deleted_config: false,
@@ -371,7 +365,7 @@ fn render_human_shows_preserved_auth() {
     let result = RazeResult {
         cancelled: false,
         deleted_files: 0,
-        deleted_manifest: false,
+        deleted_state: false,
         removed_output_dir: false,
         output_dir_left_in_place: false,
         deleted_config: true,
@@ -457,7 +451,7 @@ fn confirm_shows_tree_path() {
 
 #[test]
 fn confirm_shows_leaf_and_branch_counts() {
-    let manifest = make_manifest(
+    let state = make_state(
         "test",
         vec![
             make_leaf_record("leaf-1", "a.md"),
@@ -469,7 +463,7 @@ fn confirm_shows_leaf_and_branch_counts() {
     let mut writer = Vec::new();
     confirm_raze(
         std::path::Path::new("/tmp/tree"),
-        Some(&manifest),
+        Some(&state),
         false,
         &mut reader,
         &mut writer,
@@ -480,7 +474,7 @@ fn confirm_shows_leaf_and_branch_counts() {
 }
 
 #[test]
-fn confirm_missing_manifest_shows_degraded_message() {
+fn confirm_missing_state_shows_degraded_message() {
     let mut reader = Cursor::new(b"yes\n");
     let mut writer = Vec::new();
     confirm_raze(
@@ -492,7 +486,7 @@ fn confirm_missing_manifest_shows_degraded_message() {
     )
     .unwrap();
     let output = String::from_utf8(writer).unwrap();
-    assert!(output.contains("unable to read manifest"));
+    assert!(output.contains("unable to read state"));
 }
 
 #[test]
@@ -547,7 +541,7 @@ fn render_human_cancelled_shows_message() {
     let result = RazeResult {
         cancelled: true,
         deleted_files: 0,
-        deleted_manifest: false,
+        deleted_state: false,
         removed_output_dir: false,
         output_dir_left_in_place: false,
         deleted_config: false,

@@ -1,13 +1,13 @@
 // bo status — tree health and compile readiness at a glance.
 //
-// Pipeline: read manifest → derive metrics → scan filesystem for size and
+// Pipeline: read state → derive metrics → scan filesystem for size and
 //           orphan/missing checks → return StatusResult.
 //
-// Read-only: never modifies any file. Reads consult the manifest.
+// Read-only: never modifies any file. Reads consult the state.
 
 use crate::domain::frontmatter;
-use crate::domain::manifest;
-use crate::domain::tree::{self, TreeRuntimeState};
+use crate::domain::state;
+use crate::domain::tree::{self, TreeLoadState};
 use crate::domain::Timestamp;
 use crate::engine::config::Config;
 use crate::engine::llm::models;
@@ -60,12 +60,12 @@ pub struct SizeStatus {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct HealthReport {
-    pub orphan_index_entries: Vec<OrphanEntry>,
-    pub missing_from_index: Vec<String>,
+    pub missing_leaf_files: Vec<MissingLeafFile>,
+    pub untracked_leaf_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct OrphanEntry {
+pub struct MissingLeafFile {
     pub file: String,
     pub title: String,
     pub url: String,
@@ -75,21 +75,21 @@ pub struct OrphanEntry {
 #[derive(Debug)]
 pub enum StatusError {
     Io(String),
-    Manifest(manifest::ManifestError),
+    TreeState(state::TreeStateError),
 }
 
 impl std::fmt::Display for StatusError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StatusError::Io(msg) => write!(f, "{}", msg),
-            StatusError::Manifest(e) => write!(f, "{}", e),
+            StatusError::TreeState(e) => write!(f, "{}", e),
         }
     }
 }
 
-impl From<manifest::ManifestError> for StatusError {
-    fn from(e: manifest::ManifestError) -> Self {
-        StatusError::Manifest(e)
+impl From<state::TreeStateError> for StatusError {
+    fn from(e: state::TreeStateError) -> Self {
+        StatusError::TreeState(e)
     }
 }
 
@@ -117,10 +117,10 @@ pub fn compute_status(
     let branch_dir = tree::branch_dir(tree_dir);
     let leaf_dir = tree::leaf_dir(tree_dir);
 
-    let manifest = match crate::engine::manifest::runtime_state(tree_dir) {
-        Ok(TreeRuntimeState::Initialized(manifest)) => manifest,
-        Ok(TreeRuntimeState::FreshSeeded) => manifest::Manifest {
-            tree: manifest::TreeMeta {
+    let state = match crate::engine::state::load_state(tree_dir) {
+        Ok(TreeLoadState::Loaded(state)) => state,
+        Ok(TreeLoadState::FreshSeeded) => state::TreeState {
+            tree: state::TreeMetadata {
                 name: tree_name.to_string(),
                 created_at: Timestamp::now(),
                 last_compiled_at: None,
@@ -128,40 +128,40 @@ pub fn compute_status(
             leaves: Vec::new(),
             branches: Vec::new(),
         },
-        Ok(TreeRuntimeState::MissingManifest) => {
-            return Err(StatusError::Manifest(
-                manifest::ManifestError::TreeNotInitialized,
+        Ok(TreeLoadState::MissingState) => {
+            return Err(StatusError::TreeState(
+                state::TreeStateError::TreeNotInitialized,
             ));
         }
-        Err(error) => return Err(StatusError::Manifest(error)),
+        Err(error) => return Err(StatusError::TreeState(error)),
     };
 
-    // Leaf metrics straight from the manifest.
-    let uncompiled_slugs: Vec<String> = manifest
+    // Leaf metrics straight from the state.
+    let uncompiled_slugs: Vec<String> = state
         .uncompiled_leaves()
         .iter()
         .map(|l| l.slug.as_str().to_string())
         .collect();
 
     let leaves = LeafStatus {
-        total: manifest.leaves.len(),
+        total: state.leaves.len(),
         uncompiled: uncompiled_slugs.len(),
         uncompiled_slugs,
     };
 
     let branches = BranchStatus {
-        total: manifest.branches.len(),
-        last_compiled_at: manifest
+        total: state.branches.len(),
+        last_compiled_at: state
             .tree
             .last_compiled_at
             .as_ref()
             .map(|t| t.to_rfc3339_millis()),
     };
 
-    // Filesystem scan only for size — the one metric the manifest doesn't track.
+    // Filesystem scan only for size — the one metric the state doesn't track.
     let size = compute_size(&leaf_dir, &branch_dir);
 
-    let health = compute_health(tree_dir, &manifest);
+    let health = compute_health(tree_dir, &state);
     let hints = generate_hints(&leaves, &branches, &health);
 
     let (provider, model, compile_model, model_ctx, compile_ctx) = config_fields(config);
@@ -230,8 +230,8 @@ fn config_only_status(config: Option<&Config>) -> StatusResult {
             estimated_tokens: 0,
         },
         health: HealthReport {
-            orphan_index_entries: Vec::new(),
-            missing_from_index: Vec::new(),
+            missing_leaf_files: Vec::new(),
+            untracked_leaf_files: Vec::new(),
         },
         hints: vec!["run 'bo seed --path <path>' to create a tree".to_string()],
         provider,
@@ -264,13 +264,13 @@ fn compute_size(leaf_dir: &Path, branch_dir: &Path) -> SizeStatus {
     }
 }
 
-fn compute_health(tree_dir: &Path, manifest: &manifest::Manifest) -> HealthReport {
-    // Orphan: manifest entry references a file that doesn't exist on disk.
-    let orphans: Vec<OrphanEntry> = manifest
+fn compute_health(tree_dir: &Path, state: &state::TreeState) -> HealthReport {
+    // Orphan: state entry references a file that doesn't exist on disk.
+    let orphans: Vec<MissingLeafFile> = state
         .leaves
         .iter()
         .filter(|l| !tree_dir.join(&l.file).exists())
-        .map(|l| OrphanEntry {
+        .map(|l| MissingLeafFile {
             file: l.file.clone(),
             title: l
                 .title
@@ -278,20 +278,20 @@ fn compute_health(tree_dir: &Path, manifest: &manifest::Manifest) -> HealthRepor
                 .map(|t| t.as_str().to_string())
                 .unwrap_or_default(),
             url: l.url.as_str().to_string(),
-            remediation: format!("re-collect '{}' or remove the manifest entry", l.url),
+            remediation: format!("re-collect '{}' or remove the state entry", l.url),
         })
         .collect();
 
-    let manifest_files: HashSet<&str> = manifest.leaves.iter().map(|l| l.file.as_str()).collect();
-    let missing_from_index = scan_missing_from_index(tree_dir, &manifest_files);
+    let state_files: HashSet<&str> = state.leaves.iter().map(|l| l.file.as_str()).collect();
+    let untracked_leaf_files = scan_untracked_leaf_files(tree_dir, &state_files);
 
     HealthReport {
-        orphan_index_entries: orphans,
-        missing_from_index,
+        missing_leaf_files: orphans,
+        untracked_leaf_files,
     }
 }
 
-fn scan_missing_from_index(tree_dir: &Path, manifest_files: &HashSet<&str>) -> Vec<String> {
+fn scan_untracked_leaf_files(tree_dir: &Path, state_files: &HashSet<&str>) -> Vec<String> {
     let mut missing: Vec<String> = Vec::new();
     let leaf_dir = tree_dir.join("leaf");
     if let Ok(dir_entries) = fs::read_dir(&leaf_dir) {
@@ -301,9 +301,9 @@ fn scan_missing_from_index(tree_dir: &Path, manifest_files: &HashSet<&str>) -> V
                 continue;
             }
             let filename = entry.file_name().to_string_lossy().into_owned();
-            // Manifest stores leaf paths as `leaf/{file}`; the on-disk entry is bare `{file}`.
+            // TreeState stores leaf paths as `leaf/{file}`; the on-disk entry is bare `{file}`.
             let relative = format!("leaf/{filename}");
-            if manifest_files.contains(relative.as_str()) {
+            if state_files.contains(relative.as_str()) {
                 continue;
             }
             if is_leaf_file(&path) {
@@ -347,19 +347,19 @@ fn generate_hints(
         ));
     }
 
-    if !health.orphan_index_entries.is_empty() {
-        let n = health.orphan_index_entries.len();
+    if !health.missing_leaf_files.is_empty() {
+        let n = health.missing_leaf_files.len();
         hints.push(format!(
-            "{} index {} reference missing files \u{2014} re-collect or remove manually",
+            "{} state {} reference missing files \u{2014} re-collect or remove manually",
             n,
             if n == 1 { "entry" } else { "entries" }
         ));
     }
 
-    if !health.missing_from_index.is_empty() {
-        let n = health.missing_from_index.len();
+    if !health.untracked_leaf_files.is_empty() {
+        let n = health.untracked_leaf_files.len();
         hints.push(format!(
-            "{} leaf {} not indexed \u{2014} they won't appear in search or compile",
+            "{} leaf {} untracked \u{2014} they won't appear in search or compile",
             n,
             if n == 1 { "file" } else { "files" }
         ));
@@ -443,20 +443,20 @@ pub fn render_human(result: &StatusResult) -> String {
         }
     }
 
-    if !result.health.orphan_index_entries.is_empty()
-        || !result.health.missing_from_index.is_empty()
+    if !result.health.missing_leaf_files.is_empty()
+        || !result.health.untracked_leaf_files.is_empty()
     {
         out.push('\n');
         out.push_str("  Issues:\n");
-        for orphan in &result.health.orphan_index_entries {
+        for orphan in &result.health.missing_leaf_files {
             out.push_str(&format!(
                 "    \u{26a0} orphan: {} ({})\n",
                 orphan.file, orphan.remediation
             ));
         }
-        for missing in &result.health.missing_from_index {
+        for missing in &result.health.untracked_leaf_files {
             out.push_str(&format!(
-                "    \u{26a0} not indexed: {} (run 'bo collect' to re-index)\n",
+                "    \u{26a0} untracked: {} (run 'bo collect' to track it)\n",
                 missing
             ));
         }
