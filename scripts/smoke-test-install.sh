@@ -52,7 +52,7 @@ echo "OK"
 
 # 3. seed into a tree
 TREE_DIR="$FAKE_HOME/test-tree"
-MANIFEST="$TREE_DIR/.bo/manifest.json"
+STATE="$TREE_DIR/.bo/state.json"
 echo -n "  bo seed --path $TREE_DIR --name test-tree --provider openai --model gpt-4.1-mini ... "
 HOME="$FAKE_HOME" "$BO" seed \
     --path "$TREE_DIR" \
@@ -61,10 +61,10 @@ HOME="$FAKE_HOME" "$BO" seed \
     --model gpt-4.1-mini > /dev/null 2>&1
 echo "OK"
 
-# 4. manifest absent immediately after seed
-echo -n "  manifest absent after seed ... "
-if [[ -f "$MANIFEST" ]]; then
-    echo "FAIL: manifest exists immediately after seed"
+# 4. state absent immediately after seed
+echo -n "  state absent after seed ... "
+if [[ -f "$STATE" ]]; then
+    echo "FAIL: state exists immediately after seed"
     exit 1
 fi
 echo "OK"
@@ -120,10 +120,10 @@ if ! HOME="$FAKE_HOME" "$BO" collect "$WORK_DIR/note.md" > /dev/null 2>&1; then
 fi
 echo "OK"
 
-# 11. manifest has one bo://note/ leaf
-echo -n "  manifest has one bo://note/ leaf ... "
-if [[ ! -f "$MANIFEST" ]]; then
-    echo "FAIL: manifest not created after collect"
+# 11. state has one bo://note/ leaf
+echo -n "  state has one bo://note/ leaf ... "
+if [[ ! -f "$STATE" ]]; then
+    echo "FAIL: state not created after collect"
     exit 1
 fi
 if ! python3 -c '
@@ -132,8 +132,8 @@ with open(sys.argv[1]) as f:
     data = json.load(f)
 assert len(data["leaves"]) == 1
 assert data["leaves"][0]["url"].startswith("bo://note/")
-' "$MANIFEST" 2>/dev/null; then
-    echo "FAIL: manifest did not validate"
+' "$STATE" 2>/dev/null; then
+    echo "FAIL: state did not validate"
     exit 1
 fi
 echo "OK"

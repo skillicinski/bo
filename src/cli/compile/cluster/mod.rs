@@ -5,7 +5,7 @@
 // and names clusters. Stage 2 (synthesize) reuses the existing per-branch
 // parse/validate/execute path.
 
-use crate::domain::manifest;
+use crate::domain::state;
 use crate::engine::config::SeededConfig;
 use crate::engine::llm::{LlmProvider, Model};
 
@@ -84,14 +84,14 @@ pub(in crate::cli::compile) fn run_two_stage_incremental(
     cfg: &SeededConfig,
     provider: &dyn LlmProvider,
     model: &Model,
-    manifest: &manifest::Manifest,
+    state: &state::TreeState,
     loaded_leaves: &[LoadedLeaf],
     new_leaf_slugs: &[String],
     warnings: &mut Vec<String>,
 ) -> Result<(CompilePlan, CompileStages), CompileError> {
     // Stage 1: Cluster new leaves against existing branch titles + summaries.
     let cluster_user_message =
-        build_incremental_cluster_user_message(cfg, manifest, loaded_leaves, new_leaf_slugs);
+        build_incremental_cluster_user_message(cfg, state, loaded_leaves, new_leaf_slugs);
     let cluster_tokens = execute::estimate_compile_prompt_tokens(
         INCREMENTAL_CLUSTER_SYSTEM_PROMPT
             .len()
@@ -113,7 +113,7 @@ pub(in crate::cli::compile) fn run_two_stage_incremental(
         serde_json::from_str(&cluster_response).map_err(|e| {
             CompileError::Validation(format!("invalid incremental cluster response shape: {}", e))
         })?;
-    let stage1 = validate_incremental_clusters(&parsed, manifest, loaded_leaves, warnings)?;
+    let stage1 = validate_incremental_clusters(&parsed, state, loaded_leaves, warnings)?;
     let cluster_count = stage1.clusters.len();
 
     // Stage 2: Per-cluster synthesize (updates for existing branches, fresh for new).
@@ -122,7 +122,7 @@ pub(in crate::cli::compile) fn run_two_stage_incremental(
         provider,
         model,
         &stage1,
-        manifest,
+        state,
         loaded_leaves,
         warnings,
     )?;

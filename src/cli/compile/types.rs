@@ -52,14 +52,14 @@ pub enum CompileError {
     ContentFilter,
     /// LLM API or network error.
     Llm(String),
-    /// I/O or manifest/pending error.
+    /// I/O or state/pending error.
     Io(String),
     /// Another bo process is mutating this tree.
     Busy(String),
     /// Validation error in the LLM response.
     Validation(String),
     /// A dry-run was blocked because recovery/repair would be required, or the
-    /// manifest changed mid-run. Zero bytes were written.
+    /// state changed mid-run. Zero bytes were written.
     DryRunBlocked(String),
     /// The agent loop failed to produce a valid plan (limit, truncation,
     /// context overflow, provider error, or no submission). Zero bytes written.
@@ -272,8 +272,8 @@ pub struct CompilePreview {
     pub mode: Option<CompileRunMode>,
     pub provider: String,
     pub model: String,
-    pub starting_manifest_hash: String,
-    pub manifest_unchanged: bool,
+    pub starting_state_hash: String,
+    pub state_unchanged: bool,
     pub agent: bool,
     pub turns: usize,
     pub tool_calls: usize,

@@ -234,7 +234,7 @@ fn dry_run_blocked_by_pending_writes_zero() {
     let tree_dir = dir.path();
     let bo_dir = tree_dir.join(".bo");
 
-    let manifest_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
+    let state_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
 
     // Write a pending.json with a dead PID (99999) and no staged files
     let pending = bo::engine::pending::PendingOperation {
@@ -243,7 +243,7 @@ fn dry_run_blocked_by_pending_writes_zero() {
         },
         started_at: "2020-01-01T00:00:00Z".to_string(),
         pid: 99999,
-        pre_manifest_hash: manifest_hash,
+        pre_state_hash: state_hash,
         writes: Vec::new(),
         deletes: Vec::new(),
     };
@@ -294,12 +294,12 @@ fn dry_run_blocked_by_stale_repair_writes_zero() {
     fs::remove_file(&missing).unwrap();
     assert!(!missing.exists());
 
-    // Set last_compiled_at so the manifest has a known-compiled state
-    let mut m = bo::engine::manifest::read(&bo_dir.join("manifest.json")).unwrap();
+    // Set last_compiled_at so the state has a known-compiled state
+    let mut m = bo::engine::state::read(&bo_dir.join("state.json")).unwrap();
     m.tree.last_compiled_at = Some(Timestamp::parse("2025-06-02T00:00:00Z").unwrap());
-    bo::engine::manifest::write(&bo_dir.join("manifest.json"), &m).unwrap();
+    bo::engine::state::write(&bo_dir.join("state.json"), &m).unwrap();
 
-    let manifest_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
+    let state_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
     let before = common::snapshot_tree(tree_dir);
 
     let outcome = compile::run_compile_dry_run(
@@ -321,11 +321,11 @@ fn dry_run_blocked_by_stale_repair_writes_zero() {
         other => panic!("expected DryRunBlocked, got: {other:?}"),
     }
 
-    // Manifest hash must be unchanged
-    let after_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
+    // TreeState hash must be unchanged
+    let after_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
     assert_eq!(
-        manifest_hash, after_hash,
-        "manifest hash changed during blocked dry-run"
+        state_hash, after_hash,
+        "state hash changed during blocked dry-run"
     );
 
     // No branch/ files created
@@ -347,7 +347,7 @@ fn agent_dry_run_with_scripted_provider_produces_preview_and_zero_writes() {
     let tree_dir = dir.path();
 
     let before = common::snapshot_tree(tree_dir);
-    let before_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
+    let before_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
 
     // Turn 1: list_leaves (no args needed; the tool defaults offset/limit)
     // Turn 2: read_leaf with a real slug
@@ -400,13 +400,13 @@ fn agent_dry_run_with_scripted_provider_produces_preview_and_zero_writes() {
         preview.tool_calls
     );
     assert!(!preview.branches.is_empty());
-    assert!(preview.manifest_unchanged);
+    assert!(preview.state_unchanged);
 
     let after = common::snapshot_tree(tree_dir);
     assert_eq!(before, after, "tree was modified by agent dry-run");
 
-    let after_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
-    assert_eq!(before_hash, after_hash, "manifest hash changed");
+    let after_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
+    assert_eq!(before_hash, after_hash, "state hash changed");
 }
 
 #[test]
@@ -417,7 +417,7 @@ fn one_shot_dry_run_with_scripted_provider_produces_preview() {
     let tree_dir = dir.path();
 
     let before = common::snapshot_tree(tree_dir);
-    let before_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
+    let before_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
 
     let valid_plan = serde_json::json!({
         "branches": [
@@ -459,8 +459,8 @@ fn one_shot_dry_run_with_scripted_provider_produces_preview() {
     let after = common::snapshot_tree(tree_dir);
     assert_eq!(before, after, "tree was modified by one-shot dry-run");
 
-    let after_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
-    assert_eq!(before_hash, after_hash, "manifest hash changed");
+    let after_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
+    assert_eq!(before_hash, after_hash, "state hash changed");
 }
 
 #[test]
@@ -471,7 +471,7 @@ fn agent_dry_run_validation_feedback_then_success() {
     let tree_dir = dir.path();
 
     let before = common::snapshot_tree(tree_dir);
-    let before_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
+    let before_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
 
     // Turn 1: invalid submit_compile (branch references unknown leaf)
     let invalid_plan = serde_json::json!({
@@ -530,8 +530,8 @@ fn agent_dry_run_validation_feedback_then_success() {
         "tree was modified by agent validation-feedback dry-run"
     );
 
-    let after_hash = bo::engine::pending::manifest_hash(tree_dir).unwrap();
-    assert_eq!(before_hash, after_hash, "manifest hash changed");
+    let after_hash = bo::engine::pending::state_hash(tree_dir).unwrap();
+    assert_eq!(before_hash, after_hash, "state hash changed");
 }
 
 #[test]

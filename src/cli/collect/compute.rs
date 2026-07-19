@@ -87,7 +87,7 @@ pub(super) struct ComputedLeaf {
 // ── pipeline ─────────────────────────────────────────────────────────────────
 
 /// Compute-only: fetch, extract, quality-check, and summarize a URL.
-/// Returns the data needed to write a leaf without touching the manifest or
+/// Returns the data needed to write a leaf without touching the state or
 /// output directory. Safe to call from multiple threads.
 pub(super) fn compute_leaf(
     url: &str,

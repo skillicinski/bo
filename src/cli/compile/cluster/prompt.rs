@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use crate::cli::compile::plan::LoadedLeaf;
-use crate::domain::manifest::Manifest;
+use crate::domain::state::TreeState;
 use crate::engine::config::SeededConfig;
 
 use super::discovery::{compute_candidate_clusters, CandidateCluster};
@@ -61,7 +61,7 @@ pub(in crate::cli::compile) fn build_cluster_user_message(leaves: &[LoadedLeaf])
 /// Build the cluster user message for Incremental mode.
 pub(in crate::cli::compile) fn build_incremental_cluster_user_message(
     cfg: &SeededConfig,
-    manifest: &Manifest,
+    state: &TreeState,
     leaves: &[LoadedLeaf],
     new_leaf_slugs: &[String],
 ) -> String {
@@ -76,10 +76,10 @@ pub(in crate::cli::compile) fn build_incremental_cluster_user_message(
     let mut msg = String::new();
 
     // Existing branches as anchors with their body summaries.
-    if !manifest.branches.is_empty() {
+    if !state.branches.is_empty() {
         msg.push_str("<existing_branches>\n");
         let tree = cfg.tree();
-        for branch in &manifest.branches {
+        for branch in &state.branches {
             let leaves_str: Vec<&str> = branch.leaves.iter().map(|s| s.as_str()).collect();
             msg.push_str(&format!(
                 "<branch slug=\"{}\" title=\"{}\" leaves=\"{}\">\n",

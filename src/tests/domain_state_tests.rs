@@ -9,9 +9,9 @@ fn url(s: &str) -> Url {
     Url::parse(s).unwrap()
 }
 
-fn resolution_fixture() -> Manifest {
-    Manifest {
-        tree: TreeMeta {
+fn resolution_fixture() -> TreeState {
+    TreeState {
+        tree: TreeMetadata {
             name: "fixture".to_string(),
             created_at: Timestamp::parse("2026-05-19T13:00:00Z").unwrap(),
             last_compiled_at: Some(Timestamp::parse("2026-05-19T15:00:00Z").unwrap()),

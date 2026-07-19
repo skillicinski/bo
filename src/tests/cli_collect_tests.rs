@@ -10,7 +10,7 @@
 
 use super::*;
 use crate::cli::collect::compute::compute_leaf_from_html;
-use crate::domain::manifest;
+use crate::domain::state;
 use crate::domain::{Slug, Timestamp, Title, Url};
 use std::fs;
 use std::path::Path;
@@ -73,17 +73,17 @@ fn batch_collect_deduplicates_repeated_input_urls() {
 }
 
 #[test]
-fn batch_collect_skips_existing_manifest_duplicates_without_fetching() {
+fn batch_collect_skips_existing_state_duplicates_without_fetching() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let url = "https://example.com/already";
 
-    // Write the URL into the manifest, the dedup source.
-    let manifest_path = dir.path().join(".bo/manifest.json");
-    crate::engine::manifest::write(
-        &manifest_path,
-        &manifest::Manifest {
-            tree: manifest::TreeMeta {
+    // Write the URL into the state, the dedup source.
+    let state_path = dir.path().join(".bo/state.json");
+    crate::engine::state::write(
+        &state_path,
+        &state::TreeState {
+            tree: state::TreeMetadata {
                 name: "test".to_string(),
                 created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
                 last_compiled_at: None,
@@ -123,7 +123,7 @@ fn batch_collect_skips_same_batch_url_collapse() {
     // Two distinct input URLs that compute resolves to the same fetched URL
     // (e.g. both redirect to one canonical page). Phase-1 dedup keys on the
     // input URL, so both reach compute; phase-3 must catch the collision
-    // against the in-memory manifest and skip the second without a second commit.
+    // against the in-memory state and skip the second without a second commit.
     let result = collect_batch_parallel_with_compute(
         vec![
             "https://example.com/a".to_string(),
@@ -165,10 +165,10 @@ fn batch_collect_skips_same_batch_url_collapse() {
     );
 
     // Exactly one leaf committed despite two computes.
-    let manifest = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
-    assert_eq!(manifest.leaves.len(), 1);
+    let state = crate::engine::state::read(&dir.path().join(".bo/state.json")).unwrap();
+    assert_eq!(state.leaves.len(), 1);
     assert_eq!(
-        manifest.leaves[0].url.as_str(),
+        state.leaves[0].url.as_str(),
         "https://example.com/canonical"
     );
 }
@@ -180,14 +180,14 @@ filtering. It remains an ordinary HTML collection fixture after refactoring.</p>
 </article></body></html>"#;
 
 #[test]
-fn ordinary_html_collection_writes_leaf_and_manifest() {
+fn ordinary_html_collection_writes_leaf_and_state() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
     let document =
         collect_html_test("https://example.com/article", ARTICLE_HTML, dir.path()).unwrap();
 
     assert!(dir.path().join(&document.file).exists());
-    let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = crate::engine::state::read(&dir.path().join(".bo/state.json")).unwrap();
     assert_eq!(m.leaves.len(), 1);
     assert_eq!(m.leaves[0].url.as_str(), "https://example.com/article");
     assert!(!dir.path().join(".bo/index.jsonl").exists());
@@ -206,7 +206,7 @@ fn collect_html_keeps_exact_match_duplicate_semantics_for_youtube_urls() {
     .unwrap();
     collect_html_test("https://youtu.be/a1mhk7mAetk", ARTICLE_HTML, dir.path()).unwrap();
 
-    let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = crate::engine::state::read(&dir.path().join(".bo/state.json")).unwrap();
     assert_eq!(m.leaves.len(), 2);
 }
 
@@ -300,10 +300,13 @@ fn assert_no_collection_artifacts(dir: &TempDir) {
         "rejected collection wrote markdown files"
     );
 
-    let index_path = dir.path().join(".bo/index.jsonl");
+    let legacy_index_path = dir.path().join(".bo/index.jsonl");
     assert!(
-        !index_path.exists() || std::fs::read_to_string(&index_path).unwrap().is_empty(),
-        "rejected collection wrote index entries"
+        !legacy_index_path.exists()
+            || std::fs::read_to_string(&legacy_index_path)
+                .unwrap()
+                .is_empty(),
+        "rejected collection wrote legacy index entries"
     );
 }
 
@@ -341,11 +344,11 @@ fn full_pipeline_happy_path() {
     assert!(mapping.get("fetched").is_none());
     assert!(body.contains("# Test Article"));
     assert!(body.contains("Section One"));
-    // Summary and updated_at are NOT in leaf frontmatter — the manifest is the single source of truth.
+    // Summary and updated_at are NOT in leaf frontmatter — the state is the single source of truth.
     assert!(mapping.get("summary").is_none());
     assert!(mapping.get("updated_at").is_none());
 
-    let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = crate::engine::state::read(&dir.path().join(".bo/state.json")).unwrap();
     assert_eq!(m.leaves.len(), 1);
     assert_eq!(m.leaves[0].url.as_str(), "https://example.com/article");
     assert!(m.leaves[0].summary.is_some());
@@ -364,7 +367,7 @@ fn duplicate_rejected() {
         .to_string()
         .contains("already collected"));
 
-    let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = crate::engine::state::read(&dir.path().join(".bo/state.json")).unwrap();
     assert_eq!(m.leaves.len(), 1);
 }
 
@@ -390,7 +393,7 @@ fn slug_collision_disambiguated() {
         page2.file
     );
 
-    let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = crate::engine::state::read(&dir.path().join(".bo/state.json")).unwrap();
     assert_eq!(m.leaves.len(), 2);
 }
 
@@ -480,7 +483,7 @@ fn mdbook_page_with_bad_ui_title_and_substantive_body_is_accepted() {
         Some("Understanding Ownership")
     );
 
-    let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = crate::engine::state::read(&dir.path().join(".bo/state.json")).unwrap();
     assert_eq!(m.leaves.len(), 1);
     assert_eq!(
         m.leaves[0].title.as_ref().unwrap().as_str(),
@@ -514,22 +517,22 @@ fn near_duplicate_urls_both_stored() {
     )
     .unwrap();
 
-    let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = crate::engine::state::read(&dir.path().join(".bo/state.json")).unwrap();
     assert_eq!(m.leaves.len(), 2);
 }
 
-// ── manifest dual-write (T4.2) ────────────────────────────────────────────────────
+// ── state dual-write (T4.2) ────────────────────────────────────────────────────
 //
 // These tests bypass the real fetch+summarize pipeline by injecting a
 // `ComputedLeaf` with synthetic data through `collect_batch_parallel_with_compute`
 // (the test seam that accepts an injected compute closure).
 
 fn seed_for_collect(dir: &TempDir, name: &str) {
-    use crate::domain::manifest::TreeMeta;
+    use crate::domain::state::TreeMetadata;
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
-    let manifest_path = dir.path().join(".bo/manifest.json");
-    let m = manifest::Manifest {
-        tree: TreeMeta {
+    let state_path = dir.path().join(".bo/state.json");
+    let m = state::TreeState {
+        tree: TreeMetadata {
             name: name.to_string(),
             created_at: Timestamp::parse("2026-05-19T12:00:00Z").unwrap(),
             last_compiled_at: None,
@@ -537,13 +540,13 @@ fn seed_for_collect(dir: &TempDir, name: &str) {
         leaves: Vec::new(),
         branches: Vec::new(),
     };
-    crate::engine::manifest::write(&manifest_path, &m).unwrap();
+    crate::engine::state::write(&state_path, &m).unwrap();
 }
 
 #[test]
-fn collect_appends_leaf_record_to_manifest_with_full_metadata() {
+fn collect_appends_leaf_record_to_state_with_full_metadata() {
     let dir = TempDir::new().unwrap();
-    seed_for_collect(&dir, "manifest-collect-tree");
+    seed_for_collect(&dir, "state-collect-tree");
 
     let result = collect_batch_parallel_with_compute(
         vec!["https://example.com/article".to_string()],
@@ -562,8 +565,8 @@ fn collect_appends_leaf_record_to_manifest_with_full_metadata() {
     .unwrap();
 
     let doc_file = result.items[0].file.clone().unwrap();
-    let manifest_path = dir.path().join(".bo/manifest.json");
-    let m = crate::engine::manifest::read(&manifest_path).unwrap();
+    let state_path = dir.path().join(".bo/state.json");
+    let m = crate::engine::state::read(&state_path).unwrap();
     assert_eq!(m.leaves.len(), 1);
     let rec = &m.leaves[0];
     assert_eq!(
@@ -584,12 +587,12 @@ fn collect_appends_leaf_record_to_manifest_with_full_metadata() {
     );
     assert_eq!(rec.summary.as_deref(), Some("A summary of the article."));
     // Tree metadata preserved across the dual-write.
-    assert_eq!(m.tree.name, "manifest-collect-tree");
+    assert_eq!(m.tree.name, "state-collect-tree");
     assert!(m.tree.last_compiled_at.is_none());
 }
 
 #[test]
-fn collect_writes_only_manifest_records() {
+fn collect_writes_only_state_records() {
     let dir = TempDir::new().unwrap();
     seed_for_collect(&dir, "parity-tree");
 
@@ -616,7 +619,7 @@ fn collect_writes_only_manifest_records() {
         assert_eq!(result.summary.collected, 1);
     }
 
-    let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = crate::engine::state::read(&dir.path().join(".bo/state.json")).unwrap();
 
     assert_eq!(m.leaves.len(), 3);
     assert!(!dir.path().join(".bo/index.jsonl").exists());
@@ -649,12 +652,12 @@ fn collect_omits_summary_field_when_empty_string() {
     )
     .unwrap();
 
-    let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = crate::engine::state::read(&dir.path().join(".bo/state.json")).unwrap();
     assert!(m.leaves[0].summary.is_none());
 }
 
 #[test]
-fn fresh_collect_after_3b_does_not_write_index_secondary() {
+fn fresh_collect_after_3b_does_not_write_legacy_secondary() {
     let dir = TempDir::new().unwrap();
     seed_for_collect(&dir, "secondary-still-written-tree");
 
@@ -674,7 +677,7 @@ fn fresh_collect_after_3b_does_not_write_index_secondary() {
     )
     .unwrap();
 
-    let m = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
+    let m = crate::engine::state::read(&dir.path().join(".bo/state.json")).unwrap();
     assert_eq!(m.leaves.len(), 1);
     assert_eq!(m.leaves[0].url.as_str(), "https://example.com/page");
     assert!(!dir.path().join(".bo/index.jsonl").exists());
@@ -687,7 +690,7 @@ fn recovery_notice_lands_in_warnings_not_stderr() {
     let dir = TempDir::new().unwrap();
     seed_for_collect(&dir, "recovery-warnings-tree");
 
-    // Stage a stale pending op (dead pid, matching manifest hash → rollback path).
+    // Stage a stale pending op (dead pid, matching state hash → rollback path).
     let staged = b"rolled back";
     fs::write(dir.path().join("stale-leaf.md.tmp"), staged).unwrap();
     let op = pending::PendingOperation {
@@ -696,7 +699,7 @@ fn recovery_notice_lands_in_warnings_not_stderr() {
         },
         started_at: "2020-01-01T00:00:00Z".to_string(),
         pid: 99999,
-        pre_manifest_hash: pending::manifest_hash(dir.path()).unwrap(),
+        pre_state_hash: pending::state_hash(dir.path()).unwrap(),
         writes: vec![pending::PendingWrite {
             path: "stale-leaf.md".to_string(),
             content_hash: pending::content_hash(staged),
@@ -759,13 +762,13 @@ fn collect_note_writes_leaf_with_no_summary_and_strips_frontmatter() {
         "user frontmatter must be stripped"
     );
 
-    // Notes skip the LLM summary: the manifest leaf carries no summary.
-    let manifest = crate::engine::manifest::read(&dir.path().join(".bo/manifest.json")).unwrap();
-    let leaf = manifest
+    // Notes skip the LLM summary: the state leaf carries no summary.
+    let state = crate::engine::state::read(&dir.path().join(".bo/state.json")).unwrap();
+    let leaf = state
         .leaves
         .iter()
         .find(|l| l.url.as_str().starts_with("bo://note/"))
-        .expect("note leaf in manifest");
+        .expect("note leaf in state");
     assert!(leaf.summary.is_none());
 }
 

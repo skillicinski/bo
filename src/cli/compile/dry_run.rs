@@ -1,7 +1,7 @@
 // ── compile dry-run: read-only preflight and preview ───────────────────────
 
-use crate::domain::manifest;
-use crate::domain::tree::TreeRuntimeState;
+use crate::domain::state;
+use crate::domain::tree::TreeLoadState;
 use crate::engine::auth;
 use crate::engine::config::SeededConfig;
 use crate::engine::llm::{LlmProvider, Model};
@@ -16,7 +16,7 @@ use super::types::{
 };
 
 struct DryRunRequest {
-    manifest: manifest::Manifest,
+    state: state::TreeState,
     loaded_leaves: Vec<plan::LoadedLeaf>,
     skipped_leaves: Vec<String>,
     new_leaf_slugs: Vec<String>,
@@ -141,9 +141,9 @@ fn dry_run_preflight(
         ));
     }
 
-    let manifest = match crate::engine::manifest::runtime_state(tree_dir) {
-        Ok(TreeRuntimeState::Initialized(manifest)) => manifest,
-        Ok(TreeRuntimeState::FreshSeeded) => {
+    let state = match crate::engine::state::load_state(tree_dir) {
+        Ok(TreeLoadState::Loaded(state)) => state,
+        Ok(TreeLoadState::FreshSeeded) => {
             return Ok(DryRunPreflight::Noop(noop_preview(
                 "empty_tree",
                 cfg,
@@ -151,32 +151,29 @@ fn dry_run_preflight(
                 options.agent,
             )));
         }
-        Ok(TreeRuntimeState::MissingManifest) => {
+        Ok(TreeLoadState::MissingState) => {
             return Err(CompileError::Io(format!(
-                "failed to read manifest: {}",
-                manifest::ManifestError::TreeNotInitialized
+                "failed to read state: {}",
+                state::TreeStateError::TreeNotInitialized
             )));
         }
         Err(error) => {
-            return Err(CompileError::Io(format!(
-                "failed to read manifest: {}",
-                error
-            )));
+            return Err(CompileError::Io(format!("failed to read state: {}", error)));
         }
     };
 
     // ZERO writes: read-only stale-repair check. Do not repair.
-    if repair::requires_repair(cfg, &manifest)? {
+    if repair::requires_repair(cfg, &state)? {
         return Err(CompileError::DryRunBlocked(
             "stale branches require repair; run `bo compile` (without --dry-run) to repair before previewing".to_string(),
         ));
     }
 
-    // Capture the manifest hash at start; recheck before accepting the preview.
-    let starting_hash = pending::manifest_hash(tree_dir)?;
+    // Capture the state hash at start; recheck before accepting the preview.
+    let starting_hash = pending::state_hash(tree_dir)?;
 
-    let run_mode = plan::select_run_mode(options, &manifest);
-    if manifest.leaves.is_empty() {
+    let run_mode = plan::select_run_mode(options, &state);
+    if state.leaves.is_empty() {
         return Ok(DryRunPreflight::Noop(noop_preview(
             "empty_tree",
             cfg,
@@ -184,7 +181,7 @@ fn dry_run_preflight(
             options.agent,
         )));
     }
-    let new_leaf_slugs = plan::select_new_leaf_slugs(&manifest)?;
+    let new_leaf_slugs = plan::select_new_leaf_slugs(&state)?;
     if !options.all && new_leaf_slugs.is_empty() {
         return Ok(DryRunPreflight::Noop(noop_preview(
             NO_NEW_LEAVES_REASON,
@@ -193,7 +190,7 @@ fn dry_run_preflight(
             options.agent,
         )));
     }
-    let (loaded_leaves, skipped_leaves) = plan::read_valid_leaves(cfg, &manifest.leaves);
+    let (loaded_leaves, skipped_leaves) = plan::read_valid_leaves(cfg, &state.leaves);
     if loaded_leaves.is_empty() {
         return Ok(DryRunPreflight::Noop(noop_preview(
             "empty_tree",
@@ -212,7 +209,7 @@ fn dry_run_preflight(
     }
 
     Ok(DryRunPreflight::NeedsLlm(DryRunRequest {
-        manifest,
+        state,
         loaded_leaves,
         skipped_leaves,
         new_leaf_slugs,
@@ -230,7 +227,7 @@ fn dry_run_build_plan(
     warnings: &mut Vec<String>,
 ) -> Result<CompilePreview, CompileError> {
     let DryRunRequest {
-        manifest,
+        state,
         loaded_leaves,
         skipped_leaves,
         new_leaf_slugs,
@@ -240,14 +237,14 @@ fn dry_run_build_plan(
 
     let (plan, stats, validation_warnings) = if options.agent {
         let (plan, stats, vw) =
-            agent::run_agent_dry_run(cfg, provider, model, &manifest, &loaded_leaves, run_mode)?;
+            agent::run_agent_dry_run(cfg, provider, model, &state, &loaded_leaves, run_mode)?;
         (plan, stats, vw)
     } else {
         let (plan, compile_stages) = plan::build_compile_plan(
             cfg,
             provider,
             model,
-            &manifest,
+            &state,
             &loaded_leaves,
             &new_leaf_slugs,
             run_mode,
@@ -262,12 +259,12 @@ fn dry_run_build_plan(
     };
     warnings.extend(validation_warnings);
 
-    // Recheck the manifest hash; abort if the tree changed mid-run.
-    let current_hash = pending::manifest_hash(cfg.tree().path())?;
-    let manifest_unchanged = current_hash == starting_hash;
-    if !manifest_unchanged {
+    // Recheck the state hash; abort if the tree changed mid-run.
+    let current_hash = pending::state_hash(cfg.tree().path())?;
+    let state_unchanged = current_hash == starting_hash;
+    if !state_unchanged {
         return Err(CompileError::DryRunBlocked(
-            "manifest changed during dry-run; rerun `bo compile --dry-run`".to_string(),
+            "state changed during dry-run; rerun `bo compile --dry-run`".to_string(),
         ));
     }
     Ok(CompilePreview {
@@ -276,8 +273,8 @@ fn dry_run_build_plan(
         mode: Some(run_mode),
         provider: cfg.config.provider.to_string(),
         model: model.to_string(),
-        starting_manifest_hash: starting_hash,
-        manifest_unchanged,
+        starting_state_hash: starting_hash,
+        state_unchanged,
         agent: options.agent,
         turns: stats.turns,
         tool_calls: stats.tool_calls,
@@ -316,8 +313,8 @@ fn noop_preview(
         mode: None,
         provider: cfg.config.provider.to_string(),
         model: model_str.to_string(),
-        starting_manifest_hash: starting_hash.to_string(),
-        manifest_unchanged: true,
+        starting_state_hash: starting_hash.to_string(),
+        state_unchanged: true,
         agent: is_agent,
         turns: 0,
         tool_calls: 0,

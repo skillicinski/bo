@@ -2,8 +2,8 @@
 
 use crate::cli::json::JsonError;
 use crate::cli::resolve_leaf_path;
-use crate::domain::manifest::{self};
-use crate::domain::tree::TreeRuntimeState;
+use crate::domain::state::{self};
+use crate::domain::tree::TreeLoadState;
 use crate::domain::{Leaf, Title, Url};
 use crate::engine::config::SeededConfig;
 use serde::Serialize;
@@ -40,7 +40,7 @@ pub struct ShowResult {
 #[derive(Debug)]
 pub enum ShowError {
     Io(io::Error),
-    Manifest(manifest::ManifestError),
+    TreeState(state::TreeStateError),
     NotFound {
         title: String,
     },
@@ -68,7 +68,7 @@ impl fmt::Display for ShowError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ShowError::Io(e) => write!(f, "I/O error: {}", e),
-            ShowError::Manifest(e) => write!(f, "{}", e),
+            ShowError::TreeState(e) => write!(f, "{}", e),
             ShowError::NotFound { title } => write!(
                 f,
                 "leaf title '{title}' not found; run `bo list` to inspect available leaves"
@@ -91,7 +91,7 @@ impl fmt::Display for ShowError {
             }
             ShowError::MissingFile { file } => write!(
                 f,
-                "cannot show '{file}': file is missing \u{2014} the file was deleted or moved.\nrun `bo compile` to clean up the stale manifest record."
+                "cannot show '{file}': file is missing \u{2014} the file was deleted or moved.\nrun `bo compile` to clean up the stale state record."
             ),
             ShowError::UnreadableFile { file, source } => {
                 write!(f, "cannot show '{file}': unreadable file: {source}")
@@ -121,7 +121,7 @@ impl ShowError {
                 json!({ "title": title, "candidates": candidates }),
             ),
             ShowError::Io(_) => JsonError::new("io_error", self.to_string()),
-            ShowError::Manifest(_) => JsonError::new("manifest_error", self.to_string()),
+            ShowError::TreeState(_) => JsonError::new("state_error", self.to_string()),
             ShowError::SuspiciousPath { file } => JsonError::with_details(
                 "suspicious_path",
                 self.to_string(),
@@ -157,24 +157,24 @@ pub(crate) fn show_leaf(tree_dir: &Path, title: &str, full: bool) -> Result<Show
         });
     }
 
-    let manifest = match crate::engine::manifest::runtime_state(tree_dir) {
-        Ok(TreeRuntimeState::Initialized(manifest)) => manifest,
-        Ok(TreeRuntimeState::FreshSeeded) => {
+    let state = match crate::engine::state::load_state(tree_dir) {
+        Ok(TreeLoadState::Loaded(state)) => state,
+        Ok(TreeLoadState::FreshSeeded) => {
             return Err(ShowError::NotFound {
                 title: title.to_string(),
             });
         }
-        Ok(TreeRuntimeState::MissingManifest) => {
-            return Err(ShowError::Manifest(
-                manifest::ManifestError::TreeNotInitialized,
+        Ok(TreeLoadState::MissingState) => {
+            return Err(ShowError::TreeState(
+                state::TreeStateError::TreeNotInitialized,
             ));
         }
-        Err(e) => return Err(ShowError::Manifest(e)),
+        Err(e) => return Err(ShowError::TreeState(e)),
     };
     let canonical_tree_dir = fs::canonicalize(tree_dir).ok();
 
     let mut matches = Vec::new();
-    for leaf in &manifest.leaves {
+    for leaf in &state.leaves {
         let candidate = load_candidate(tree_dir, canonical_tree_dir.as_deref(), leaf);
         let title_match = match &candidate {
             CandidateLoad::Loaded(loaded) => {

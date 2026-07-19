@@ -68,21 +68,21 @@ fn auth_path(home: &TempDir) -> std::path::PathBuf {
     home.path().join(".bo").join("auth.json")
 }
 
-fn append_index_entry(tree: &Path, file: &str, title: &str) {
-    upsert_manifest_leaf(tree, file, title, "2025-01-01T00:00:00Z");
+fn append_state_leaf(tree: &Path, file: &str, title: &str) {
+    upsert_state_leaf(tree, file, title, "2025-01-01T00:00:00Z");
 }
 
-fn upsert_manifest_leaf(tree: &Path, file: &str, title: &str, collected_at: &str) {
-    common::ensure_manifest(tree);
-    let mut manifest = common::read_manifest(tree);
+fn upsert_state_leaf(tree: &Path, file: &str, title: &str, collected_at: &str) {
+    common::ensure_state(tree);
+    let mut state = common::read_state(tree);
     let slug = file.trim_end_matches(".md").to_string();
     let url = format!("https://example.com/{}", file.trim_end_matches(".md"));
-    if let Some(existing) = manifest.leaves.iter_mut().find(|leaf| leaf.file == file) {
+    if let Some(existing) = state.leaves.iter_mut().find(|leaf| leaf.file == file) {
         existing.title = Title::parse(title).ok();
         existing.url = Url::parse(&url).unwrap();
         existing.collected_at = Timestamp::parse(collected_at).unwrap();
     } else {
-        manifest.leaves.push(bo::domain::Leaf {
+        state.leaves.push(bo::domain::Leaf {
             slug: Slug::parse(&slug).unwrap_or_else(|_| Slug::generate(&slug, "")),
             file: file.to_string(),
             title: Title::parse(title).ok(),
@@ -91,15 +91,15 @@ fn upsert_manifest_leaf(tree: &Path, file: &str, title: &str, collected_at: &str
             summary: None,
         });
     }
-    common::write_manifest(tree, &manifest);
+    common::write_state(tree, &state);
 }
 
-fn set_manifest_branches_for_leaf(tree: &Path, file: &str, branches: &[&str], timestamp: &str) {
-    common::ensure_manifest(tree);
-    let mut manifest = common::read_manifest(tree);
+fn set_state_branches_for_leaf(tree: &Path, file: &str, branches: &[&str], timestamp: &str) {
+    common::ensure_state(tree);
+    let mut state = common::read_state(tree);
     let leaf_slug = file.trim_end_matches(".md").to_string();
 
-    for branch in &mut manifest.branches {
+    for branch in &mut state.branches {
         branch.leaves.retain(|slug| slug.as_str() != leaf_slug);
     }
 
@@ -107,7 +107,7 @@ fn set_manifest_branches_for_leaf(tree: &Path, file: &str, branches: &[&str], ti
         if branch_slug.is_empty() {
             continue;
         }
-        if let Some(branch) = manifest
+        if let Some(branch) = state
             .branches
             .iter_mut()
             .find(|branch| branch.slug.as_str() == *branch_slug)
@@ -116,7 +116,7 @@ fn set_manifest_branches_for_leaf(tree: &Path, file: &str, branches: &[&str], ti
                 branch.leaves.push(Slug::parse(&leaf_slug).unwrap());
             }
         } else {
-            manifest.branches.push(bo::domain::Branch {
+            state.branches.push(bo::domain::Branch {
                 slug: Slug::parse(branch_slug).unwrap(),
                 file: format!("branches/{branch_slug}.md"),
                 title: Title::parse(branch_slug).unwrap(),
@@ -127,8 +127,8 @@ fn set_manifest_branches_for_leaf(tree: &Path, file: &str, branches: &[&str], ti
         }
     }
 
-    manifest.branches.retain(|branch| !branch.leaves.is_empty());
-    common::write_manifest(tree, &manifest);
+    state.branches.retain(|branch| !branch.leaves.is_empty());
+    common::write_state(tree, &state);
 }
 
 fn write_leaf(tree: &Path, file: &str, title: &str, collected_at: &str, branches: Option<&[&str]>) {
@@ -154,12 +154,12 @@ fn write_leaf(tree: &Path, file: &str, title: &str, collected_at: &str, branches
 
     content.push_str(&format!("---\n\n# {title}\n\nBody.\n"));
     fs::write(tree.join(file), content).unwrap();
-    upsert_manifest_leaf(tree, file, title, collected_at);
-    set_manifest_branches_for_leaf(tree, file, branches.unwrap_or(&[]), collected_at);
+    upsert_state_leaf(tree, file, title, collected_at);
+    set_state_branches_for_leaf(tree, file, branches.unwrap_or(&[]), collected_at);
 }
 
 fn write_basic_list_tree(tree: &Path) {
-    append_index_entry(tree, "beta-entry.md", "Beta Entry");
+    append_state_leaf(tree, "beta-entry.md", "Beta Entry");
     write_leaf(
         tree,
         "beta-entry.md",
@@ -168,7 +168,7 @@ fn write_basic_list_tree(tree: &Path) {
         Some(&[] as &[&str]),
     );
 
-    append_index_entry(tree, "alpha-entry.md", "Alpha Entry");
+    append_state_leaf(tree, "alpha-entry.md", "Alpha Entry");
     write_leaf(
         tree,
         "alpha-entry.md",
@@ -177,7 +177,7 @@ fn write_basic_list_tree(tree: &Path) {
         Some(&["branch-a", "branch-b"]),
     );
 
-    append_index_entry(tree, "gamma-entry.md", "Gamma Entry");
+    append_state_leaf(tree, "gamma-entry.md", "Gamma Entry");
     write_leaf(
         tree,
         "gamma-entry.md",
@@ -188,7 +188,7 @@ fn write_basic_list_tree(tree: &Path) {
 }
 
 fn write_json_list_tree(tree: &Path) {
-    append_index_entry(tree, "live-entry.md", "Live Entry");
+    append_state_leaf(tree, "live-entry.md", "Live Entry");
     write_leaf(
         tree,
         "live-entry.md",
@@ -197,17 +197,17 @@ fn write_json_list_tree(tree: &Path) {
         Some(&["branch-a"]),
     );
 
-    append_index_entry(tree, "missing-entry.md", "Missing Entry");
+    append_state_leaf(tree, "missing-entry.md", "Missing Entry");
 }
 
 fn write_show_leaf(
     tree: &Path,
     file: &str,
-    index_title: &str,
+    state_title: &str,
     frontmatter_title: &str,
     body: &str,
 ) {
-    append_index_entry(tree, file, index_title);
+    append_state_leaf(tree, file, state_title);
 
     let escaped_title = frontmatter_title.replace('\\', "\\\\").replace('"', "\\\"");
     let content = format!(
@@ -224,7 +224,7 @@ fn write_show_leaf(
 }
 
 fn write_combined_flags_tree(tree: &Path) {
-    append_index_entry(tree, "a-oldest.md", "A Oldest");
+    append_state_leaf(tree, "a-oldest.md", "A Oldest");
     write_leaf(
         tree,
         "a-oldest.md",
@@ -233,7 +233,7 @@ fn write_combined_flags_tree(tree: &Path) {
         Some(&["branch-a"]),
     );
 
-    append_index_entry(tree, "a-middle.md", "A Middle");
+    append_state_leaf(tree, "a-middle.md", "A Middle");
     write_leaf(
         tree,
         "a-middle.md",
@@ -242,7 +242,7 @@ fn write_combined_flags_tree(tree: &Path) {
         Some(&["branch-a"]),
     );
 
-    append_index_entry(tree, "b-other.md", "B Other");
+    append_state_leaf(tree, "b-other.md", "B Other");
     write_leaf(
         tree,
         "b-other.md",
@@ -251,7 +251,7 @@ fn write_combined_flags_tree(tree: &Path) {
         Some(&["branch-b"]),
     );
 
-    append_index_entry(tree, "a-old.md", "A Old");
+    append_state_leaf(tree, "a-old.md", "A Old");
     write_leaf(
         tree,
         "a-old.md",
@@ -260,7 +260,7 @@ fn write_combined_flags_tree(tree: &Path) {
         Some(&["branch-a"]),
     );
 
-    append_index_entry(tree, "a-newest.md", "A Newest");
+    append_state_leaf(tree, "a-newest.md", "A Newest");
     write_leaf(
         tree,
         "a-newest.md",
@@ -269,7 +269,7 @@ fn write_combined_flags_tree(tree: &Path) {
         Some(&["branch-a"]),
     );
 
-    append_index_entry(tree, "a-oldish.md", "A Oldish");
+    append_state_leaf(tree, "a-oldish.md", "A Oldish");
     write_leaf(
         tree,
         "a-oldish.md",
@@ -278,7 +278,7 @@ fn write_combined_flags_tree(tree: &Path) {
         Some(&["branch-a"]),
     );
 
-    append_index_entry(tree, "a-older.md", "A Older");
+    append_state_leaf(tree, "a-older.md", "A Older");
     write_leaf(
         tree,
         "a-older.md",
@@ -611,7 +611,7 @@ fn list_on_seeded_empty_tree_reports_no_leaves_collected_yet() {
 }
 
 #[test]
-fn list_on_synthetic_tree_uses_index_order_and_shows_dates_and_branch_arrays() {
+fn list_on_synthetic_tree_uses_state_order_and_shows_dates_and_branch_arrays() {
     let home = TempDir::new().unwrap();
     let tree = home.path().join("my-tree");
 
@@ -1093,10 +1093,10 @@ fn raze_refuses_without_interactive_terminal_and_preserves_tree() {
     .unwrap();
     assert!(auth_path(&home).exists());
 
-    // Manually write a tree file and manifest entry so raze has something to delete
+    // Manually write a tree file and state entry so raze has something to delete
     fs::create_dir_all(&tree).unwrap();
     fs::write(tree.join("article.md"), "# Article").unwrap();
-    upsert_manifest_leaf(&tree, "article.md", "Article", "2026-01-01T00:00:00Z");
+    upsert_state_leaf(&tree, "article.md", "Article", "2026-01-01T00:00:00Z");
 
     let out = raze(home.path());
     assert!(!out.status.success());

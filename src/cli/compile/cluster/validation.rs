@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 use crate::cli::compile::validation::{leaf_resolver, LeafLookup};
 use crate::cli::compile::CompileError;
-use crate::domain::manifest::Manifest;
+use crate::domain::state::TreeState;
 
 // ── cluster response schemas ─────────────────────────────────────────────────
 
@@ -205,7 +205,7 @@ pub(in crate::cli::compile) fn validate_clusters(
 /// existing branch, empty leaf reference, every cluster repaired away.
 pub(in crate::cli::compile) fn validate_incremental_clusters(
     response: &IncrementalClusterResponse,
-    manifest: &Manifest,
+    state: &TreeState,
     loaded_leaves: &[crate::cli::compile::plan::LoadedLeaf],
     warnings: &mut Vec<String>,
 ) -> Result<ValidatedClusters, CompileError> {
@@ -214,7 +214,7 @@ pub(in crate::cli::compile) fn validate_incremental_clusters(
         warnings.push(format!("warning: title collision — {}", msg));
     }
 
-    let existing_titles_lower: HashSet<String> = manifest
+    let existing_titles_lower: HashSet<String> = state
         .branches
         .iter()
         .map(|b| b.title.as_str().to_lowercase())
@@ -279,7 +279,7 @@ pub(in crate::cli::compile) fn validate_incremental_clusters(
     // Validate assignments (existing branches).
     for assignment in &response.assignments {
         // Unknown branch slug → drop assignment, warn.
-        let Some(branch) = manifest.branch_by_slug_str(&assignment.branch_slug) else {
+        let Some(branch) = state.branch_by_slug_str(&assignment.branch_slug) else {
             warnings.push(format!(
                 "warning: assignment references unknown branch '{}' — assignment dropped",
                 assignment.branch_slug

@@ -1,8 +1,8 @@
 pub mod branch;
 pub mod frontmatter;
 pub mod leaf;
-pub mod manifest;
 pub mod slug;
+pub mod state;
 pub mod timestamp;
 pub mod title;
 pub mod tree;

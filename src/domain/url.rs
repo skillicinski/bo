@@ -23,7 +23,7 @@ impl fmt::Display for UrlError {
 impl Url {
     /// Validate via `url::Url::parse` but store the original input unchanged.
     /// `url::Url` normalizes (lowercases host, adds trailing slash); we avoid that
-    /// to prevent silent manifest rewrites and broken duplicate-URL detection.
+    /// to prevent silent state rewrites and broken duplicate-URL detection.
     pub fn parse(s: &str) -> Result<Self, UrlError> {
         ::url::Url::parse(s).map_err(|e| UrlError::Invalid(e.to_string()))?;
         Ok(Self(s.to_string()))

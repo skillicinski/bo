@@ -22,7 +22,7 @@ fn compile_result_notifications_skipped_from_json() {
     let encoded = json::success_string("compile", &result, Vec::new()).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&encoded).unwrap();
 
-    assert_eq!(parsed["schema_version"], 1);
+    assert_eq!(parsed["schema_version"], 2);
     assert_eq!(parsed["ok"], true);
     assert!(parsed["data"]["notifications"].is_null());
 }

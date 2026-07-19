@@ -6,12 +6,12 @@
 //   Tree
 //    ├── branch/   (Branch files written by `bo compile`)
 //    ├── leaf/     (Leaf files written by `bo collect`)
-//    └── .bo/      (manifest.json + pending.json runtime state)
+//    └── .bo/      (state.json + pending.json runtime state)
 //
 // The active tree's metadata lives in `~/.bo/config.json` under `tree`.
-// Runtime tree state lives in `{tree}/.bo/manifest.json` once collection starts.
+// Runtime tree state lives in `{tree}/.bo/state.json` once collection starts.
 
-use crate::domain::manifest::{Manifest, TreeMeta};
+use crate::domain::state::{TreeMetadata, TreeState};
 use crate::domain::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -46,9 +46,9 @@ impl Tree {
         }
     }
 
-    pub fn empty_manifest(&self) -> Manifest {
-        Manifest {
-            tree: TreeMeta {
+    pub fn empty_state(&self) -> TreeState {
+        TreeState {
+            tree: TreeMetadata {
                 name: self.name.clone(),
                 created_at: self.created_at.clone(),
                 last_compiled_at: None,
@@ -68,10 +68,10 @@ impl Tree {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TreeRuntimeState {
+pub enum TreeLoadState {
     FreshSeeded,
-    Initialized(Manifest),
-    MissingManifest,
+    Loaded(TreeState),
+    MissingState,
 }
 
 // ── Free path helpers ──────────────────────────────────────────────────────────
@@ -86,9 +86,9 @@ pub fn leaf_dir(tree_dir: &Path) -> PathBuf {
     tree_dir.join("leaf")
 }
 
-/// Manifest path from a bare tree directory.
-pub fn manifest_path(tree_dir: &Path) -> PathBuf {
-    infra_dir(tree_dir).join("manifest.json")
+/// Tree state path from a bare tree directory.
+pub fn state_path(tree_dir: &Path) -> PathBuf {
+    infra_dir(tree_dir).join("state.json")
 }
 
 /// Infra directory from a bare tree directory.

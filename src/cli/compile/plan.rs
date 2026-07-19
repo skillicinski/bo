@@ -1,11 +1,11 @@
-// ── compile planning: leaf loading, classification, manifest delta ─────────────
+// ── compile planning: leaf loading, classification, state delta ─────────────
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
 
 use crate::domain::frontmatter;
-use crate::domain::manifest::{Manifest, TreeMeta};
 use crate::domain::slug::Slug;
+use crate::domain::state::{TreeMetadata, TreeState};
 use crate::domain::Timestamp;
 use crate::domain::{Branch, Leaf, Title};
 use crate::engine::config::SeededConfig;
@@ -38,8 +38,8 @@ pub(super) struct PlannedBranchWrite {
 }
 
 #[derive(Debug)]
-pub(super) struct ManifestDelta {
-    pub(super) new_manifest: Manifest,
+pub(super) struct StateDelta {
+    pub(super) new_state: TreeState,
     pub(super) branch_writes: Vec<PlannedBranchWrite>,
     pub(super) branch_deletes: Vec<String>,
     pub(super) branches_created: Vec<BranchResult>,
@@ -54,24 +54,24 @@ pub(super) struct ManifestDelta {
 /// A tree with no branches has nothing to incrementally update, so it compiles
 /// from scratch regardless of `--all`. Incremental mode is only coherent
 /// against an existing branch graph.
-pub(super) fn select_run_mode(options: CompileOptions, manifest: &Manifest) -> CompileRunMode {
-    if options.all || manifest.branches.is_empty() {
+pub(super) fn select_run_mode(options: CompileOptions, state: &TreeState) -> CompileRunMode {
+    if options.all || state.branches.is_empty() {
         CompileRunMode::Full
     } else {
         CompileRunMode::Incremental
     }
 }
 
-pub(super) fn select_new_leaf_slugs(manifest: &Manifest) -> Result<Vec<String>, CompileError> {
-    let Some(last_compiled_at) = &manifest.tree.last_compiled_at else {
-        return Ok(manifest
+pub(super) fn select_new_leaf_slugs(state: &TreeState) -> Result<Vec<String>, CompileError> {
+    let Some(last_compiled_at) = &state.tree.last_compiled_at else {
+        return Ok(state
             .leaves
             .iter()
             .map(|leaf| leaf.slug.as_str().to_string())
             .collect());
     };
 
-    Ok(manifest
+    Ok(state
         .leaves
         .iter()
         .filter(|leaf| &leaf.collected_at > last_compiled_at)
@@ -141,12 +141,12 @@ pub(super) fn validated_branch_leaf_slugs(branch: &ValidatedBranch) -> Vec<Slug>
         .collect()
 }
 
-pub(super) fn build_manifest_delta(
-    current: &Manifest,
+pub(super) fn build_state_delta(
+    current: &TreeState,
     plan: &CompilePlan,
     run_mode: CompileRunMode,
     run_timestamp: &Timestamp,
-) -> Result<ManifestDelta, CompileError> {
+) -> Result<StateDelta, CompileError> {
     match run_mode {
         CompileRunMode::Full => build_full_delta(current, plan, run_timestamp),
         CompileRunMode::Incremental => build_incremental_delta(current, plan, run_timestamp),
@@ -154,10 +154,10 @@ pub(super) fn build_manifest_delta(
 }
 
 fn build_full_delta(
-    current: &Manifest,
+    current: &TreeState,
     plan: &CompilePlan,
     run_timestamp: &Timestamp,
-) -> Result<ManifestDelta, CompileError> {
+) -> Result<StateDelta, CompileError> {
     let mut branch_writes = Vec::new();
     let mut branch_deletes = Vec::new();
     let mut branches_created = Vec::new();
@@ -186,7 +186,7 @@ fn build_full_delta(
         new_branches.push(record);
     }
 
-    finalize_manifest_delta(
+    finalize_state_delta(
         current,
         run_timestamp,
         branch_writes,
@@ -232,10 +232,10 @@ fn build_branch_artifacts(
 }
 
 fn build_incremental_delta(
-    current: &Manifest,
+    current: &TreeState,
     plan: &CompilePlan,
     run_timestamp: &Timestamp,
-) -> Result<ManifestDelta, CompileError> {
+) -> Result<StateDelta, CompileError> {
     let mut branch_writes = Vec::new();
     let mut branches_created = Vec::new();
     let mut branches_updated = Vec::new();
@@ -272,7 +272,7 @@ fn build_incremental_delta(
         new_branches.push(record);
     }
 
-    finalize_manifest_delta(
+    finalize_state_delta(
         current,
         run_timestamp,
         branch_writes,
@@ -283,18 +283,18 @@ fn build_incremental_delta(
     )
 }
 
-/// ponytail: shared finalizer; the Manifest construction is identical across modes.
-fn finalize_manifest_delta(
-    current: &Manifest,
+/// ponytail: shared finalizer; the TreeState construction is identical across modes.
+fn finalize_state_delta(
+    current: &TreeState,
     run_timestamp: &Timestamp,
     branch_writes: Vec<PlannedBranchWrite>,
     branch_deletes: Vec<String>,
     branches_created: Vec<BranchResult>,
     branches_updated: Vec<BranchResult>,
     new_branches: Vec<Branch>,
-) -> Result<ManifestDelta, CompileError> {
-    let new_manifest = Manifest {
-        tree: TreeMeta {
+) -> Result<StateDelta, CompileError> {
+    let new_state = TreeState {
+        tree: TreeMetadata {
             name: current.tree.name.clone(),
             created_at: current.tree.created_at.clone(),
             last_compiled_at: Some(run_timestamp.clone()),
@@ -303,8 +303,8 @@ fn finalize_manifest_delta(
         branches: new_branches,
     };
 
-    Ok(ManifestDelta {
-        new_manifest,
+    Ok(StateDelta {
+        new_state,
         branch_writes,
         branch_deletes,
         branches_created,
@@ -322,7 +322,7 @@ pub(super) fn build_compile_plan(
     cfg: &SeededConfig,
     provider: &dyn LlmProvider,
     model: &Model,
-    manifest: &Manifest,
+    state: &TreeState,
     loaded_leaves: &[LoadedLeaf],
     new_leaf_slugs: &[String],
     run_mode: CompileRunMode,
@@ -342,7 +342,7 @@ pub(super) fn build_compile_plan(
                 cfg,
                 provider,
                 model,
-                manifest,
+                state,
                 loaded_leaves,
                 new_leaf_slugs,
                 warnings,
@@ -371,12 +371,8 @@ pub(super) fn build_compile_plan(
             )
         }
         CompileRunMode::Incremental => {
-            let msg = prompt::build_incremental_user_message(
-                cfg,
-                manifest,
-                loaded_leaves,
-                new_leaf_slugs,
-            );
+            let msg =
+                prompt::build_incremental_user_message(cfg, state, loaded_leaves, new_leaf_slugs);
             let tokens = execute::estimate_compile_prompt_tokens(
                 prompt::COMPILE_SYSTEM_PROMPT
                     .len()

@@ -12,7 +12,7 @@ The tree grows with you. New leaves feed existing branches; new questions surfac
 bo seed --path ~/my-knowledge-tree --name my-knowledge-tree --provider openai --model gpt-4.1-mini
 ```
 
-Creates a single active local tree and writes `~/.bo/config.json`. `bo seed` does not create `manifest.json`; collection creates the manifest when tree runtime state first exists. Run bare `bo seed` in a terminal for guided prompts.
+Creates a single active local tree and writes `~/.bo/config.json`. `bo seed` does not write `state.json`; the first `bo collect` creates it. Run bare `bo seed` in a terminal for guided prompts.
 
 ---
 

@@ -3,12 +3,12 @@ use super::*;
 use std::fs;
 use tempfile::TempDir;
 
-fn pending(op: OpKind, pre_manifest_hash: String, writes: Vec<PendingWrite>) -> PendingOperation {
+fn pending(op: OpKind, pre_state_hash: String, writes: Vec<PendingWrite>) -> PendingOperation {
     PendingOperation {
         op,
         started_at: "2026-05-19T00:00:00Z".to_string(),
         pid: 0,
-        pre_manifest_hash,
+        pre_state_hash,
         writes,
         deletes: Vec::new(),
     }
@@ -36,11 +36,11 @@ fn write_read_clear_round_trip() {
 }
 
 #[test]
-fn rollback_removes_staged_write_when_manifest_unchanged() {
+fn rollback_removes_staged_write_when_state_unchanged() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
-    fs::write(dir.path().join(".bo/manifest.json"), b"manifest").unwrap();
-    let pre = manifest_hash(dir.path()).unwrap();
+    fs::write(dir.path().join(".bo/state.json"), b"state").unwrap();
+    let pre = state_hash(dir.path()).unwrap();
     let body = b"new leaf";
     let write = PendingWrite {
         path: "leaf.md".to_string(),
@@ -66,11 +66,11 @@ fn rollback_removes_staged_write_when_manifest_unchanged() {
 }
 
 #[test]
-fn roll_forward_renames_staged_write_when_manifest_changed() {
+fn roll_forward_renames_staged_write_when_state_changed() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
-    fs::write(dir.path().join(".bo/manifest.json"), b"manifest-before").unwrap();
-    let pre = manifest_hash(dir.path()).unwrap();
+    fs::write(dir.path().join(".bo/state.json"), b"state-before").unwrap();
+    let pre = state_hash(dir.path()).unwrap();
     let body = b"new leaf";
     let write = PendingWrite {
         path: "leaf.md".to_string(),
@@ -85,7 +85,7 @@ fn roll_forward_renames_staged_write_when_manifest_changed() {
     );
     super::write(&pending_path(dir.path()), &op).unwrap();
     write_staged(dir.path(), &write, body).unwrap();
-    fs::write(dir.path().join(".bo/manifest.json"), b"manifest-after").unwrap();
+    fs::write(dir.path().join(".bo/state.json"), b"state-after").unwrap();
 
     let report = recover_or_refuse(dir.path()).unwrap().unwrap();
 
@@ -96,17 +96,60 @@ fn roll_forward_renames_staged_write_when_manifest_changed() {
 }
 
 #[test]
+fn legacy_manifest_blocks_recovery_before_mutation() {
+    let dir = TempDir::new().unwrap();
+    let bo_dir = dir.path().join(".bo");
+    fs::create_dir_all(&bo_dir).unwrap();
+    fs::write(bo_dir.join("state.json"), b"state-before").unwrap();
+    let pre = state_hash(dir.path()).unwrap();
+    let body = b"new leaf";
+    let pending_write = PendingWrite {
+        path: "leaf.md".to_string(),
+        content_hash: content_hash(body),
+    };
+    let operation = pending(
+        OpKind::Collect {
+            url: "https://example.com".to_string(),
+        },
+        pre,
+        vec![pending_write.clone()],
+    );
+    let pending_file = pending_path(dir.path());
+    write(&pending_file, &operation).unwrap();
+    write_staged(dir.path(), &pending_write, body).unwrap();
+    fs::write(bo_dir.join("state.json"), b"state-after").unwrap();
+    fs::write(bo_dir.join("manifest.json"), b"legacy").unwrap();
+
+    let err = recover_or_refuse(dir.path()).unwrap_err();
+
+    assert!(matches!(
+        err,
+        PendingError::TreeState(crate::domain::state::TreeStateError::LegacyManifestFound)
+    ));
+    assert!(
+        pending_file.exists(),
+        "pending intent must remain untouched"
+    );
+    assert!(
+        staged_path(dir.path(), "leaf.md").unwrap().exists(),
+        "staged write must remain untouched"
+    );
+    assert!(!dir.path().join("leaf.md").exists());
+    assert_eq!(fs::read(bo_dir.join("state.json")).unwrap(), b"state-after");
+}
+
+#[test]
 fn live_pending_refuses() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
-    fs::write(dir.path().join(".bo/manifest.json"), b"manifest").unwrap();
+    fs::write(dir.path().join(".bo/state.json"), b"state").unwrap();
     let op = PendingOperation {
         op: OpKind::Compile {
             mode: CompileMode::Full,
         },
         started_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         pid: std::process::id(),
-        pre_manifest_hash: manifest_hash(dir.path()).unwrap(),
+        pre_state_hash: state_hash(dir.path()).unwrap(),
         writes: Vec::new(),
         deletes: Vec::new(),
     };

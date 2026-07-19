@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::domain::manifest::Manifest;
+use crate::domain::state::TreeState;
 use crate::domain::Slug;
 
 use super::parse::{CompileResponse, IncrementalCompileResponse};
@@ -226,12 +226,12 @@ pub(super) fn validate_full(
 
 pub(super) fn validate_incremental(
     parsed: IncrementalCompileResponse,
-    manifest: &Manifest,
+    state: &TreeState,
     loaded_leaves: &[plan::LoadedLeaf],
     input_body_bytes: usize,
     warnings: &mut Vec<String>,
 ) -> Result<CompilePlan, CompileError> {
-    let new_leaf_slugs_vec = select_new_leaf_slugs(manifest)?;
+    let new_leaf_slugs_vec = select_new_leaf_slugs(state)?;
     let new_leaf_slugs: HashSet<String> = new_leaf_slugs_vec.into_iter().collect();
     let lookup = leaf_resolver(loaded_leaves);
     for msg in &lookup.collisions {
@@ -242,7 +242,7 @@ pub(super) fn validate_incremental(
     let mut validated_branches = Vec::new();
 
     for raw in parsed.updated_branches {
-        let existing = manifest.branch_by_slug_str(&raw.slug).ok_or_else(|| {
+        let existing = state.branch_by_slug_str(&raw.slug).ok_or_else(|| {
             CompileError::Validation(format!(
                 "invalid incremental compile response: update references unknown branch '{}'",
                 raw.slug
@@ -312,7 +312,7 @@ pub(super) fn validate_incremental(
             )));
         }
         let branch_slug = Slug::generate(&title, "").to_string();
-        if manifest.branch_by_slug_str(&branch_slug).is_some()
+        if state.branch_by_slug_str(&branch_slug).is_some()
             || !seen_branch_slugs.insert(branch_slug.clone())
         {
             return Err(CompileError::Validation(format!(

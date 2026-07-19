@@ -167,7 +167,7 @@ fn query_json_no_answer_errors_include_next_steps() {
 #[test]
 fn query_preflight_no_answer_takes_precedence_over_missing_provider() {
     let empty = TempDir::new().unwrap();
-    write_index(empty.path(), &[]);
+    write_state(empty.path(), &[]);
     assert_no_provider_resolver_not_called(&seeded_config(empty.path()), "what is rust", |err| {
         matches!(err, query::QueryError::EmptyTree)
     });
@@ -179,7 +179,7 @@ fn query_preflight_no_answer_takes_precedence_over_missing_provider() {
         "Cooking Tips",
         "Boil water and add salt.",
     );
-    write_index(
+    write_state(
         no_results.path(),
         &[(
             "leaves/cooking.md",
@@ -200,7 +200,7 @@ fn query_preflight_no_answer_takes_precedence_over_missing_provider() {
         "Trust Building",
         "Trust grows slowly.",
     );
-    write_index(
+    write_state(
         weak.path(),
         &[(
             "leaves/trust.md",
@@ -222,7 +222,7 @@ fn query_relevant_sources_require_provider() {
         "Only Leaf",
         "Rust is a language focused on safety.",
     );
-    write_index(
+    write_state(
         dir.path(),
         &[(
             "leaves/only-leaf.md",
@@ -257,7 +257,7 @@ fn query_uses_model_not_compile_model() {
         "Only Leaf",
         "Rust is a language focused on safety.",
     );
-    write_index(
+    write_state(
         dir.path(),
         &[(
             "leaves/only-leaf.md",
@@ -382,7 +382,7 @@ fn write_leaf(tree: &Path, filename: &str, title: &str, body: &str) {
     .unwrap();
 }
 
-fn write_index(tree: &Path, entries: &[(&str, &str, &str)]) {
+fn write_state(tree: &Path, entries: &[(&str, &str, &str)]) {
     let bo_dir = tree.join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
     let leaves = entries
@@ -396,10 +396,10 @@ fn write_index(tree: &Path, entries: &[(&str, &str, &str)]) {
             summary: Some(title.to_string()),
         })
         .collect();
-    bo::engine::manifest::write(
-        &bo_dir.join("manifest.json"),
-        &bo::domain::manifest::Manifest {
-            tree: bo::domain::manifest::TreeMeta {
+    bo::engine::state::write(
+        &bo_dir.join("state.json"),
+        &bo::domain::state::TreeState {
+            tree: bo::domain::state::TreeMetadata {
                 name: "test-tree".to_string(),
                 created_at: Timestamp::parse("2026-05-17T00:00:00Z").unwrap(),
                 last_compiled_at: None,

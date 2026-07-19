@@ -2,8 +2,8 @@
 
 use std::collections::HashSet;
 
-use crate::domain::manifest;
-use crate::domain::tree::{self, TreeRuntimeState};
+use crate::domain::state;
+use crate::domain::tree::{self, TreeLoadState};
 use crate::domain::Timestamp;
 use crate::engine::auth;
 use crate::engine::config::SeededConfig;
@@ -22,11 +22,11 @@ use super::types::{
 };
 
 pub(super) fn preflight_noop(
-    manifest: &manifest::Manifest,
+    state: &state::TreeState,
     _options: CompileOptions,
     notifications: &[String],
 ) -> Option<CompileResult> {
-    match manifest.leaves.len() {
+    match state.leaves.len() {
         0 => return Some(CompileResult::noop("empty_tree", notifications.to_vec())),
         1 => return Some(CompileResult::noop("single_leaf", notifications.to_vec())),
         _ => {}
@@ -103,25 +103,22 @@ fn run_compile(
     // Stale repair runs before preflight so preflight sees repaired state.
     let tree = cfg.tree();
     execute::recover_pending_if_needed(tree.path(), warnings)?;
-    let manifest = match crate::engine::manifest::runtime_state(tree.path()) {
-        Ok(TreeRuntimeState::Initialized(manifest)) => manifest,
-        Ok(TreeRuntimeState::FreshSeeded) => {
+    let state = match crate::engine::state::load_state(tree.path()) {
+        Ok(TreeLoadState::Loaded(state)) => state,
+        Ok(TreeLoadState::FreshSeeded) => {
             return Ok(CompileResult::noop("empty_tree", Vec::new()));
         }
-        Ok(TreeRuntimeState::MissingManifest) => {
+        Ok(TreeLoadState::MissingState) => {
             return Err(CompileError::Io(format!(
-                "failed to read manifest: {}",
-                manifest::ManifestError::TreeNotInitialized
+                "failed to read state: {}",
+                state::TreeStateError::TreeNotInitialized
             )));
         }
         Err(error) => {
-            return Err(CompileError::Io(format!(
-                "failed to read manifest: {}",
-                error
-            )));
+            return Err(CompileError::Io(format!("failed to read state: {}", error)));
         }
     };
-    let repair_report = repair::repair_stale_branches(cfg, &manifest)?;
+    let repair_report = repair::repair_stale_branches(cfg, &state)?;
     // Repair notices are destructive-action reporting (e.g. "removed N stale
     // branches"); mirror them onto the stderr channel so they reach consumers
     // in both human and --json mode. The human-mode double-emission (stderr
@@ -136,18 +133,18 @@ fn run_compile(
         );
     }
     let notifications = repair_report.notifications;
-    let manifest = crate::engine::manifest::read(&tree::manifest_path(tree.path()))
-        .map_err(|e| CompileError::Io(format!("failed to read manifest: {}", e)))?;
+    let state = crate::engine::state::read(&tree::state_path(tree.path()))
+        .map_err(|e| CompileError::Io(format!("failed to read state: {}", e)))?;
 
-    if let Some(noop) = preflight_noop(&manifest, options, &notifications) {
+    if let Some(noop) = preflight_noop(&state, options, &notifications) {
         return Ok(noop);
     }
-    let new_leaf_slugs = plan::select_new_leaf_slugs(&manifest)?;
+    let new_leaf_slugs = plan::select_new_leaf_slugs(&state)?;
     if !options.all && new_leaf_slugs.is_empty() {
         return Ok(CompileResult::noop(NO_NEW_LEAVES_REASON, notifications));
     }
 
-    let expected_manifest_hash = pending::manifest_hash(tree.path())?;
+    let expected_state_hash = pending::state_hash(tree.path())?;
 
     let api_key =
         auth::resolve_api_key(cfg.config.provider).map_err(|e| CompileError::Llm(e.to_string()))?;
@@ -168,9 +165,9 @@ fn run_compile(
         &compile_model,
         &compile_started_at,
         notifications,
-        &manifest,
+        &state,
         &new_leaf_slugs,
-        &expected_manifest_hash,
+        &expected_state_hash,
         warnings,
     )
 }
@@ -184,12 +181,12 @@ pub fn run_compile_with_provider_started_at(
     model: &Model,
     compile_started_at: &Timestamp,
     mut notifications: Vec<String>,
-    manifest: &manifest::Manifest,
+    state: &state::TreeState,
     new_leaf_slugs: &[String],
-    expected_manifest_hash: &str,
+    expected_state_hash: &str,
     warnings: &mut Vec<String>,
 ) -> Result<CompileResult, CompileError> {
-    let (loaded_leaves, skipped_leaves) = plan::read_valid_leaves(cfg, &manifest.leaves);
+    let (loaded_leaves, skipped_leaves) = plan::read_valid_leaves(cfg, &state.leaves);
 
     if loaded_leaves.len() < 2 {
         if loaded_leaves.is_empty() {
@@ -201,7 +198,7 @@ pub fn run_compile_with_provider_started_at(
     let tree = cfg.tree();
     let started = std::time::Instant::now();
 
-    let run_mode = plan::select_run_mode(options, manifest);
+    let run_mode = plan::select_run_mode(options, state);
     let valid_filenames: HashSet<String> =
         loaded_leaves.iter().map(|l| l.filename.clone()).collect();
     let run_timestamp = compile_started_at;
@@ -213,7 +210,7 @@ pub fn run_compile_with_provider_started_at(
             cfg,
             provider,
             model,
-            manifest,
+            state,
             &loaded_leaves,
             new_leaf_slugs,
             run_mode,
@@ -227,7 +224,7 @@ pub fn run_compile_with_provider_started_at(
             run_timestamp,
             &skipped_leaves,
             run_mode,
-            expected_manifest_hash,
+            expected_state_hash,
             warnings,
         )
     })();

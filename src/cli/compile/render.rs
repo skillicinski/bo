@@ -172,10 +172,10 @@ fn render_preview_summary_human<W: Write>(
         }
     }
 
-    if !preview.manifest_unchanged {
+    if !preview.state_unchanged {
         writeln!(
             stdout,
-            "  \u{26a0} manifest changed during the dry-run; preview may be stale"
+            "  \u{26a0} state changed during the dry-run; preview may be stale"
         )?;
     }
 

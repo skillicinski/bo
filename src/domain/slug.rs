@@ -4,7 +4,7 @@
 // length ≤ 80.
 //
 // Two constructors:
-//   Slug::parse(s)          — validates an existing string (from disk/manifest)
+//   Slug::parse(s)          — validates an existing string (from disk/state)
 //   Slug::generate(title, url) — infallible generation from title+url
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -40,7 +40,7 @@ impl fmt::Display for SlugError {
 }
 
 impl Slug {
-    /// Validate an existing string as a slug (from disk/manifest).
+    /// Validate an existing string as a slug (from disk/state).
     pub fn parse(s: &str) -> Result<Self, SlugError> {
         if s.is_empty() {
             return Err(SlugError::Empty);

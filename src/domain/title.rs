@@ -60,8 +60,8 @@ impl<'de> Deserialize<'de> for Title {
     }
 }
 
-// ponytail: legacy manifests wrote title: "" for untitled leaves; fold to None on read.
-// Remove once no pre-v0.0.6 manifests remain.
+// ponytail: pre-v0.0.6 tree files wrote title: "" for untitled leaves; fold to None on read.
+// Remove once no pre-v0.0.6 trees remain.
 pub(crate) fn deserialize_option_title<'de, D>(deserializer: D) -> Result<Option<Title>, D::Error>
 where
     D: Deserializer<'de>,

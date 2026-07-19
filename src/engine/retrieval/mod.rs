@@ -68,7 +68,7 @@ pub enum RetrievalError {
     NoResults,
     /// Tree has no leaves
     EmptyTree,
-    /// Index read or file I/O error
+    /// State read or file I/O error
     Io(String),
     /// Known model has too little context after reserved prompt/completion budget
     ContextBudgetExhausted {

@@ -39,7 +39,7 @@ fn seed_tree(home: &TempDir, name: &str) -> std::path::PathBuf {
 }
 
 fn write_compile_leaf(tree: &Path, file: &str, title: &str) {
-    add_manifest_leaf(
+    add_state_leaf(
         tree,
         file,
         title,
@@ -55,9 +55,9 @@ fn write_compile_leaf(tree: &Path, file: &str, title: &str) {
     .unwrap();
 }
 
-fn add_manifest_leaf(tree: &Path, file: &str, title: &str, url: &str) {
+fn add_state_leaf(tree: &Path, file: &str, title: &str, url: &str) {
     static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    common::ensure_manifest(tree);
+    common::ensure_state(tree);
     let idx = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let slug = Slug::parse(&format!("leaf-{}", idx)).unwrap_or_else(|_| Slug::generate(title, url));
     common::append_leaf(
@@ -376,7 +376,7 @@ fn collect_json_duplicate_url_is_structured_error() {
     let home = TempDir::new().unwrap();
     let tree = seed_tree(&home, "tree");
     let url = "https://www.youtube.com/watch?v=a1mhk7mAetk";
-    add_manifest_leaf(&tree, "existing.md", "Existing Video", url);
+    add_state_leaf(&tree, "existing.md", "Existing Video", url);
 
     let out = run(home.path(), &["collect", "--json", url]);
     assert!(!out.status.success());
@@ -392,7 +392,7 @@ fn collect_json_batch_reports_skipped_duplicates_per_input() {
     let home = TempDir::new().unwrap();
     let tree = seed_tree(&home, "tree");
     let url = "https://example.com/already";
-    add_manifest_leaf(&tree, "existing.md", "Existing", url);
+    add_state_leaf(&tree, "existing.md", "Existing", url);
 
     let out = run(home.path(), &["collect", "--json", url, url]);
     assert!(out.status.success());

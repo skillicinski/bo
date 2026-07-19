@@ -1,10 +1,10 @@
-// Write-intent recovery for manifest-backed tree mutations.
+// Write-intent recovery for state-backed tree mutations.
 //
 // `{tree}/.bo/pending.json` is both an intent log and an advisory lock. A
 // mutating command writes it before staging content, commits by rewriting or
-// deleting `manifest.json`, then renames staged files / applies deletes and
+// deleting `state.json`, then renames staged files / applies deletes and
 // clears pending. On the next mutating command, a stale pending file is rolled
-// back or rolled forward according to whether the manifest hash changed.
+// back or rolled forward according to whether the state hash changed.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -16,7 +16,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 const LIVE_LOCK_WINDOW_SECS: i64 = 60;
-const MISSING_MANIFEST_HASH: &str = "<missing>";
+const MISSING_STATE_HASH: &str = "<missing>";
 
 // ── public types ─────────────────────────────────────────────────────────────
 
@@ -25,7 +25,7 @@ pub struct PendingOperation {
     pub op: OpKind,
     pub started_at: String,
     pub pid: u32,
-    pub pre_manifest_hash: String,
+    pub pre_state_hash: String,
     pub writes: Vec<PendingWrite>,
     #[serde(default)]
     pub deletes: Vec<String>,
@@ -62,6 +62,7 @@ pub struct RecoveryReport {
 pub enum PendingError {
     Io(io::Error),
     Parse(serde_json::Error),
+    TreeState(crate::domain::state::TreeStateError),
     Busy {
         tree_dir: PathBuf,
     },
@@ -83,6 +84,7 @@ impl fmt::Display for PendingError {
         match self {
             PendingError::Io(e) => write!(f, "pending I/O error: {e}"),
             PendingError::Parse(e) => write!(f, "pending parse error: {e}"),
+            PendingError::TreeState(e) => write!(f, "{e}"),
             PendingError::Busy { tree_dir } => write!(
                 f,
                 "another bo process is already interacting with {}",
@@ -136,7 +138,7 @@ pub fn read(path: &Path) -> Result<Option<PendingOperation>, PendingError> {
 
 pub fn write(path: &Path, pending: &PendingOperation) -> Result<(), PendingError> {
     let json = serde_json::to_string_pretty(pending)?;
-    crate::engine::manifest::atomic_write(path, json.as_bytes())?;
+    crate::engine::state::atomic_write(path, json.as_bytes())?;
     Ok(())
 }
 
@@ -158,7 +160,7 @@ pub fn new_operation(
         op,
         started_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         pid: std::process::id(),
-        pre_manifest_hash: manifest_hash(tree_dir)?,
+        pre_state_hash: state_hash(tree_dir)?,
         writes,
         deletes,
     })
@@ -169,6 +171,8 @@ pub fn new_operation(
 /// Returns `Ok(Some(report))` only when a stale pending file existed and was
 /// resolved. Callers should surface the report as a one-line warning.
 pub fn recover_or_refuse(tree_dir: &Path) -> Result<Option<RecoveryReport>, PendingError> {
+    crate::engine::state::ensure_current_format(&crate::domain::tree::state_path(tree_dir))
+        .map_err(PendingError::TreeState)?;
     let path = pending_path(tree_dir);
     let Some(pending) = read(&path)? else {
         return Ok(None);
@@ -180,8 +184,8 @@ pub fn recover_or_refuse(tree_dir: &Path) -> Result<Option<RecoveryReport>, Pend
         });
     }
 
-    let current_hash = manifest_hash(tree_dir)?;
-    let changes = if current_hash == pending.pre_manifest_hash {
+    let current_hash = state_hash(tree_dir)?;
+    let changes = if current_hash == pending.pre_state_hash {
         rollback(tree_dir, &pending)?
     } else {
         roll_forward(tree_dir, &pending)?
@@ -200,8 +204,10 @@ pub fn content_hash(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-pub fn manifest_hash(tree_dir: &Path) -> Result<String, PendingError> {
-    hash_file_or_missing(&tree_dir.join(".bo").join("manifest.json"))
+pub fn state_hash(tree_dir: &Path) -> Result<String, PendingError> {
+    let path = crate::domain::tree::state_path(tree_dir);
+    crate::engine::state::ensure_current_format(&path).map_err(PendingError::TreeState)?;
+    hash_file_or_missing(&path)
 }
 
 pub fn write_staged(
@@ -280,13 +286,13 @@ pub fn apply_deletes(tree_dir: &Path, deletes: &[String]) -> Result<usize, Pendi
     Ok(changes)
 }
 
-/// Atomic commit: write pending, stage content, write manifest, apply writes
+/// Atomic commit: write pending, stage content, write tree state, apply writes
 /// and deletes, clear pending. Used by collect and compile — they share
 /// the same 6-step transaction idiom.
-pub fn commit_with_manifest(
+pub fn commit_with_state(
     tree_dir: &Path,
     op: OpKind,
-    manifest: &crate::domain::manifest::Manifest,
+    state: &crate::domain::state::TreeState,
     staged: &[(&PendingWrite, &[u8])],
     deletes: &[String],
 ) -> Result<(), PendingError> {
@@ -297,12 +303,8 @@ pub fn commit_with_manifest(
     for (pw, bytes) in staged {
         write_staged(tree_dir, pw, bytes)?;
     }
-    let manifest_path = tree_dir.join(".bo").join("manifest.json");
-    crate::engine::manifest::write(&manifest_path, manifest).map_err(
-        |e: crate::domain::manifest::ManifestError| {
-            PendingError::Io(std::io::Error::other(e.to_string()))
-        },
-    )?;
+    let state_path = crate::domain::tree::state_path(tree_dir);
+    crate::engine::state::write(&state_path, state).map_err(PendingError::TreeState)?;
     apply_writes(tree_dir, &writes)?;
     apply_deletes(tree_dir, deletes)?;
     clear(&pending_path)?;
@@ -400,7 +402,7 @@ fn resolve_relative(tree_dir: &Path, relative: &str) -> Result<PathBuf, PendingE
 fn hash_file_or_missing(path: &Path) -> Result<String, PendingError> {
     match fs::read(path) {
         Ok(bytes) => Ok(content_hash(&bytes)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(MISSING_MANIFEST_HASH.to_string()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(MISSING_STATE_HASH.to_string()),
         Err(e) => Err(PendingError::Io(e)),
     }
 }

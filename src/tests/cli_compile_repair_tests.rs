@@ -1,6 +1,6 @@
 use super::*;
-use crate::domain::manifest::{Manifest, TreeMeta};
 use crate::domain::slug::Slug;
+use crate::domain::state::{TreeMetadata, TreeState};
 use crate::domain::{Branch, Leaf, Timestamp, Title, Url};
 use crate::engine::config::SeededConfig;
 use std::collections::HashSet;
@@ -18,19 +18,18 @@ fn seeded_config(dir: &Path) -> SeededConfig {
     SeededConfig::new(crate::engine::config::Config::default(), tree_cfg)
 }
 
-fn write_manifest(dir: &Path, manifest: &Manifest) {
+fn write_state(dir: &Path, state: &TreeState) {
     let tree = crate::domain::tree::Tree::from_config(&crate::domain::tree::TreeConfig {
         path: dir.to_path_buf(),
         name: "test-tree".to_string(),
         created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
     });
-    crate::engine::manifest::write(&crate::domain::tree::manifest_path(&tree.path), manifest)
-        .unwrap();
+    crate::engine::state::write(&crate::domain::tree::state_path(&tree.path), state).unwrap();
 }
 
-fn read_manifest(dir: &Path) -> Manifest {
-    let manifest_path = crate::domain::tree::manifest_path(dir);
-    crate::engine::manifest::read(&manifest_path).unwrap()
+fn read_state(dir: &Path) -> TreeState {
+    let state_path = crate::domain::tree::state_path(dir);
+    crate::engine::state::read(&state_path).unwrap()
 }
 
 fn leaf_record(slug: &str, file: &str, title: &str, collected_at: &str) -> Leaf {
@@ -44,9 +43,9 @@ fn leaf_record(slug: &str, file: &str, title: &str, collected_at: &str) -> Leaf 
     }
 }
 
-fn fresh_manifest(name: &str, created_at: &str, last_compiled_at: Option<&str>) -> Manifest {
-    Manifest {
-        tree: TreeMeta {
+fn fresh_state(name: &str, created_at: &str, last_compiled_at: Option<&str>) -> TreeState {
+    TreeState {
+        tree: TreeMetadata {
             name: name.to_string(),
             created_at: Timestamp::parse(created_at).unwrap(),
             last_compiled_at: last_compiled_at.map(|s| Timestamp::parse(s).unwrap()),
@@ -80,31 +79,31 @@ fn branch_record(slug: &str, title: &str, leaf_slugs: &[&str]) -> Branch {
 #[test]
 fn missing_unbranched_new_leaf_is_pruned_not_error() {
     let dir = TempDir::new().unwrap();
-    let mut manifest = fresh_manifest("test", "2026-01-01T00:00:00Z", Some("2026-02-01T00:00:00Z"));
-    manifest.leaves.push(leaf_record(
+    let mut state = fresh_state("test", "2026-01-01T00:00:00Z", Some("2026-02-01T00:00:00Z"));
+    state.leaves.push(leaf_record(
         "leaf-a",
         "leaf-a.md",
         "Leaf A",
         "2026-03-01T00:00:00Z",
     ));
-    manifest.leaves.push(leaf_record(
+    state.leaves.push(leaf_record(
         "leaf-b",
         "leaf-b.md",
         "Leaf B",
         "2026-03-01T00:00:00Z",
     ));
     write_leaf(dir.path(), "leaf-b.md", "---\ntitle: Leaf B\n---\n\nbody\n");
-    write_manifest(dir.path(), &manifest);
+    write_state(dir.path(), &state);
 
     let cfg = seeded_config(dir.path());
-    let notifications = repair_stale_branches(&cfg, &manifest)
+    let notifications = repair_stale_branches(&cfg, &state)
         .expect("repair should succeed")
         .notifications;
 
     assert_eq!(notifications.len(), 1);
     assert!(notifications[0].contains("pruned 1 orphan"));
 
-    let repaired = read_manifest(dir.path());
+    let repaired = read_state(dir.path());
     assert_eq!(repaired.leaves.len(), 1);
     assert_eq!(repaired.leaves[0].slug.as_str(), "leaf-b");
 }
@@ -112,47 +111,47 @@ fn missing_unbranched_new_leaf_is_pruned_not_error() {
 #[test]
 fn missing_unbranched_leaf_never_compiled_is_pruned() {
     let dir = TempDir::new().unwrap();
-    let mut manifest = fresh_manifest("test", "2026-01-01T00:00:00Z", None);
-    manifest.leaves.push(leaf_record(
+    let mut state = fresh_state("test", "2026-01-01T00:00:00Z", None);
+    state.leaves.push(leaf_record(
         "leaf-a",
         "leaf-a.md",
         "Leaf A",
         "2026-01-15T00:00:00Z",
     ));
-    manifest.leaves.push(leaf_record(
+    state.leaves.push(leaf_record(
         "leaf-b",
         "leaf-b.md",
         "Leaf B",
         "2026-01-15T00:00:00Z",
     ));
     write_leaf(dir.path(), "leaf-b.md", "---\ntitle: Leaf B\n---\n\nbody\n");
-    write_manifest(dir.path(), &manifest);
+    write_state(dir.path(), &state);
 
     let cfg = seeded_config(dir.path());
-    let notifications = repair_stale_branches(&cfg, &manifest)
+    let notifications = repair_stale_branches(&cfg, &state)
         .expect("repair should succeed")
         .notifications;
 
     assert_eq!(notifications.len(), 1);
     assert!(notifications[0].contains("pruned 1 orphan"));
-    assert_eq!(read_manifest(dir.path()).leaves.len(), 1);
+    assert_eq!(read_state(dir.path()).leaves.len(), 1);
 }
 
 #[test]
 fn repair_with_no_missing_files_has_empty_notifications() {
     let dir = TempDir::new().unwrap();
-    let mut manifest = fresh_manifest("test", "2026-01-01T00:00:00Z", None);
-    manifest.leaves.push(leaf_record(
+    let mut state = fresh_state("test", "2026-01-01T00:00:00Z", None);
+    state.leaves.push(leaf_record(
         "leaf-a",
         "leaf-a.md",
         "Leaf A",
         "2026-01-15T00:00:00Z",
     ));
     write_leaf(dir.path(), "leaf-a.md", "---\ntitle: Leaf A\n---\n\nbody\n");
-    write_manifest(dir.path(), &manifest);
+    write_state(dir.path(), &state);
 
     let cfg = seeded_config(dir.path());
-    let notifications = repair_stale_branches(&cfg, &manifest)
+    let notifications = repair_stale_branches(&cfg, &state)
         .expect("repair should succeed")
         .notifications;
 
@@ -160,72 +159,72 @@ fn repair_with_no_missing_files_has_empty_notifications() {
 }
 
 #[test]
-fn all_leaves_deleted_manifest_repaired_to_empty() {
+fn all_leaves_deleted_state_repaired_to_empty() {
     let dir = TempDir::new().unwrap();
-    let mut manifest = fresh_manifest("test", "2026-01-01T00:00:00Z", Some("2026-02-01T00:00:00Z"));
-    manifest.leaves.push(leaf_record(
+    let mut state = fresh_state("test", "2026-01-01T00:00:00Z", Some("2026-02-01T00:00:00Z"));
+    state.leaves.push(leaf_record(
         "leaf-a",
         "leaf-a.md",
         "Leaf A",
         "2026-03-01T00:00:00Z",
     ));
-    manifest.leaves.push(leaf_record(
+    state.leaves.push(leaf_record(
         "leaf-b",
         "leaf-b.md",
         "Leaf B",
         "2026-03-01T00:00:00Z",
     ));
-    write_manifest(dir.path(), &manifest);
+    write_state(dir.path(), &state);
 
     let cfg = seeded_config(dir.path());
-    let notifications = repair_stale_branches(&cfg, &manifest)
+    let notifications = repair_stale_branches(&cfg, &state)
         .expect("repair should succeed")
         .notifications;
 
     assert_eq!(notifications.len(), 1);
     assert!(notifications[0].contains("pruned 2 orphan"));
-    assert_eq!(read_manifest(dir.path()).leaves.len(), 0);
+    assert_eq!(read_state(dir.path()).leaves.len(), 0);
 }
 
 #[test]
 fn repair_notifications_include_branch_repair_and_removal_messages() {
     let dir = TempDir::new().unwrap();
-    let mut manifest = fresh_manifest("test", "2026-01-01T00:00:00Z", Some("2026-01-10T00:00:00Z"));
+    let mut state = fresh_state("test", "2026-01-01T00:00:00Z", Some("2026-01-10T00:00:00Z"));
 
-    manifest.leaves.push(leaf_record(
+    state.leaves.push(leaf_record(
         "leaf-a",
         "leaf-a.md",
         "Leaf A",
         "2026-02-01T00:00:00Z",
     ));
-    manifest.leaves.push(leaf_record(
+    state.leaves.push(leaf_record(
         "leaf-b",
         "leaf-b.md",
         "Leaf B",
         "2026-02-01T00:00:00Z",
     ));
-    manifest.leaves.push(leaf_record(
+    state.leaves.push(leaf_record(
         "leaf-c",
         "leaf-c.md",
         "Leaf C",
         "2026-02-01T00:00:00Z",
     ));
-    manifest.leaves.push(leaf_record(
+    state.leaves.push(leaf_record(
         "leaf-d",
         "leaf-d.md",
         "Leaf D",
         "2026-02-01T00:00:00Z",
     ));
 
-    manifest
+    state
         .branches
         .push(branch_record("branch-1", "Branch 1", &["leaf-a", "leaf-b"]));
-    manifest.branches.push(branch_record(
+    state.branches.push(branch_record(
         "branch-2",
         "Branch 2",
         &["leaf-a", "leaf-b", "leaf-c"],
     ));
-    manifest
+    state
         .branches
         .push(branch_record("branch-3", "Branch 3", &["leaf-c", "leaf-d"]));
 
@@ -239,10 +238,10 @@ fn repair_notifications_include_branch_repair_and_removal_messages() {
         "leaf-b.md",
         "---\ntitle: Leaf B\n---\n\nbody b\n",
     );
-    write_manifest(dir.path(), &manifest);
+    write_state(dir.path(), &state);
 
     let cfg = seeded_config(dir.path());
-    let notifications = repair_stale_branches(&cfg, &manifest)
+    let notifications = repair_stale_branches(&cfg, &state)
         .expect("repair should succeed")
         .notifications;
 
@@ -262,7 +261,7 @@ fn repair_notifications_include_branch_repair_and_removal_messages() {
         notifications
     );
 
-    let repaired = read_manifest(dir.path());
+    let repaired = read_state(dir.path());
     assert_eq!(repaired.branches.len(), 2);
     let branch_slugs: HashSet<&str> = repaired.branches.iter().map(|b| b.slug.as_str()).collect();
     assert!(branch_slugs.contains("branch-1"));
@@ -273,28 +272,28 @@ fn repair_notifications_include_branch_repair_and_removal_messages() {
 #[test]
 fn repair_stale_branches_fixes_branch_frontmatter() {
     let dir = TempDir::new().unwrap();
-    let mut manifest = fresh_manifest("test", "2026-01-01T00:00:00Z", Some("2026-01-10T00:00:00Z"));
+    let mut state = fresh_state("test", "2026-01-01T00:00:00Z", Some("2026-01-10T00:00:00Z"));
 
-    manifest.leaves.push(leaf_record(
+    state.leaves.push(leaf_record(
         "leaf-a",
         "leaf-a.md",
         "Leaf A",
         "2026-02-01T00:00:00Z",
     ));
-    manifest.leaves.push(leaf_record(
+    state.leaves.push(leaf_record(
         "leaf-b",
         "leaf-b.md",
         "Leaf B",
         "2026-02-01T00:00:00Z",
     ));
-    manifest.leaves.push(leaf_record(
+    state.leaves.push(leaf_record(
         "leaf-c",
         "leaf-c.md",
         "Leaf C",
         "2026-02-01T00:00:00Z",
     ));
 
-    manifest.branches.push(branch_record(
+    state.branches.push(branch_record(
         "test-branch",
         "Test Branch",
         &["leaf-a", "leaf-b", "leaf-c"],
@@ -315,10 +314,10 @@ fn repair_stale_branches_fixes_branch_frontmatter() {
     let branch_content = "---\ntitle: Test Branch\ncreated_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\nleaves:\n- leaf-a.md\n- leaf-b.md\n- leaf-c.md\n---\n\n# Test Branch\n\nBody text with reference to Leaf A\n";
     std::fs::write(dir.path().join("branch/test-branch.md"), branch_content).unwrap();
 
-    write_manifest(dir.path(), &manifest);
+    write_state(dir.path(), &state);
 
     let cfg = seeded_config(dir.path());
-    let notifications = repair_stale_branches(&cfg, &manifest)
+    let notifications = repair_stale_branches(&cfg, &state)
         .expect("repair should succeed")
         .notifications;
 
@@ -337,8 +336,8 @@ fn repair_stale_branches_fixes_branch_frontmatter() {
 
     assert!(repaired.contains("reference to Leaf A"));
 
-    let repaired_manifest = read_manifest(dir.path());
-    let branch = repaired_manifest
+    let repaired_state = read_state(dir.path());
+    let branch = repaired_state
         .branches
         .iter()
         .find(|b| b.slug.as_str() == "test-branch")

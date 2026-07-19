@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 
 use crate::domain::frontmatter;
-use crate::domain::manifest::Manifest;
+use crate::domain::state::TreeState;
 use crate::engine::config::SeededConfig;
 
 use super::plan::LoadedLeaf;
@@ -51,7 +51,7 @@ pub(super) fn build_user_message(leaves: &[LoadedLeaf]) -> String {
 
 pub(super) fn build_incremental_user_message(
     cfg: &SeededConfig,
-    manifest: &Manifest,
+    state: &TreeState,
     leaves: &[LoadedLeaf],
     new_leaf_slugs: &[String],
 ) -> String {
@@ -75,7 +75,7 @@ pub(super) fn build_incremental_user_message(
     );
 
     msg.push_str("<existing_branches>\n");
-    for branch_record in &manifest.branches {
+    for branch_record in &state.branches {
         let leaves_str: Vec<&str> = branch_record.leaves.iter().map(|s| s.as_str()).collect();
         msg.push_str(&format!(
             "<branch slug=\"{}\" title=\"{}\" leaves=\"{}\">\n",
