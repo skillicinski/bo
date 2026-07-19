@@ -1,7 +1,7 @@
 use super::*;
 use crate::domain::{Slug, Timestamp};
 use crate::engine::llm::{
-    model::Model, FinishReason, LlmProvider, LlmResponse, NormalizedSchema, Provider,
+    model::Model, FinishReason, LlmProvider, LlmResponse, Provider, ProviderSchema,
 };
 use async_trait::async_trait;
 use std::fs;
@@ -156,7 +156,7 @@ impl LlmProvider for FlakyQueryProvider {
         _messages: &[Message],
         _model: &str,
         _max_tokens: u32,
-        _response_schema: Option<&NormalizedSchema>,
+        _response_schema: Option<&ProviderSchema>,
         _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
@@ -194,7 +194,7 @@ impl LlmProvider for HangingQueryProvider {
         _messages: &[Message],
         _model: &str,
         _max_tokens: u32,
-        _response_schema: Option<&NormalizedSchema>,
+        _response_schema: Option<&ProviderSchema>,
         _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -340,7 +340,7 @@ impl LlmProvider for ZeroCitationProvider {
         _messages: &[Message],
         _model: &str,
         _max_tokens: u32,
-        _response_schema: Option<&NormalizedSchema>,
+        _response_schema: Option<&ProviderSchema>,
         _reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         Ok(LlmResponse {

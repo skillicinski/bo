@@ -134,13 +134,13 @@ pub const ALL_PROVIDERS: &[&str] = &["openai", "deepseek", "google", "zai", "cus
 
 // ── public types ──────────────────────────────────────────────────────────────
 
-/// A response schema that has been normalized into a provider's native dialect.
+/// A response schema mapped into a provider's native schema dialect.
 ///
 /// Only `LlmProvider::map_response_schema` can produce this value.
-/// Passing `Option<&NormalizedSchema>` to `complete()` is a compile-time
-/// guarantee that normalization happened — you cannot forget.
+/// Passing `Option<&ProviderSchema>` to `complete()` is a compile-time
+/// guarantee that schema mapping happened — you cannot forget.
 #[derive(Debug, Clone)]
-pub struct NormalizedSchema(pub(crate) Value);
+pub struct ProviderSchema(pub(crate) Value);
 
 #[derive(Debug)]
 pub enum LlmError {
@@ -206,10 +206,10 @@ pub async fn complete_with_policy(
         ));
     }
 
-    // Normalize the schema into the provider's native dialect once,
+    // Map the schema into the provider's native dialect once,
     // before the retry loop. A schema the provider cannot satisfy
     // fails fast here rather than after N retries.
-    let normalized_schema = match response_schema {
+    let provider_schema = match response_schema {
         Some(schema) => Some(provider.map_response_schema(schema)?),
         None => None,
     };
@@ -223,7 +223,7 @@ pub async fn complete_with_policy(
                 messages,
                 model,
                 max_tokens,
-                normalized_schema.as_ref(),
+                provider_schema.as_ref(),
                 reasoning_disabled,
             ),
         )
@@ -468,15 +468,15 @@ pub trait LlmProvider: Send + Sync {
     /// Transform a response schema into the provider's native dialect.
     ///
     /// Default: identity (pass-through). Override if the provider's schema
-    /// vocabulary differs from the canonical JSON Schema dialect (e.g. Gemini
-    /// does not accept `additionalProperties`).
+    /// vocabulary differs from JSON Schema (e.g. Gemini does not accept
+    /// `additionalProperties`).
     ///
     /// Return `Err` if the schema uses constructs the provider cannot satisfy —
     /// the caller must not silently degrade. This is called once per request
     /// by `complete_with_policy`, before the retry loop.
-    fn map_response_schema(&self, schema: &Value) -> Result<NormalizedSchema, LlmError> {
-        // ponytail: default identity – most providers accept canonical JSON Schema as-is
-        Ok(NormalizedSchema(schema.clone()))
+    fn map_response_schema(&self, schema: &Value) -> Result<ProviderSchema, LlmError> {
+        // ponytail: default identity – most providers accept JSON Schema as-is
+        Ok(ProviderSchema(schema.clone()))
     }
 
     async fn complete(
@@ -484,7 +484,7 @@ pub trait LlmProvider: Send + Sync {
         messages: &[Message],
         model: &str,
         max_tokens: u32,
-        response_schema: Option<&NormalizedSchema>,
+        response_schema: Option<&ProviderSchema>,
         reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError>;
 

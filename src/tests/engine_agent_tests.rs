@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 
 use crate::engine::llm::{
-    AgentMessage, AgentResponse, FinishReason, LlmError, LlmProvider, NormalizedSchema, ToolCall,
+    AgentMessage, AgentResponse, FinishReason, LlmError, LlmProvider, ProviderSchema, ToolCall,
     ToolSchema, Usage,
 };
 
@@ -55,7 +55,7 @@ impl LlmProvider for ScriptedProvider {
         _: &[crate::engine::llm::Message],
         _: &str,
         _: u32,
-        _: Option<&NormalizedSchema>,
+        _: Option<&ProviderSchema>,
         _: bool,
     ) -> Result<crate::engine::llm::LlmResponse, LlmError> {
         unimplemented!("agent tests use complete_with_tools")

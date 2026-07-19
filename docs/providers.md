@@ -39,7 +39,7 @@ The `gpt-4.1` family is not recommended for compile at scale. bo warns (`degener
 
 ### Notes
 
-- **Structured output mode** — bo uses OpenAI's `response_format: json_schema` to guarantee well-formed compile responses. Schema normalization is enforced at the type level across all providers.
+- **Structured output mode** — bo uses OpenAI's `response_format: json_schema` to guarantee well-formed compile responses. Provider schema mapping is enforced at the type level.
 - **Model selection** — choose at seed time (flag or interactive prompt). No silent default; `bo seed` always requires an explicit `--model` or prompts for one.
 
 ---
@@ -53,7 +53,7 @@ The `gpt-4.1` family is not recommended for compile at scale. bo warns (`degener
 
 ### Notes
 
-- **No structured output mode** — DeepSeek's API does not support `response_format: json_schema`. bo falls back to JSON-mode prompting (system message instructions + `response_format: json_object`). Schema normalization is enforced at the type level; validation gate catches any malformed responses.
+- **No structured output mode** — DeepSeek's API does not support `response_format: json_schema`. bo falls back to JSON-mode prompting (system message instructions + `response_format: json_object`). Provider schema mapping is enforced at the type level; the validation gate catches malformed responses.
 
 ---
 

@@ -238,7 +238,7 @@ impl bo::engine::llm::LlmProvider for FakeLlmProvider {
         _messages: &[bo::engine::llm::Message],
         _model: &str,
         _max_tokens: u32,
-        _response_schema: Option<&bo::engine::llm::NormalizedSchema>,
+        _response_schema: Option<&bo::engine::llm::ProviderSchema>,
         _reasoning_disabled: bool,
     ) -> Result<bo::engine::llm::LlmResponse, bo::engine::llm::LlmError> {
         Ok(bo::engine::llm::LlmResponse {
@@ -274,7 +274,7 @@ impl bo::engine::llm::LlmProvider for CapturingProvider {
         messages: &[bo::engine::llm::Message],
         _model: &str,
         _max_tokens: u32,
-        _response_schema: Option<&bo::engine::llm::NormalizedSchema>,
+        _response_schema: Option<&bo::engine::llm::ProviderSchema>,
         _reasoning_disabled: bool,
     ) -> Result<bo::engine::llm::LlmResponse, bo::engine::llm::LlmError> {
         if let Some(msg) = messages.first() {

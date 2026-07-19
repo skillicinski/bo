@@ -4,7 +4,7 @@ use serde_json::Value;
 use super::{map_http_error, map_reqwest_error};
 use crate::engine::llm::{
     sanitize_provider_error_message, AgentMessage, AgentResponse, FinishReason, LlmError,
-    LlmProvider, LlmResponse, Message, NormalizedSchema, Role, ToolCall, ToolSchema, Usage,
+    LlmProvider, LlmResponse, Message, ProviderSchema, Role, ToolCall, ToolSchema, Usage,
 };
 
 pub struct OpenAiCompatProvider {
@@ -48,7 +48,7 @@ impl LlmProvider for OpenAiCompatProvider {
         messages: &[Message],
         model: &str,
         max_tokens: u32,
-        response_schema: Option<&NormalizedSchema>,
+        response_schema: Option<&ProviderSchema>,
         reasoning_disabled: bool,
     ) -> Result<LlmResponse, LlmError> {
         // 1. Convert messages to chat format.

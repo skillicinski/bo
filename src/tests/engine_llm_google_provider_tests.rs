@@ -165,13 +165,13 @@ async fn google_provider_smoke_structured_output() {
 
     let messages = vec![Message::user("What is 2+2?")];
 
-    let normalized = provider.map_response_schema(&schema).unwrap();
+    let provider_schema = provider.map_response_schema(&schema).unwrap();
     let result = provider
         .complete(
             &messages,
             "gemini-flash-latest",
             2000,
-            Some(&normalized),
+            Some(&provider_schema),
             false,
         )
         .await;
