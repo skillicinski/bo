@@ -238,7 +238,7 @@ fn validate_incremental_clusters_accepts_assignment_and_new_cluster() {
         tree: TreeMetadata {
             name: "test".to_string(),
             created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
-            last_compiled_at: Some(Timestamp::parse("2026-01-02T00:00:00Z").unwrap()),
+            last_synthesized_at: Some(Timestamp::parse("2026-01-02T00:00:00Z").unwrap()),
         },
         leaves: vec![
             leaf_record(
@@ -295,7 +295,7 @@ fn validate_incremental_clusters_repairs_unknown_branch() {
         tree: TreeMetadata {
             name: "test".to_string(),
             created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
-            last_compiled_at: Some(Timestamp::parse("2026-01-02T00:00:00Z").unwrap()),
+            last_synthesized_at: Some(Timestamp::parse("2026-01-02T00:00:00Z").unwrap()),
         },
         leaves: vec![
             leaf_record("new-1", "new-1.md", "New One", "2026-01-03T00:00:00Z"),
@@ -344,7 +344,7 @@ fn validate_incremental_clusters_rejects_new_cluster_title_collision() {
         tree: TreeMetadata {
             name: "test".to_string(),
             created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
-            last_compiled_at: Some(Timestamp::parse("2026-01-02T00:00:00Z").unwrap()),
+            last_synthesized_at: Some(Timestamp::parse("2026-01-02T00:00:00Z").unwrap()),
         },
         leaves: vec![
             leaf_record("new-1", "new-1.md", "New One", "2026-01-03T00:00:00Z"),

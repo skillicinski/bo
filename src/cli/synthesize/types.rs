@@ -16,13 +16,13 @@ pub(super) const MAX_SYNTHESIZED_BODY_BYTES_MIN: usize = 16 * 1024;
 pub(super) const MAX_SYNTHESIZED_BODY_BYTES_PER_INPUT_BYTE: usize = 8;
 pub(super) const SYNTHESIS_PROMPT_OVERHEAD_TOKENS: usize = 4096;
 pub(super) const TOKEN_ESTIMATE_BYTES_PER_TOKEN: usize = 4;
-pub(super) const NO_NEW_LEAVES_REASON: &str = "no new leaves since last compile";
+pub(super) const NO_NEW_LEAVES_REASON: &str = "no new leaves since last synthesis";
 const SYNTHESIS_MODEL_NEXT_STEPS: [&str; 2] = [
-    "bo config --compile-model gpt-4.1-mini",
-    "bo config --compile-model gpt-4.1",
+    "bo config --synthesis-model gpt-4.1-mini",
+    "bo config --synthesis-model gpt-4.1",
 ];
 
-pub const VALIDATION_NEXT_STEP: &str = "No files were changed. Try `bo compile` again; if this repeats, switch models with `bo config --model <model>` or report the validation message.";
+pub const VALIDATION_NEXT_STEP: &str = "No files were changed. Try `bo synthesize` again; if this repeats, switch models with `bo config --model <model>` or report the validation message.";
 
 pub(super) const SYNTHESIS_LLM_POLICY: LlmCallPolicy = LlmCallPolicy {
     timeout: Duration::from_secs(180),
@@ -80,15 +80,15 @@ impl std::fmt::Display for SynthesisError {
         match self {
             SynthesisError::ContextOverflow { model, .. } => write!(
                 f,
-                "compile model context is too small for '{}' — set a larger compile model, for example:\n{}\n{}",
+                "synthesis model context is too small for '{}' — set a larger synthesis model, for example:\n{}\n{}",
                 model, SYNTHESIS_MODEL_NEXT_STEPS[0], SYNTHESIS_MODEL_NEXT_STEPS[1]
             ),
             SynthesisError::Truncated => write!(
                 f,
-                "compile output was truncated — try reducing collection size or \
+                "synthesis output was truncated — try reducing collection size or \
                  using a model with larger output capacity"
             ),
-            SynthesisError::ContentFilter => write!(f, "compile was blocked by content filter"),
+            SynthesisError::ContentFilter => write!(f, "synthesis was blocked by content filter"),
             SynthesisError::Llm(msg) => write!(f, "LLM error: {}", msg),
             SynthesisError::Io(msg) => write!(f, "{}", msg),
             SynthesisError::Busy(msg) => write!(f, "{}", msg),
@@ -134,7 +134,7 @@ impl SynthesisError {
                 "validation_error",
                 message.clone(),
                 json!({
-                    "phase": "compile_validation",
+                    "phase": "synthesis_validation",
                     "files_changed": false,
                     "next_step": VALIDATION_NEXT_STEP,
                 }),
@@ -211,7 +211,7 @@ impl SynthesisResult {
         notifications: Vec<String>,
     ) -> Self {
         Self {
-            status: "compiled".to_string(),
+            status: "synthesized".to_string(),
             reason: None,
             mode: Some(mode),
             model: Some(model.to_string()),

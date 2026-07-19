@@ -74,7 +74,7 @@ use std::time::Duration;
 // ── shared async executor ────────────────────────────────────────────────────
 
 /// One current-thread tokio runtime shared by all blocking LLM calls.
-/// Collect, query, and compile all call into the same runtime — avoid three
+/// Collect, query, and synthesize all call into the same runtime — avoid three
 /// different instantiation patterns and the per-call builder overhead.
 ///
 /// Panics if the runtime cannot be built (fatal, process-wide).

@@ -49,7 +49,7 @@ fn single_url_duplicate_errors_without_journaling() {
             tree: state::TreeMetadata {
                 name: "t".to_string(),
                 created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
-                last_compiled_at: None,
+                last_synthesized_at: None,
             },
             leaves: vec![crate::domain::Leaf {
                 slug: Slug::parse("article").unwrap(),

@@ -61,7 +61,7 @@ fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
     );
     fs::write(branches_dir.join(format!("{}.md", slug)), content).unwrap();
 
-    // Append to state and stamp last_compiled_at.
+    // Append to state and stamp last_synthesized_at.
     common::ensure_state(tree_dir);
     let mut m = common::read_state(tree_dir);
     m.branches.push(bo::domain::Branch {
@@ -72,7 +72,7 @@ fn write_branch(tree_dir: &Path, slug: &str, created_at: &str) {
         updated_at: Timestamp::parse(created_at).unwrap(),
         leaves: vec![Slug::parse("some-leaf").unwrap()],
     });
-    m.tree.last_compiled_at = Some(Timestamp::parse(created_at).unwrap());
+    m.tree.last_synthesized_at = Some(Timestamp::parse(created_at).unwrap());
     common::write_state(tree_dir, &m);
 }
 
@@ -93,7 +93,7 @@ fn status_after_seed_shows_empty_tree() {
 }
 
 #[test]
-fn status_shows_uncompiled_leaves() {
+fn status_shows_unsynthesized_leaves() {
     let tmp = TempDir::new().unwrap();
     let tree_dir = common::seed(tmp.path(), "tree");
 
@@ -105,29 +105,29 @@ fn status_shows_uncompiled_leaves() {
     assert!(out.status.success());
 
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("3 uncompiled"));
+    assert!(stdout.contains("3 unsynthesized"));
     assert!(stdout.contains("leaf-one"));
     assert!(stdout.contains("leaf-two"));
     assert!(stdout.contains("leaf-three"));
-    assert!(stdout.contains("compile"));
+    assert!(stdout.contains("synthesize"));
 }
 
 #[test]
-fn status_after_compile_shows_zero_uncompiled() {
+fn status_after_synthesize_shows_zero_unsynthesized() {
     let tmp = TempDir::new().unwrap();
     let tree_dir = common::seed(tmp.path(), "tree");
 
     write_leaf(&tree_dir, "leaf-a", "https://a.com");
     write_leaf(&tree_dir, "leaf-b", "https://b.com");
 
-    // Simulate compile: write branch + update state timestamp.
+    // Simulate synthesis: write branch + update state timestamp.
     write_branch(&tree_dir, "topic-one", "2026-05-15T10:00:00Z");
 
     let out = status(tmp.path());
     assert!(out.status.success());
 
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(!stdout.contains("uncompiled"));
+    assert!(!stdout.contains("unsynthesized"));
     assert!(stdout.contains("Branches:    1"));
     assert!(stdout.contains("2026-05-15T10:00:00"));
 }
@@ -196,10 +196,10 @@ fn status_json_is_valid_and_complete() {
     assert_eq!(json["command"], "status");
     assert!(json["data"]["tree_name"].is_string());
     assert!(json["data"]["leaves"]["total"].is_number());
-    assert!(json["data"]["leaves"]["uncompiled"].is_number());
-    assert!(json["data"]["leaves"]["uncompiled_slugs"].is_array());
+    assert!(json["data"]["leaves"]["unsynthesized"].is_number());
+    assert!(json["data"]["leaves"]["unsynthesized_slugs"].is_array());
     assert!(json["data"]["branches"]["total"].is_number());
-    assert!(json["data"]["branches"]["last_compiled_at"].is_null());
+    assert!(json["data"]["branches"]["last_synthesized_at"].is_null());
     assert!(json["data"]["size"]["bytes"].is_number());
     assert!(json["data"]["size"]["estimated_tokens"].is_number());
     assert!(json["data"]["health"]["missing_leaf_files"].is_array());

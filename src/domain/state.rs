@@ -22,7 +22,7 @@ pub struct TreeState {
     pub tree: TreeMetadata,
     /// All collected leaves, in collection order.
     pub leaves: Vec<Leaf>,
-    /// All compiled branches, in compile order.
+    /// All synthesized branches, in synthesis order.
     pub branches: Vec<Branch>,
 }
 
@@ -30,8 +30,8 @@ pub struct TreeState {
 pub struct TreeMetadata {
     pub name: String,
     pub created_at: Timestamp,
-    /// Set on successful compile. `None` until the first compile run.
-    pub last_compiled_at: Option<Timestamp>,
+    /// Set on successful synthesis. `None` until the first synthesis run.
+    pub last_synthesized_at: Option<Timestamp>,
 }
 
 // ── errors ────────────────────────────────────────────────────────────────────
@@ -76,12 +76,12 @@ impl TreeState {
         self.branches.iter().find(|b| b.slug.as_str() == slug)
     }
 
-    /// Leaves that have not been seen by a compile pass.
+    /// Leaves that have not been seen by a synthesis pass.
     ///
-    /// A leaf is uncompiled iff `tree.last_compiled_at` is `None` or
-    /// `leaf.collected_at > tree.last_compiled_at`. Uses typed Ord comparison.
-    pub fn uncompiled_leaves(&self) -> Vec<&Leaf> {
-        match &self.tree.last_compiled_at {
+    /// A leaf is unsynthesized iff `tree.last_synthesized_at` is `None` or
+    /// `leaf.collected_at > tree.last_synthesized_at`. Uses typed Ord comparison.
+    pub fn unsynthesized_leaves(&self) -> Vec<&Leaf> {
+        match &self.tree.last_synthesized_at {
             None => self.leaves.iter().collect(),
             Some(last) => self
                 .leaves

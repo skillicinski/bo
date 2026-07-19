@@ -35,7 +35,7 @@ pub struct PendingTransaction {
 #[serde(tag = "type")]
 pub enum TransactionKind {
     Collect { url: String },
-    Compile { mode: SynthesisMode },
+    Synthesize { mode: SynthesisMode },
     Raze { include_auth: bool },
 }
 
@@ -281,7 +281,7 @@ pub fn apply_deletes(tree_dir: &Path, deletes: &[String]) -> Result<usize, Trans
 }
 
 /// Atomic commit: write the pending transaction, stage content, write tree state,
-/// apply writes and deletes, then clear the transaction. Used by collect and compile — they share
+/// apply writes and deletes, then clear the transaction. Used by collect and synthesize — they share
 /// the same 6-step transaction idiom.
 pub fn commit_with_state(
     tree_dir: &Path,
@@ -380,7 +380,7 @@ fn is_process_alive(pid: u32) -> bool {
 fn kind_label(kind: &TransactionKind) -> &'static str {
     match kind {
         TransactionKind::Collect { .. } => "collect",
-        TransactionKind::Compile { .. } => "compile",
+        TransactionKind::Synthesize { .. } => "synthesize",
         TransactionKind::Raze { .. } => "raze",
     }
 }

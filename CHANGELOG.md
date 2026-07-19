@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Breaking:** renamed the `bo compile` command to `bo synthesize`. The old command name is rejected; there is no alias.
+- **Breaking:** renamed the `compile_model` config key and `--compile-model` flag to `synthesis_model` / `--synthesis-model`. `~/.bo/config.json` must be migrated by hand.
+- **Breaking:** renamed serialized state field `last_compiled_at` to `last_synthesized_at` in `.bo/state.json`, status JSON, and status human output. Existing trees require manual migration.
+- **Breaking:** renamed status leaf fields `uncompiled` / `uncompiled_slugs` to `unsynthesized` / `unsynthesized_slugs`, and `uncompiled` display wording to `unsynthesized`.
+- **Breaking:** renamed transaction kind tag `Compile` to `Synthesize` in `.bo/pending.json` (the `kind_label`/recovery report now reads `synthesize`).
+- **Breaking:** renamed the agent terminal tool `submit_compile` to `submit_synthesis`.
+- **Breaking:** synthesis output status is now `synthesized` (was `compiled`); no-work reason is now `no new leaves since last synthesis`; validation error JSON phase is now `synthesis_validation`.
+- **Breaking:** bumped the operation journal schema from 1 to 2 and renamed the journal op `compile` to `synthesize` in `.bo/journal.jsonl`. Old journals are not read across the schema boundary.
 - **Breaking:** tree metadata and topology now live in `.bo/state.json` instead of `.bo/manifest.json`. Existing trees require manual migration before deploying v0.1.0; there is no automatic migration.
 - **Breaking:** renamed machine-facing JSON fields and error codes to the new state vocabulary (e.g. `bo status` health `orphan_index_entries`/`missing_from_index` → `missing_leaf_files`/`untracked_leaf_files`; status state errors now report code `state_error` instead of `io_error`). The executable JSON envelope `schema_version` bumped from 1 to 2.
 - **Breaking:** renamed JSON error code `pending_error` to `transaction_error` in collect responses. The `tree_busy` code is unchanged.

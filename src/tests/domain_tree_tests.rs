@@ -67,7 +67,7 @@ fn tree_meta_round_trip_preserves_json_shape() {
     let json = r#"{
   "name": "my-research",
   "created_at": "2026-04-14T09:00:00.000Z",
-  "last_compiled_at": "2026-04-14T10:00:00.000Z"
+  "last_synthesized_at": "2026-04-14T10:00:00.000Z"
 }"#;
 
     use crate::domain::state::TreeMetadata;
@@ -75,7 +75,7 @@ fn tree_meta_round_trip_preserves_json_shape() {
     assert_eq!(meta.name, "my-research");
     assert_eq!(meta.created_at.to_string(), "2026-04-14T09:00:00.000Z");
     assert_eq!(
-        meta.last_compiled_at.as_ref().unwrap().to_string(),
+        meta.last_synthesized_at.as_ref().unwrap().to_string(),
         "2026-04-14T10:00:00.000Z"
     );
 

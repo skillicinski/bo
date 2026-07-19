@@ -30,7 +30,7 @@ fn setup_tree(tmp: &TempDir) -> (PathBuf, PathBuf) {
             tree: crate::domain::state::TreeMetadata {
                 name: "tree".to_string(),
                 created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
-                last_compiled_at: None,
+                last_synthesized_at: None,
             },
             leaves: Vec::new(),
             branches: Vec::new(),
@@ -47,7 +47,7 @@ fn setup_tree(tmp: &TempDir) -> (PathBuf, PathBuf) {
                 created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
             }),
             model: "gpt-4.1-mini".to_string(),
-            compile_model: None,
+            synthesis_model: None,
             base_url: None,
         },
         &config_path,
@@ -107,7 +107,7 @@ fn make_state(name: &str, leaves: Vec<crate::domain::Leaf>) -> crate::domain::st
         tree: crate::domain::state::TreeMetadata {
             name: name.to_string(),
             created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
-            last_compiled_at: None,
+            last_synthesized_at: None,
         },
         leaves,
         branches: Vec::new(),
@@ -153,7 +153,7 @@ fn deletes_state_alongside_other_infra() {
             tree: crate::domain::state::TreeMetadata {
                 name: "raze-test".to_string(),
                 created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
-                last_compiled_at: None,
+                last_synthesized_at: None,
             },
             leaves: Vec::new(),
             branches: Vec::new(),

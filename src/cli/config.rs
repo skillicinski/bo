@@ -20,7 +20,7 @@ use std::path::Path;
 pub struct WriteConfigOptions {
     pub provider: Option<Provider>,
     pub model: Option<String>,
-    pub compile_model: Option<String>,
+    pub synthesis_model: Option<String>,
     pub base_url: Option<String>,
 }
 
@@ -32,7 +32,7 @@ pub struct ConfigWriteResult {
     pub provider: String,
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub compile_model: Option<String>,
+    pub synthesis_model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
 }
@@ -196,8 +196,8 @@ pub fn write_config(
         config.model = trimmed;
     }
 
-    // Validate and apply compile_model if specified
-    if let Some(ref cm) = options.compile_model {
+    // Validate and apply synthesis_model if specified
+    if let Some(ref cm) = options.synthesis_model {
         let trimmed = cm.trim().to_string();
         if !models::is_supported_model(effective_provider, &trimmed) {
             return Err(ConfigWriteError::UnsupportedModel {
@@ -205,7 +205,7 @@ pub fn write_config(
                 provider: effective_provider,
             });
         }
-        config.compile_model = Some(trimmed);
+        config.synthesis_model = Some(trimmed);
     }
 
     // Write config
@@ -216,7 +216,7 @@ pub fn write_config(
         status: "ok".to_string(),
         provider: config.provider.to_string(),
         model: config.model,
-        compile_model: config.compile_model,
+        synthesis_model: config.synthesis_model,
         base_url: config.base_url,
     })
 }
@@ -228,8 +228,8 @@ pub fn render_human(result: &ConfigWriteResult) -> String {
         format!("provider: {}", result.provider),
         format!("model: {}", result.model),
     ];
-    if let Some(ref cm) = result.compile_model {
-        lines.push(format!("compile_model: {}", cm));
+    if let Some(ref cm) = result.synthesis_model {
+        lines.push(format!("synthesis_model: {}", cm));
     }
     if let Some(ref base_url) = result.base_url {
         lines.push(format!("base_url: {}", base_url));

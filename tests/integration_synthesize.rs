@@ -1,4 +1,4 @@
-// Integration tests for `bo compile`.
+// Integration tests for `bo synthesize`.
 //
 // All tests use injectable mock LLM providers and run in CI without API keys.
 // Former live-API tests were migrated/dropped per #131 — their unique
@@ -23,18 +23,18 @@ fn make_config(output_dir: &std::path::Path) -> SeededConfig {
 // ── crash recovery integration tests ─────────────────────────────────────────
 
 #[test]
-fn crash_mid_compile_rollback_cleans_staged_files() {
-    // Simulate: compile started, pending.json written, staged .tmp exists,
+fn crash_mid_synthesis_rollback_cleans_staged_files() {
+    // Simulate: synthesis started, pending.json written, staged .tmp exists,
     // but state was NOT updated (crash before commit).
     // Next invocation should rollback: delete .tmp, clear pending.
     let dir = common::setup_fixture_collection();
     let tree_dir = dir.path();
     let bo_dir = tree_dir.join(".bo");
 
-    // Mark all leaves as compiled so compile returns noop after recovery
+    // Mark all leaves as synthesized so synthesis returns noop after recovery
     let state_path = bo_dir.join("state.json");
     let mut m = bo::engine::state::read(&state_path).unwrap();
-    m.tree.last_compiled_at = Some(Timestamp::parse("2099-01-01T00:00:00Z").unwrap());
+    m.tree.last_synthesized_at = Some(Timestamp::parse("2099-01-01T00:00:00Z").unwrap());
     bo::engine::state::write(&state_path, &m).unwrap();
 
     // Record state hash before "crash"
@@ -48,7 +48,7 @@ fn crash_mid_compile_rollback_cleans_staged_files() {
 
     // Write pending.json with a dead PID and old timestamp (not a live lock)
     let transaction = bo::engine::transaction::PendingTransaction {
-        op: bo::engine::transaction::TransactionKind::Compile {
+        op: bo::engine::transaction::TransactionKind::Synthesize {
             mode: bo::engine::transaction::SynthesisMode::Full,
         },
         started_at: "2020-01-01T00:00:00Z".to_string(),
@@ -63,7 +63,7 @@ fn crash_mid_compile_rollback_cleans_staged_files() {
     let pending_path = bo_dir.join("pending.json");
     bo::engine::transaction::write(&pending_path, &transaction).unwrap();
 
-    // Now run compile — should detect stale pending, rollback, then proceed normally
+    // Now run synthesis — should detect stale pending, rollback, then proceed normally
     let cfg = make_config(tree_dir);
     let outcome = synthesize::run_with_options(&cfg, Default::default());
 
@@ -77,10 +77,10 @@ fn crash_mid_compile_rollback_cleans_staged_files() {
         !pending_path.exists(),
         "pending.json should be cleared after recovery"
     );
-    // Compile itself should succeed (noop or compiled depending on state)
+    // Synthesis itself should succeed (noop or synthesized depending on state)
     assert!(
         outcome.result.is_ok(),
-        "compile should succeed after recovery: {:?}",
+        "synthesis should succeed after recovery: {:?}",
         outcome.result.err()
     );
     // The recovery notice is collected as a diagnostic line, not printed below
@@ -96,18 +96,18 @@ fn crash_mid_compile_rollback_cleans_staged_files() {
 }
 
 #[test]
-fn crash_mid_compile_roll_forward_applies_staged_writes() {
-    // Simulate: compile started, pending.json written, staged .tmp exists,
+fn crash_mid_synthesis_roll_forward_applies_staged_writes() {
+    // Simulate: synthesis started, pending.json written, staged .tmp exists,
     // AND state WAS updated (crash after commit but before rename).
     // Next invocation should roll forward: rename .tmp to final, clear pending.
     let dir = common::setup_fixture_collection();
     let tree_dir = dir.path();
     let bo_dir = tree_dir.join(".bo");
 
-    // Mark all leaves as compiled
+    // Mark all leaves as synthesized
     let state_path = bo_dir.join("state.json");
     let mut m = bo::engine::state::read(&state_path).unwrap();
-    m.tree.last_compiled_at = Some(Timestamp::parse("2099-01-01T00:00:00Z").unwrap());
+    m.tree.last_synthesized_at = Some(Timestamp::parse("2099-01-01T00:00:00Z").unwrap());
     bo::engine::state::write(&state_path, &m).unwrap();
 
     // Write a staged .tmp file
@@ -122,7 +122,7 @@ fn crash_mid_compile_roll_forward_applies_staged_writes() {
     let fake_pre_hash = "deadbeef".to_string();
 
     let transaction = bo::engine::transaction::PendingTransaction {
-        op: bo::engine::transaction::TransactionKind::Compile {
+        op: bo::engine::transaction::TransactionKind::Synthesize {
             mode: bo::engine::transaction::SynthesisMode::Full,
         },
         started_at: "2020-01-01T00:00:00Z".to_string(),
@@ -137,7 +137,7 @@ fn crash_mid_compile_roll_forward_applies_staged_writes() {
     let pending_path = bo_dir.join("pending.json");
     bo::engine::transaction::write(&pending_path, &transaction).unwrap();
 
-    // Run compile — should roll forward
+    // Run synthesis — should roll forward
     let cfg = make_config(tree_dir);
     let result = synthesize::run_with_options(&cfg, Default::default()).result;
 
@@ -156,7 +156,7 @@ fn crash_mid_compile_roll_forward_applies_staged_writes() {
     assert!(!pending_path.exists(), "pending.json should be cleared");
     assert!(
         result.is_ok(),
-        "compile should succeed after recovery: {:?}",
+        "synthesis should succeed after recovery: {:?}",
         result.err()
     );
 }
@@ -165,15 +165,15 @@ fn crash_mid_compile_roll_forward_applies_staged_writes() {
 fn crash_mid_collect_rollback_leaves_tree_unchanged() {
     // Simulate: collect started, pending.json written for a collect op,
     // staged leaf .tmp exists, state NOT updated.
-    // Next compile invocation should rollback the stale collect.
+    // Next synthesis invocation should rollback the stale collect.
     let dir = common::setup_fixture_collection();
     let tree_dir = dir.path();
     let bo_dir = tree_dir.join(".bo");
 
-    // Mark all leaves as compiled
+    // Mark all leaves as synthesized
     let state_path = bo_dir.join("state.json");
     let mut m = bo::engine::state::read(&state_path).unwrap();
-    m.tree.last_compiled_at = Some(Timestamp::parse("2099-01-01T00:00:00Z").unwrap());
+    m.tree.last_synthesized_at = Some(Timestamp::parse("2099-01-01T00:00:00Z").unwrap());
     bo::engine::state::write(&state_path, &m).unwrap();
 
     let state_hash = bo::engine::transaction::state_hash(tree_dir).unwrap();
@@ -199,7 +199,7 @@ fn crash_mid_collect_rollback_leaves_tree_unchanged() {
     };
     bo::engine::transaction::write(&bo_dir.join("pending.json"), &transaction).unwrap();
 
-    // Run compile — should recover (rollback) first, then proceed
+    // Run synthesis — should recover (rollback) first, then proceed
     let cfg = make_config(tree_dir);
     let _result = synthesize::run_with_options(&cfg, Default::default());
 
@@ -214,7 +214,7 @@ fn crash_mid_collect_rollback_leaves_tree_unchanged() {
     );
     // TreeState unchanged by the failed collect
     let _state_after = fs::read_to_string(bo_dir.join("state.json")).unwrap();
-    // Note: compile may update state (last_compiled_at), so just verify no interrupted leaf
+    // Note: synthesis may update state (last_synthesized_at), so just verify no interrupted leaf
     let m = bo::engine::state::read(&bo_dir.join("state.json")).unwrap();
     assert!(!m
         .leaves
@@ -296,15 +296,15 @@ impl bo::engine::llm::LlmProvider for CapturingProvider {
     }
 }
 
-fn compile_model() -> bo::engine::llm::Model {
+fn synthesis_model() -> bo::engine::llm::Model {
     bo::engine::llm::Model::parse("gpt-4.1", bo::engine::llm::Provider::OpenAI).unwrap()
 }
 
 #[test]
-fn compile_full_with_canned_response_creates_branches() {
+fn synthesize_full_with_canned_response_creates_branches() {
     let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
-    let model = compile_model();
+    let model = synthesis_model();
     let started_at = Timestamp::now();
 
     // Canned response: two branches, each covering two leaves.
@@ -341,7 +341,7 @@ fn compile_full_with_canned_response_creates_branches() {
     );
 
     let synthesis_result = result.unwrap();
-    assert_eq!(synthesis_result.status, "compiled");
+    assert_eq!(synthesis_result.status, "synthesized");
     assert_eq!(synthesis_result.branches.len(), 2);
 
     // Verify branch files were written to disk
@@ -378,7 +378,7 @@ fn compile_full_with_canned_response_creates_branches() {
     // No legacy index store (migrated from dropped live test)
     assert!(
         !dir.path().join(".bo/index.jsonl").exists(),
-        "compile must not write .bo/index.jsonl"
+        "synthesis must not write .bo/index.jsonl"
     );
 
     let branch_b = branches_dir.join("systems-design-in-rust.md");
@@ -389,12 +389,12 @@ fn compile_full_with_canned_response_creates_branches() {
     // TreeState updated with branches
     let m = bo::engine::state::read(&dir.path().join(".bo/state.json")).unwrap();
     assert_eq!(m.branches.len(), 2);
-    assert!(m.tree.last_compiled_at.is_some());
+    assert!(m.tree.last_synthesized_at.is_some());
 }
 
 #[test]
-fn compile_incremental_with_canned_response_updates_existing_branches() {
-    // Build a tree with an existing compile: 2 leaves, 1 branch, last_compiled_at set.
+fn synthesize_incremental_with_canned_response_updates_existing_branches() {
+    // Build a tree with an existing synthesis: 2 leaves, 1 branch, last_synthesized_at set.
     // Then add 2 new leaves with later collected_at.
     let dir = tempfile::TempDir::new().unwrap();
     let bo_dir = dir.path().join(".bo");
@@ -402,10 +402,10 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
     fs::create_dir_all(dir.path().join("branch")).unwrap();
 
     let ts_old = Timestamp::parse("2025-06-01T10:00:00Z").unwrap();
-    let ts_last_compile = Timestamp::parse("2025-06-02T00:00:00Z").unwrap();
+    let ts_last_synthesis = Timestamp::parse("2025-06-02T00:00:00Z").unwrap();
     let ts_new = Timestamp::parse("2025-06-03T10:00:00Z").unwrap();
 
-    // Two existing leaves (already compiled)
+    // Two existing leaves (already synthesized)
     for (file, title, body) in [
         (
             "ownership.md",
@@ -424,7 +424,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
         fs::write(dir.path().join(file), content).unwrap();
     }
 
-    // Two new leaves (collected after last compile)
+    // Two new leaves (collected after last synthesis)
     for (file, title, body) in [
         (
             "lifetimes.md",
@@ -456,7 +456,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
             tree: TreeMetadata {
                 name: "incremental-fixture".to_string(),
                 created_at: ts_old.clone(),
-                last_compiled_at: Some(ts_last_compile.clone()),
+                last_synthesized_at: Some(ts_last_synthesis.clone()),
             },
             leaves: vec![
                 Leaf {
@@ -496,8 +496,8 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
                 slug: bo::domain::Slug::parse("memory-model").unwrap(),
                 file: "branch/memory-model.md".to_string(),
                 title: Title::parse("Memory Model").unwrap(),
-                created_at: ts_last_compile.clone(),
-                updated_at: ts_last_compile.clone(),
+                created_at: ts_last_synthesis.clone(),
+                updated_at: ts_last_synthesis.clone(),
                 leaves: vec![
                     bo::domain::Slug::parse("ownership").unwrap(),
                     bo::domain::Slug::parse("borrowing").unwrap(),
@@ -508,7 +508,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
     .unwrap();
 
     let cfg = make_config(dir.path());
-    let model = compile_model();
+    let model = synthesis_model();
     let started_at = Timestamp::now();
 
     // Canned incremental response: update existing branch and create a new one.
@@ -538,7 +538,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
         .iter()
         .filter(|l| {
             m.tree
-                .last_compiled_at
+                .last_synthesized_at
                 .as_ref()
                 .is_none_or(|ts| &l.collected_at > ts)
         })
@@ -560,7 +560,7 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
     );
 
     let synthesis_result = result.unwrap();
-    assert_eq!(synthesis_result.status, "compiled");
+    assert_eq!(synthesis_result.status, "synthesized");
 
     // Both branches should exist on disk
     let branches_dir = dir.path().join("branch");
@@ -581,16 +581,16 @@ fn compile_incremental_with_canned_response_updates_existing_branches() {
         .find(|b| b.slug.as_str() == "memory-model")
         .expect("memory-model branch present");
     assert_eq!(
-        memory_model.created_at, ts_last_compile,
+        memory_model.created_at, ts_last_synthesis,
         "created_at must be preserved across an incremental update"
     );
 }
 
 #[test]
-fn compile_all_leaves_deleted_repair_handles_missing_files() {
+fn synthesize_all_leaves_deleted_repair_handles_missing_files() {
     // Create a tree with leaves and a branch, then delete all leaf files.
     // The stale-repair pass should prune orphan leaves and remove the branch.
-    // The compile itself returns noop since no leaves remain.
+    // The synthesis itself returns noop since no leaves remain.
     let dir = tempfile::TempDir::new().unwrap();
     let bo_dir = dir.path().join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
@@ -618,7 +618,7 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
             tree: TreeMetadata {
                 name: "repair-fixture".to_string(),
                 created_at: ts.clone(),
-                last_compiled_at: Some(Timestamp::parse("2025-06-01T11:00:00Z").unwrap()),
+                last_synthesized_at: Some(Timestamp::parse("2025-06-01T11:00:00Z").unwrap()),
             },
             leaves: vec![
                 Leaf {
@@ -660,12 +660,12 @@ fn compile_all_leaves_deleted_repair_handles_missing_files() {
     let result = synthesize::run_with_options(&cfg, Default::default()).result;
     assert!(
         result.is_ok(),
-        "compile should succeed after repair: {:?}",
+        "synthesis should succeed after repair: {:?}",
         result.err()
     );
 
     let synthesis_result = result.unwrap();
-    // With only 1 surviving leaf, compile returns noop (single_leaf or empty_tree)
+    // With only 1 surviving leaf, synthesis returns noop (single_leaf or empty_tree)
     assert_eq!(synthesis_result.status, "noop");
 
     // TreeState cleaned: deleted leaf removed, branch removed (only 1 leaf left)
@@ -716,11 +716,11 @@ fn create_leaf_docs(
 }
 
 #[test]
-fn compile_one_shot_uses_synthesis_system_prompt() {
+fn synthesize_one_shot_uses_synthesis_system_prompt() {
     // 4 leaves < 40 threshold → single-pass Full path.
     let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
-    let model = compile_model();
+    let model = synthesis_model();
     let started_at = Timestamp::now();
 
     let canned = serde_json::json!({
@@ -756,19 +756,19 @@ fn compile_one_shot_uses_synthesis_system_prompt() {
         &mut Vec::new(),
     );
 
-    assert!(result.is_ok(), "compile failed: {:?}", result.err());
+    assert!(result.is_ok(), "synthesis failed: {:?}", result.err());
 
     let prompts = provider.system_prompts.lock().unwrap();
     assert_eq!(prompts.len(), 1, "expected exactly one LLM call");
     assert!(
-        prompts[0].contains("knowledge compilation engine for a personal document collection"),
+        prompts[0].contains("knowledge synthesis engine for a personal document collection"),
         "one-shot should send SYNTHESIS system prompt, got: {}",
         prompts[0]
     );
 }
 
 #[test]
-fn compile_full_two_stage_uses_cluster_system_prompt() {
+fn synthesize_full_two_stage_uses_cluster_system_prompt() {
     // 40 leaves ≥ 40 threshold → two-stage Full path.
     let dir = tempfile::TempDir::new().unwrap();
     let bo_dir = dir.path().join(".bo");
@@ -783,7 +783,7 @@ fn compile_full_two_stage_uses_cluster_system_prompt() {
             tree: TreeMetadata {
                 name: "two-stage-full-fixture".to_string(),
                 created_at: ts.clone(),
-                last_compiled_at: None,
+                last_synthesized_at: None,
             },
             leaves: leaves.clone(),
             branches: Vec::new(),
@@ -792,7 +792,7 @@ fn compile_full_two_stage_uses_cluster_system_prompt() {
     .unwrap();
 
     let cfg = make_config(dir.path());
-    let model = compile_model();
+    let model = synthesis_model();
     let started_at = Timestamp::now();
 
     // Stage 1: 2 clusters of 20 leaves each.
@@ -836,7 +836,7 @@ fn compile_full_two_stage_uses_cluster_system_prompt() {
         &mut Vec::new(),
     );
 
-    assert!(result.is_ok(), "compile failed: {:?}", result.err());
+    assert!(result.is_ok(), "synthesis failed: {:?}", result.err());
 
     let prompts = provider.system_prompts.lock().unwrap();
     assert!(
@@ -845,13 +845,13 @@ fn compile_full_two_stage_uses_cluster_system_prompt() {
         prompts.len()
     );
     assert!(
-        prompts[0].contains("You are clustering documents for a knowledge tree compilation"),
+        prompts[0].contains("You are clustering documents for a knowledge tree synthesis"),
         "stage 1 should send CLUSTER system prompt, got: {}",
         prompts[0]
     );
     for (i, p) in prompts.iter().enumerate().skip(1) {
         assert!(
-            p.contains("knowledge compilation engine"),
+            p.contains("knowledge synthesis engine"),
             "stage 2 call {} should send SYNTHESIS system prompt, got: {}",
             i,
             p
@@ -860,19 +860,19 @@ fn compile_full_two_stage_uses_cluster_system_prompt() {
 }
 
 #[test]
-fn compile_incremental_two_stage_uses_incremental_cluster_system_prompt() {
-    // Existing tree: 4 compiled leaves, 1 branch, last_compiled_at set.
-    // Add 16 new leaves (collected after last_compile) → 16 ≥ 15 threshold.
+fn synthesize_incremental_two_stage_uses_incremental_cluster_system_prompt() {
+    // Existing tree: 4 synthesized leaves, 1 branch, last_synthesized_at set.
+    // Add 16 new leaves (collected after last synthesis) → 16 ≥ 15 threshold.
     let dir = tempfile::TempDir::new().unwrap();
     let bo_dir = dir.path().join(".bo");
     fs::create_dir_all(&bo_dir).unwrap();
     fs::create_dir_all(dir.path().join("branch")).unwrap();
 
     let ts_old = Timestamp::parse("2025-06-01T10:00:00Z").unwrap();
-    let ts_last_compile = Timestamp::parse("2025-06-02T00:00:00Z").unwrap();
+    let ts_last_synthesis = Timestamp::parse("2025-06-02T00:00:00Z").unwrap();
     let ts_new = Timestamp::parse("2025-06-03T10:00:00Z").unwrap();
 
-    // Existing compiled leaves (4).
+    // Existing synthesized leaves (4).
     let existing_leaves = create_leaf_docs(dir.path(), 4, "existing", &ts_old);
     // New leaves (16).
     let new_leaves = create_leaf_docs(dir.path(), 16, "new", &ts_new);
@@ -895,15 +895,15 @@ fn compile_incremental_two_stage_uses_incremental_cluster_system_prompt() {
             tree: TreeMetadata {
                 name: "incremental-two-stage-fixture".to_string(),
                 created_at: ts_old.clone(),
-                last_compiled_at: Some(ts_last_compile.clone()),
+                last_synthesized_at: Some(ts_last_synthesis.clone()),
             },
             leaves: all_leaves,
             branches: vec![Branch {
                 slug: bo::domain::Slug::parse("existing-branch").unwrap(),
                 file: "branch/existing-branch.md".to_string(),
                 title: Title::parse("Existing Branch").unwrap(),
-                created_at: ts_last_compile.clone(),
-                updated_at: ts_last_compile.clone(),
+                created_at: ts_last_synthesis.clone(),
+                updated_at: ts_last_synthesis.clone(),
                 leaves: vec![
                     bo::domain::Slug::parse("existing-01").unwrap(),
                     bo::domain::Slug::parse("existing-02").unwrap(),
@@ -916,7 +916,7 @@ fn compile_incremental_two_stage_uses_incremental_cluster_system_prompt() {
     .unwrap();
 
     let cfg = make_config(dir.path());
-    let model = compile_model();
+    let model = synthesis_model();
     let started_at = Timestamp::now();
 
     // new leaf slugs: new-01 through new-16
@@ -965,7 +965,7 @@ fn compile_incremental_two_stage_uses_incremental_cluster_system_prompt() {
         &mut Vec::new(),
     );
 
-    assert!(result.is_ok(), "compile failed: {:?}", result.err());
+    assert!(result.is_ok(), "synthesis failed: {:?}", result.err());
 
     let prompts = provider.system_prompts.lock().unwrap();
     assert!(
@@ -980,7 +980,7 @@ fn compile_incremental_two_stage_uses_incremental_cluster_system_prompt() {
     );
     for (i, p) in prompts.iter().enumerate().skip(1) {
         assert!(
-            p.contains("knowledge compilation engine"),
+            p.contains("knowledge synthesis engine"),
             "stage 2 call {} should send SYNTHESIS system prompt, got: {}",
             i,
             p

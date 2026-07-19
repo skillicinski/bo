@@ -33,7 +33,7 @@ pub struct SeedResult {
     pub created_at: Timestamp,
     pub provider: Provider,
     pub model: String,
-    pub compile_model: Option<String>,
+    pub synthesis_model: Option<String>,
 }
 
 #[derive(Debug)]
@@ -211,7 +211,7 @@ pub fn seed(
         &Config {
             provider,
             model: model.clone(),
-            compile_model: None,
+            synthesis_model: None,
             base_url: None,
             tree: Some(TreeConfig {
                 path: path.clone(),
@@ -230,7 +230,7 @@ pub fn seed(
         created_at,
         provider,
         model,
-        compile_model: None,
+        synthesis_model: None,
     })
 }
 
@@ -249,8 +249,8 @@ pub fn render_human(result: &SeedResult) -> String {
         format!("model: {}", result.model),
     ];
 
-    if let Some(compile_model) = &result.compile_model {
-        lines.push(format!("compile_model: {compile_model}"));
+    if let Some(synthesis_model) = &result.synthesis_model {
+        lines.push(format!("synthesis_model: {synthesis_model}"));
     }
 
     if result.status == SeedStatus::AlreadyExists {
@@ -267,7 +267,7 @@ struct ExistingSeed {
     created_at: Timestamp,
     provider: Provider,
     model: String,
-    compile_model: Option<String>,
+    synthesis_model: Option<String>,
 }
 
 fn read_existing_seed(global_config_path: &Path) -> Result<Option<ExistingSeed>, SeedError> {
@@ -286,8 +286,8 @@ fn valid_existing_seed(config: Config) -> Option<ExistingSeed> {
     if !is_supported_model(config.provider, &model) {
         return None;
     }
-    if let Some(compile_model) = config.compile_model.as_ref() {
-        if !is_supported_model(config.provider, compile_model) {
+    if let Some(synthesis_model) = config.synthesis_model.as_ref() {
+        if !is_supported_model(config.provider, synthesis_model) {
             return None;
         }
     }
@@ -302,7 +302,7 @@ fn valid_existing_seed(config: Config) -> Option<ExistingSeed> {
         created_at: tree.created_at,
         provider: config.provider,
         model,
-        compile_model: config.compile_model,
+        synthesis_model: config.synthesis_model,
     })
 }
 
@@ -327,7 +327,7 @@ fn existing_seed_result(
         created_at: existing.created_at,
         provider: existing.provider,
         model: existing.model,
-        compile_model: existing.compile_model,
+        synthesis_model: existing.synthesis_model,
     })
 }
 

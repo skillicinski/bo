@@ -10,7 +10,7 @@ use crate::engine::config::SeededConfig;
 use super::plan::LoadedLeaf;
 
 pub(super) const SYNTHESIS_SYSTEM_PROMPT: &str = "\
-You are a knowledge compilation engine for a personal document collection.
+You are a knowledge synthesis engine for a personal document collection.
 
 Your task: identify recurring concepts and themes that appear across multiple \
 documents, then produce structured output describing each concept.
@@ -69,7 +69,7 @@ pub(super) fn build_incremental_user_message(
          - Use `updated_branches` to modify an existing branch — include its slug, updated body, and full leaf list (existing + new).\n\
          - Use `new_branches` only for entirely new concepts not covered by any existing branch. Each new branch must include at least one new leaf.\n\
          - Do NOT place an existing branch in `new_branches` — that causes a duplicate slug error.\n\
-         - Do NOT output branches that only contain previously-compiled leaves with no new leaf added.\n\
+         - Do NOT output branches that only contain previously-synthesized leaves with no new leaf added.\n\
          - Omit unchanged branches entirely — they are preserved automatically.\n\
          - If no new leaf fits any existing or new cross-cutting concept, return empty arrays.\n\n",
     );

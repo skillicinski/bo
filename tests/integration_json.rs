@@ -38,7 +38,7 @@ fn seed_tree(home: &TempDir, name: &str) -> std::path::PathBuf {
     common::seed(home.path(), name)
 }
 
-fn write_compile_leaf(tree: &Path, file: &str, title: &str) {
+fn write_synthesis_leaf(tree: &Path, file: &str, title: &str) {
     add_state_leaf(
         tree,
         file,
@@ -146,7 +146,7 @@ fn every_output_command_accepts_json_flag() {
             "config",
         ),
         (vec!["collect", "--json", "https://example.com"], "collect"),
-        (vec!["compile", "--json"], "compile"),
+        (vec!["synthesize", "--json"], "synthesize"),
         (vec!["list", "--json"], "list"),
         (vec!["show", "--json", "Title"], "show"),
         (vec!["raze", "--json"], "raze"),
@@ -190,7 +190,7 @@ fn config_json_model_included_in_payload() {
 
     let out = run(
         home.path(),
-        &["--json", "config", "--compile-model", "gpt-4.1-mini"],
+        &["--json", "config", "--synthesis-model", "gpt-4.1-mini"],
     );
 
     assert!(out.status.success());
@@ -199,7 +199,7 @@ fn config_json_model_included_in_payload() {
     assert_eq!(parsed["command"], "config");
     assert_eq!(parsed["data"]["status"], "ok");
     assert_eq!(parsed["data"]["model"], "gpt-4.1-mini");
-    assert_eq!(parsed["data"]["compile_model"], "gpt-4.1-mini");
+    assert_eq!(parsed["data"]["synthesis_model"], "gpt-4.1-mini");
 }
 
 #[test]
@@ -224,16 +224,16 @@ fn config_json_usage_error_preserves_exit_code_and_command() {
         .any(|value| value == "gpt-4.1-mini"));
 }
 
-// ── compile ──────────────────────────────────────────────────────────────────
+// ── synthesize ──────────────────────────────────────────────────────────────────
 
 #[test]
-fn compile_json_empty_tree_is_noop_without_api_key() {
+fn synthesize_json_empty_tree_is_noop_without_api_key() {
     let home = TempDir::new().unwrap();
     let tree = seed_tree(&home, "tree");
     assert!(tree.exists());
 
     let out = bo(home.path())
-        .args(["compile", "--json"])
+        .args(["synthesize", "--json"])
         .env_remove("OPENAI_API_KEY")
         .output()
         .unwrap();
@@ -245,13 +245,13 @@ fn compile_json_empty_tree_is_noop_without_api_key() {
 }
 
 #[test]
-fn compile_json_single_leaf_is_noop_without_api_key() {
+fn synthesize_json_single_leaf_is_noop_without_api_key() {
     let home = TempDir::new().unwrap();
     let tree = seed_tree(&home, "tree");
-    write_compile_leaf(&tree, "a.md", "A");
+    write_synthesis_leaf(&tree, "a.md", "A");
 
     let out = bo(home.path())
-        .args(["compile", "--json"])
+        .args(["synthesize", "--json"])
         .env_remove("OPENAI_API_KEY")
         .output()
         .unwrap();
@@ -263,14 +263,14 @@ fn compile_json_single_leaf_is_noop_without_api_key() {
 }
 
 #[test]
-fn compile_json_missing_api_key_is_structured_error() {
+fn synthesize_json_missing_api_key_is_structured_error() {
     let home = TempDir::new().unwrap();
     let tree = seed_tree(&home, "tree");
-    write_compile_leaf(&tree, "a.md", "A");
-    write_compile_leaf(&tree, "b.md", "B");
+    write_synthesis_leaf(&tree, "a.md", "A");
+    write_synthesis_leaf(&tree, "b.md", "B");
 
     let out = bo(home.path())
-        .args(["compile", "--json"])
+        .args(["synthesize", "--json"])
         .env_remove("OPENAI_API_KEY")
         .output()
         .unwrap();
@@ -304,8 +304,8 @@ fn show_json_not_found_is_structured_error() {
 fn show_json_ambiguous_title_includes_candidates() {
     let home = TempDir::new().unwrap();
     let tree = seed_tree(&home, "tree");
-    write_compile_leaf(&tree, "a.md", "Same Title");
-    write_compile_leaf(&tree, "b.md", "Same Title");
+    write_synthesis_leaf(&tree, "a.md", "Same Title");
+    write_synthesis_leaf(&tree, "b.md", "Same Title");
 
     let out = run(home.path(), &["show", "--json", "Same Title"]);
     assert!(!out.status.success());

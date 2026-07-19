@@ -5,7 +5,7 @@
 //
 // Tests the full CLI binary with $HOME override. No network/LLM required —
 // fixtures are staged on disk directly so we can invoke `bo status`, `bo list`,
-// `bo show`, etc. without going through `collect`/`compile`.
+// `bo show`, etc. without going through `collect`/`synthesize`.
 
 mod common;
 
@@ -26,7 +26,7 @@ fn run(home: &Path, args: &[&str]) -> Output {
 
 /// Stage a tree containing a fully populated state, three leaf files,
 /// and one branch file. The fixture mimics the state-only outcome of
-/// normal seed -> collect -> compile.
+/// normal seed -> collect -> synthesize.
 fn stage_tree(home: &Path) -> std::path::PathBuf {
     let tree_dir = common::seed(home, "tree");
 
@@ -53,13 +53,13 @@ fn stage_tree(home: &Path) -> std::path::PathBuf {
     fs::write(branches_dir.join("topic-x.md"), branch_content).unwrap();
 
     // state.json — the only tree-state store. Mirrors leaves + the one branch
-    // above with last_compiled_at set so 'gamma' (collected 2026-01-01) shows
-    // as compiled.
+    // above with last_synthesized_at set so 'gamma' (collected 2026-01-01) shows
+    // as synthesized.
     let state = bo::domain::state::TreeState {
         tree: bo::domain::state::TreeMetadata {
             name: "tree".to_string(),
             created_at: Timestamp::parse("2026-01-01T00:00:00Z").unwrap(),
-            last_compiled_at: Some(Timestamp::parse("2026-01-02T10:00:00Z").unwrap()),
+            last_synthesized_at: Some(Timestamp::parse("2026-01-02T10:00:00Z").unwrap()),
         },
         leaves: leaves
             .iter()

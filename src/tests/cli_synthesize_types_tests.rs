@@ -4,7 +4,7 @@ use crate::cli::json;
 #[test]
 fn synthesis_result_notifications_skipped_from_json() {
     let result = SynthesisResult {
-        status: "compiled".to_string(),
+        status: "synthesized".to_string(),
         reason: None,
         mode: Some(SynthesisMode::Full),
         model: Some("gpt-4.1".to_string()),
@@ -19,7 +19,7 @@ fn synthesis_result_notifications_skipped_from_json() {
         warnings: Vec::new(),
     };
 
-    let encoded = json::success_string("compile", &result, Vec::new()).unwrap();
+    let encoded = json::success_string("synthesize", &result, Vec::new()).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&encoded).unwrap();
 
     assert_eq!(parsed["schema_version"], 2);
@@ -30,7 +30,7 @@ fn synthesis_result_notifications_skipped_from_json() {
 #[test]
 fn synthesis_result_warnings_skipped_from_json() {
     let result = SynthesisResult {
-        status: "compiled".to_string(),
+        status: "synthesized".to_string(),
         reason: None,
         mode: Some(SynthesisMode::Full),
         model: Some("gpt-4.1".to_string()),
@@ -45,7 +45,7 @@ fn synthesis_result_warnings_skipped_from_json() {
         warnings: vec!["warning: title collision — shared".to_string()],
     };
 
-    let encoded = json::success_string("compile", &result, Vec::new()).unwrap();
+    let encoded = json::success_string("synthesize", &result, Vec::new()).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&encoded).unwrap();
 
     // warnings are presentation (stderr), never part of the JSON envelope.

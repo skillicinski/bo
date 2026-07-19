@@ -52,7 +52,7 @@ pub(super) fn parse_and_validate_with_input_size(
     warnings: &mut Vec<String>,
 ) -> Result<validation::SynthesisPlan, SynthesisError> {
     let parsed: BranchSynthesisResponse = serde_json::from_str(response).map_err(|e| {
-        SynthesisError::Validation(format!("invalid compile response shape: {}", e))
+        SynthesisError::Validation(format!("invalid synthesis response shape: {}", e))
     })?;
     validation::validate_full(parsed, loaded_leaves, input_body_bytes, warnings)
 }
@@ -61,7 +61,10 @@ pub(super) fn parse_incremental_response(
     response: &str,
 ) -> Result<IncrementalSynthesisResponse, SynthesisError> {
     serde_json::from_str(response).map_err(|e| {
-        SynthesisError::Validation(format!("invalid incremental compile response shape: {}", e))
+        SynthesisError::Validation(format!(
+            "invalid incremental synthesis response shape: {}",
+            e
+        ))
     })
 }
 

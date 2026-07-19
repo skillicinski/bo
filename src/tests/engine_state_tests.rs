@@ -13,7 +13,7 @@ fn sample_state() -> TreeState {
         tree: TreeMetadata {
             name: "rust-notes".to_string(),
             created_at: Timestamp::parse("2026-05-19T14:00:00Z").unwrap(),
-            last_compiled_at: Some(Timestamp::parse("2026-05-19T14:32:11.000Z").unwrap()),
+            last_synthesized_at: Some(Timestamp::parse("2026-05-19T14:32:11.000Z").unwrap()),
         },
         leaves: vec![Leaf {
             slug: Slug::parse("ownership-and-borrowing").unwrap(),
@@ -39,7 +39,7 @@ fn empty_state() -> TreeState {
         tree: TreeMetadata {
             name: "empty-tree".to_string(),
             created_at: Timestamp::parse("2026-05-19T14:00:00Z").unwrap(),
-            last_compiled_at: None,
+            last_synthesized_at: None,
         },
         leaves: Vec::new(),
         branches: Vec::new(),

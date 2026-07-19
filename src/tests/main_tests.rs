@@ -27,34 +27,53 @@ fn raw_json_mode_detection_stops_at_arg_terminator() {
 }
 
 #[test]
-fn compile_flags_parse() {
-    let cli = Cli::try_parse_from(["bo", "compile", "--all"]).unwrap();
+fn synthesize_flags_parse() {
+    let cli = Cli::try_parse_from(["bo", "synthesize", "--all"]).unwrap();
 
     match cli.command {
-        Commands::Compile { all, .. } => {
+        Commands::Synthesize { all, .. } => {
             assert!(all);
         }
-        other => panic!("expected compile command, got {other:?}"),
+        other => panic!("expected synthesize command, got {other:?}"),
     }
 }
 
 #[test]
-fn compile_flags_default_false() {
-    let cli = Cli::try_parse_from(["bo", "compile"]).unwrap();
+fn synthesize_flags_default_false() {
+    let cli = Cli::try_parse_from(["bo", "synthesize"]).unwrap();
 
     match cli.command {
-        Commands::Compile { all, .. } => {
+        Commands::Synthesize { all, .. } => {
             assert!(!all);
         }
-        other => panic!("expected compile command, got {other:?}"),
+        other => panic!("expected synthesize command, got {other:?}"),
     }
 }
 
 #[test]
-fn compile_noop_human_output_is_exact_message() {
+fn compile_command_is_rejected() {
+    // The old `bo compile` command was renamed to `bo synthesize`; clap must
+    // reject the old name with no alias.
+    let err = Cli::try_parse_from(["bo", "compile"]).unwrap_err();
+    assert_eq!(err.kind(), clap::error::ErrorKind::InvalidSubcommand);
+}
+
+#[test]
+fn compile_model_flag_is_rejected() {
+    // The old `--compile-model` flag was renamed to `--synthesis-model`; clap
+    // must reject the old flag with no alias.
+    let err = Cli::try_parse_from(["bo", "config", "--compile-model", "gpt-4.1"]).unwrap_err();
+    assert!(matches!(
+        err.kind(),
+        clap::error::ErrorKind::UnknownArgument | clap::error::ErrorKind::InvalidSubcommand
+    ));
+}
+
+#[test]
+fn synthesize_noop_human_output_is_exact_message() {
     let result = SynthesisResult {
         status: "noop".to_string(),
-        reason: Some("no new leaves since last compile".to_string()),
+        reason: Some("no new leaves since last synthesis".to_string()),
         mode: None,
         model: None,
         branches: Vec::new(),
@@ -69,15 +88,15 @@ fn compile_noop_human_output_is_exact_message() {
 
     assert_eq!(
         String::from_utf8(stdout).unwrap(),
-        "nothing new to compile\n"
+        "nothing new to synthesize\n"
     );
 }
 
 #[test]
-fn compile_noop_json_data_contains_reason() {
+fn synthesize_noop_json_data_contains_reason() {
     let result = SynthesisResult {
         status: "noop".to_string(),
-        reason: Some("no new leaves since last compile".to_string()),
+        reason: Some("no new leaves since last synthesis".to_string()),
         mode: None,
         model: None,
         branches: Vec::new(),
@@ -86,15 +105,18 @@ fn compile_noop_json_data_contains_reason() {
         notifications: Vec::new(),
         warnings: Vec::new(),
     };
-    let encoded = json_output::success_string("compile", &result, Vec::new()).unwrap();
+    let encoded = json_output::success_string("synthesize", &result, Vec::new()).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&encoded).unwrap();
 
     assert_eq!(parsed["data"]["status"], "noop");
-    assert_eq!(parsed["data"]["reason"], "no new leaves since last compile");
+    assert_eq!(
+        parsed["data"]["reason"],
+        "no new leaves since last synthesis"
+    );
 }
 
 #[test]
-fn compile_context_overflow_json_recommends_compile_model() {
+fn synthesize_context_overflow_json_recommends_synthesis_model() {
     let error = SynthesisError::ContextOverflow {
         model: "gpt-4o-mini".to_string(),
         estimated_tokens: Some(250_000),
@@ -108,21 +130,21 @@ fn compile_context_overflow_json_recommends_compile_model() {
     assert_eq!(error.details["context_tokens"], 128_000);
     assert!(error
         .message
-        .contains("bo config --compile-model gpt-4.1-mini"));
+        .contains("bo config --synthesis-model gpt-4.1-mini"));
     assert!(error.details["next_steps"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|step| step == "bo config --compile-model gpt-4.1"));
+        .any(|step| step == "bo config --synthesis-model gpt-4.1"));
 }
 
 #[test]
-fn compile_validation_json_error_includes_next_action() {
-    let error = SynthesisError::Validation("invalid compile response".to_string()).json_error();
+fn synthesize_validation_json_error_includes_next_action() {
+    let error = SynthesisError::Validation("invalid synthesis response".to_string()).json_error();
 
     assert_eq!(error.code, "validation_error");
-    assert_eq!(error.message, "invalid compile response");
-    assert_eq!(error.details["phase"], "compile_validation");
+    assert_eq!(error.message, "invalid synthesis response");
+    assert_eq!(error.details["phase"], "synthesis_validation");
     assert_eq!(error.details["files_changed"], false);
     assert_eq!(error.details["next_step"], synthesize::VALIDATION_NEXT_STEP);
 }
@@ -249,7 +271,7 @@ fn query_relevant_sources_require_provider() {
 }
 
 #[test]
-fn query_uses_model_not_compile_model() {
+fn query_uses_model_not_synthesis_model() {
     let dir = TempDir::new().unwrap();
     write_leaf(
         dir.path(),
@@ -271,7 +293,7 @@ fn query_uses_model_not_compile_model() {
         bo::engine::config::Config {
             provider: bo::engine::llm::Provider::OpenAI,
             model: "gpt-4o-mini".to_string(),
-            compile_model: Some("gpt-4.1".to_string()),
+            synthesis_model: Some("gpt-4.1".to_string()),
             base_url: None,
             tree: None,
         },
@@ -357,7 +379,7 @@ fn seeded_config(tree: &Path) -> SeededConfig {
         bo::engine::config::Config {
             provider: bo::engine::llm::Provider::OpenAI,
             model: "gpt-4o".to_string(),
-            compile_model: None,
+            synthesis_model: None,
             base_url: None,
             tree: None,
         },
@@ -402,7 +424,7 @@ fn write_state(tree: &Path, entries: &[(&str, &str, &str)]) {
             tree: bo::domain::state::TreeMetadata {
                 name: "test-tree".to_string(),
                 created_at: Timestamp::parse("2026-05-17T00:00:00Z").unwrap(),
-                last_compiled_at: None,
+                last_synthesized_at: None,
             },
             leaves,
             branches: Vec::new(),

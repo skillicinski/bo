@@ -61,7 +61,7 @@ pub fn run_dry_run(cfg: &SeededConfig, options: SynthesisOptions) -> SynthesisDr
         .map_err(|e| SynthesisError::Llm(e.to_string()))?;
         let model = cfg
             .config
-            .effective_compile_model()
+            .effective_synthesis_model()
             .map_err(|e| SynthesisError::Llm(e.to_string()))?;
         dry_run_build_plan(
             cfg,
@@ -137,7 +137,7 @@ fn dry_run_preflight(
     // ZERO writes: read-only pending check. Do not recover.
     if transaction::read(&transaction::pending_path(tree_dir))?.is_some() {
         return Err(SynthesisError::DryRunBlocked(
-            "an unfinished transaction exists; run `bo compile` (without --dry-run) to recover it before previewing".to_string(),
+            "an unfinished transaction exists; run `bo synthesize` (without --dry-run) to recover it before previewing".to_string(),
         ));
     }
 
@@ -168,7 +168,7 @@ fn dry_run_preflight(
     // ZERO writes: read-only stale-repair check. Do not repair.
     if repair::requires_repair(cfg, &state)? {
         return Err(SynthesisError::DryRunBlocked(
-            "stale branches require repair; run `bo compile` (without --dry-run) to repair before previewing".to_string(),
+            "stale branches require repair; run `bo synthesize` (without --dry-run) to repair before previewing".to_string(),
         ));
     }
 
@@ -267,7 +267,7 @@ fn dry_run_build_plan(
     let state_unchanged = current_hash == starting_hash;
     if !state_unchanged {
         return Err(SynthesisError::DryRunBlocked(
-            "state changed during dry-run; rerun `bo compile --dry-run`".to_string(),
+            "state changed during dry-run; rerun `bo synthesize --dry-run`".to_string(),
         ));
     }
     Ok(SynthesisPreview {
@@ -307,7 +307,7 @@ fn noop_preview(
 ) -> SynthesisPreview {
     let model_str = cfg
         .config
-        .compile_model
+        .synthesis_model
         .as_deref()
         .unwrap_or(&cfg.config.model);
     SynthesisPreview {

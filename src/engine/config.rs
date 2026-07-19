@@ -10,7 +10,7 @@
 //   {
 //     "provider": "openai",          // operator-level: spans all trees
 //     "model": "gpt-4.1-mini",      // operator-level: spans all trees
-//     "compile_model": "gpt-4.1",   // optional model used by compile
+//     "synthesis_model": "gpt-4.1",   // optional model used by synthesis
 //     "base_url": "https://...",    // optional; required by the custom provider
 //     "tree": {                      // active tree metadata
 //       "path": "/path/to/tree",
@@ -47,9 +47,9 @@ pub struct Config {
     #[serde(default)]
     pub model: String,
 
-    /// Optional model used by compile. Falls back to `model`.
+    /// Optional model used by synthesis. Falls back to `model`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub compile_model: Option<String>,
+    pub synthesis_model: Option<String>,
 
     /// OpenAI-compatible endpoint prefix (everything before `/chat/completions`).
     /// Required by the custom provider; inert for all others.
@@ -66,7 +66,7 @@ impl Default for Config {
         Self {
             provider: Provider::OpenAI,
             model: String::new(),
-            compile_model: None,
+            synthesis_model: None,
             base_url: None,
             tree: None,
         }
@@ -78,8 +78,8 @@ impl Config {
         Model::parse(&self.model, self.provider)
     }
 
-    pub fn effective_compile_model(&self) -> Result<Model, UnsupportedModel> {
-        let model_id = self.compile_model.as_deref().unwrap_or(&self.model);
+    pub fn effective_synthesis_model(&self) -> Result<Model, UnsupportedModel> {
+        let model_id = self.synthesis_model.as_deref().unwrap_or(&self.model);
         Model::parse(model_id, self.provider)
     }
 

@@ -108,7 +108,7 @@ fn empty_state(name: &str) -> TreeState {
         tree: TreeMetadata {
             name: name.to_string(),
             created_at: ts(EPOCH),
-            last_compiled_at: None,
+            last_synthesized_at: None,
         },
         leaves: Vec::new(),
         branches: Vec::new(),
@@ -182,7 +182,7 @@ pub fn setup_fixture_collection() -> TempDir {
             tree: TreeMetadata {
                 name: "synthesis-fixture".to_string(),
                 created_at: ts("2025-06-01T09:00:00Z"),
-                last_compiled_at: None,
+                last_synthesized_at: None,
             },
             leaves,
             branches: Vec::new(),
@@ -197,7 +197,7 @@ pub fn seeded_config(dir: &Path, provider: Provider, model: &str) -> SeededConfi
         Config {
             provider,
             model: model.to_string(),
-            compile_model: None,
+            synthesis_model: None,
             base_url: None,
             tree: None,
         },

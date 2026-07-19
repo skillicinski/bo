@@ -1,6 +1,6 @@
 # bo
 
-Collect web content that you don't have time to read as a local markdown knowledge tree. Compile the content into common themes and topics using an LLM. Your collection can now be queried for the information you need and answer questions that span every raw document.
+Collect web content that you don't have time to read as a local markdown knowledge tree. Synthesize the content into common themes and topics using an LLM. Your collection can now be queried for the information you need and answer questions that span every raw document.
 
 Your collection stays legible and can be viewed with any markdown reader. The idea is to skip RAG and vector databases altogether and just rely on local files and let LLMs do what they're best at. The CLI is intended to be machine-friendly for use via any coding assistant/harness.
 
@@ -50,7 +50,7 @@ bo status
 bo show "Intro to Knowledge Graphs"
 
 # Identify themes/topics across documents
-bo compile
+bo synthesize
 
 # Ask a question
 bo query "Can a Knowledge Graph be explained in three sentences?"
@@ -80,10 +80,10 @@ bo config --provider zai --model glm-4.7
 bo config --provider custom --base-url https://api.example.com/v1 --model my-model
 ```
 
-You can also pin a heavier model just for the compile step:
+You can also pin a heavier model just for the synthesis step:
 
 ```bash
-bo config --compile-model gpt-4.1
+bo config --synthesis-model gpt-4.1
 ```
 
 ### 2. Provide an API key

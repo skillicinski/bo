@@ -509,7 +509,7 @@ fn render_human_no_branches_message() {
         branch_filter: None,
     };
 
-    assert_eq!(render_human(&result), "no branches compiled yet\n");
+    assert_eq!(render_human(&result), "no branches synthesized yet\n");
 }
 
 #[test]
@@ -722,7 +722,7 @@ fn write_state(tree_dir: &Path, leaves: &[Leaf], branches: &[(&str, &[&str])]) {
         tree: TreeMetadata {
             name: "test".to_string(),
             created_at: Timestamp::parse("2025-01-01T00:00:00Z").unwrap(),
-            last_compiled_at: None,
+            last_synthesized_at: None,
         },
         leaves: leaves.to_vec(),
         branches: branch_records,

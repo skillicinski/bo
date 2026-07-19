@@ -46,11 +46,11 @@ pub fn degenerate_result_warning(
         return None;
     }
     // ponytail: shared remediation hint; both failure modes suggest the same fix.
-    const FIX: &str = "the model likely collapsed; try `bo compile --all` again or switch models with `bo config --compile-model <model>`";
+    const FIX: &str = "the model likely collapsed; try `bo synthesize --all` again or switch models with `bo config --synthesis-model <model>`";
     let branch_count = branches.len();
     if branch_count < 2 {
         return Some(format!(
-            "degenerate compile result: {} branch(es) for {} leaves — {FIX}",
+            "degenerate synthesis result: {} branch(es) for {} leaves — {FIX}",
             branch_count, leaves_processed
         ));
     }
@@ -59,7 +59,7 @@ pub fn degenerate_result_warning(
     let unbranched_pct = (unbranched as f64 / leaves_processed as f64) * 100.0;
     if unbranched_pct > 80.0 {
         return Some(format!(
-            "degenerate compile result: {} of {} leaves unbranched ({:.0}%) — {FIX}",
+            "degenerate synthesis result: {} of {} leaves unbranched ({:.0}%) — {FIX}",
             unbranched, leaves_processed, unbranched_pct
         ));
     }
@@ -68,7 +68,7 @@ pub fn degenerate_result_warning(
     let coverage = branched_leaf_count as f64 / leaves_processed as f64;
     if coverage < 0.30 {
         return Some(format!(
-            "degenerate compile result: only {} of {} leaves placed in branches — {FIX}",
+            "degenerate synthesis result: only {} of {} leaves placed in branches — {FIX}",
             branched_leaf_count, leaves_processed
         ));
     }
@@ -159,7 +159,7 @@ fn run_live(
     .map_err(|e| SynthesisError::Llm(e.to_string()))?;
     let model = cfg
         .config
-        .effective_compile_model()
+        .effective_synthesis_model()
         .map_err(|e| SynthesisError::Llm(e.to_string()))?;
     run_with_provider_started_at(
         cfg,
@@ -243,7 +243,7 @@ pub fn run_with_provider_started_at(
             }
             journal::append_payload(
                 tree.path(),
-                journal::Op::Compile,
+                journal::Op::Synthesize,
                 Some(model.to_string()),
                 &journal_mod::synthesis_payload(
                     &summary,
@@ -269,7 +269,7 @@ pub fn run_with_provider_started_at(
             ) {
                 journal::append_payload(
                     tree.path(),
-                    journal::Op::Compile,
+                    journal::Op::Synthesize,
                     Some(model.to_string()),
                     &payload,
                 );

@@ -42,7 +42,7 @@ fn write_read_clear_round_trip() {
 #[test]
 fn transaction_serialization_preserves_pending_file_shape() {
     let transaction = PendingTransaction {
-        op: TransactionKind::Compile {
+        op: TransactionKind::Synthesize {
             mode: SynthesisMode::Full,
         },
         started_at: "2026-05-19T00:00:00Z".to_string(),
@@ -54,7 +54,7 @@ fn transaction_serialization_preserves_pending_file_shape() {
 
     let value = serde_json::to_value(transaction).unwrap();
 
-    assert_eq!(value["op"]["type"], "Compile");
+    assert_eq!(value["op"]["type"], "Synthesize");
     assert_eq!(value["op"]["mode"], "Full");
     assert_eq!(value["pre_state_hash"], "abc");
 }
@@ -125,7 +125,7 @@ fn live_pending_refuses() {
     fs::create_dir_all(dir.path().join(".bo")).unwrap();
     fs::write(dir.path().join(".bo/state.json"), b"state").unwrap();
     let transaction = PendingTransaction {
-        op: TransactionKind::Compile {
+        op: TransactionKind::Synthesize {
             mode: SynthesisMode::Full,
         },
         started_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

@@ -1,4 +1,4 @@
-// Integration tests for `bo compile --dry-run`.
+// Integration tests for `bo synthesize --dry-run`.
 //
 // Covers the zero-write dry-run surface: empty-tree/noop paths, transaction/repair
 // block, agent-without-dry-run rejection, and scripted-provider agent and
@@ -24,12 +24,12 @@ fn seed(home: &Path, name: &str) -> PathBuf {
     common::seed_with(home, name, "deepseek", "deepseek-v4-flash")
 }
 
-fn compile_cmd(home: &Path, args: &[&str]) -> Output {
+fn synthesize_cmd(home: &Path, args: &[&str]) -> Output {
     bo(home)
-        .arg("compile")
+        .arg("synthesize")
         .args(args)
         .output()
-        .expect("failed to run bo compile")
+        .expect("failed to run bo synthesize")
 }
 
 fn make_config(output_dir: &Path) -> bo::engine::config::SeededConfig {
@@ -40,7 +40,7 @@ fn make_config(output_dir: &Path) -> bo::engine::config::SeededConfig {
     )
 }
 
-fn compile_model() -> bo::engine::llm::Model {
+fn synthesis_model() -> bo::engine::llm::Model {
     bo::engine::llm::Model::parse("deepseek-v4-flash", bo::engine::llm::Provider::Deepseek).unwrap()
 }
 
@@ -156,14 +156,14 @@ fn tool_response_many(calls: Vec<bo::engine::llm::ToolCall>) -> bo::engine::llm:
 // ── tests ───────────────────────────────────────────────────────────────────
 
 #[test]
-fn compile_no_flags_empty_tree_byte_for_byte() {
+fn synthesize_no_flags_empty_tree_byte_for_byte() {
     let home = TempDir::new().unwrap();
     seed(home.path(), "test-grove");
 
-    let out = compile_cmd(home.path(), &[]);
+    let out = synthesize_cmd(home.path(), &[]);
     assert!(
         out.status.success(),
-        "compile failed: {}",
+        "synthesize failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
 
@@ -179,16 +179,16 @@ fn compile_no_flags_empty_tree_byte_for_byte() {
 }
 
 #[test]
-fn compile_dry_run_empty_tree_is_noop_and_zero_write() {
+fn synthesize_dry_run_empty_tree_is_noop_and_zero_write() {
     let home = TempDir::new().unwrap();
     let tree = seed(home.path(), "meadow");
 
     let before = common::snapshot_tree(&tree);
 
-    let out = compile_cmd(home.path(), &["--dry-run"]);
+    let out = synthesize_cmd(home.path(), &["--dry-run"]);
     assert!(
         out.status.success(),
-        "compile --dry-run failed: {}",
+        "synthesize --dry-run failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
 
@@ -211,7 +211,7 @@ fn agent_without_dry_run_is_rejected() {
     let home = TempDir::new().unwrap();
     seed(home.path(), "copse");
 
-    let out = compile_cmd(home.path(), &["--agent"]);
+    let out = synthesize_cmd(home.path(), &["--agent"]);
     assert!(!out.status.success(), "expected non-zero exit code");
     assert_eq!(
         out.status.code(),
@@ -238,7 +238,7 @@ fn dry_run_blocked_by_unfinished_transaction_writes_zero() {
 
     // Write a pending.json with a dead PID (99999) and no staged files
     let transaction = bo::engine::transaction::PendingTransaction {
-        op: bo::engine::transaction::TransactionKind::Compile {
+        op: bo::engine::transaction::TransactionKind::Synthesize {
             mode: bo::engine::transaction::SynthesisMode::Full,
         },
         started_at: "2020-01-01T00:00:00Z".to_string(),
@@ -294,9 +294,9 @@ fn dry_run_blocked_by_stale_repair_writes_zero() {
     fs::remove_file(&missing).unwrap();
     assert!(!missing.exists());
 
-    // Set last_compiled_at so the state has a known-compiled state
+    // Set last_synthesized_at so the state has a known-synthesized state
     let mut m = bo::engine::state::read(&bo_dir.join("state.json")).unwrap();
-    m.tree.last_compiled_at = Some(Timestamp::parse("2025-06-02T00:00:00Z").unwrap());
+    m.tree.last_synthesized_at = Some(Timestamp::parse("2025-06-02T00:00:00Z").unwrap());
     bo::engine::state::write(&bo_dir.join("state.json"), &m).unwrap();
 
     let state_hash = bo::engine::transaction::state_hash(tree_dir).unwrap();
@@ -343,7 +343,7 @@ fn dry_run_blocked_by_stale_repair_writes_zero() {
 fn agent_dry_run_with_scripted_provider_produces_preview_and_zero_writes() {
     let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
-    let model = compile_model();
+    let model = synthesis_model();
     let tree_dir = dir.path();
 
     let before = common::snapshot_tree(tree_dir);
@@ -351,7 +351,7 @@ fn agent_dry_run_with_scripted_provider_produces_preview_and_zero_writes() {
 
     // Turn 1: list_leaves (no args needed; the tool defaults offset/limit)
     // Turn 2: read_leaf with a real slug
-    // Turn 3: submit_compile with valid Full plan
+    // Turn 3: submit_synthesis with valid Full plan
     let valid_plan = serde_json::json!({
         "branches": [
             {
@@ -371,7 +371,7 @@ fn agent_dry_run_with_scripted_provider_produces_preview_and_zero_writes() {
     let script = vec![
         tool_response("call_1", "list_leaves", "{}"),
         tool_response("call_2", "read_leaf", r#"{"slug":"rust-ownership"}"#),
-        tool_response("call_3", "submit_compile", &valid_plan),
+        tool_response("call_3", "submit_synthesis", &valid_plan),
     ];
     let provider = ScriptedAgentProvider::new(script);
 
@@ -413,7 +413,7 @@ fn agent_dry_run_with_scripted_provider_produces_preview_and_zero_writes() {
 fn one_shot_dry_run_with_scripted_provider_produces_preview() {
     let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
-    let model = compile_model();
+    let model = synthesis_model();
     let tree_dir = dir.path();
 
     let before = common::snapshot_tree(tree_dir);
@@ -467,13 +467,13 @@ fn one_shot_dry_run_with_scripted_provider_produces_preview() {
 fn agent_dry_run_validation_feedback_then_success() {
     let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
-    let model = compile_model();
+    let model = synthesis_model();
     let tree_dir = dir.path();
 
     let before = common::snapshot_tree(tree_dir);
     let before_hash = bo::engine::transaction::state_hash(tree_dir).unwrap();
 
-    // Turn 1: invalid submit_compile (branch references unknown leaf)
+    // Turn 1: invalid submit_synthesis (branch references unknown leaf)
     let invalid_plan = serde_json::json!({
         "branches": [
             {
@@ -503,8 +503,8 @@ fn agent_dry_run_validation_feedback_then_success() {
     .to_string();
 
     let script = vec![
-        tool_response("call_1", "submit_compile", &invalid_plan),
-        tool_response("call_2", "submit_compile", &valid_plan),
+        tool_response("call_1", "submit_synthesis", &invalid_plan),
+        tool_response("call_2", "submit_synthesis", &valid_plan),
     ];
     let provider = ScriptedAgentProvider::new(script);
 
@@ -542,7 +542,7 @@ fn agent_dry_run_unsupported_provider_errors_with_actionable_message() {
     // or silently degrade. Covers acceptance #6 (unsupported providers).
     let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
-    let model = compile_model();
+    let model = synthesis_model();
     let tree_dir = dir.path();
 
     let before = common::snapshot_tree(tree_dir);
@@ -593,7 +593,7 @@ fn agent_dry_run_limit_failure_surfaces_diagnostics_in_json() {
     // usage, and last_error (the last tool-result error).
     let dir = common::setup_fixture_collection();
     let cfg = make_config(dir.path());
-    let model = compile_model();
+    let model = synthesis_model();
     let tree_dir = dir.path();
 
     let before = common::snapshot_tree(tree_dir);

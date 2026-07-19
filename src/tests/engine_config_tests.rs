@@ -24,7 +24,7 @@ fn make_seeded_config(path: &str) -> Config {
         provider: Provider::OpenAI,
         tree: Some(make_tree(path)),
         model: "gpt-4.1-mini".to_string(),
-        compile_model: None,
+        synthesis_model: None,
         base_url: None,
     }
 }
@@ -83,7 +83,7 @@ fn model_roundtrip_with_value() {
         provider: Provider::OpenAI,
         tree: Some(make_tree("/tmp/bo")),
         model: "gpt-4.1-mini".to_string(),
-        compile_model: None,
+        synthesis_model: None,
         base_url: None,
     };
     write_config(&config, &path).unwrap();
@@ -94,7 +94,7 @@ fn model_roundtrip_with_value() {
 }
 
 #[test]
-fn compile_model_roundtrip_with_value() {
+fn synthesis_model_roundtrip_with_value() {
     let dir = TempDir::new().unwrap();
     let path = temp_config_path(&dir);
 
@@ -102,17 +102,17 @@ fn compile_model_roundtrip_with_value() {
         provider: Provider::OpenAI,
         tree: Some(make_tree("/tmp/bo")),
         model: "gpt-4o-mini".to_string(),
-        compile_model: Some("gpt-4.1-mini".to_string()),
+        synthesis_model: Some("gpt-4.1-mini".to_string()),
         base_url: None,
     };
     write_config(&config, &path).unwrap();
 
     let loaded = read_config(&path).unwrap();
     assert_eq!(loaded.model, "gpt-4o-mini");
-    assert_eq!(loaded.compile_model.as_deref(), Some("gpt-4.1-mini"));
+    assert_eq!(loaded.synthesis_model.as_deref(), Some("gpt-4.1-mini"));
     assert_eq!(loaded.effective_model().unwrap().as_str(), "gpt-4o-mini");
     assert_eq!(
-        loaded.effective_compile_model().unwrap().as_str(),
+        loaded.effective_synthesis_model().unwrap().as_str(),
         "gpt-4.1-mini"
     );
 }
@@ -130,7 +130,7 @@ fn tree_metadata_roundtrip() {
             created_at: test_timestamp(),
         }),
         model: "gpt-4.1-mini".to_string(),
-        compile_model: None,
+        synthesis_model: None,
         base_url: None,
     };
     write_config(&config, &path).unwrap();
@@ -165,7 +165,7 @@ fn write_config_without_tree_omits_tree_key() {
             provider: Provider::OpenAI,
             tree: None,
             model: "gpt-4.1-mini".to_string(),
-            compile_model: None,
+            synthesis_model: None,
             base_url: None,
         },
         &path,
@@ -184,7 +184,7 @@ fn seeded_conversion_succeeds_when_tree_exists() {
         provider: Provider::OpenAI,
         tree: Some(make_tree("/tmp/bo")),
         model: "gpt-4.1-mini".to_string(),
-        compile_model: None,
+        synthesis_model: None,
         base_url: None,
     };
 
@@ -203,7 +203,7 @@ fn seeded_conversion_fails_when_tree_missing() {
         provider: Provider::OpenAI,
         tree: None,
         model: "gpt-4.1-mini".to_string(),
-        compile_model: None,
+        synthesis_model: None,
         base_url: None,
     };
 
@@ -216,23 +216,23 @@ fn seeded_config_effective_model_fails_with_empty_model() {
         provider: Provider::OpenAI,
         tree: Some(make_tree("/tmp/bo")),
         model: String::new(),
-        compile_model: None,
+        synthesis_model: None,
         base_url: None,
     };
 
     let seeded = cfg.into_seeded().unwrap();
 
     assert!(seeded.config.effective_model().is_err());
-    assert!(seeded.config.effective_compile_model().is_err());
+    assert!(seeded.config.effective_synthesis_model().is_err());
 }
 
 #[test]
-fn seeded_config_effective_compile_model_prefers_compile_model() {
+fn seeded_config_effective_synthesis_model_prefers_synthesis_model() {
     let cfg = Config {
         provider: Provider::OpenAI,
         tree: Some(make_tree("/tmp/bo")),
         model: "gpt-4o-mini".to_string(),
-        compile_model: Some("gpt-4.1-mini".to_string()),
+        synthesis_model: Some("gpt-4.1-mini".to_string()),
         base_url: None,
     };
 
@@ -243,25 +243,25 @@ fn seeded_config_effective_compile_model_prefers_compile_model() {
         "gpt-4o-mini"
     );
     assert_eq!(
-        seeded.config.effective_compile_model().unwrap().as_str(),
+        seeded.config.effective_synthesis_model().unwrap().as_str(),
         "gpt-4.1-mini"
     );
 }
 
 #[test]
-fn seeded_config_effective_compile_model_falls_back_to_model() {
+fn seeded_config_effective_synthesis_model_falls_back_to_model() {
     let cfg = Config {
         provider: Provider::OpenAI,
         tree: Some(make_tree("/tmp/bo")),
         model: "gpt-4o-mini".to_string(),
-        compile_model: None,
+        synthesis_model: None,
         base_url: None,
     };
 
     let seeded = cfg.into_seeded().unwrap();
 
     assert_eq!(
-        seeded.config.effective_compile_model().unwrap().as_str(),
+        seeded.config.effective_synthesis_model().unwrap().as_str(),
         "gpt-4o-mini"
     );
 }

@@ -67,7 +67,7 @@ enum Commands {
         #[arg(required = true, value_name = "URL_OR_URLS_FILE", num_args = 1..)]
         inputs: Vec<String>,
     },
-    /// Configure bo settings (provider, model, compile_model, base_url)
+    /// Configure bo settings (provider, model, synthesis_model, base_url)
     Config {
         /// LLM provider (openai, deepseek, google, zai, or custom)
         #[arg(long)]
@@ -75,17 +75,17 @@ enum Commands {
         /// Model for LLM operations
         #[arg(long)]
         model: Option<String>,
-        /// Model for compile operations (falls back to --model)
+        /// Model for synthesis operations (falls back to --model)
         #[arg(long)]
-        compile_model: Option<String>,
+        synthesis_model: Option<String>,
         /// OpenAI-compatible endpoint prefix for the custom provider
         /// (everything before /chat/completions)
         #[arg(long)]
         base_url: Option<String>,
     },
-    /// Compile collected documents into a linked knowledge graph
-    Compile {
-        /// Recompile the full corpus from scratch — produces a new branch
+    /// Synthesize collected documents into a linked knowledge graph
+    Synthesize {
+        /// Re-synthesize the full corpus from scratch — produces a new branch
         /// organization each run
         #[arg(long)]
         all: bool,
@@ -140,9 +140,9 @@ enum Commands {
         #[arg(long)]
         include_auth: bool,
     },
-    /// Show tree health and compile readiness
+    /// Show tree health and synthesis readiness
     Status,
-    /// Read the tree's operation journal (append-only log of collects, compiles, queries)
+    /// Read the tree's operation journal (append-only log of collects, syntheses, queries)
     Journal {
         /// Maximum number of recent events to show (newest last)
         #[arg(long, default_value_t = 20)]
@@ -163,7 +163,7 @@ enum CliError {
     Collect(CollectError),
     List(ListError),
     Show(ShowError),
-    Compile(SynthesisError),
+    Synthesize(SynthesisError),
     Status(StatusError),
     ConfigWrite(ConfigWriteError),
 }
@@ -174,7 +174,7 @@ impl CliError {
             CliError::Seed(error) => error.exit_code(),
             CliError::ConfigWrite(error) => error.exit_code(),
             CliError::Collect(CollectError::Transaction(TransactionError::Busy { .. }))
-            | CliError::Compile(SynthesisError::Busy(_))
+            | CliError::Synthesize(SynthesisError::Busy(_))
             | CliError::Raze(RazeError::Busy(_)) => 2,
             _ => 1,
         }
@@ -189,7 +189,7 @@ impl CliError {
             CliError::Collect(error) => error.json_error(),
             CliError::List(error) => error.json_error(),
             CliError::Show(error) => error.json_error(),
-            CliError::Compile(error) => error.json_error(),
+            CliError::Synthesize(error) => error.json_error(),
             CliError::Status(error) => match error {
                 StatusError::Io(msg) => JsonError::new("io_error", msg),
                 StatusError::TreeState(e) => JsonError::new("state_error", e.to_string()),
@@ -211,7 +211,7 @@ impl fmt::Display for CliError {
             CliError::Collect(error) => write!(f, "{}", error),
             CliError::List(error) => write!(f, "{}", error),
             CliError::Show(error) => write!(f, "{}", error),
-            CliError::Compile(error) => write!(f, "{}", error),
+            CliError::Synthesize(error) => write!(f, "{}", error),
             CliError::Status(error) => write!(f, "{}", error),
             CliError::ConfigWrite(error) => write!(f, "{}", error),
         }
@@ -298,7 +298,16 @@ fn emit_cli_error<E: Write>(command: &str, json: bool, error: CliError, stderr: 
 // ── argument helpers ─────────────────────────────────────────────────────────
 
 const KNOWN_COMMANDS: &[&str] = &[
-    "seed", "config", "collect", "compile", "journal", "list", "show", "query", "status", "raze",
+    "seed",
+    "config",
+    "collect",
+    "synthesize",
+    "journal",
+    "list",
+    "show",
+    "query",
+    "status",
+    "raze",
 ];
 
 fn raw_json_mode_requested(args: &[OsString]) -> bool {
@@ -449,7 +458,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
         Commands::Config {
             provider,
             model,
-            compile_model,
+            synthesis_model,
             base_url,
         } => {
             let provider_opt = match provider {
@@ -467,7 +476,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 cli_config::WriteConfigOptions {
                     provider: provider_opt,
                     model,
-                    compile_model,
+                    synthesis_model,
                     base_url,
                 },
                 &config::config_path(),
@@ -528,14 +537,14 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                 Err(error) => emit_cli_error("collect", json, error, stderr),
             }
         }
-        Commands::Compile {
+        Commands::Synthesize {
             all,
             agent,
             dry_run,
         } => {
             let cfg = match require_seeded_config() {
                 Ok(c) => c,
-                Err(error) => return emit_cli_error("compile", json, error, stderr),
+                Err(error) => return emit_cli_error("synthesize", json, error, stderr),
             };
             match synthesize::run(
                 &cfg,
@@ -549,7 +558,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                     let _ = synthesize::render_diagnostics(outcome.stderr_lines(), stderr);
                     match outcome.result {
                         Ok(preview) if json => emit_json_success(
-                            "compile",
+                            "synthesize",
                             &preview,
                             synthesize::preview_warnings(&preview),
                             stdout,
@@ -559,7 +568,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                             0,
                         ),
                         Err(error) => {
-                            emit_cli_error("compile", json, CliError::Compile(error), stderr)
+                            emit_cli_error("synthesize", json, CliError::Synthesize(error), stderr)
                         }
                     }
                 }
@@ -567,7 +576,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                     let _ = synthesize::render_diagnostics(outcome.stderr_lines(), stderr);
                     match outcome.result {
                         Ok(result) if json => emit_json_success(
-                            "compile",
+                            "synthesize",
                             &result,
                             synthesize::result_warnings(&result),
                             stdout,
@@ -577,7 +586,7 @@ fn run_cli<W: Write, E: Write>(cli: Cli, stdout: &mut W, stderr: &mut E) -> i32 
                             0,
                         ),
                         Err(error) => {
-                            emit_cli_error("compile", json, CliError::Compile(error), stderr)
+                            emit_cli_error("synthesize", json, CliError::Synthesize(error), stderr)
                         }
                     }
                 }
