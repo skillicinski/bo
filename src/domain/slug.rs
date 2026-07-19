@@ -114,14 +114,14 @@ impl<'de> Deserialize<'de> for Slug {
 
 // ── public helpers ────────────────────────────────────────────────────────────
 
-/// Resolve a slug to a unique one, appending a hash suffix on collision.
+/// Allocate a unique slug, appending a hash suffix on collision.
 ///
 /// `used` holds already-claimed filename stems. The caller seeds it with
 /// existing on-disk stems (and, in batch contexts, stems claimed earlier
 /// in the batch). If `slug` is not in `used`, it is inserted and returned
 /// as-is. Otherwise a URL-hash suffix is appended and the disambiguated
 /// stem is also inserted into `used`.
-pub fn resolve_slug(slug: &Slug, url: &str, used: &mut std::collections::HashSet<String>) -> Slug {
+pub fn allocate_slug(slug: &Slug, url: &str, used: &mut std::collections::HashSet<String>) -> Slug {
     if used.insert(slug.as_str().to_string()) {
         return slug.clone();
     }

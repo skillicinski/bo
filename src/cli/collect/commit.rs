@@ -279,7 +279,7 @@ pub(super) fn commit_computed(
                 }
                 let base_slug =
                     Slug::generate(computed.title.as_deref().unwrap_or(""), &computed.url);
-                let filename = slug::resolve_slug(&base_slug, &computed.url, &mut used_slugs);
+                let filename = slug::allocate_slug(&base_slug, &computed.url, &mut used_slugs);
                 let leaf_file = format!("leaf/{}.md", filename);
                 let domain_url =
                     Url::parse(&computed.url).expect("URL already validated at fetch time");
