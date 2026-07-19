@@ -57,7 +57,7 @@ fn collision_adds_hash() {
     let mut used = HashSet::from(["introduction".to_string()]);
 
     let base = Slug::parse("introduction").unwrap();
-    let resolved = resolve_slug(&base, "https://example.com/intro1", &mut used);
+    let resolved = allocate_slug(&base, "https://example.com/intro1", &mut used);
     assert_ne!(resolved.as_str(), "introduction");
     assert!(resolved.as_str().starts_with("introduction-"));
     assert_eq!(resolved.as_str().len(), "introduction-".len() + 12); // 6 bytes = 12 hex chars
@@ -67,7 +67,7 @@ fn collision_adds_hash() {
 fn no_collision_no_hash() {
     let mut used = HashSet::new();
     let base = Slug::parse("introduction").unwrap();
-    let resolved = resolve_slug(&base, "https://example.com/intro1", &mut used);
+    let resolved = allocate_slug(&base, "https://example.com/intro1", &mut used);
     assert_eq!(resolved.as_str(), "introduction");
 }
 
@@ -76,8 +76,8 @@ fn different_urls_get_different_hashes() {
     let mut used = HashSet::from(["introduction".to_string()]);
 
     let base = Slug::parse("introduction").unwrap();
-    let r1 = resolve_slug(&base, "https://example.com/intro1", &mut used);
-    let r2 = resolve_slug(&base, "https://example.com/intro2", &mut used);
+    let r1 = allocate_slug(&base, "https://example.com/intro1", &mut used);
+    let r2 = allocate_slug(&base, "https://example.com/intro2", &mut used);
     assert_ne!(r1, r2);
 }
 
@@ -158,14 +158,14 @@ fn parse_accepts_max_length() {
     assert!(Slug::parse(&s).is_ok());
 }
 
-// ── resolve_slug edge cases ────────────────────────────────────────────────
+// ── allocate_slug edge cases ────────────────────────────────────────────────
 
 #[test]
 fn collision_with_long_base_slug_stays_within_limit() {
     // Max-length (80-char) base slug.
     let long_base = Slug::parse(&"a".repeat(80)).unwrap();
     let mut used = HashSet::from([long_base.as_str().to_string()]);
-    let resolved = resolve_slug(&long_base, "https://example.com/conflict", &mut used);
+    let resolved = allocate_slug(&long_base, "https://example.com/conflict", &mut used);
     assert!(
         resolved.as_str().len() <= 80,
         "resolved slug too long: {} chars",
@@ -179,14 +179,14 @@ fn collision_with_long_base_slug_stays_within_limit() {
     );
 }
 
-// ── intra-batch collision (ex resolve_slug_batch) ────────────────────────────
+// ── intra-batch collision (ex allocate_slug_batch) ───────────────────────────
 
 #[test]
 fn intra_batch_collision_distinct_slugs() {
     let mut used = HashSet::new();
     let base = Slug::parse("introduction").unwrap();
-    let r1 = resolve_slug(&base, "https://example.com/intro1", &mut used);
-    let r2 = resolve_slug(&base, "https://example.com/intro2", &mut used);
+    let r1 = allocate_slug(&base, "https://example.com/intro1", &mut used);
+    let r2 = allocate_slug(&base, "https://example.com/intro2", &mut used);
     assert_eq!(r1.as_str(), "introduction");
     assert_ne!(r2.as_str(), "introduction");
     assert!(r2.as_str().starts_with("introduction-"));
