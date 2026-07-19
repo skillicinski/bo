@@ -49,16 +49,43 @@ use std::path::Path;
 use std::process::Output;
 use tempfile::TempDir;
 
-fn add(home: &Path, url: &str) -> Output {
+fn collect(home: &Path, url: &str) -> Output {
     bo(home)
         .args(["collect", url])
         .output()
-        .expect("failed to run bo add")
+        .expect("failed to run bo collect")
 }
 
 // Now refuses non-interactively so cleanup is a no-op unless run interactively.
 fn raze(home: &Path) {
     let _ = bo(home).arg("raze").output();
+}
+
+// ── leaf helpers ──────────────────────────────────────────────────────────────
+
+/// Number of `.md` files in the leaf/ directory. Returns 0 if the directory
+/// doesn't exist yet.
+fn leaf_count(tree: &Path) -> usize {
+    let dir = bo::domain::tree::leaf_dir(tree);
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return 0;
+    };
+    entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+        .count()
+}
+
+/// Read the single leaf file (panics if zero or multiple).
+fn read_leaf(tree: &Path) -> String {
+    let dir = bo::domain::tree::leaf_dir(tree);
+    let entries: Vec<_> = fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "md"))
+        .collect();
+    assert_eq!(entries.len(), 1, "expected exactly one leaf .md file");
+    fs::read_to_string(entries[0].path()).unwrap()
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────
@@ -69,24 +96,16 @@ fn network_happy_path_wikipedia() {
     let home = TempDir::new().unwrap();
     let tree = common::seed(home.path(), "tree");
 
-    let out = add(home.path(), ARTICLE_WIKIPEDIA_2);
+    let out = collect(home.path(), ARTICLE_WIKIPEDIA_2);
     assert!(
         out.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
 
-    // At least one .md file exists
-    let md_files: Vec<_> = fs::read_dir(&tree)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
-        .collect();
-    assert_eq!(md_files.len(), 1);
-
-    // Ledger has one entry
-    let ledger = fs::read_to_string(tree.join("ledger.jsonl")).unwrap();
-    assert_eq!(ledger.lines().count(), 1);
+    // One leaf file and one state entry
+    assert_eq!(leaf_count(&tree), 1);
+    assert_eq!(common::read_state(&tree).leaves.len(), 1);
 
     raze(home.path());
 }
@@ -99,19 +118,14 @@ fn network_happy_path_bodhi() {
     let home = TempDir::new().unwrap();
     let tree = common::seed(home.path(), "tree");
 
-    let out = add(home.path(), ARTICLE_WIKIPEDIA_1);
+    let out = collect(home.path(), ARTICLE_WIKIPEDIA_1);
     assert!(
         out.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let md_file = fs::read_dir(&tree)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .find(|e| e.path().extension().is_some_and(|ext| ext == "md"))
-        .unwrap();
-    let content = fs::read_to_string(md_file.path()).unwrap();
+    let content = read_leaf(&tree);
 
     // No markdown links should survive extraction
     assert!(
@@ -128,7 +142,7 @@ fn network_happy_path_blog() {
     let home = TempDir::new().unwrap();
     common::seed(home.path(), "tree");
 
-    let out = add(home.path(), ARTICLE_BLOG);
+    let out = collect(home.path(), ARTICLE_BLOG);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -144,19 +158,15 @@ fn network_very_long_page() {
     let home = TempDir::new().unwrap();
     let tree = common::seed(home.path(), "tree");
 
-    let out = add(home.path(), VERY_LONG);
+    let out = collect(home.path(), VERY_LONG);
     assert!(
         out.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let md_files: Vec<_> = fs::read_dir(&tree)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
-        .collect();
-    let content = fs::read_to_string(md_files[0].path()).unwrap();
+    assert_eq!(leaf_count(&tree), 1);
+    let content = read_leaf(&tree);
     assert!(
         content.len() > 50_000,
         "expected large file, got {} bytes",
@@ -172,19 +182,14 @@ fn network_404_fails_gracefully() {
     let home = TempDir::new().unwrap();
     let tree = common::seed(home.path(), "tree");
 
-    let out = add(home.path(), DEAD_404);
+    let out = collect(home.path(), DEAD_404);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("404"), "stderr: {stderr}");
 
-    // No markdown file, no ledger
-    let md_files: Vec<_> = fs::read_dir(&tree)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
-        .collect();
-    assert!(md_files.is_empty());
-    assert!(!tree.join("ledger.jsonl").exists());
+    // A failed first collection writes neither a leaf nor tree state.
+    assert_eq!(leaf_count(&tree), 0);
+    assert!(!bo::domain::tree::state_path(&tree).exists());
 
     raze(home.path());
 }
@@ -195,7 +200,7 @@ fn network_pdf_fails_gracefully() {
     let home = TempDir::new().unwrap();
     common::seed(home.path(), "tree");
 
-    let out = add(home.path(), NON_HTML_PDF);
+    let out = collect(home.path(), NON_HTML_PDF);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("not HTML"), "stderr: {stderr}");
@@ -209,10 +214,10 @@ fn network_duplicate_rejected() {
     let home = TempDir::new().unwrap();
     common::seed(home.path(), "tree");
 
-    let out1 = add(home.path(), ARTICLE_WIKIPEDIA_2);
+    let out1 = collect(home.path(), ARTICLE_WIKIPEDIA_2);
     assert!(out1.status.success());
 
-    let out2 = add(home.path(), ARTICLE_WIKIPEDIA_2);
+    let out2 = collect(home.path(), ARTICLE_WIKIPEDIA_2);
     assert!(!out2.status.success());
     let stderr = String::from_utf8_lossy(&out2.stderr);
     assert!(stderr.contains("already collected"), "stderr: {stderr}");
@@ -226,14 +231,13 @@ fn network_near_duplicate_urls_both_stored() {
     let home = TempDir::new().unwrap();
     let tree = common::seed(home.path(), "tree");
 
-    let out1 = add(home.path(), NEAR_DUP_BASE);
+    let out1 = collect(home.path(), NEAR_DUP_BASE);
     assert!(out1.status.success());
 
-    let out2 = add(home.path(), NEAR_DUP_VARIANT);
+    let out2 = collect(home.path(), NEAR_DUP_VARIANT);
     assert!(out2.status.success());
 
-    let ledger = fs::read_to_string(tree.join("ledger.jsonl")).unwrap();
-    assert_eq!(ledger.lines().count(), 2);
+    assert_eq!(common::read_state(&tree).leaves.len(), 2);
 
     raze(home.path());
 }
@@ -244,19 +248,14 @@ fn network_link_heavy_page() {
     let home = TempDir::new().unwrap();
     let tree = common::seed(home.path(), "tree");
 
-    let out = add(home.path(), LINK_HEAVY);
+    let out = collect(home.path(), LINK_HEAVY);
     assert!(
         out.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let md_file = fs::read_dir(&tree)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .find(|e| e.path().extension().is_some_and(|ext| ext == "md"))
-        .unwrap();
-    let content = fs::read_to_string(md_file.path()).unwrap();
+    let content = read_leaf(&tree);
     assert!(
         !content.contains("](http"),
         "output still contains markdown links"
@@ -271,29 +270,23 @@ fn network_slug_collision_pair() {
     let home = TempDir::new().unwrap();
     let tree = common::seed(home.path(), "tree");
 
-    let out1 = add(home.path(), SLUG_COLLISION_1);
+    let out1 = collect(home.path(), SLUG_COLLISION_1);
     assert!(
         out1.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&out1.stderr)
     );
 
-    let out2 = add(home.path(), SLUG_COLLISION_2);
+    let out2 = collect(home.path(), SLUG_COLLISION_2);
     assert!(
         out2.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&out2.stderr)
     );
 
-    let ledger = fs::read_to_string(tree.join("ledger.jsonl")).unwrap();
-    assert_eq!(ledger.lines().count(), 2);
-
-    let md_files: Vec<_> = fs::read_dir(&tree)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
-        .collect();
-    assert_eq!(md_files.len(), 2);
+    // Two state entries and two collision-safe leaf files
+    assert_eq!(common::read_state(&tree).leaves.len(), 2);
+    assert_eq!(leaf_count(&tree), 2);
 
     raze(home.path());
 }
@@ -304,7 +297,7 @@ fn network_500_retries_then_fails() {
     let home = TempDir::new().unwrap();
     common::seed(home.path(), "tree");
 
-    let out = add(home.path(), DEAD_500);
+    let out = collect(home.path(), DEAD_500);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -321,7 +314,7 @@ fn network_binary_content_fails() {
     let home = TempDir::new().unwrap();
     common::seed(home.path(), "tree");
 
-    let out = add(home.path(), NON_HTML_BINARY);
+    let out = collect(home.path(), NON_HTML_BINARY);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("not HTML"), "stderr: {stderr}");
@@ -335,7 +328,7 @@ fn network_paywalled_degrades_gracefully() {
     let home = TempDir::new().unwrap();
     common::seed(home.path(), "tree");
 
-    let out = add(home.path(), PAYWALLED);
+    let out = collect(home.path(), PAYWALLED);
     // May succeed with partial content or fail — either is acceptable
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!stderr.contains("panic"), "binary panicked: {stderr}");
@@ -349,7 +342,7 @@ fn network_js_spa_degrades_gracefully() {
     let home = TempDir::new().unwrap();
     common::seed(home.path(), "tree");
 
-    let out = add(home.path(), JS_SPA);
+    let out = collect(home.path(), JS_SPA);
     // SPA may return some server-rendered content or fail extraction
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!stderr.contains("panic"), "binary panicked: {stderr}");
