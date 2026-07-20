@@ -1,6 +1,6 @@
 // Domain entity and I/O for leaf documents.
 //
-// A leaf is a collected document produced by `bo add`. It lives at
+// A leaf is a collected document produced by `bo collect`. It lives at
 // {output_dir}/leaf/{slug}.md and has YAML frontmatter followed by a markdown body.
 //
 // Analogous to branch.rs; together they define the two entity types in bo's

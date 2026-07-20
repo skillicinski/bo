@@ -4,6 +4,7 @@
 // shapes and thin delegation wrappers.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use crate::domain::state::TreeState;
 use crate::domain::Slug;
@@ -80,6 +81,12 @@ pub(super) fn leaf_resolver(loaded_leaves: &[plan::LoadedLeaf]) -> LeafLookup {
             }
         }
     }
+    // Exact slugs and filenames take precedence over ambiguous title aliases.
+    for leaf in loaded_leaves {
+        refs.insert(leaf.slug.clone(), leaf.filename.clone());
+        refs.insert(leaf.filename.clone(), leaf.filename.clone());
+    }
+
     LeafLookup {
         map: refs,
         collisions,
@@ -102,6 +109,13 @@ pub(super) fn validate_synthesized_body_size(
     }
 
     Ok(())
+}
+
+pub(super) fn leaf_slug_from_file(file: &str) -> &str {
+    Path::new(file)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(file)
 }
 
 pub(super) fn normalize_incremental_leaf_refs(
@@ -257,7 +271,7 @@ pub(super) fn validate_incremental(
         let leaves = normalize_incremental_leaf_refs(&raw.title, &raw.leaves, &lookup.map)?;
         let leaf_slugs: HashSet<String> = leaves
             .iter()
-            .map(|leaf| leaf.strip_suffix(".md").unwrap_or(leaf).to_string())
+            .map(|leaf| leaf_slug_from_file(leaf).to_string())
             .collect();
         // Ensure existing leaves are preserved (no drops)
         for existing_leaf in &existing.leaves {
@@ -328,10 +342,10 @@ pub(super) fn validate_incremental(
                 leaves.len()
             )));
         }
-        if !leaves.iter().any(|leaf| {
-            let slug = leaf.strip_suffix(".md").unwrap_or(leaf);
-            new_leaf_slugs.contains(slug)
-        }) {
+        if !leaves
+            .iter()
+            .any(|leaf| new_leaf_slugs.contains(leaf_slug_from_file(leaf)))
+        {
             // LLM tried to reorganize existing content without integrating a new leaf.
             // Silently drop rather than fail — this is a common model misbehaviour.
             continue;

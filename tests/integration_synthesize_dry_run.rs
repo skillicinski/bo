@@ -290,7 +290,7 @@ fn dry_run_blocked_by_stale_repair_writes_zero() {
     let bo_dir = tree_dir.join(".bo");
 
     // Delete one leaf file so repair is required
-    let missing = tree_dir.join("rust-ownership.md");
+    let missing = tree_dir.join("leaf/rust-ownership.md");
     fs::remove_file(&missing).unwrap();
     assert!(!missing.exists());
 
@@ -357,12 +357,12 @@ fn agent_dry_run_with_scripted_provider_produces_preview_and_zero_writes() {
             {
                 "title": "Rust Memory Safety",
                 "body": "# Rust Memory Safety\n\nOwnership and borrowing make memory safety a compile-time guarantee.",
-                "leaves": ["rust-ownership.md", "memory-safety.md"]
+                "leaves": ["rust-ownership", "memory-safety"]
             },
             {
                 "title": "Systems Design in Rust",
                 "body": "# Systems Design in Rust\n\nZero-cost abstractions and safe concurrency shape Rust systems code.",
-                "leaves": ["safe-concurrency.md", "zero-cost-abstractions.md"]
+                "leaves": ["safe-concurrency", "zero-cost-abstractions"]
             }
         ]
     })
@@ -424,12 +424,12 @@ fn one_shot_dry_run_with_scripted_provider_produces_preview() {
             {
                 "title": "Rust Memory Safety",
                 "body": "# Rust Memory Safety\n\nOwnership and borrowing make memory safety a compile-time guarantee.",
-                "leaves": ["rust-ownership.md", "memory-safety.md"]
+                "leaves": ["rust-ownership", "memory-safety"]
             },
             {
                 "title": "Systems Design in Rust",
                 "body": "# Systems Design in Rust\n\nZero-cost abstractions and safe concurrency shape Rust systems code.",
-                "leaves": ["safe-concurrency.md", "zero-cost-abstractions.md"]
+                "leaves": ["safe-concurrency", "zero-cost-abstractions"]
             }
         ]
     })
@@ -479,7 +479,7 @@ fn agent_dry_run_validation_feedback_then_success() {
             {
                 "title": "Fake Branch",
                 "body": "This branch references a leaf that doesn't exist.",
-                "leaves": ["nonexistent.md", "rust-ownership.md"]
+                "leaves": ["nonexistent.md", "rust-ownership"]
             }
         ]
     })
@@ -491,12 +491,12 @@ fn agent_dry_run_validation_feedback_then_success() {
             {
                 "title": "Rust Memory Safety",
                 "body": "# Rust Memory Safety\n\nOwnership and borrowing make memory safety a compile-time guarantee.",
-                "leaves": ["rust-ownership.md", "memory-safety.md"]
+                "leaves": ["rust-ownership", "memory-safety"]
             },
             {
                 "title": "Systems Design in Rust",
                 "body": "# Systems Design in Rust\n\nZero-cost abstractions and safe concurrency shape Rust systems code.",
-                "leaves": ["safe-concurrency.md", "zero-cost-abstractions.md"]
+                "leaves": ["safe-concurrency", "zero-cost-abstractions"]
             }
         ]
     })

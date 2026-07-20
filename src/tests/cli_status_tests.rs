@@ -56,7 +56,7 @@ fn branch_record(slug: &str, ts: &str, leaf_slugs: &[&str]) -> Branch {
 
 fn write_leaf_file(dir: &Path, filename: &str, url: &str) {
     let content = format!(
-        "---\ntitle: \"{}\"\nurl: {}\ncollected_at: 2026-05-14T10:00:00Z\nupdated_at: 2026-05-14T10:00:00Z\n---\n\n# Test\n\nBody content here.\n",
+        "---\ntitle: \"{}\"\nurl: {}\ncollected_at: 2026-05-14T10:00:00Z\n---\n\n# Test\n\nBody content here.\n",
         filename.trim_end_matches(".md"),
         url
     );

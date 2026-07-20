@@ -25,7 +25,7 @@ npm install -g @skillicinski/bo
 Alternatively, build from source:
 
 ```bash
-cargo install --git https://github.com/skillicinski/bo --tag v0.0.2
+cargo install --git https://github.com/skillicinski/bo --tag v0.1.0
 ```
 
 ## Quickstart

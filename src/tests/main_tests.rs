@@ -204,7 +204,7 @@ fn query_preflight_no_answer_takes_precedence_over_missing_provider() {
     write_state(
         no_results.path(),
         &[(
-            "leaves/cooking.md",
+            "leaf/cooking.md",
             "Cooking Tips",
             "https://example.com/cooking",
         )],
@@ -225,7 +225,7 @@ fn query_preflight_no_answer_takes_precedence_over_missing_provider() {
     write_state(
         weak.path(),
         &[(
-            "leaves/trust.md",
+            "leaf/trust.md",
             "Trust Building",
             "https://example.com/trust",
         )],
@@ -246,11 +246,7 @@ fn query_relevant_sources_require_provider() {
     );
     write_state(
         dir.path(),
-        &[(
-            "leaves/only-leaf.md",
-            "Only Leaf",
-            "https://example.com/only",
-        )],
+        &[("leaf/only-leaf.md", "Only Leaf", "https://example.com/only")],
     );
     let calls = Cell::new(0);
 
@@ -281,11 +277,7 @@ fn query_uses_model_not_synthesis_model() {
     );
     write_state(
         dir.path(),
-        &[(
-            "leaves/only-leaf.md",
-            "Only Leaf",
-            "https://example.com/only",
-        )],
+        &[("leaf/only-leaf.md", "Only Leaf", "https://example.com/only")],
     );
 
     let provider = QueryModelRecordingProvider::new();
@@ -392,13 +384,13 @@ fn seeded_config(tree: &Path) -> SeededConfig {
 }
 
 fn write_leaf(tree: &Path, filename: &str, title: &str, body: &str) {
-    let leaves_dir = tree.join("leaves");
-    fs::create_dir_all(&leaves_dir).unwrap();
+    let leaf_dir = tree.join("leaf");
+    fs::create_dir_all(&leaf_dir).unwrap();
     fs::write(
-        leaves_dir.join(filename),
+        leaf_dir.join(filename),
         format!(
-            "---\ntitle: \"{}\"\nurl: \"https://example.com/{}\"\nsummary: \"{}\"\n---\n\n{}\n",
-            title, filename, title, body
+            "---\ntitle: \"{}\"\nurl: \"https://example.com/{}\"\ncollected_at: 2026-01-01T00:00:00Z\n---\n\n{}\n",
+            title, filename, body
         ),
     )
     .unwrap();

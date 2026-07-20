@@ -11,7 +11,7 @@ use crate::domain::{Branch, Leaf, Title};
 use crate::engine::config::SeededConfig;
 
 use super::types::{SynthesisStages, TWO_STAGE_FULL_THRESHOLD, TWO_STAGE_INCREMENTAL_THRESHOLD};
-use super::validation::{SynthesisPlan, ValidatedBranch};
+use super::validation::{leaf_slug_from_file, SynthesisPlan, ValidatedBranch};
 use super::{
     cluster, execute, parse, prompt, BranchResult, SynthesisError, SynthesisMode, SynthesisOptions,
 };
@@ -126,8 +126,8 @@ pub(super) fn validated_branch_leaf_slugs(branch: &ValidatedBranch) -> Vec<Slug>
         .leaves
         .iter()
         .map(|leaf| {
-            let stem = leaf.strip_suffix(".md").unwrap_or(leaf);
-            Slug::parse(stem).unwrap_or_else(|_| Slug::generate(stem, ""))
+            let slug = leaf_slug_from_file(leaf);
+            Slug::parse(slug).unwrap_or_else(|_| Slug::generate(slug, ""))
         })
         .collect()
 }

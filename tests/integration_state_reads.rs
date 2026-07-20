@@ -41,7 +41,7 @@ fn stage_tree(home: &Path) -> std::path::PathBuf {
     fs::create_dir_all(&leaves_dir).unwrap();
     for (slug, title, url) in &leaves {
         let content = format!(
-            "---\ntitle: \"{title}\"\nurl: {url}\ncollected_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\n# {title}\n\nBody for {slug}.\n"
+            "---\ntitle: \"{title}\"\nurl: {url}\ncollected_at: 2026-01-01T00:00:00Z\n---\n\n# {title}\n\nBody for {slug}.\n"
         );
         fs::write(leaves_dir.join(format!("{slug}.md")), content).unwrap();
     }

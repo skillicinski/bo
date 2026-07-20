@@ -76,15 +76,16 @@ fn upsert_state_leaf(tree: &Path, file: &str, title: &str, collected_at: &str) {
     common::ensure_state(tree);
     let mut state = common::read_state(tree);
     let slug = file.trim_end_matches(".md").to_string();
-    let url = format!("https://example.com/{}", file.trim_end_matches(".md"));
-    if let Some(existing) = state.leaves.iter_mut().find(|leaf| leaf.file == file) {
+    let state_file = format!("leaf/{file}");
+    let url = format!("https://example.com/{slug}");
+    if let Some(existing) = state.leaves.iter_mut().find(|leaf| leaf.file == state_file) {
         existing.title = Title::parse(title).ok();
         existing.url = Url::parse(&url).unwrap();
         existing.collected_at = Timestamp::parse(collected_at).unwrap();
     } else {
         state.leaves.push(bo::domain::Leaf {
             slug: Slug::parse(&slug).unwrap_or_else(|_| Slug::generate(&slug, "")),
-            file: file.to_string(),
+            file: state_file,
             title: Title::parse(title).ok(),
             url: Url::parse(&url).unwrap(),
             collected_at: Timestamp::parse(collected_at).unwrap(),
@@ -118,7 +119,7 @@ fn set_state_branches_for_leaf(tree: &Path, file: &str, branches: &[&str], times
         } else {
             state.branches.push(bo::domain::Branch {
                 slug: Slug::parse(branch_slug).unwrap(),
-                file: format!("branches/{branch_slug}.md"),
+                file: format!("branch/{branch_slug}.md"),
                 title: Title::parse(branch_slug).unwrap(),
                 created_at: Timestamp::parse(timestamp).unwrap(),
                 updated_at: Timestamp::parse(timestamp).unwrap(),
@@ -133,27 +134,16 @@ fn set_state_branches_for_leaf(tree: &Path, file: &str, branches: &[&str], times
 
 fn write_leaf(tree: &Path, file: &str, title: &str, collected_at: &str, branches: Option<&[&str]>) {
     let escaped_title = title.replace('\\', "\\\\").replace('"', "\\\"");
-    let mut content = format!(
-        "---\ntitle: \"{}\"\nurl: https://example.com/{}\ncollected_at: {}\nupdated_at: {}\n",
+    let content = format!(
+        "---\ntitle: \"{}\"\nurl: https://example.com/{}\ncollected_at: {}\n---\n\n# {title}\n\nBody.\n",
         escaped_title,
         file.trim_end_matches(".md"),
         collected_at,
-        collected_at,
     );
 
-    if let Some(branches) = branches {
-        if branches.is_empty() {
-            content.push_str("branches: []\n");
-        } else {
-            content.push_str("branches:\n");
-            for branch in branches {
-                content.push_str(&format!("  - {branch}\n"));
-            }
-        }
-    }
-
-    content.push_str(&format!("---\n\n# {title}\n\nBody.\n"));
-    fs::write(tree.join(file), content).unwrap();
+    let leaf_dir = tree.join("leaf");
+    fs::create_dir_all(&leaf_dir).unwrap();
+    fs::write(leaf_dir.join(file), content).unwrap();
     upsert_state_leaf(tree, file, title, collected_at);
     set_state_branches_for_leaf(tree, file, branches.unwrap_or(&[]), collected_at);
 }
@@ -211,16 +201,15 @@ fn write_show_leaf(
 
     let escaped_title = frontmatter_title.replace('\\', "\\\\").replace('"', "\\\"");
     let content = format!(
-        "---\ntitle: \"{}\"\nurl: https://example.com/{}\ncollected_at: 2025-04-01T12:00:00Z\nupdated_at: 2025-04-01T12:00:00Z\n---\n\n{}",
+        "---\ntitle: \"{}\"\nurl: https://example.com/{}\ncollected_at: 2025-04-01T12:00:00Z\n---\n\n{}",
         escaped_title,
         file.trim_end_matches(".md"),
         body,
     );
 
-    if let Some(parent) = tree.join(file).parent() {
-        fs::create_dir_all(parent).unwrap();
-    }
-    fs::write(tree.join(file), content).unwrap();
+    let path = tree.join("leaf").join(file);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, content).unwrap();
 }
 
 fn write_combined_flags_tree(tree: &Path) {
@@ -755,14 +744,14 @@ fn list_json_output_is_parseable_and_includes_required_fields_and_degradation_st
 
     let live = leaves
         .iter()
-        .find(|row| row.get("file").and_then(Value::as_str) == Some("live-entry.md"))
-        .expect("missing live-entry.md row");
+        .find(|row| row.get("file").and_then(Value::as_str) == Some("leaf/live-entry.md"))
+        .expect("missing leaf/live-entry.md row");
     assert_eq!(live.get("degraded").and_then(Value::as_bool), Some(false));
 
     let missing = leaves
         .iter()
-        .find(|row| row.get("file").and_then(Value::as_str) == Some("missing-entry.md"))
-        .expect("missing missing-entry.md row");
+        .find(|row| row.get("file").and_then(Value::as_str) == Some("leaf/missing-entry.md"))
+        .expect("missing leaf/missing-entry.md row");
     assert_eq!(missing.get("degraded").and_then(Value::as_bool), Some(true));
     assert!(
         missing
@@ -814,11 +803,11 @@ fn list_combined_flags_filter_sort_limit_and_emit_json() {
     assert_eq!(
         files,
         vec![
-            "a-newest.md",
-            "a-middle.md",
-            "a-older.md",
-            "a-old.md",
-            "a-oldish.md",
+            "leaf/a-newest.md",
+            "leaf/a-middle.md",
+            "leaf/a-older.md",
+            "leaf/a-old.md",
+            "leaf/a-oldish.md",
         ]
     );
 
@@ -834,8 +823,8 @@ fn list_combined_flags_filter_sort_limit_and_emit_json() {
             "row missing branch-a: {row}"
         );
     }
-    assert!(!files.contains(&"b-other.md"));
-    assert!(!files.contains(&"a-oldest.md"));
+    assert!(!files.contains(&"leaf/b-other.md"));
+    assert!(!files.contains(&"leaf/a-oldest.md"));
 }
 
 // ── show ─────────────────────────────────────────────────────────────────────
@@ -958,7 +947,7 @@ fn show_json_output_is_parseable_and_contains_required_fields() {
     let leaf = &payload["data"];
 
     assert_eq!(leaf["title"], "Json Title");
-    assert_eq!(leaf["file"], "json-title.md");
+    assert_eq!(leaf["file"], "leaf/json-title.md");
     assert_eq!(leaf["url"], "https://example.com/json-title");
     assert_eq!(leaf["frontmatter"]["title"], "Json Title");
     assert!(
@@ -1094,8 +1083,8 @@ fn raze_refuses_without_interactive_terminal_and_preserves_tree() {
     assert!(auth_path(&home).exists());
 
     // Manually write a tree file and state entry so raze has something to delete
-    fs::create_dir_all(&tree).unwrap();
-    fs::write(tree.join("article.md"), "# Article").unwrap();
+    fs::create_dir_all(tree.join("leaf")).unwrap();
+    fs::write(tree.join("leaf/article.md"), "# Article").unwrap();
     upsert_state_leaf(&tree, "article.md", "Article", "2026-01-01T00:00:00Z");
 
     let out = raze(home.path());
@@ -1106,7 +1095,7 @@ fn raze_refuses_without_interactive_terminal_and_preserves_tree() {
     assert!(stderr.contains("interactive terminal"), "stderr: {stderr}");
 
     // Nothing was deleted
-    assert!(tree.join("article.md").exists());
+    assert!(tree.join("leaf/article.md").exists());
     assert!(config_path(&home).exists());
     assert!(auth_path(&home).exists());
 }

@@ -77,7 +77,7 @@ fn branch_record(slug: &str, title: &str, leaf_slugs: &[&str]) -> Branch {
 fn loaded_leaf(slug: &str, title: &str) -> LoadedLeaf {
     LoadedLeaf {
         slug: slug.to_string(),
-        filename: format!("{}.md", slug),
+        filename: format!("leaf/{slug}.md"),
         title: title.to_string(),
         summary: None,
         body: format!("body of {}", title),
@@ -111,25 +111,25 @@ fn setup_incremental_tree(dir: &Path) -> (SeededConfig, TreeState, Vec<LoadedLea
     let mut state = fresh_state("test", "2026-01-01T00:00:00Z", Some("2026-01-10T00:00:00Z"));
     state.leaves.push(leaf_record(
         "leaf-a",
-        "leaf-a.md",
+        "leaf/leaf-a.md",
         "Leaf A",
         "2026-01-15T00:00:00Z",
     ));
     state.leaves.push(leaf_record(
         "leaf-b",
-        "leaf-b.md",
+        "leaf/leaf-b.md",
         "Leaf B",
         "2026-01-15T00:00:00Z",
     ));
     state.leaves.push(leaf_record(
         "leaf-c",
-        "leaf-c.md",
+        "leaf/leaf-c.md",
         "Leaf C",
         "2026-01-05T00:00:00Z",
     ));
     state.leaves.push(leaf_record(
         "leaf-d",
-        "leaf-d.md",
+        "leaf/leaf-d.md",
         "Leaf D",
         "2026-01-05T00:00:00Z",
     ));
@@ -139,10 +139,10 @@ fn setup_incremental_tree(dir: &Path) -> (SeededConfig, TreeState, Vec<LoadedLea
         &["leaf-c", "leaf-d"],
     ));
 
-    write_leaf(dir, "leaf-a.md", "---\ntitle: Leaf A\n---\n\nbody a\n");
-    write_leaf(dir, "leaf-b.md", "---\ntitle: Leaf B\n---\n\nbody b\n");
-    write_leaf(dir, "leaf-c.md", "---\ntitle: Leaf C\n---\n\nbody c\n");
-    write_leaf(dir, "leaf-d.md", "---\ntitle: Leaf D\n---\n\nbody d\n");
+    write_leaf(dir, "leaf/leaf-a.md", "---\ntitle: Leaf A\n---\n\nbody a\n");
+    write_leaf(dir, "leaf/leaf-b.md", "---\ntitle: Leaf B\n---\n\nbody b\n");
+    write_leaf(dir, "leaf/leaf-c.md", "---\ntitle: Leaf C\n---\n\nbody c\n");
+    write_leaf(dir, "leaf/leaf-d.md", "---\ntitle: Leaf D\n---\n\nbody d\n");
 
     std::fs::create_dir_all(dir.join("branch")).unwrap();
     std::fs::write(
@@ -232,20 +232,24 @@ fn valid_leaf_reference_map_resolves_by_filename_stem_and_unique_title() {
 
     assert!(lookup.collisions.is_empty());
     assert_eq!(
-        lookup.map.get("alpha-concept.md"),
-        Some(&"alpha-concept.md".to_string())
+        lookup.map.get("leaf/alpha-concept.md"),
+        Some(&"leaf/alpha-concept.md".to_string())
+    );
+    assert_eq!(
+        lookup.map.get("leaf/alpha-concept"),
+        Some(&"leaf/alpha-concept.md".to_string())
     );
     assert_eq!(
         lookup.map.get("alpha-concept"),
-        Some(&"alpha-concept.md".to_string())
+        Some(&"leaf/alpha-concept.md".to_string())
     );
     assert_eq!(
         lookup.map.get("alpha concept"),
-        Some(&"alpha-concept.md".to_string())
+        Some(&"leaf/alpha-concept.md".to_string())
     );
     assert_eq!(
-        lookup.map.get("beta-thing.md"),
-        Some(&"beta-thing.md".to_string())
+        lookup.map.get("leaf/beta-thing.md"),
+        Some(&"leaf/beta-thing.md".to_string())
     );
 }
 
@@ -267,11 +271,11 @@ fn valid_leaf_reference_map_drops_ambiguous_title_keys() {
     );
     assert_eq!(
         lookup.map.get("gamma-one"),
-        Some(&"gamma-one.md".to_string())
+        Some(&"leaf/gamma-one.md".to_string())
     );
     assert_eq!(
         lookup.map.get("gamma-two"),
-        Some(&"gamma-two.md".to_string())
+        Some(&"leaf/gamma-two.md".to_string())
     );
 }
 
@@ -283,7 +287,7 @@ fn collision_warnings_captured_as_data_not_printed() {
     ];
     let mut warnings = Vec::new();
     parse_and_validate_with_input_size(
-        &branch_response(&["gamma-one", "gamma-two.md"]),
+        &branch_response(&["gamma-one", "leaf/gamma-two.md"]),
         &leaves,
         1024,
         &mut warnings,
@@ -307,7 +311,7 @@ fn parse_resolves_leaf_references_by_slug_filename_and_title() {
     ];
 
     let plan = parse_and_validate_with_input_size(
-        &branch_response(&["alpha-concept", "beta-thing.md"]),
+        &branch_response(&["alpha-concept", "leaf/beta-thing.md"]),
         &leaves,
         1024,
         &mut Vec::new(),
@@ -315,7 +319,7 @@ fn parse_resolves_leaf_references_by_slug_filename_and_title() {
     .expect("refs by slug and filename must resolve");
     assert_eq!(
         plan.branches[0].leaves,
-        vec!["alpha-concept.md", "beta-thing.md"]
+        vec!["leaf/alpha-concept.md", "leaf/beta-thing.md"]
     );
 
     parse_and_validate_with_input_size(
@@ -325,6 +329,27 @@ fn parse_resolves_leaf_references_by_slug_filename_and_title() {
         &mut Vec::new(),
     )
     .expect("refs by unique title must resolve");
+}
+
+#[test]
+fn parse_resolves_disambiguated_leaf_slug() {
+    let leaves = vec![
+        loaded_leaf("shared-topic-a1b2c3", "Shared Topic"),
+        loaded_leaf("other-topic", "Other Topic"),
+    ];
+
+    let plan = parse_and_validate_with_input_size(
+        &branch_response(&["shared-topic-a1b2c3", "other-topic"]),
+        &leaves,
+        1024,
+        &mut Vec::new(),
+    )
+    .expect("exact state slugs must resolve independently of titles");
+
+    assert_eq!(
+        plan.branches[0].leaves,
+        vec!["leaf/shared-topic-a1b2c3.md", "leaf/other-topic.md"]
+    );
 }
 
 #[test]
@@ -435,9 +460,15 @@ fn parse_incremental_update_preserves_existing_leaves_and_adds_new() {
 
     assert_eq!(plan.branches.len(), 1);
     assert_eq!(plan.branches[0].slug, "existing");
-    assert!(plan.branches[0].leaves.contains(&"leaf-a.md".to_string()));
-    assert!(plan.branches[0].leaves.contains(&"leaf-c.md".to_string()));
-    assert!(plan.branches[0].leaves.contains(&"leaf-d.md".to_string()));
+    assert!(plan.branches[0]
+        .leaves
+        .contains(&"leaf/leaf-a.md".to_string()));
+    assert!(plan.branches[0]
+        .leaves
+        .contains(&"leaf/leaf-c.md".to_string()));
+    assert!(plan.branches[0]
+        .leaves
+        .contains(&"leaf/leaf-d.md".to_string()));
 }
 
 #[test]
