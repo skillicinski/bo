@@ -3,35 +3,5 @@ name = "bo"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Collect web pages into a local markdown knowledge tree"
-repository = "https://github.com/skillicinski/bo"
-homepage = "https://github.com/skillicinski/bo"
-keywords = ["cli", "knowledge-base", "markdown", "rag", "web"]
-categories = ["command-line-utilities"]
-
-[lib]
-name = "bo"
-path = "src/lib.rs"
-
-[dependencies]
-trafilatura = { version = "0.3", features = ["markdown"] }
-reqwest = { version = "0.12", features = ["blocking", "json"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-chrono = { version = "0.4", features = ["serde"] }
-sha2 = "0.10"
-url = "2"
-quick-xml = "0.37"
-clap = { version = "4", features = ["derive"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-async-trait = "0.1"
-tokio = { version = "1", features = ["rt", "macros", "time"] }
-serde_yaml_ng = "0.10"
-schemars = "0.8"
-
-[dev-dependencies]
-async-trait = "0.1"
-serial_test = "3.4.0"
-tempfile = "3"
+description = "Create local bo seed directories"
+repository = "https://github.com/skillicinski/bo.git"

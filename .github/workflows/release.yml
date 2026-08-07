@@ -33,7 +33,7 @@ jobs:
         run: cargo test
 
       - name: Install smoke test
-        run: ./scripts/smoke-test-install.sh
+        uses: ./.github/actions/install-smoke
 
   build:
     needs: gate

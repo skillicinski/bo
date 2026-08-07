@@ -1,0 +1,33 @@
+name: Install smoke test
+description: Install bo outside the repository and exercise bo seed
+
+runs:
+  using: composite
+  steps:
+    - name: Install and run bo
+      shell: bash
+      run: |
+        set -euo pipefail
+        INSTALL_ROOT="$(mktemp -d)"
+        FAKE_HOME="$(mktemp -d)"
+        WORK_DIR="$(mktemp -d)"
+        cleanup() {
+          rm -rf "$INSTALL_ROOT" "$FAKE_HOME" "$WORK_DIR"
+        }
+        trap cleanup EXIT
+
+        cargo install --path . --locked --root "$INSTALL_ROOT" --quiet
+        BO="$INSTALL_ROOT/bin/bo"
+        cd "$WORK_DIR"
+
+        output=$(HOME="$FAKE_HOME" "$BO" seed --name test)
+        [[ "$output" == "seeded at $FAKE_HOME/.bo/test" ]]
+        [[ -d "$FAKE_HOME/.bo/test" ]]
+
+        if HOME="$FAKE_HOME" "$BO" seed --name test >/dev/null 2>&1; then
+          echo "existing seed unexpectedly succeeded" >&2
+          exit 1
+        fi
+
+        default_output=$(HOME="$FAKE_HOME" "$BO" seed)
+        [[ "$default_output" == seeded\ at\ "$FAKE_HOME"/.bo/*-* ]]
