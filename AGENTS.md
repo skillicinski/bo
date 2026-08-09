@@ -1,4 +1,4 @@
-# Development Rules
+# Rules
 
 ## Conversational Style
 
@@ -17,30 +17,18 @@
 - Do not preserve backward compatibility unless the user asks for it.
 - For evaluation work, read `evals/AGENTS.md` before changing or running the corpus workflow.
 
-## Commands
-
-- After code changes (not docs), run `cargo fmt --check` and `cargo clippy --all-targets --all-features -- -D warnings` with full output. Fix all errors and warnings before committing.
-- Before opening a PR, also run `cargo test` as required by `CONTRIBUTING.md`.
-
-## Dependency and Install Security
-
-- Treat npm dep and lockfile changes as reviewed code. Direct external deps stay pinned to exact versions.
-- Hydrate/update locally with npm install --ignore-scripts; clean/CI-style with npm ci --ignore-scripts. Don't run lifecycle scripts unless the user asks.
-- If dep metadata changes, refresh package-lock.json with npm install --package-lock-only --ignore-scripts.
-
 ## Git
 
-Multiple pi sessions may be running in this cwd at the same time, each modifying different files. Git operations that touch unstaged, staged, or untracked files outside your own changes will stomp on other sessions' work. Follow these rules:
+Multiple agent sessions may be running in this cwd at the same time, each modifying different files. Git operations that touch unstaged, staged, or untracked files outside your own changes will stomp on other sessions' work. Do not use built-in web search to reach the project's Github repository, prefer the `gh` CLI instead.
 
-Committing:
+Committing changes:
 
 - Only commit files YOU changed in THIS session.
 - Stage explicit paths (git add <path1> <path2>); never git add -A / git add ..
 - Before committing, run git status and verify you are only staging your files.
 - Message format: {feat,fix,refactor,docs,test}[(scope)]: <commit message> (optionally multiple lines). Message is informative and concise.
 
-Never run (destroys other agents' work or bypasses checks):
-- git reset --hard, git checkout ., git clean -fd, git stash, git add -A, git add ., git commit --no-verify.
+Never run (destroys other agents' work or bypasses checks): `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, `git add -A`, `git add .`, `git commit --no-verify`.
 
 If rebase conflicts occur:
 
@@ -48,31 +36,11 @@ If rebase conflicts occur:
 - If a conflict is in a file you did not modify, abort and ask the user.
 - Never force push.
 
-## Issues & PRs
-
-See CONTRIBUTING.md for the contributor gate.
-
-### Solving issues
-
-- Read the issue body and comments, linked or blocking issues, canonical project documentation, and the milestone description when the issue is assigned to one. Confirm required predecessor work has merged.
-- Revalidate the issue against current `main`. Line numbers, proposed module boundaries, and implementation sketches are evidence, not immutable specifications.
-- If the premise is stale, duplicated, blocked, or conflicts with current architecture, update or close the issue before changing code.
-- Treat acceptance criteria and existing observable behavior as the contract unless the issue explicitly permits a breaking change. Do not add unspecified backward compatibility.
-- Prefer the smallest complete change. Do not expand scope or introduce abstractions without a concrete need in the current issue.
-- Do not reopen settled architectural decisions without new concrete evidence.
-- An issue is not solved when implementation ends. After required checks pass, audit the completed diff against the issue's acceptance criteria before declaring it done.
-- For non-trivial completed work, delegate a read-only review after the builder finishes, never in the same parallel batch:
-  - use `reviewer` for the default focused review;
-  - use `reviewer-ensemble` for significant multi-file changes needing independent cross-vendor review;
-  - use `adversarial-reviewer` for architecture, security, state consistency, migration, or other cross-cutting risks.
-- Treat delegated findings as review assertions until their evidence is verified. Do not discard an evidence-backed finding by majority vote.
-- Review findings cite `file:line` evidence and are classified as blockers, requested changes, or notes.
-
 ### Pull requests
 
 When posting issue/PR comments:
 
-- Write the comment to a temp file and post with gh issue/pr comment --body-file (never multi-line markdown via --body).
+- Write the comment to a temp file and post with `gh issue/pr comment --body-file` (never multi-line markdown via `--body`).
 - Keep comments concise, technical, in the user's tone.
 
 When closing issues via commit:
@@ -81,9 +49,9 @@ When closing issues via commit:
 
 When reviewing PRs:
 
-- Do not run gh pr checkout, git switch, or otherwise move the worktree to the PR branch unless the user explicitly asks.
-- Use gh pr view, gh pr diff, gh api, and local git show/git diff against fetched refs to inspect PR metadata, commits, and patches without changing branches.
-- If you need PR file contents, fetch/read them into temporary files or use git show <ref>:<path> without switching branches.
+- Do not run `gh pr checkout`, `git switch`, or otherwise move the worktree to the PR branch unless the user explicitly asks.
+- Use `gh pr view`, `gh pr diff`, `gh api`, and local `git show`/`git diff` against fetched refs to inspect PR metadata, commits, and patches without changing branches.
+- If you need PR file contents, fetch/read them into temporary files or use `git show <ref>:<path>` without switching branches.
 
 When creating PRs:
 
