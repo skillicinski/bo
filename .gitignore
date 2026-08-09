@@ -11,5 +11,13 @@ internal/
 
 # agents
 .agents/
+
+# generated agent evaluation corpus and reports
+/evals/*
+!/evals/AGENTS.md
+!/evals/manifest.txt
+!/evals/RUBRIC.md
+!/evals/run.sh
+
 /.pi/*
 !/.pi/extensions/

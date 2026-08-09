@@ -15,6 +15,7 @@
 - Inline single-line helpers that have only one call site.
 - Always ask before removing functionality or code that appears intentional.
 - Do not preserve backward compatibility unless the user asks for it.
+- For evaluation work, read `evals/AGENTS.md` before changing or running the corpus workflow.
 
 ## Commands
 
