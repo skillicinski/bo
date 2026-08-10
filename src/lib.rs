@@ -50,11 +50,11 @@ pub mod application {
                 target.display()
             ));
         }
-        let records = super::load_state(&target)?;
+        let state = super::load_state(&target)?;
         if full {
-            serde_json::to_string_pretty(&records).map_err(|error| error.to_string())
+            serde_json::to_string_pretty(&state).map_err(|error| error.to_string())
         } else {
-            Ok(format!("{} documents snapped", records.len()))
+            Ok(format!("{} documents snapped", state.raw.len()))
         }
     }
 
@@ -82,7 +82,7 @@ pub(crate) fn home_dir() -> Result<PathBuf, String> {
 }
 
 fn snap_at(target: &Path, urls: &[String]) -> Result<application::SnapReport, String> {
-    let mut records = load_state(target)?;
+    let mut state = load_state(target)?;
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .user_agent("bo/0.1")
@@ -93,12 +93,12 @@ fn snap_at(target: &Path, urls: &[String]) -> Result<application::SnapReport, St
     for url in urls {
         match snap_one(&client, target, url) {
             Ok(snapshot) => {
-                records.push(StateRecord {
+                state.raw.push(RawRecord {
                     filename: snapshot.filename.clone(),
                     url: url.clone(),
                     written_at: snapshot.written_at,
                 });
-                write_state(target, &records)?;
+                write_state(target, &state)?;
                 outcomes.push((url.clone(), Ok(snapshot.filename)));
             }
             Err(error) => {
@@ -170,11 +170,26 @@ struct Snapshot {
     written_at: u128,
 }
 
+#[derive(Default, Deserialize, Serialize)]
+pub(crate) struct State {
+    pub(crate) raw: Vec<RawRecord>,
+    pub(crate) summaries: Vec<SummaryRecord>,
+}
+
 #[derive(Deserialize, Serialize)]
-struct StateRecord {
-    filename: String,
-    url: String,
-    written_at: u128,
+pub(crate) struct RawRecord {
+    pub(crate) filename: String,
+    pub(crate) url: String,
+    pub(crate) written_at: u128,
+}
+
+#[derive(Deserialize, Serialize, Clone)]
+pub(crate) struct SummaryRecord {
+    pub(crate) filename: String,
+    pub(crate) source_key: String,
+    pub(crate) derived_from: String,
+    pub(crate) created_at: u128,
+    pub(crate) updated_at: u128,
 }
 
 fn extract_page(html: &str) -> Result<Page, String> {
@@ -304,11 +319,11 @@ fn seed_at(home: &Path, requested_name: Option<&str>) -> Result<PathBuf, String>
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let path = root.join(&name);
     fs::create_dir(&path).map_err(|error| error.to_string())?;
-    write_state(&path, &[])?;
+    write_state(&path, &State::default())?;
     Ok(path)
 }
 
-fn load_state(target: &Path) -> Result<Vec<StateRecord>, String> {
+pub(crate) fn load_state(target: &Path) -> Result<State, String> {
     let path = target.join(STATE_FILE);
     let contents = fs::read_to_string(&path)
         .map_err(|error| format!("reading {} failed: {error}", path.display()))?;
@@ -316,10 +331,10 @@ fn load_state(target: &Path) -> Result<Vec<StateRecord>, String> {
         .map_err(|error| format!("parsing {} failed: {error}", path.display()))
 }
 
-fn write_state(target: &Path, records: &[StateRecord]) -> Result<(), String> {
+pub(crate) fn write_state(target: &Path, state: &State) -> Result<(), String> {
     let path = target.join(STATE_FILE);
     let temporary_path = target.join(format!(".{STATE_FILE}.tmp"));
-    let contents = serde_json::to_string_pretty(records)
+    let contents = serde_json::to_string_pretty(state)
         .map_err(|error| format!("serializing {} failed: {error}", path.display()))?;
     let write_result = (|| -> io::Result<()> {
         let mut file = File::create(&temporary_path)?;
@@ -449,7 +464,7 @@ mod tests {
         fs::write(target.join(STATE_FILE), "previous state\n").unwrap();
         fs::create_dir(target.join(format!(".{STATE_FILE}.tmp"))).unwrap();
 
-        assert!(write_state(&target, &[]).is_err());
+        assert!(write_state(&target, &State::default()).is_err());
         assert_eq!(
             fs::read_to_string(target.join(STATE_FILE)).unwrap(),
             "previous state\n"

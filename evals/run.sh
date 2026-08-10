@@ -50,14 +50,29 @@ set -e
 
 missing=0
 : >"$report/missing-summaries.log"
-for raw in "$target"/*.md; do
-    [ -f "$raw" ] || continue
-    summary="$target/summaries/$(basename "$raw")"
-    if [ ! -s "$summary" ]; then
-        printf 'missing summary: %s\n' "$(basename "$raw")" >>"$report/missing-summaries.log"
-        missing=$((missing + 1))
-    fi
-done
+python3 - "$target/state.json" "$target" >"$report/missing-summaries.log" <<'PY'
+import json
+import os
+import sys
+
+state_path, target = sys.argv[1:]
+with open(state_path, encoding="utf-8") as file:
+    state = json.load(file)
+
+raw_records = {record["filename"]: record["url"] for record in state["raw"]}
+source_keys = set()
+for filename in os.listdir(target):
+    if filename.lower().endswith(".md") and os.path.isfile(os.path.join(target, filename)):
+        source_keys.add(raw_records.get(filename, f"raw:{filename}"))
+
+summaries = {record["source_key"]: record for record in state["summaries"]}
+for source_key in sorted(source_keys):
+    record = summaries.get(source_key)
+    path = os.path.join(target, "summaries", record["filename"]) if record else ""
+    if not record or not os.path.isfile(path) or os.path.getsize(path) == 0:
+        print(f"missing summary: {source_key}")
+PY
+missing=$(wc -l <"$report/missing-summaries.log" | tr -d ' ')
 
 hashes >"$report/raw-after.sha256"
 if ! diff -u "$report/raw-before.sha256" "$report/raw-after.sha256" >"$report/raw-hash-diff.log"; then

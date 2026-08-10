@@ -123,12 +123,17 @@ fn run_agent(
     if documents.is_empty() {
         return Err(format!("no raw Markdown documents in {}", target.display()));
     }
+    let state = crate::load_state(&target)?;
+    let sources = source_groups(&documents, &state);
     let mut context = ToolContext {
         root,
         target: target.clone(),
         documents,
+        sources,
+        state,
         cwd: target,
         max_output_bytes: config.max_tool_output_bytes,
+        state_read: false,
     };
     let prompt = system_prompt(&context);
     let document_names: Vec<_> = context.documents.keys().cloned().collect();
@@ -137,7 +142,7 @@ fn run_agent(
         json!({
             "role": "user",
             "content": format!(
-                "Inspect every listed raw document, then write one concise Markdown summary for each. Raw documents: {}",
+                "Call read_state first. Then inspect the latest raw snapshot for every source identity and write one concise Markdown summary per source. Raw documents: {}",
                 document_names.join(", ")
             )
         }),
@@ -157,7 +162,7 @@ fn run_agent(
                 "max turns reached ({}) with {} of {} summaries written",
                 config.max_turns,
                 summarized.len(),
-                context.documents.len()
+                context.sources.len()
             ));
         }
         turns += 1;
@@ -186,7 +191,7 @@ fn run_agent(
                         "max tool calls reached ({}) with {} of {} summaries written",
                         config.max_tool_calls,
                         summarized.len(),
-                        context.documents.len()
+                        context.sources.len()
                     ));
                 }
                 tool_calls += 1;
@@ -210,9 +215,9 @@ fn run_agent(
         }
 
         let missing: Vec<_> = context
-            .documents
+            .sources
             .keys()
-            .filter(|name| !summarized.contains(*name))
+            .filter(|source_key| !summarized.contains(*source_key))
             .cloned()
             .collect();
         if missing.is_empty() {
@@ -229,7 +234,7 @@ fn run_agent(
                 "max turns reached ({}) with {} of {} summaries written",
                 config.max_turns,
                 summarized.len(),
-                context.documents.len()
+                context.sources.len()
             ));
         }
         correction_sent = true;
@@ -237,7 +242,7 @@ fn run_agent(
         messages.push(json!({
             "role": "user",
             "content": format!(
-                "You stopped before completing the task. Use the bounded tools now and write successful summaries for every missing raw document: {}",
+                "You stopped before completing the task. Use the bounded tools now and write successful summaries for every missing source identity: {}",
                 missing.join(", ")
             )
         }));
@@ -304,15 +309,41 @@ fn tools() -> Value {
         {
             "type": "function",
             "function": {
+                "name": "read_state",
+                "description": "Read the authoritative state for the target directory.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_summary",
+                "description": "Read the existing Markdown summary for one source identity.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"source_key": {"type": "string"}},
+                    "required": ["source_key"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "write_summary",
-                "description": "Replace the Markdown summary for one raw document in the summaries directory.",
+                "description": "Write or replace the Markdown summary for one source identity using its newest raw snapshot.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "source_filename": {"type": "string"},
+                        "source_key": {"type": "string"},
                         "markdown": {"type": "string"}
                     },
-                    "required": ["source_filename", "markdown"],
+                    "required": ["source_key", "markdown"],
                     "additionalProperties": false
                 }
             }
@@ -322,18 +353,27 @@ fn tools() -> Value {
 
 fn system_prompt(context: &ToolContext) -> String {
     format!(
-        "You are bo's bounded document-summary agent. Inspect every raw Markdown document in {}. Never modify or delete raw files. Summarize only facts present in each source. Preserve epistemic status: clearly attribute author experience or measurements (for example, 'the author reports'), recommendations or opinions (for example, 'the article recommends'), and predictions or forecasts (for example, 'the author predicts'); do not present those as general facts. Preserve qualifications and uncertainty while staying concise. Write one concise Markdown summary per document with write_summary. Use only the provided bounded tools; bash is a strict facade, not a shell. The raw filenames discovered at start are: {}.",
+        "You are bo's bounded document-summary agent for {}. Call read_state before any other tool. The state object is authoritative: each exact raw URL is one source identity, and raw:filename identifies a Markdown file with no state record. For each source identity, use the newest raw snapshot by written_at as evidence. If a summary record exists, call read_summary with its source_key before replacing it. Never modify or delete raw files. Summarize only facts present in each source. Preserve epistemic status: clearly attribute author experience or measurements (for example, 'the author reports'), recommendations or opinions (for example, 'the article recommends'), and predictions or forecasts (for example, 'the author predicts'); do not present those as general facts. Preserve qualifications and uncertainty while staying concise. Write one concise Markdown summary per source identity with write_summary using source_key, not a raw filename. Use only the provided bounded tools; bash is a strict facade, not a shell. The raw filenames discovered at start are: {}.",
         context.target.display(),
         context.documents.keys().cloned().collect::<Vec<_>>().join(", ")
     )
+}
+
+struct Source {
+    latest_filename: String,
+    latest_written_at: u128,
+    latest_state_index: usize,
 }
 
 struct ToolContext {
     root: PathBuf,
     target: PathBuf,
     documents: BTreeMap<String, PathBuf>,
+    sources: BTreeMap<String, Source>,
+    state: crate::State,
     cwd: PathBuf,
     max_output_bytes: usize,
+    state_read: bool,
 }
 
 fn discover_documents(root: &Path, target: &Path) -> Result<BTreeMap<String, PathBuf>, String> {
@@ -376,6 +416,36 @@ fn discover_documents(root: &Path, target: &Path) -> Result<BTreeMap<String, Pat
     Ok(documents)
 }
 
+fn source_groups(
+    documents: &BTreeMap<String, PathBuf>,
+    state: &crate::State,
+) -> BTreeMap<String, Source> {
+    let mut sources = BTreeMap::new();
+    for filename in documents.keys() {
+        let (source_key, written_at, state_index) = state
+            .raw
+            .iter()
+            .enumerate()
+            .find(|(_, record)| record.filename == *filename)
+            .map(|(index, record)| (record.url.clone(), record.written_at, index))
+            .unwrap_or_else(|| (format!("raw:{filename}"), 0, 0));
+        let replace = sources.get(&source_key).is_none_or(|source: &Source| {
+            (written_at, state_index) > (source.latest_written_at, source.latest_state_index)
+        });
+        if replace {
+            sources.insert(
+                source_key,
+                Source {
+                    latest_filename: filename.clone(),
+                    latest_written_at: written_at,
+                    latest_state_index: state_index,
+                },
+            );
+        }
+    }
+    sources
+}
+
 fn execute_tool_call(
     context: &mut ToolContext,
     call: &Value,
@@ -389,6 +459,9 @@ fn execute_tool_call(
         .get("name")
         .and_then(Value::as_str)
         .ok_or_else(|| "tool call is missing function.name".to_string())?;
+    if name != "read_state" && !context.state_read {
+        return Err("read_state must be called before other tools".to_string());
+    }
     let arguments = function
         .get("arguments")
         .and_then(Value::as_str)
@@ -399,6 +472,15 @@ fn execute_tool_call(
         .as_object()
         .ok_or_else(|| format!("{name} arguments must be a JSON object"))?;
     match name {
+        "read_state" => {
+            if !arguments.is_empty() {
+                return Err("read_state arguments must be empty".to_string());
+            }
+            context.state_read = true;
+            serde_json::to_string_pretty(&context.state)
+                .map(|state| bounded_output(&state, context.max_output_bytes))
+                .map_err(|error| format!("serializing state failed: {error}"))
+        }
         "bash" => {
             if arguments.len() != 1 {
                 return Err("bash arguments must contain only command".to_string());
@@ -409,24 +491,33 @@ fn execute_tool_call(
                 .ok_or_else(|| "bash.command must be a string".to_string())?;
             execute_bash(context, command)
         }
+        "read_summary" => {
+            if arguments.len() != 1 {
+                return Err("read_summary arguments must contain only source_key".to_string());
+            }
+            let source_key = arguments
+                .get("source_key")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "read_summary.source_key must be a string".to_string())?;
+            read_summary(context, source_key)
+        }
         "write_summary" => {
             if arguments.len() != 2 {
                 return Err(
-                    "write_summary arguments must contain only source_filename and markdown"
-                        .to_string(),
+                    "write_summary arguments must contain only source_key and markdown".to_string(),
                 );
             }
-            let source_filename = arguments
-                .get("source_filename")
+            let source_key = arguments
+                .get("source_key")
                 .and_then(Value::as_str)
-                .ok_or_else(|| "write_summary.source_filename must be a string".to_string())?;
+                .ok_or_else(|| "write_summary.source_key must be a string".to_string())?;
             let markdown = arguments
                 .get("markdown")
                 .and_then(Value::as_str)
                 .ok_or_else(|| "write_summary.markdown must be a string".to_string())?;
-            write_summary(context, source_filename, markdown)?;
-            summarized.insert(source_filename.to_string());
-            Ok(format!("summary written: {source_filename}"))
+            write_summary(context, source_key, markdown)?;
+            summarized.insert(source_key.to_string());
+            Ok(format!("summary written: {source_key}"))
         }
         _ => Err(format!("unsupported tool: {name}")),
     }
@@ -578,23 +669,26 @@ fn read_bounded(path: &Path, limit: usize) -> Result<String, String> {
     Ok(bounded_output(&text, limit))
 }
 
+fn read_summary(context: &ToolContext, source_key: &str) -> Result<String, String> {
+    let record = context
+        .state
+        .summaries
+        .iter()
+        .find(|record| record.source_key == source_key)
+        .ok_or_else(|| format!("no summary exists for source: {source_key}"))?;
+    let path = summary_path(context, &record.filename)?;
+    read_bounded(&path, context.max_output_bytes)
+}
+
 fn write_summary(
-    context: &ToolContext,
-    source_filename: &str,
+    context: &mut ToolContext,
+    source_key: &str,
     markdown: &str,
 ) -> Result<(), String> {
-    if !context.documents.contains_key(source_filename)
-        || source_filename.is_empty()
-        || source_filename == "."
-        || source_filename == ".."
-        || source_filename.contains('/')
-        || source_filename.contains('\\')
-        || !source_filename
-            .rsplit_once('.')
-            .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("md"))
-    {
-        return Err("source_filename must name a discovered raw Markdown file".to_string());
-    }
+    let source = context
+        .sources
+        .get(source_key)
+        .ok_or_else(|| format!("unknown source: {source_key}"))?;
     if markdown.trim().is_empty() {
         return Err("summary Markdown must be non-empty".to_string());
     }
@@ -604,6 +698,53 @@ fn write_summary(
             context.max_output_bytes
         ));
     }
+    let existing = context
+        .state
+        .summaries
+        .iter()
+        .find(|record| record.source_key == source_key);
+    let filename = existing
+        .map(|record| record.filename.clone())
+        .unwrap_or_else(|| source.latest_filename.clone());
+    let path = prepare_summary_path(context, &filename)?;
+    write_summary_file(&path, markdown)?;
+
+    let now = timestamp()?;
+    let (created_at, updated_at) = existing
+        .map(|record| (record.created_at, now.max(record.updated_at + 1)))
+        .unwrap_or((now, now));
+    let record = crate::SummaryRecord {
+        filename,
+        source_key: source_key.to_string(),
+        derived_from: source.latest_filename.clone(),
+        created_at,
+        updated_at,
+    };
+    if let Some(existing) = context
+        .state
+        .summaries
+        .iter_mut()
+        .find(|record| record.source_key == source_key)
+    {
+        *existing = record;
+    } else {
+        context.state.summaries.push(record);
+    }
+    crate::write_state(&context.target, &context.state)
+}
+
+fn summary_path(context: &ToolContext, filename: &str) -> Result<PathBuf, String> {
+    let summaries = context.target.join("summaries");
+    if !summaries.is_dir() {
+        return Err(format!(
+            "summaries directory does not exist: {}",
+            summaries.display()
+        ));
+    }
+    canonical_summary_path(context, &summaries, filename)
+}
+
+fn prepare_summary_path(context: &ToolContext, filename: &str) -> Result<PathBuf, String> {
     let summaries = context.target.join("summaries");
     if fs::symlink_metadata(&summaries)
         .map(|metadata| metadata.file_type().is_symlink())
@@ -617,7 +758,26 @@ fn write_summary(
         .canonicalize()
         .map_err(|error| format!("canonicalizing summaries failed: {error}"))?;
     ensure_inside(&summaries, &context.target)?;
-    let destination = summaries.join(source_filename);
+    canonical_summary_path(context, &summaries, filename)
+}
+
+fn canonical_summary_path(
+    context: &ToolContext,
+    summaries: &Path,
+    filename: &str,
+) -> Result<PathBuf, String> {
+    if filename.is_empty()
+        || filename == "."
+        || filename == ".."
+        || filename.contains('/')
+        || filename.contains('\\')
+        || !filename
+            .rsplit_once('.')
+            .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("md"))
+    {
+        return Err("summary filename must be a Markdown file name".to_string());
+    }
+    let destination = summaries.join(filename);
     if let Ok(metadata) = fs::symlink_metadata(&destination) {
         if metadata.file_type().is_symlink() {
             return Err("summary destination must not be a symlink".to_string());
@@ -628,13 +788,20 @@ fn write_summary(
         let resolved = destination
             .canonicalize()
             .map_err(|error| format!("canonicalizing summary failed: {error}"))?;
-        ensure_inside(&resolved, &summaries)?;
+        ensure_inside(&resolved, summaries)?;
     }
+    ensure_inside(&destination, summaries)?;
+    ensure_inside(summaries, &context.target)?;
+    Ok(destination)
+}
+
+fn write_summary_file(destination: &Path, markdown: &str) -> Result<(), String> {
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
         .as_nanos();
-    let temporary = summaries.join(format!(".bo-summary-tmp-{}-{suffix}", std::process::id()));
+    let temporary =
+        destination.with_file_name(format!(".bo-summary-tmp-{}-{suffix}", std::process::id()));
     let result = (|| -> io::Result<()> {
         let mut file = OpenOptions::new()
             .write(true)
@@ -642,13 +809,20 @@ fn write_summary(
             .open(&temporary)?;
         file.write_all(markdown.as_bytes())?;
         file.sync_all()?;
-        fs::rename(&temporary, &destination)
+        fs::rename(&temporary, destination)
     })();
     if let Err(error) = result {
         let _ = fs::remove_file(&temporary);
         return Err(format!("writing {} failed: {error}", destination.display()));
     }
     Ok(())
+}
+
+fn timestamp() -> Result<u128, String> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .map_err(|error| error.to_string())
 }
 
 fn ensure_inside(path: &Path, root: &Path) -> Result<(), String> {
@@ -685,6 +859,7 @@ fn take_prefix(value: &str, limit: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{load_state, write_state};
     use std::net::{TcpListener, TcpStream};
     use std::sync::{mpsc, Mutex, OnceLock};
     use std::thread;
@@ -697,6 +872,7 @@ mod tests {
         let root =
             env::temp_dir().join(format!("bo-agent-{label}-{}-{suffix}", std::process::id()));
         fs::create_dir_all(root.join("notes")).unwrap();
+        write_state(&root.join("notes"), &crate::State::default()).unwrap();
         root
     }
 
@@ -704,12 +880,17 @@ mod tests {
         let root = root.canonicalize().unwrap();
         let target = root.join("notes").canonicalize().unwrap();
         let documents = discover_documents(&root, &target).unwrap();
+        let state = crate::load_state(&target).unwrap();
+        let sources = source_groups(&documents, &state);
         ToolContext {
             root,
             target: target.clone(),
             documents,
+            sources,
+            state,
             cwd: target,
             max_output_bytes: 256,
+            state_read: false,
         }
     }
 
@@ -810,6 +991,24 @@ mod tests {
         fs::write(target.join("article.md"), "# Article\n\nThe source fact.\n").unwrap();
         fs::create_dir(target.join("summaries")).unwrap();
         fs::write(target.join("summaries/article.md"), "old summary").unwrap();
+        write_state(
+            &target,
+            &crate::State {
+                raw: vec![crate::RawRecord {
+                    filename: "article.md".to_string(),
+                    url: "https://example.test/article".to_string(),
+                    written_at: 1,
+                }],
+                summaries: vec![crate::SummaryRecord {
+                    filename: "article.md".to_string(),
+                    source_key: "https://example.test/article".to_string(),
+                    derived_from: "article.md".to_string(),
+                    created_at: 2,
+                    updated_at: 3,
+                }],
+            },
+        )
+        .unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = format!("http://{}/chat/completions", listener.local_addr().unwrap());
         let (done_tx, done_rx) = mpsc::channel();
@@ -820,7 +1019,7 @@ mod tests {
                 response(
                     &mut stream,
                     &serde_json::to_string(&json!({"choices":[{"message":{
-                        "role":"assistant", "content":null, "tool_calls":[{"id":"cat-1","type":"function","function":{"name":"bash","arguments":r#"{"command":"cat article.md"}"#}}]
+                        "role":"assistant", "content":null, "tool_calls":[{"id":"state-1","type":"function","function":{"name":"read_state","arguments":"{}"}}]
                     }}]}))
                         .unwrap(),
                 );
@@ -836,36 +1035,50 @@ mod tests {
                 response(
                     &mut stream,
                     &serde_json::to_string(&json!({"choices":[{"message":{
-                        "role":"assistant", "content":null, "tool_calls":[{"id":"write-1","type":"function","function":{"name":"write_summary","arguments":r###"{"source_filename":"article.md","markdown":"# Summary\n\nThe source fact.\n"}"###}}]
+                        "role":"assistant", "content":null, "tool_calls":[{"id":"read-1","type":"function","function":{"name":"read_summary","arguments":r###"{"source_key":"https://example.test/article"}"###}}]
                     }}]}))
                         .unwrap(),
                 );
                 messages
             };
             assert_eq!(messages[2]["role"], "assistant");
-            assert_eq!(messages[2]["tool_calls"][0]["id"], "cat-1");
+            assert_eq!(messages[2]["tool_calls"][0]["id"], "state-1");
             assert_eq!(messages[3]["role"], "tool");
-            assert_eq!(messages[3]["tool_call_id"], "cat-1");
+            assert_eq!(messages[3]["tool_call_id"], "state-1");
 
             let messages = {
                 let (mut stream, _) = listener.accept().unwrap();
                 let third = request_body(&mut stream);
-                let messages = third["messages"].as_array().unwrap().clone();
+                response(
+                    &mut stream,
+                    &serde_json::to_string(&json!({"choices":[{"message":{
+                        "role":"assistant", "content":null, "tool_calls":[{"id":"write-1","type":"function","function":{"name":"write_summary","arguments":r###"{"source_key":"https://example.test/article","markdown":"# Summary\n\nThe source fact.\n"}"###}}]
+                    }}]}))
+                        .unwrap(),
+                );
+                third["messages"].as_array().unwrap().clone()
+            };
+            assert_eq!(messages[4]["role"], "assistant");
+            assert_eq!(messages[4]["tool_calls"][0]["id"], "read-1");
+            assert_eq!(messages[5]["tool_call_id"], "read-1");
+            let messages = {
+                let (mut stream, _) = listener.accept().unwrap();
+                let fourth = request_body(&mut stream);
                 response(
                     &mut stream,
                     r#"{"choices":[{"message":{"role":"assistant","content":"done"}}]}"#,
                 );
-                messages
+                fourth["messages"].as_array().unwrap().clone()
             };
-            assert_eq!(messages[4]["role"], "assistant");
-            assert_eq!(messages[4]["tool_calls"][0]["id"], "write-1");
-            assert_eq!(messages[5]["tool_call_id"], "write-1");
+            assert_eq!(messages[6]["role"], "assistant");
+            assert_eq!(messages[6]["tool_calls"][0]["id"], "write-1");
+            assert_eq!(messages[7]["tool_call_id"], "write-1");
             done_tx.send(()).unwrap();
         });
 
         let config = Config {
-            max_turns: 3,
-            max_tool_calls: 2,
+            max_turns: 4,
+            max_tool_calls: 3,
             ..Config::default()
         };
         assert_eq!(
@@ -886,6 +1099,18 @@ mod tests {
         let root = temp_root("budget");
         let target = root.join("notes");
         fs::write(target.join("article.md"), "fact\n").unwrap();
+        write_state(
+            &target,
+            &crate::State {
+                raw: vec![crate::RawRecord {
+                    filename: "article.md".to_string(),
+                    url: "raw:article.md".to_string(),
+                    written_at: 0,
+                }],
+                summaries: vec![],
+            },
+        )
+        .unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = format!("http://{}/chat/completions", listener.local_addr().unwrap());
         let thread = thread::spawn(move || {
@@ -894,14 +1119,17 @@ mod tests {
             response(
                 &mut stream,
                 &serde_json::to_string(&json!({"choices":[{"message":{
-                    "role":"assistant", "content":null, "tool_calls":[{"id":"write-1","type":"function","function":{"name":"write_summary","arguments":r###"{"source_filename":"article.md","markdown":"# Summary\n"}"###}}]
+                    "role":"assistant", "content":null, "tool_calls":[
+                        {"id":"state-1","type":"function","function":{"name":"read_state","arguments":"{}"}},
+                        {"id":"write-1","type":"function","function":{"name":"write_summary","arguments":r###"{"source_key":"raw:article.md","markdown":"# Summary\n"}"###}}
+                    ]
                 }}]}))
                     .unwrap(),
             );
         });
         let config = Config {
             max_turns: 1,
-            max_tool_calls: 1,
+            max_tool_calls: 2,
             ..Config::default()
         };
         let error = run_agent(&root, &target, "test-key", &endpoint, &config).unwrap_err();
@@ -915,15 +1143,113 @@ mod tests {
     }
 
     #[test]
+    fn source_groups_use_latest_snapshot_and_raw_fallbacks() {
+        let root = temp_root("sources");
+        let target = root.join("notes");
+        fs::write(target.join("old.md"), "old\n").unwrap();
+        fs::write(target.join("new.md"), "new\n").unwrap();
+        fs::write(target.join("other.md"), "other\n").unwrap();
+        fs::write(target.join("manual.md"), "manual\n").unwrap();
+        write_state(
+            &target,
+            &crate::State {
+                raw: vec![
+                    crate::RawRecord {
+                        filename: "old.md".into(),
+                        url: "https://example.test/a".into(),
+                        written_at: 1,
+                    },
+                    crate::RawRecord {
+                        filename: "new.md".into(),
+                        url: "https://example.test/a".into(),
+                        written_at: 2,
+                    },
+                    crate::RawRecord {
+                        filename: "other.md".into(),
+                        url: "https://example.test/b".into(),
+                        written_at: 1,
+                    },
+                ],
+                summaries: vec![],
+            },
+        )
+        .unwrap();
+        let context = context(&root);
+        assert_eq!(context.sources.len(), 3);
+        assert_eq!(
+            context.sources["https://example.test/a"].latest_filename,
+            "new.md"
+        );
+        assert_eq!(
+            context.sources["https://example.test/b"].latest_filename,
+            "other.md"
+        );
+        assert_eq!(
+            context.sources["raw:manual.md"].latest_filename,
+            "manual.md"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn summary_upsert_preserves_created_at_and_tracks_latest_raw() {
+        let root = temp_root("upsert");
+        let target = root.join("notes");
+        fs::write(target.join("old.md"), "old\n").unwrap();
+        fs::write(target.join("new.md"), "new\n").unwrap();
+        fs::create_dir(target.join("summaries")).unwrap();
+        fs::write(target.join("summaries/summary.md"), "old summary\n").unwrap();
+        write_state(
+            &target,
+            &crate::State {
+                raw: vec![
+                    crate::RawRecord {
+                        filename: "old.md".into(),
+                        url: "https://example.test/a".into(),
+                        written_at: 1,
+                    },
+                    crate::RawRecord {
+                        filename: "new.md".into(),
+                        url: "https://example.test/a".into(),
+                        written_at: 2,
+                    },
+                ],
+                summaries: vec![crate::SummaryRecord {
+                    filename: "summary.md".into(),
+                    source_key: "https://example.test/a".into(),
+                    derived_from: "old.md".into(),
+                    created_at: 10,
+                    updated_at: 11,
+                }],
+            },
+        )
+        .unwrap();
+        let mut context = context(&root);
+        context.state_read = true;
+        write_summary(&mut context, "https://example.test/a", "new summary\n").unwrap();
+        let state = load_state(&target).unwrap();
+        assert_eq!(state.summaries.len(), 1);
+        assert_eq!(state.summaries[0].filename, "summary.md");
+        assert_eq!(state.summaries[0].derived_from, "new.md");
+        assert_eq!(state.summaries[0].created_at, 10);
+        assert!(state.summaries[0].updated_at > 11);
+        assert_eq!(
+            fs::read_to_string(target.join("summaries/summary.md")).unwrap(),
+            "new summary\n"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn bounded_tools_reject_shell_escape_and_non_raw_files() {
         let root = temp_root("boundary");
         let target = root.join("notes");
         fs::write(target.join("article.md"), "fact\n").unwrap();
-        fs::write(target.join("state.json"), "secret\n").unwrap();
+        fs::write(target.join("secret.txt"), "secret\n").unwrap();
         let mut context = context(&root);
         let bo_root = context.root.clone();
-        assert!(execute_bash(&mut context, "cat state.json").is_err());
-        assert!(execute_bash(&mut context, "cat ../notes/state.json").is_err());
+        assert!(execute_bash(&mut context, "cat secret.txt").is_err());
+        assert!(execute_bash(&mut context, "cat ../notes/secret.txt").is_err());
         assert!(execute_bash(&mut context, "cat article.md | head").is_err());
         assert!(execute_bash(&mut context, "ls /tmp").is_err());
         assert!(execute_bash(&mut context, "grep fact /tmp").is_err());
@@ -940,8 +1266,8 @@ mod tests {
         assert!(execute_bash(&mut context, "cd /tmp").is_err());
         assert_eq!(context.cwd, bo_root);
 
-        assert!(write_summary(&context, "../outside.md", "no").is_err());
-        assert!(write_summary(&context, "article.md", " \n").is_err());
+        assert!(write_summary(&mut context, "../outside.md", "no").is_err());
+        assert!(write_summary(&mut context, "raw:article.md", " \n").is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
