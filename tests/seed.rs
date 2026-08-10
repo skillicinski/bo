@@ -77,6 +77,7 @@ fn seed_creates_random_adjective_noun_directory() {
         .all(|character| character.is_ascii_lowercase() || character == '-'));
     assert_eq!(name.matches('-').count(), 1);
     assert!(path.is_dir());
+    assert_eq!(fs::read_to_string(path.join("state.json")).unwrap(), "[]\n");
 }
 
 #[test]
@@ -87,6 +88,10 @@ fn seed_with_name_creates_named_directory() {
 
     assert_success(&output, &expected_path);
     assert!(expected_path.is_dir());
+    assert_eq!(
+        fs::read_to_string(expected_path.join("state.json")).unwrap(),
+        "[]\n"
+    );
 }
 
 #[test]
