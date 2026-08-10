@@ -11,6 +11,7 @@
 
 ## Code Quality
 
+- For design principles, refer to [architecture.md](docs/architecture.md)
 - Read files in full before wide-ranging changes, before editing files you have not fully inspected, and when asked to investigate or audit. Do not rely on search snippets for broad changes.
 - Inline single-line helpers that have only one call site.
 - Always ask before removing functionality or code that appears intentional.
