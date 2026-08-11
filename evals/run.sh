@@ -48,7 +48,6 @@ HOME="$home" "$bo" agent "$run_id" >"$report/agent.log" 2>&1
 agent_status=$?
 set -e
 
-missing=0
 : >"$report/missing-summaries.log"
 python3 - "$target/state.json" "$target" >"$report/missing-summaries.log" <<'PY'
 import json

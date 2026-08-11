@@ -12,8 +12,8 @@ fn main() {
             }
         },
         Some("snap") => match parse_snap(args) {
-            Ok(report) => {
-                if print_snap_report(report.outcomes, None) {
+            Ok(outcomes) => {
+                if print_snap_report(outcomes, None) {
                     process::exit(1);
                 }
             }
@@ -35,7 +35,7 @@ fn main() {
                 process::exit(1);
             }
         },
-        Some("agent") => match bo::run_agent(args) {
+        Some("agent") => match bo::agent::run(args) {
             Ok(()) => {}
             Err(error) => {
                 eprintln!("agent failed: {error}");
@@ -115,7 +115,7 @@ fn parse_state(mut args: impl Iterator<Item = String>) -> Result<(), String> {
 
 fn parse_snap(
     mut args: impl Iterator<Item = String>,
-) -> Result<bo::application::SnapReport, bo::application::SnapCommandError> {
+) -> Result<Vec<bo::application::SnapOutcome>, bo::application::SnapCommandError> {
     let name = args
         .next()
         .ok_or_else(|| bo::application::SnapCommandError::input("usage: bo snap <dir> <url>..."))?;

@@ -1,48 +1,16 @@
+mod common;
+
+use common::{command, TempHome};
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::Path;
+use std::process::Output;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-struct TempHome(PathBuf);
-
-impl TempHome {
-    fn new() -> Self {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("bo-snap-output-{}-{suffix}", std::process::id()));
-        fs::create_dir_all(path.join(".bo/notes")).unwrap();
-        fs::write(
-            path.join(".bo/notes/state.json"),
-            "{\n  \"raw\": [],\n  \"summaries\": []\n}\n",
-        )
-        .unwrap();
-        Self(path)
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempHome {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.0).unwrap();
-    }
-}
+use std::time::Duration;
 
 fn run(home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_bo"))
-        .args(args)
-        .env("HOME", home)
-        .env_remove("USERPROFILE")
-        .output()
-        .unwrap()
+    command(home).args(args).output().unwrap()
 }
 
 fn request(stream: &mut TcpStream) -> String {
@@ -65,7 +33,7 @@ fn response(stream: &mut TcpStream, status: &str, headers: &str, body: &str) {
 
 #[test]
 fn snap_separates_success_output_and_diagnostics() {
-    let home = TempHome::new();
+    let home = TempHome::new("snap-output", true);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let server = thread::spawn(move || {
@@ -109,7 +77,7 @@ fn snap_separates_success_output_and_diagnostics() {
 
 #[test]
 fn snap_reports_state_write_failure_with_source_context() {
-    let home = TempHome::new();
+    let home = TempHome::new("snap-state-write", true);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let first_url = format!("http://{address}/first");

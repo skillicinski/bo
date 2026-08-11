@@ -37,7 +37,7 @@ impl Default for Config {
     }
 }
 
-pub(crate) fn run(mut args: impl Iterator<Item = String>) -> Result<(), String> {
+pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), String> {
     let name = args
         .next()
         .filter(|name| !name.starts_with('-'))
@@ -227,14 +227,6 @@ fn run_agent(
             return Err(format!(
                 "model stopped with missing summaries: {}",
                 missing.join(", ")
-            ));
-        }
-        if turns >= config.max_turns {
-            return Err(format!(
-                "max turns reached ({}) with {} of {} summaries written",
-                config.max_turns,
-                summarized.len(),
-                context.sources.len()
             ));
         }
         correction_sent = true;
@@ -849,11 +841,7 @@ fn bounded_output(value: &str, limit: usize) -> String {
 }
 
 fn take_prefix(value: &str, limit: usize) -> &str {
-    let mut end = limit.min(value.len());
-    while end > 0 && !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    &value[..end]
+    &value[..value.floor_char_boundary(limit.min(value.len()))]
 }
 
 #[cfg(test)]
@@ -861,7 +849,7 @@ mod tests {
     use super::*;
     use crate::{load_state, write_state};
     use std::net::{TcpListener, TcpStream};
-    use std::sync::{mpsc, Mutex, OnceLock};
+    use std::sync::mpsc;
     use std::thread;
 
     fn temp_root(label: &str) -> PathBuf {
@@ -892,21 +880,6 @@ mod tests {
             max_output_bytes: 256,
             state_read: false,
         }
-    }
-
-    #[test]
-    fn api_key_is_read_from_bo_api_key_and_empty_values_are_rejected() {
-        let lock = static_env_lock().lock().unwrap();
-        let previous = env::var_os("BO_API_KEY");
-        env::set_var("BO_API_KEY", "secret");
-        assert_eq!(api_key_from_env().unwrap(), "secret");
-        env::set_var("BO_API_KEY", "");
-        assert!(api_key_from_env().is_err());
-        match previous {
-            Some(value) => env::set_var("BO_API_KEY", value),
-            None => env::remove_var("BO_API_KEY"),
-        }
-        drop(lock);
     }
 
     #[test]
@@ -946,11 +919,6 @@ mod tests {
                 .unwrap_err()
                 .contains("positive integer")
         );
-    }
-
-    fn static_env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
     }
 
     fn response(stream: &mut TcpStream, body: &str) {

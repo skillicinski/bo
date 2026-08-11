@@ -1,14 +1,3 @@
-[advisories]
-# Deny crates with known security vulnerabilities
-ignore = [
-    # quick-xml 0.37.5 DoS advisories. The vulnerable code paths are not reached:
-    # bo uses a plain quick_xml::Reader at a single call site (YouTube transcript
-    # parsing) and never uses NsReader or calls .attributes(). Revisit if either
-    # of those changes.
-    "RUSTSEC-2026-0194", # attribute duplicate-check O(N^2) blowup
-    "RUSTSEC-2026-0195", # unbounded NsReader namespace-declaration allocation
-]
-
 [licenses]
 # Allow common permissive licenses
 allow = [

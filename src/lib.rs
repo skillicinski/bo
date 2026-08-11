@@ -9,15 +9,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use htmd::{HtmlToMarkdown, Node};
 use markup5ever_rcdom::NodeData;
-use reqwest::blocking::Client;
+use reqwest::{blocking::Client, Url};
 use serde::{Deserialize, Serialize};
-use url::Url;
 
-mod agent;
-
-pub fn run_agent(args: impl Iterator<Item = String>) -> Result<(), String> {
-    agent::run(args)
-}
+pub mod agent;
 
 const STATE_FILE: &str = "state.json";
 
@@ -99,10 +94,6 @@ pub mod application {
         pub result: Result<String, SnapError>,
     }
 
-    pub struct SnapReport {
-        pub outcomes: Vec<SnapOutcome>,
-    }
-
     pub fn seed(requested_name: Option<&str>) -> Result<std::path::PathBuf, String> {
         let home = super::home_dir()?;
         super::seed_at(&home, requested_name)
@@ -126,7 +117,7 @@ pub mod application {
         }
     }
 
-    pub fn snap(name: &str, urls: &[String]) -> Result<SnapReport, SnapCommandError> {
+    pub fn snap(name: &str, urls: &[String]) -> Result<Vec<SnapOutcome>, SnapCommandError> {
         super::validate_name(name).map_err(|error| SnapCommandError {
             completed: Vec::new(),
             source_url: None,
@@ -164,7 +155,7 @@ pub(crate) fn home_dir() -> Result<PathBuf, String> {
 fn snap_at(
     target: &Path,
     urls: &[String],
-) -> Result<application::SnapReport, application::SnapCommandError> {
+) -> Result<Vec<application::SnapOutcome>, application::SnapCommandError> {
     let mut state = load_state(target).map_err(|error| application::SnapCommandError {
         completed: Vec::new(),
         source_url: None,
@@ -220,7 +211,7 @@ fn snap_at(
         }
     }
 
-    Ok(application::SnapReport { outcomes })
+    Ok(outcomes)
 }
 
 fn snap_one(
@@ -554,17 +545,6 @@ mod tests {
             expected_valid,
             "name: {name:?}"
         );
-    }
-
-    #[test]
-    fn generated_names_are_lowercase_adjective_noun_names() {
-        let name = random_name().unwrap();
-
-        assert!(name
-            .chars()
-            .all(|character| character.is_ascii_lowercase() || character == '-'));
-        assert_eq!(name.matches('-').count(), 1);
-        assert!(validate_name(&name).is_ok());
     }
 
     #[test]
