@@ -163,7 +163,9 @@ fn snap_reports_state_write_failure_with_source_context() {
     assert!(!stderr.contains(&unattempted_url));
     assert!(stderr.contains("1 succeeded / 1 failed; batch aborted"));
     assert!(stderr.contains("state.json"));
+    assert!(stderr.contains("snapshot written then deleted"));
     let state = fs::read_to_string(home.path().join(".bo/notes/state.json")).unwrap();
     assert!(state.contains(&first_url));
     assert!(!state.contains(&second_url));
+    assert!(!home.path().join(".bo/notes/second-page.md").exists());
 }

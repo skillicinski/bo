@@ -190,12 +190,20 @@ fn snap_at(
                     written_at: snapshot.written_at,
                 });
                 if let Err(error) = write_state(target, &state) {
+                    let path = target.join(&snapshot.filename);
+                    let detail = match fs::remove_file(&path) {
+                        Ok(()) => format!(
+                            "updating state failed: {error}; snapshot written then deleted"
+                        ),
+                        Err(cleanup_error) => format!(
+                            "updating state failed: {error}; snapshot cleanup failed for {}: {cleanup_error}",
+                            path.display()
+                        ),
+                    };
                     return Err(application::SnapCommandError {
                         completed: outcomes,
                         source_url: Some(url.clone()),
-                        error: application::SnapError::Filesystem(format!(
-                            "updating state failed: {error}"
-                        )),
+                        error: application::SnapError::Filesystem(detail),
                     });
                 }
                 outcomes.push(application::SnapOutcome {
