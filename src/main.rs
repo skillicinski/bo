@@ -12,10 +12,19 @@ fn main() {
             }
         },
         Some("snap") => match parse_snap(args) {
-            Ok(0) => {}
-            Ok(_) => process::exit(1),
-            Err(error) => {
-                eprintln!("snap failed: {error}");
+            Ok(report) => {
+                if print_snap_report(report.outcomes, None) {
+                    process::exit(1);
+                }
+            }
+            Err(mut error) => {
+                let reportable = error.source_url.is_some() || !error.completed.is_empty();
+                if reportable {
+                    let completed = std::mem::take(&mut error.completed);
+                    print_snap_report(completed, Some(error));
+                } else {
+                    eprintln!("snap failed: {error}");
+                }
                 process::exit(1);
             }
         },
@@ -40,6 +49,38 @@ fn main() {
             process::exit(1);
         }
     }
+}
+
+fn print_snap_report(
+    outcomes: Vec<bo::application::SnapOutcome>,
+    fatal: Option<bo::application::SnapCommandError>,
+) -> bool {
+    let total = outcomes.len();
+    let failed = outcomes
+        .iter()
+        .filter(|outcome| outcome.result.is_err())
+        .count();
+    let aborted = fatal.is_some();
+    for outcome in outcomes {
+        match outcome.result {
+            Ok(filename) => println!("snapped: {} -> {filename}", outcome.source_url),
+            Err(error) => eprintln!("failed: {} ({error})", outcome.source_url),
+        }
+    }
+    if let Some(error) = fatal {
+        match error.source_url {
+            Some(source_url) => eprintln!("failed: {source_url} ({})", error.error),
+            None => eprintln!("snap failed: {}", error.error),
+        }
+    }
+    let total_failed = failed + if aborted { 1 } else { 0 };
+    let succeeded = total - failed;
+    if aborted {
+        eprintln!("{succeeded} succeeded / {total_failed} failed; batch aborted");
+    } else {
+        eprintln!("{succeeded} succeeded / {total_failed} failed");
+    }
+    aborted || failed > 0
 }
 
 fn parse_seed(mut args: impl Iterator<Item = String>) -> Result<std::path::PathBuf, String> {
@@ -72,27 +113,18 @@ fn parse_state(mut args: impl Iterator<Item = String>) -> Result<(), String> {
     Ok(())
 }
 
-fn parse_snap(mut args: impl Iterator<Item = String>) -> Result<usize, String> {
+fn parse_snap(
+    mut args: impl Iterator<Item = String>,
+) -> Result<bo::application::SnapReport, bo::application::SnapCommandError> {
     let name = args
         .next()
-        .ok_or_else(|| "usage: bo snap <dir> <url>...".to_string())?;
+        .ok_or_else(|| bo::application::SnapCommandError::input("usage: bo snap <dir> <url>..."))?;
     let urls: Vec<_> = args.collect();
     if urls.is_empty() {
-        return Err("usage: bo snap <dir> <url>...".to_string());
+        return Err(bo::application::SnapCommandError::input(
+            "usage: bo snap <dir> <url>...",
+        ));
     }
 
-    let report = bo::application::snap(&name, &urls)?;
-    let failed = report
-        .outcomes
-        .iter()
-        .filter(|(_, result)| result.is_err())
-        .count();
-    for (url, result) in report.outcomes {
-        match result {
-            Ok(filename) => println!("snapped: {url} -> {filename}"),
-            Err(error) => println!("failed: {url} ({error})"),
-        }
-    }
-    println!("{} succeeded / {failed} failed", urls.len() - failed);
-    Ok(failed)
+    bo::application::snap(&name, &urls)
 }

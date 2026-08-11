@@ -31,8 +31,76 @@ const NOUNS: &[&str] = &[
 ];
 
 pub mod application {
+    use std::fmt;
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub enum SnapError {
+        Input(String),
+        Request(String),
+        Http {
+            status: u16,
+            request_id: Option<String>,
+        },
+        Content(String),
+        Filesystem(String),
+        Unsupported(String),
+    }
+
+    impl fmt::Display for SnapError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::Input(detail) => write!(formatter, "input: {detail}"),
+                Self::Request(detail) => write!(formatter, "request: {detail}"),
+                Self::Http {
+                    status,
+                    request_id: Some(request_id),
+                } => write!(formatter, "http: HTTP {status} (request_id: {request_id})"),
+                Self::Http {
+                    status,
+                    request_id: None,
+                } => write!(formatter, "http: HTTP {status}"),
+                Self::Content(detail) => write!(formatter, "content: {detail}"),
+                Self::Filesystem(detail) => write!(formatter, "filesystem: {detail}"),
+                Self::Unsupported(detail) => write!(formatter, "unsupported: {detail}"),
+            }
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct SnapCommandError {
+        pub completed: Vec<SnapOutcome>,
+        pub source_url: Option<String>,
+        pub error: SnapError,
+    }
+
+    impl SnapCommandError {
+        pub fn input(detail: impl Into<String>) -> Self {
+            Self {
+                completed: Vec::new(),
+                source_url: None,
+                error: SnapError::Input(detail.into()),
+            }
+        }
+    }
+
+    impl fmt::Display for SnapCommandError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            if let Some(source_url) = &self.source_url {
+                write!(formatter, "{source_url} ({})", self.error)
+            } else {
+                self.error.fmt(formatter)
+            }
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct SnapOutcome {
+        pub source_url: String,
+        pub result: Result<String, SnapError>,
+    }
+
     pub struct SnapReport {
-        pub outcomes: Vec<(String, Result<String, String>)>,
+        pub outcomes: Vec<SnapOutcome>,
     }
 
     pub fn seed(requested_name: Option<&str>) -> Result<std::path::PathBuf, String> {
@@ -58,16 +126,28 @@ pub mod application {
         }
     }
 
-    pub fn snap(name: &str, urls: &[String]) -> Result<SnapReport, String> {
-        super::validate_name(name)?;
-        let home = super::home_dir()?;
+    pub fn snap(name: &str, urls: &[String]) -> Result<SnapReport, SnapCommandError> {
+        super::validate_name(name).map_err(|error| SnapCommandError {
+            completed: Vec::new(),
+            source_url: None,
+            error: SnapError::Input(error),
+        })?;
+        let home = super::home_dir().map_err(|error| SnapCommandError {
+            completed: Vec::new(),
+            source_url: None,
+            error: SnapError::Filesystem(error),
+        })?;
         let target = home.join(".bo").join(name);
         if !target.is_dir() {
-            return Err(format!(
-                "target directory does not exist: {} (run bo seed --name {})",
-                target.display(),
-                name
-            ));
+            return Err(SnapCommandError {
+                completed: Vec::new(),
+                source_url: None,
+                error: SnapError::Input(format!(
+                    "target directory does not exist: {} (run bo seed --name {})",
+                    target.display(),
+                    name
+                )),
+            });
         }
         super::snap_at(&target, urls)
     }
@@ -81,13 +161,24 @@ pub(crate) fn home_dir() -> Result<PathBuf, String> {
         .ok_or_else(|| "HOME or USERPROFILE is not set".to_string())
 }
 
-fn snap_at(target: &Path, urls: &[String]) -> Result<application::SnapReport, String> {
-    let mut state = load_state(target)?;
+fn snap_at(
+    target: &Path,
+    urls: &[String],
+) -> Result<application::SnapReport, application::SnapCommandError> {
+    let mut state = load_state(target).map_err(|error| application::SnapCommandError {
+        completed: Vec::new(),
+        source_url: None,
+        error: application::SnapError::Filesystem(error),
+    })?;
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .user_agent("bo/0.1")
         .build()
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| application::SnapCommandError {
+            completed: Vec::new(),
+            source_url: None,
+            error: application::SnapError::Request(error.to_string()),
+        })?;
     let mut outcomes = Vec::new();
 
     for url in urls {
@@ -98,11 +189,25 @@ fn snap_at(target: &Path, urls: &[String]) -> Result<application::SnapReport, St
                     url: url.clone(),
                     written_at: snapshot.written_at,
                 });
-                write_state(target, &state)?;
-                outcomes.push((url.clone(), Ok(snapshot.filename)));
+                if let Err(error) = write_state(target, &state) {
+                    return Err(application::SnapCommandError {
+                        completed: outcomes,
+                        source_url: Some(url.clone()),
+                        error: application::SnapError::Filesystem(format!(
+                            "updating state failed: {error}"
+                        )),
+                    });
+                }
+                outcomes.push(application::SnapOutcome {
+                    source_url: url.clone(),
+                    result: Ok(snapshot.filename),
+                });
             }
             Err(error) => {
-                outcomes.push((url.clone(), Err(error)));
+                outcomes.push(application::SnapOutcome {
+                    source_url: url.clone(),
+                    result: Err(error),
+                });
             }
         }
     }
@@ -110,25 +215,42 @@ fn snap_at(target: &Path, urls: &[String]) -> Result<application::SnapReport, St
     Ok(application::SnapReport { outcomes })
 }
 
-fn snap_one(client: &Client, target: &Path, input: &str) -> Result<Snapshot, String> {
-    let url = Url::parse(input).map_err(|error| format!("invalid URL: {error}"))?;
+fn snap_one(
+    client: &Client,
+    target: &Path,
+    input: &str,
+) -> Result<Snapshot, application::SnapError> {
+    let url = Url::parse(input)
+        .map_err(|error| application::SnapError::Input(format!("invalid URL: {error}")))?;
     if !matches!(url.scheme(), "http" | "https") {
-        return Err("URL scheme must be http or https".to_string());
+        return Err(application::SnapError::Input(
+            "URL scheme must be http or https".into(),
+        ));
     }
     if url.host_str().is_some_and(|host| {
         host.eq_ignore_ascii_case("youtube.com")
             || host.ends_with(".youtube.com")
             || host.eq_ignore_ascii_case("youtu.be")
     }) {
-        return Err("YouTube transcription is not supported".to_string());
+        return Err(application::SnapError::Unsupported(
+            "YouTube transcription is not supported".into(),
+        ));
     }
 
     let response = client
         .get(url)
         .send()
-        .map_err(|error| format!("request failed: {error}"))?;
+        .map_err(|error| application::SnapError::Request(format!("request failed: {error}")))?;
     if !response.status().is_success() {
-        return Err(format!("HTTP {}", response.status()));
+        let request_id = response
+            .headers()
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        return Err(application::SnapError::Http {
+            status: response.status().as_u16(),
+            request_id,
+        });
     }
 
     let content_type = response
@@ -137,13 +259,15 @@ fn snap_one(client: &Client, target: &Path, input: &str) -> Result<Snapshot, Str
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
     if !is_html_content_type(content_type) {
-        return Err(format!("not HTML (Content-Type: {content_type})"));
+        return Err(application::SnapError::Content(format!(
+            "not HTML (Content-Type: {content_type})"
+        )));
     }
 
-    let html = response
-        .text()
-        .map_err(|error| format!("reading response failed: {error}"))?;
-    let page = extract_page(&html)?;
+    let html = response.text().map_err(|error| {
+        application::SnapError::Content(format!("reading response failed: {error}"))
+    })?;
+    let page = extract_page(&html).map_err(application::SnapError::Content)?;
     write_snapshot(target, &page.title, &page.markdown)
 }
 
@@ -262,11 +386,16 @@ fn text_content(node: &Rc<Node>) -> String {
     text
 }
 
-fn write_snapshot(target: &Path, title: &str, markdown: &str) -> Result<Snapshot, String> {
-    let slug = kebab_case(title).ok_or_else(|| "title cannot produce a filename".to_string())?;
+fn write_snapshot(
+    target: &Path,
+    title: &str,
+    markdown: &str,
+) -> Result<Snapshot, application::SnapError> {
+    let slug = kebab_case(title)
+        .ok_or_else(|| application::SnapError::Content("title cannot produce a filename".into()))?;
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|error| error.to_string())?
+        .map_err(|error| application::SnapError::Filesystem(error.to_string()))?
         .as_millis();
 
     for attempt in 0.. {
@@ -278,15 +407,24 @@ fn write_snapshot(target: &Path, title: &str, markdown: &str) -> Result<Snapshot
         let path = target.join(&filename);
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(mut file) => {
-                file.write_all(markdown.as_bytes())
-                    .map_err(|error| format!("writing {} failed: {error}", path.display()))?;
+                file.write_all(markdown.as_bytes()).map_err(|error| {
+                    application::SnapError::Filesystem(format!(
+                        "writing {} failed: {error}",
+                        path.display()
+                    ))
+                })?;
                 return Ok(Snapshot {
                     filename,
                     written_at: timestamp,
                 });
             }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(format!("creating {} failed: {error}", path.display())),
+            Err(error) => {
+                return Err(application::SnapError::Filesystem(format!(
+                    "creating {} failed: {error}",
+                    path.display()
+                )))
+            }
         }
     }
 
