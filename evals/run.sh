@@ -21,7 +21,6 @@ set +e
 HOME="$home" "$bo" snap "$run_id" $urls >"$report/snap.log" 2>&1
 snap_status=$?
 set -e
-cp "$target/state.json" "$report/state.json"
 
 for file in "$target"/*.md; do
     [ -f "$file" ] || continue
@@ -47,6 +46,15 @@ set +e
 HOME="$home" "$bo" agent "$run_id" >"$report/agent.log" 2>&1
 agent_status=$?
 set -e
+
+cp "$target/state.json" "$report/state.json"
+if [ -d "$target/summaries" ]; then
+    mkdir -p "$report/summaries"
+    for file in "$target"/summaries/*.md; do
+        [ -f "$file" ] || continue
+        cp "$file" "$report/summaries/$(basename "$file")"
+    done
+fi
 
 : >"$report/missing-summaries.log"
 python3 - "$target/state.json" "$target" >"$report/missing-summaries.log" <<'PY'

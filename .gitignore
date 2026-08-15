@@ -18,6 +18,8 @@ internal/
 !/evals/manifest.txt
 !/evals/RUBRIC.md
 !/evals/run.sh
+!/evals/evaluate.py
+!/evals/test_evaluate.py
 
 /.pi/*
 !/.pi/extensions/
