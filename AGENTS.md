@@ -3,10 +3,10 @@
 ## Conversational Style
 
 - Keep answers short and concise
+- Technical prose only, be direct
+- Comply with the international ASD-STE100 controlled language standard
 - No emojis in commits, issues, PR comments, or code
 - No fluff or cheerful filler text (e.g., "Thanks @user" not "Thanks so much @user!")
-- Technical prose only, be direct
-- Avoid overly academic or rare vocabulary, make yourself understood first and elaborate later
 - When the user asks a question, answer it first before making edits or running implementation commands.
 - When responding to user feedback or an analysis, explicitly say whether you agree or disagree before saying what you changed.
 
