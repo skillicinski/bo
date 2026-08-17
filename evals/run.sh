@@ -4,8 +4,10 @@ set -eu
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bo=${BO_BIN:-$repo/target/debug/bo}
 if [ ! -x "$bo" ]; then
-    cargo build --manifest-path "$repo/Cargo.toml" --quiet
+    mkdir -p "$(dirname "$bo")"
+    go build -o "$bo" "$repo/cmd/bo"
 fi
+: "${DEEPSEEK_API_KEY:?DEEPSEEK_API_KEY is required}"
 
 run_id="agent-$(date +%s)-$$"
 work="$repo/evals/work/$run_id"

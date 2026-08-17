@@ -77,15 +77,14 @@ When creating PRs:
 This project follows [Semantic Versioning](https://semver.org/).
 
 1. Update `CHANGELOG.md` with the new version section.
-2. Local smoke test: build an unpublished release and smoke test from outside the repo (so it can't resolve workspace files):
-3. Bump `version` in `Cargo.toml`.
-4. Bump `version` in `npm/package.json` to match.
-5. Commit, merge to main.
-6. `git tag v<version> && git push --tags`
-7. **Approve the `npm-publish` GitHub Environment** — Actions tab → tag run → click *Review deployments* → approve. The job will not run until you do.
-8. **Approve the staged tarball on npmjs.com** — `npm stage publish` uploads to a staging queue, not to public. Open the package page on npmjs.com from a 2FA-trusted device and approve the pending stage.
+2. Local smoke test: build an unpublished release with `go install ./cmd/bo` and smoke test it from outside the repo (so it cannot resolve workspace files).
+3. Bump `version` in `npm/package.json`.
+4. Commit, merge to main.
+5. `git tag v<version> && git push --tags`
+6. **Approve the `npm-publish` GitHub Environment** — Actions tab → tag run → click *Review deployments* → approve. The job will not run until you do.
+7. **Approve the staged tarball on npmjs.com** — `npm stage publish` uploads to a staging queue, not to public. Open the package page on npmjs.com from a 2FA-trusted device and approve the pending stage.
 
-The `release.yml` workflow runs CI (format, clippy, deny, test), builds platform binaries for macOS Intel/Apple Silicon and Linux x86_64, creates a GitHub Release with the tarballs attached, and stages `@skillicinski/bo` to npm via OIDC trusted publishing.
+The `release.yml` workflow runs Go format, vet, vulnerability, module, and test checks, builds platform binaries for macOS Intel/Apple Silicon and Linux x86_64, creates a GitHub Release with the tarballs attached, and stages `@skillicinski/bo` to npm via OIDC trusted publishing.
 
 ### Why two human gates?
 

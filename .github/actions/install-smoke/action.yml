@@ -16,7 +16,7 @@ runs:
         }
         trap cleanup EXIT
 
-        cargo install --path . --locked --root "$INSTALL_ROOT" --quiet
+        GOBIN="$INSTALL_ROOT/bin" go install ./cmd/bo
         BO="$INSTALL_ROOT/bin/bo"
         cd "$WORK_DIR"
 

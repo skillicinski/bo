@@ -16,16 +16,15 @@ infrastructure implementations.
 
 ## Current structure
 
-- `src/main.rs` dispatches commands and formats seed, snap, and state output.
-- `src/lib.rs::application` exposes those use cases and their result types.
-- The rest of `src/lib.rs` contains the current domain rules and concrete HTTP
-  and filesystem work.
-- `src/agent.rs` contains the bounded agent command and its concrete DeepSeek
-  integration.
+- `cmd/bo` dispatches commands and formats seed, snap, state, and agent output.
+- The root `bo` package owns state types, use cases, validation, storage and
+  provider contracts, and the bounded agent loop.
+- `local` implements the filesystem storage contract.
+- `source` implements HTTP, HTML extraction, and YouTube transcript fetching.
+- `deepseek` implements the OpenAI-compatible completion contract.
 
-This co-location is intentional while the application is small. Responsibility
-still matters; separate modules and traits do not until they remove a real
-dependency or support another entrypoint.
+The root package does not select concrete adapters. The command package wires
+the local, source, and DeepSeek implementations together.
 
 ## Boundaries
 
@@ -54,11 +53,11 @@ Extract a boundary only when at least one of these is true:
 Keep related code together otherwise. Do not create layers, traits, shared
 modules, or reusable libraries for hypothetical consumers.
 
-## Rust conventions
+## Go conventions
 
-- Use structs and enums for meaningful domain values and failures.
+- Use structs and typed errors for meaningful domain values and failures.
 - Use functions or small structs for workflows.
-- Use traits only at real external boundaries.
+- Use interfaces only at real external boundaries.
 - Prefer constructors, explicit parameters, and compile-time wiring.
 - Keep provider and persistence types at their boundaries.
 - Test behavior, not directory layout.

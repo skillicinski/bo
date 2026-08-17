@@ -10,6 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `bo seed` creates a local directory under `~/.bo` with an optional name.
 
+### Changed
+
+- **Breaking:** rewrote the local CLI and adapters in Go; install from source with `go install github.com/skillicinski/bo/cmd/bo@latest`.
+- Local DeepSeek agent credentials now use `DEEPSEEK_API_KEY` and `DEEPSEEK_API_URL`.
+
 ## [0.1.0] - 2026-07-19
 
 ### Changed
@@ -174,7 +179,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- npm distribution — install with `npm install -g @skillicinski/bo`. No Rust toolchain needed. Pre-built binaries for macOS (Intel + Apple Silicon) and Linux x86_64.
+- npm distribution — install with `npm install -g @skillicinski/bo`. No compiler toolchain needed. Pre-built binaries for macOS (Intel + Apple Silicon) and Linux x86_64.
 - DeepSeek provider support (`deepseek-v4-flash`, `deepseek-v4-pro`). Select with `bo config --provider deepseek`.
 - `bo status` command — shows tree health and compile readiness.
 - `bo compile --all` flag — recompile the full corpus and allow complete branch graph rewrite.
@@ -226,4 +231,4 @@ First experimental release.
 
 - OpenAI-compatible providers only
 - Lexical retrieval (no embeddings)
-- Requires Rust toolchain to install
+- Requires Go toolchain to install

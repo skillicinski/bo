@@ -68,4 +68,5 @@ duplicated state metadata.
 Raw documents are append-only evidence. Summary records are upserted by exact
 `source_key`; a summary rewrite never deletes an older raw snapshot. State is
 authoritative for the relationship between source identities, raw snapshots,
-and summaries.
+and summaries. Local state publication checks the generation of the exact
+previous `state.json`; a concurrent change fails with a conflict.

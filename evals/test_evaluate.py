@@ -252,7 +252,7 @@ class EvaluateTests(unittest.TestCase):
     def test_key_isolation_uses_only_evaluator_key(self):
         run = self.make_run()
         opener = self.use_valid_opener()
-        with patch.dict(os.environ, {"BO_EVAL_API_KEY": "evaluation-key", "BO_API_KEY": "wrong-key"}):
+        with patch.dict(os.environ, {"BO_EVAL_API_KEY": "evaluation-key", "DEEPSEEK_API_KEY": "wrong-key"}):
             self.assertEqual(evaluate.main([str(run)]), 0)
         request, _ = opener.requests[0]
         self.assertEqual(request.headers["Authorization"], "Bearer evaluation-key")
@@ -279,9 +279,9 @@ class EvaluateTests(unittest.TestCase):
         self.assertEqual(len(opener.requests), 2)
         self.assert_failed_without_documents(run)
 
-    def test_evaluator_key_is_required_even_when_bo_key_exists(self):
+    def test_evaluator_key_is_required_even_when_provider_key_exists(self):
         run = self.make_run()
-        with patch.dict(os.environ, {"BO_API_KEY": "agent-key"}, clear=True):
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "agent-key"}, clear=True):
             with self.assertRaises(evaluate.EvaluationError):
                 evaluate.evaluate(run, api_url="http://example.test")
         self.assert_failed_without_documents(run)

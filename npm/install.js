@@ -8,9 +8,9 @@ const pkg = require('./package.json');
 const version = pkg.version;
 
 const PLATFORM_MAP = {
-  'darwin-x64': 'x86_64-apple-darwin',
-  'darwin-arm64': 'aarch64-apple-darwin',
-  'linux-x64': 'x86_64-unknown-linux-gnu',
+  'darwin-x64': 'darwin-amd64',
+  'darwin-arm64': 'darwin-arm64',
+  'linux-x64': 'linux-amd64',
 };
 
 const key = `${process.platform}-${process.arch}`;
@@ -19,7 +19,7 @@ const target = PLATFORM_MAP[key];
 if (!target) {
   console.error(
     `bo doesn't provide a pre-built binary for ${process.platform}-${process.arch}. ` +
-    `Build from source: cargo install bo`,
+    `Build from source: go install github.com/skillicinski/bo/cmd/bo@latest`,
   );
   process.exit(0);
 }
