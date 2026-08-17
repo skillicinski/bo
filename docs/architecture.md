@@ -17,14 +17,15 @@ infrastructure implementations.
 ## Current structure
 
 - `cmd/bo` dispatches commands and formats seed, snap, state, and agent output.
-- The root `bo` package owns state types, use cases, validation, storage and
-  provider contracts, and the bounded agent loop.
-- `local` implements the filesystem storage contract.
+- The root `bo` package owns state types, use cases, filename derivation,
+  storage and provider contracts, and agent limits and message types.
+- `storage/local` owns the filesystem storage contract, local workspace bootstrap, and
+  the filesystem-backed bounded agent tools.
 - `source` implements HTTP, HTML extraction, and YouTube transcript fetching.
-- `deepseek` implements the OpenAI-compatible completion contract.
+- `provider/deepseek` implements the OpenAI-compatible completion contract.
 
-The root package does not select concrete adapters. The command package wires
-the local, source, and DeepSeek implementations together.
+The root package does not select concrete adapters or inspect local paths. The
+command package wires the local, source, and DeepSeek implementations together.
 
 ## Boundaries
 
@@ -33,7 +34,9 @@ result. Business decisions and concrete I/O do not belong in presentation.
 
 Application code coordinates a user-visible workflow and returns explicit
 success or failure. It may own a contract for an external capability when a
-useful test or replaceable implementation requires one.
+useful test or replaceable implementation requires one. Local workspace
+operations and filesystem-backed agent tools belong to `storage/local`, not to the
+reusable application package.
 
 Domain rules express application meaning and invariants. They do not perform
 I/O or read environment variables.

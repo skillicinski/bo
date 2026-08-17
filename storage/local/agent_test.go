@@ -1,4 +1,4 @@
-package bo_test
+package local_test
 
 import (
 	"context"
@@ -6,7 +6,25 @@ import (
 	"testing"
 
 	"github.com/skillicinski/bo"
+	"github.com/skillicinski/bo/storage/local"
 )
+
+func seededStore(t *testing.T) (*local.Store, string) {
+	t.Helper()
+	home := t.TempDir()
+	target, err := local.Seed(home, stringPtr("notes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := local.Open(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return store, target
+}
+
+func stringPtr(value string) *string { return &value }
 
 type fakeProvider struct {
 	responses []bo.CompletionResponse
@@ -56,7 +74,7 @@ func TestAgentReplaysToolMessagesAndUpsertsSummary(t *testing.T) {
 		toolResponse("write-1", "write_summary", "{\"source_key\":\"https://example.test/article\",\"markdown\":\"# Summary\\n\\nfact\\n\"}"),
 		{Message: bo.ChatMessage{Role: "assistant", Content: "done"}},
 	}}
-	written, err := bo.RunAgent(context.Background(), filepath.Dir(target), target, store, provider, bo.AgentConfig{MaxTurns: 4, MaxToolCalls: 3, MaxToolOutputBytes: 256, MaxResponseTokens: 16, TimeoutSeconds: 5})
+	written, err := local.RunAgent(context.Background(), filepath.Dir(target), target, store, provider, bo.AgentConfig{MaxTurns: 4, MaxToolCalls: 3, MaxToolOutputBytes: 256, MaxResponseTokens: 16, TimeoutSeconds: 5})
 	if err != nil || written != 1 {
 		t.Fatalf("RunAgent = %d, %v", written, err)
 	}
@@ -95,26 +113,7 @@ func TestAgentToolsRejectRawEscape(t *testing.T) {
 		toolResponse("write-1", "write_summary", "{\"source_key\":\"raw:article.md\",\"markdown\":\"summary\\n\"}"),
 		{Message: bo.ChatMessage{Role: "assistant", Content: "done"}},
 	}}
-	if _, err := bo.RunAgent(context.Background(), filepath.Dir(target), target, store, provider, bo.DefaultAgentConfig()); err != nil {
+	if _, err := local.RunAgent(context.Background(), filepath.Dir(target), target, store, provider, bo.DefaultAgentConfig()); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestAgentOptions(t *testing.T) {
-	config, err := bo.ParseAgentOptions([]string{"--max-turns", "2", "--max-tool-calls", "3", "--max-tool-output-bytes", "4", "--max-response-tokens", "5", "--timeout-seconds", "6"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if config.MaxTurns != 2 || config.MaxToolCalls != 3 || config.MaxToolOutputBytes != 4 || config.MaxResponseTokens != 5 || config.TimeoutSeconds != 6 {
-		t.Fatalf("config = %#v", config)
-	}
-	if _, err := bo.ParseAgentOptions([]string{"--unknown", "1"}); err == nil {
-		t.Fatal("unknown option succeeded")
-	}
-	if _, err := bo.ParseAgentOptions([]string{"--max-turns"}); err == nil {
-		t.Fatal("missing value succeeded")
-	}
-	if _, err := bo.ParseAgentOptions([]string{"--max-turns", "zero"}); err == nil {
-		t.Fatal("zero succeeded")
 	}
 }

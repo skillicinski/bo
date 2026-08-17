@@ -1,10 +1,7 @@
-package bo
+package local
 
 import (
-	"context"
 	"crypto/rand"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/skillicinski/bo"
 )
 
 const stateFile = "state.json"
@@ -65,11 +64,8 @@ func reservedDeviceName(name string) bool {
 		strings.EqualFold(stem, "AUX") || strings.EqualFold(stem, "NUL") {
 		return true
 	}
-	if len(stem) == 4 && (strings.EqualFold(stem[:3], "COM") || strings.EqualFold(stem[:3], "LPT")) &&
-		stem[3] >= '1' && stem[3] <= '9' {
-		return true
-	}
-	return false
+	return len(stem) == 4 && (strings.EqualFold(stem[:3], "COM") || strings.EqualFold(stem[:3], "LPT")) &&
+		stem[3] >= '1' && stem[3] <= '9'
 }
 
 func RandomName() (string, error) {
@@ -103,13 +99,13 @@ func Seed(home string, requestedName *string) (string, error) {
 	if err := os.Mkdir(target, 0o755); err != nil {
 		return "", err
 	}
-	if err := initializeState(target, State{Raw: []RawRecord{}, Summaries: []SummaryRecord{}}); err != nil {
+	if err := initializeState(target, bo.State{Raw: []bo.RawRecord{}, Summaries: []bo.SummaryRecord{}}); err != nil {
 		return "", err
 	}
 	return target, nil
 }
 
-func initializeState(target string, state State) error {
+func initializeState(target string, state bo.State) error {
 	root, err := os.OpenRoot(target)
 	if err != nil {
 		return err
@@ -120,7 +116,7 @@ func initializeState(target string, state State) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	data, err := MarshalState(state)
+	data, err := bo.MarshalState(state)
 	if err != nil {
 		return err
 	}
@@ -142,16 +138,7 @@ func initializeState(target string, state State) error {
 		_ = root.Remove("." + stateFile + ".tmp")
 		return err
 	}
-	return syncRootDirectory(root)
-}
-
-func syncRootDirectory(root *os.Root) error {
-	directory, err := root.Open(".")
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
+	return syncRoot(root)
 }
 
 func ResolveTarget(home, name string) (string, error) {
@@ -181,114 +168,6 @@ func ResolveTarget(home, name string) (string, error) {
 	return canonicalTarget, nil
 }
 
-func StateOutput(ctx context.Context, storage Storage, full bool) (string, error) {
-	state, _, err := storage.ReadState(ctx)
-	if err != nil {
-		return "", err
-	}
-	if !full {
-		return fmt.Sprintf("%d documents snapped", len(state.Raw)), nil
-	}
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
-func Snap(ctx context.Context, storage Storage, fetcher Source, urls []string) ([]SnapOutcome, error) {
-	if len(urls) == 0 {
-		return nil, NewSnapInputError("usage: bo snap <dir> <url>...")
-	}
-	state, generation, err := storage.ReadState(ctx)
-	if err != nil {
-		if !IsCategory(err, CategoryFilesystem) {
-			err = FilesystemError(err.Error())
-		}
-		return nil, &SnapCommandError{Err: err}
-	}
-	outcomes := make([]SnapOutcome, 0, len(urls))
-	for _, input := range urls {
-		page, fetchErr := fetcher.Fetch(ctx, input)
-		if fetchErr != nil {
-			outcomes = append(outcomes, SnapOutcome{SourceURL: input, Err: fetchErr})
-			continue
-		}
-		sourceURL := page.SourceURL
-		if sourceURL == "" {
-			sourceURL = input
-		}
-		slug, slugErr := KebabCase(page.Title)
-		if slugErr != nil {
-			outcomes = append(outcomes, SnapOutcome{SourceURL: input, Err: slugErr})
-			continue
-		}
-		writtenAt := uint64(time.Now().UnixMilli())
-		filename, document, writeErr := createRaw(ctx, storage, slug, writtenAt, []byte(page.Markdown))
-		if writeErr != nil {
-			outcomes = append(outcomes, SnapOutcome{SourceURL: input, Err: writeErr})
-			continue
-		}
-		next := state
-		next.Raw = append(append([]RawRecord{}, state.Raw...), RawRecord{
-			Filename: filename, URL: sourceURL, WrittenAt: writtenAt,
-		})
-		newGeneration, publishErr := storage.PublishState(ctx, next, generation)
-		if publishErr != nil {
-			rollbackErr := storage.DeleteDocument(ctx, document)
-			detail := fmt.Sprintf("updating state failed: %s; snapshot written then deleted", errorDetail(publishErr))
-			if rollbackErr != nil {
-				detail = fmt.Sprintf("updating state failed: %s; snapshot cleanup failed: %s", errorDetail(publishErr), errorDetail(rollbackErr))
-			}
-			failure := FilesystemError(detail)
-			if IsConflict(publishErr) {
-				failure = ConflictError(detail)
-			}
-			return outcomes, &SnapCommandError{Completed: outcomes, SourceURL: input, Err: failure}
-		}
-		state, generation = next, newGeneration
-		outcomes = append(outcomes, SnapOutcome{SourceURL: input, Filename: filename})
-	}
-	return outcomes, nil
-}
-
-func createRaw(ctx context.Context, storage Storage, slug string, timestamp uint64, contents []byte) (string, DocumentRef, error) {
-	for attempt := 0; ; attempt++ {
-		filename := slug + ".md"
-		if attempt == 1 {
-			filename = fmt.Sprintf("%s--%d.md", slug, timestamp)
-		} else if attempt > 1 {
-			filename = fmt.Sprintf("%s--%d--%d.md", slug, timestamp, attempt)
-		}
-		ref, err := storage.CreateRaw(ctx, filename, contents)
-		if err == nil {
-			return filename, ref, nil
-		}
-		if !IsAlreadyExists(err) {
-			return "", DocumentRef{}, err
-		}
-	}
-}
-
-func KebabCase(value string) (string, error) {
-	var builder strings.Builder
-	lastDash := false
-	for _, r := range value {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			builder.WriteRune(unicode.ToLower(r))
-			lastDash = false
-		} else if builder.Len() > 0 && !lastDash {
-			builder.WriteByte('-')
-			lastDash = true
-		}
-	}
-	result := strings.TrimRight(builder.String(), "-")
-	if result == "" {
-		return "", ContentError("title cannot produce a filename")
-	}
-	return result, nil
-}
-
 func ensureInside(path, root string) error {
 	relative, err := filepath.Rel(root, path)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
@@ -303,12 +182,4 @@ func nowNanos() (uint64, error) {
 		return 0, fmt.Errorf("clock returned a time before Unix epoch")
 	}
 	return uint64(now), nil
-}
-
-func errorDetail(err error) string {
-	var categorized *Error
-	if errors.As(err, &categorized) {
-		return categorized.Detail
-	}
-	return err.Error()
 }

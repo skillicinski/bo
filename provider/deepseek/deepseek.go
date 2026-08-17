@@ -11,7 +11,10 @@ import (
 	"github.com/skillicinski/bo"
 )
 
-const DefaultEndpoint = "https://api.deepseek.com/chat/completions"
+const (
+	DefaultEndpoint = "https://api.deepseek.com/chat/completions"
+	DefaultModel    = "deepseek-v4-flash"
+)
 
 type Client struct {
 	APIKey     string
@@ -29,6 +32,9 @@ func New(apiKey, endpoint string) *Client {
 func NewClient(apiKey, endpoint string) *Client { return New(apiKey, endpoint) }
 
 func (c *Client) Complete(ctx context.Context, request bo.CompletionRequest) (bo.CompletionResponse, error) {
+	if request.Model == "" {
+		request.Model = DefaultModel
+	}
 	body, err := json.Marshal(request)
 	if err != nil {
 		return bo.CompletionResponse{}, bo.RequestError(fmt.Sprintf("encoding API request failed: %v", err))

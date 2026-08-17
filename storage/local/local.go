@@ -1,3 +1,4 @@
+// Package local implements the local filesystem storage adapter.
 package local
 
 import (

@@ -1,7 +1,7 @@
 # Evaluation workflow
 
 - Keep the corpus manifest in `manifest.txt` and the human scoring guidance in `RUBRIC.md`.
-- Rebuild `target/debug/bo` after source changes with `go build -o target/debug/bo ./cmd/bo` before running the evaluator.
+- Rebuild `bin/bo` after source changes with `go build -o bin/bo ./cmd/bo` before running the evaluator.
 - Run `./evals/run.sh` from the repository root with a non-empty `DEEPSEEK_API_KEY`. Never put API keys in files or logs.
 - `bo snap` writes successful raw snapshots into the seeded target directory under the temporary eval home. The runner copies them to `evals/results/<run-id>/raw/`.
 - The runner copies final state and summaries to `evals/results/<run-id>/`; logs, hashes, and expected fetch failures are stored there too.

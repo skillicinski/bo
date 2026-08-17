@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/skillicinski/bo"
-	"github.com/skillicinski/bo/local"
+	"github.com/skillicinski/bo/storage/local"
 )
 
 type pageSource map[string]bo.Page
@@ -20,7 +20,7 @@ func (s pageSource) Fetch(_ context.Context, url string) (bo.Page, error) {
 func seededStore(t *testing.T) (*local.Store, string) {
 	t.Helper()
 	home := t.TempDir()
-	target, err := bo.Seed(home, stringPtr("notes"))
+	target, err := local.Seed(home, stringPtr("notes"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,12 +46,12 @@ func TestStateJSONIsStable(t *testing.T) {
 
 func TestValidateNameUsesPortableRules(t *testing.T) {
 	for _, name := range []string{"", ".", "..", "../escape", "sub/name", "sub\\name", "CON", "CON.txt", "COM1", "LPT9", "a:b", "a*b", "a?b", "a\"b", "a<b", "a>b", "a|b", "name.", "name ", "line\nbreak"} {
-		if err := bo.ValidateName(name); err == nil {
+		if err := local.ValidateName(name); err == nil {
 			t.Errorf("ValidateName(%q) succeeded", name)
 		}
 	}
 	for _, name := range []string{"test", "hello-world", "has space", ".hidden", "café"} {
-		if err := bo.ValidateName(name); err != nil {
+		if err := local.ValidateName(name); err != nil {
 			t.Errorf("ValidateName(%q): %v", name, err)
 		}
 	}

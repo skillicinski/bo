@@ -2,7 +2,7 @@
 set -eu
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bo=${BO_BIN:-$repo/target/debug/bo}
+bo=${BO_BIN:-$repo/bin/bo}
 if [ ! -x "$bo" ]; then
     mkdir -p "$(dirname "$bo")"
     go build -o "$bo" "$repo/cmd/bo"

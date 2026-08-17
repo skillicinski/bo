@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Breaking:** rewrote the local CLI and adapters in Go; install from source with `go install github.com/skillicinski/bo/cmd/bo@latest`.
 - Local DeepSeek agent credentials now use `DEEPSEEK_API_KEY` and `DEEPSEEK_API_URL`.
+- Local filesystem bootstrap and agent tools are separated from the reusable core package.
 
 ## [0.1.0] - 2026-07-19
 

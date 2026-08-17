@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/skillicinski/bo"
-	"github.com/skillicinski/bo/deepseek"
-	"github.com/skillicinski/bo/local"
+	"github.com/skillicinski/bo/provider/deepseek"
 	"github.com/skillicinski/bo/source"
+	"github.com/skillicinski/bo/storage/local"
 )
 
 const usage = "usage: bo seed [--name <name>] | bo snap <dir> <url>... | bo state <name> [--full] | bo agent <dir> [options]"
@@ -50,11 +50,11 @@ func runSeed(args []string) {
 		name = &value
 		index++
 	}
-	home, err := bo.HomeDir()
+	home, err := local.HomeDir()
 	if err != nil {
 		fail("seeding", err.Error())
 	}
-	path, err := bo.Seed(home, name)
+	path, err := local.Seed(home, name)
 	if err != nil {
 		fail("seeding", err.Error())
 	}
@@ -65,11 +65,11 @@ func runSnap(args []string) {
 	if len(args) < 2 || strings.HasPrefix(args[0], "-") {
 		fail("snap", "usage: bo snap <dir> <url>...")
 	}
-	home, err := bo.HomeDir()
+	home, err := local.HomeDir()
 	if err != nil {
 		fail("snap", err.Error())
 	}
-	target, err := bo.ResolveTarget(home, args[0])
+	target, err := local.ResolveTarget(home, args[0])
 	if err != nil {
 		if strings.HasPrefix(err.Error(), "target directory does not exist:") {
 			err = fmt.Errorf("%s (run bo seed --name %s)", err, args[0])
@@ -107,11 +107,11 @@ func runState(args []string) {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") || len(args) > 2 || len(args) == 2 && args[1] != "--full" {
 		fail("state", "usage: bo state <name> [--full]")
 	}
-	home, err := bo.HomeDir()
+	home, err := local.HomeDir()
 	if err != nil {
 		fail("state", err.Error())
 	}
-	target, err := bo.ResolveTarget(home, args[0])
+	target, err := local.ResolveTarget(home, args[0])
 	if err != nil {
 		fail("state", err.Error())
 	}
@@ -129,10 +129,10 @@ func runState(args []string) {
 
 func runAgent(args []string) {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		fail("agent", bo.AgentUsage())
+		fail("agent", agentUsage())
 	}
 	name := args[0]
-	config, err := bo.ParseAgentOptions(args[1:])
+	config, err := parseAgentOptions(args[1:])
 	if err != nil {
 		fail("agent", err.Error())
 	}
@@ -140,11 +140,11 @@ func runAgent(args []string) {
 	if apiKey == "" {
 		fail("agent", "DEEPSEEK_API_KEY is not set")
 	}
-	home, err := bo.HomeDir()
+	home, err := local.HomeDir()
 	if err != nil {
 		fail("agent", err.Error())
 	}
-	target, err := bo.ResolveTarget(home, name)
+	target, err := local.ResolveTarget(home, name)
 	if err != nil {
 		fail("agent", err.Error())
 	}
@@ -161,7 +161,7 @@ func runAgent(args []string) {
 	provider := deepseek.New(apiKey, endpoint)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.TimeoutSeconds)*time.Second)
 	defer cancel()
-	written, err := bo.RunAgent(ctx, root, target, storage, provider, config)
+	written, err := local.RunAgent(ctx, root, target, storage, provider, config)
 	if err != nil {
 		fail("agent", err.Error())
 	}
