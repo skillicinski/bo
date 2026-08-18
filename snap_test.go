@@ -58,3 +58,36 @@ func TestSnapRollsBackRawWhenStatePublicationFails(t *testing.T) {
 		t.Fatalf("raw document remains: %v", statErr)
 	}
 }
+
+type failingPageSource struct{}
+
+func (failingPageSource) Fetch(context.Context, string) (bo.Page, error) {
+	return bo.Page{}, errors.New("caption unavailable")
+}
+
+func TestSnapDoesNotStoreFailedFetch(t *testing.T) {
+	store, target := seededStore(t)
+	outcomes, err := bo.Snap(context.Background(), store, failingPageSource{}, []string{"https://www.youtube.com/watch?v=a1mhk7mAetk"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outcomes) != 1 || outcomes[0].Err == nil {
+		t.Fatalf("outcomes = %#v", outcomes)
+	}
+	state, _, err := store.ReadState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Raw) != 0 {
+		t.Fatalf("state = %#v", state)
+	}
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) == ".md" {
+			t.Fatalf("failed snapshot remains: %s", entry.Name())
+		}
+	}
+}

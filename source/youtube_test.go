@@ -48,6 +48,12 @@ func TestTranscriptParser(t *testing.T) {
 	if err != nil || got != "Hello world\n\nSecond" {
 		t.Fatalf("JSON3 transcript = %q, err = %v", got, err)
 	}
+	if _, err := ParseTranscriptMarkdown(`{"events":[}`); err == nil {
+		t.Fatal("malformed JSON3 transcript succeeded")
+	}
+	if _, err := ParseTranscriptMarkdown("<timedtext><p> </p></timedtext>"); err == nil {
+		t.Fatal("empty caption succeeded")
+	}
 }
 
 func TestHTTPFetchesJSON3YouTubeTranscript(t *testing.T) {
@@ -66,5 +72,40 @@ func TestHTTPFetchesJSON3YouTubeTranscript(t *testing.T) {
 	}
 	if page.Title != "Video title" || page.Markdown != "# Video title\n\nHello world\n" || page.SourceURL != "https://www.youtube.com/watch?v=a1mhk7mAetk" {
 		t.Fatalf("page = %#v", page)
+	}
+}
+
+func TestHTTPRetriesYouTubePlayerWithWatchPageAPIKey(t *testing.T) {
+	var playerKeys []string
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		header := make(http.Header)
+		switch request.URL.Path {
+		case "/player":
+			key := request.URL.Query().Get("key")
+			playerKeys = append(playerKeys, key)
+			if key == "" {
+				return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(`{"playabilityStatus":{"status":"LOGIN_REQUIRED","reason":"sign in"}}`))}, nil
+			}
+			if key != "current-key" {
+				t.Fatalf("retry key = %q", key)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(`{"playabilityStatus":{"status":"OK"},"videoDetails":{"title":"Recovered title"},"captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[{"baseUrl":"https://example.test/captions","languageCode":"en"}]}}}`))}, nil
+		case "/watch":
+			return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(`<script>var config = {"INNERTUBE_API_KEY":"current-key"}</script>`))}, nil
+		default:
+			return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(`<timedtext><text>Recovered transcript</text></timedtext>`))}, nil
+		}
+	})}
+	httpSource := New(client)
+	httpSource.PlayerEndpoint = "https://example.test/player?prettyPrint=false"
+	page, err := httpSource.Fetch(context.Background(), "https://www.youtube.com/watch?v=a1mhk7mAetk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Title != "Recovered title" || page.Markdown != "# Recovered title\n\nRecovered transcript\n" {
+		t.Fatalf("page = %#v", page)
+	}
+	if len(playerKeys) != 2 || playerKeys[0] != "" || playerKeys[1] != "current-key" {
+		t.Fatalf("player keys = %#v", playerKeys)
 	}
 }

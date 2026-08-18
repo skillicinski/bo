@@ -15,3 +15,5 @@ https://www.youtube.com/watch?v=Sir59K8ZDPU
 # Issue #256 additions
 https://towardsdatascience.com/layered-architecture-for-building-readable-robust-and-extensible-apps/
 https://www.youtube.com/watch?v=TQdLgzVk2T8
+https://www.youtube.com/watch?v=rxGVLSlUfaQ
+https://www.youtube.com/watch?v=OcZSS37SUCE
