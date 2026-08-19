@@ -137,6 +137,23 @@ class EvaluateTests(unittest.TestCase):
         self.assertEqual(len(pairs), 1)
         self.assertEqual(pairs[0]["raw_filename"], "article-1.md")
 
+    def test_missing_summary_publishes_partial_scores(self):
+        run = self.make_run(count=2)
+        state = json.loads((run / "state.json").read_text())
+        missing_source = state["raw"][1]["url"]
+        state["summaries"] = state["summaries"][:1]
+        (run / "state.json").write_text(json.dumps(state))
+        opener = self.use_valid_opener()
+
+        aggregate = evaluate.evaluate(run, api_key="evaluation-key", api_url="http://example.test")
+
+        self.assertEqual(aggregate["status"], "partial")
+        self.assertEqual(aggregate["document_count"], 2)
+        self.assertEqual(aggregate["scored_document_count"], 1)
+        self.assertEqual(len(opener.requests), 1)
+        self.assertEqual(aggregate["missing_summaries"][0]["source_key"], missing_source)
+        self.assertEqual(len(list((run / "evaluation" / "documents").glob("*.json"))), 1)
+
     def test_request_contract_and_rubric_metadata(self):
         run = self.make_run()
         opener = self.use_valid_opener()

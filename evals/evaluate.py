@@ -163,8 +163,8 @@ def _safe_summary_filename(filename: object) -> str:
     return filename
 
 
-def load_pairs(run_dir: Path) -> list[dict]:
-    """Load the newest raw/summary pair for each bo source identity."""
+def load_pairs_with_missing(run_dir: Path) -> tuple[list[dict], list[dict]]:
+    """Load complete pairs and report source identities without summaries."""
     run_dir = Path(run_dir)
     state = _read_json(run_dir / "state.json", "state.json")
     if not isinstance(state, dict):
@@ -206,8 +206,7 @@ def load_pairs(run_dir: Path) -> list[dict]:
     summaries_dir = run_dir / "summaries"
     if not raw_dir.is_dir():
         raise EvaluationError(f"raw directory does not exist: {raw_dir}")
-    if not summaries_dir.is_dir():
-        raise EvaluationError(f"summaries directory does not exist: {summaries_dir}")
+    summaries_available = summaries_dir.is_dir()
 
     sources = {}
     try:
@@ -238,15 +237,27 @@ def load_pairs(run_dir: Path) -> list[dict]:
         raise EvaluationError(f"no raw Markdown documents in {raw_dir}")
 
     pairs = []
+    missing = []
     for source_key in sorted(sources):
         source = sources[source_key]
         summary_record = summaries_by_source.get(source_key)
         if summary_record is None:
-            raise EvaluationError(f"missing summary record: {source_key}")
+            missing.append({
+                "source_key": source_key,
+                "raw_filename": source["raw_filename"],
+                "reason": "missing summary record",
+            })
+            continue
         summary_filename = _safe_summary_filename(summary_record.get("filename"))
         summary_path = summaries_dir / summary_filename
-        if summary_path.is_symlink() or not summary_path.is_file():
-            raise EvaluationError(f"missing summary file: {summary_filename}")
+        if not summaries_available or summary_path.is_symlink() or not summary_path.is_file():
+            missing.append({
+                "source_key": source_key,
+                "raw_filename": source["raw_filename"],
+                "summary_filename": summary_filename,
+                "reason": "missing summary file",
+            })
+            continue
         raw = _read_text(source["raw_path"], f"raw document {source['raw_filename']}")
         summary = _read_text(summary_path, f"summary {summary_filename}")
         pairs.append(
@@ -258,6 +269,12 @@ def load_pairs(run_dir: Path) -> list[dict]:
                 "summary": summary,
             }
         )
+    return pairs, missing
+
+
+def load_pairs(run_dir: Path) -> list[dict]:
+    """Load the complete raw/summary pairs for each source identity."""
+    pairs, _ = load_pairs_with_missing(run_dir)
     return pairs
 
 
@@ -446,10 +463,10 @@ def evaluate(
         if not key:
             raise EvaluationError("BO_EVAL_API_KEY is not set")
         endpoint = api_url or os.environ.get("BO_EVAL_API_URL") or DEFAULT_API_URL
-        pairs = load_pairs(run_dir)
-        if len(pairs) > MAX_DOCUMENTS:
+        pairs, missing_summaries = load_pairs_with_missing(run_dir)
+        if len(pairs) + len(missing_summaries) > MAX_DOCUMENTS:
             raise EvaluationError(
-                f"document limit exceeded: {len(pairs)} > {MAX_DOCUMENTS}"
+                f"document limit exceeded: {len(pairs) + len(missing_summaries)} > {MAX_DOCUMENTS}"
             )
         for pair in pairs:
             input_bytes = len(pair["raw"].encode("utf-8")) + len(
@@ -511,13 +528,15 @@ def evaluate(
                 3,
             )
             for criterion in CRITERIA
-        }
+        } if documents else {}
         aggregate = {
             **metadata,
-            "status": "success",
-            "document_count": len(documents),
+            "status": "partial" if missing_summaries else "success",
+            "document_count": len(pairs) + len(missing_summaries),
+            "scored_document_count": len(documents),
             "output_tokens": total_tokens,
             "scores": scores,
+            "missing_summaries": missing_summaries,
         }
         _publish(run_dir, aggregate, documents)
         return aggregate
