@@ -1,70 +1,50 @@
 # Architecture
 
-## Core rule
-
-Business rules must not depend on command-line formatting, filesystems, HTTP,
-or provider APIs. Dependencies point inward:
+## Layout
 
 ```text
-presentation   ──> application ──> domain rules
-infrastructure ──> application or domain-owned contracts
-composition root ──> concrete pieces
+cmd/bo/                 CLI parsing, output, and dependency wiring
+api.go                  public Go façade for workflows and contracts
+internal/agent/         provider-neutral agent runtime and tool boundary
+internal/application/   use-case orchestration
+internal/domain/        private state and document entities
+internal/provider/      provider adapters
+internal/source/url/     URL, HTML, and YouTube source adapter
+internal/storage/        filesystem and workspace adapters
 ```
 
-The composition root may know every concrete type. Inner code should not choose
-infrastructure implementations.
+The root `bo` package exposes the reusable workflows and contracts through
+`api.go`. It does not select concrete providers, sources, or storage
+implementations.
 
-## Current structure
+`cmd/bo` is the composition root. It selects local storage and workspace
+adapters, the HTTP source, and the DeepSeek provider. It parses CLI input and
+formats CLI output.
 
-- `cmd/bo` dispatches commands and formats seed, snap, state, and agent output.
-- The root `bo` package owns state types, use cases, filename derivation,
-  storage and provider contracts, and agent limits and message types.
-- `storage/local` owns the filesystem storage contract, local workspace bootstrap, and
-  the filesystem-backed bounded agent tools.
-- `source` implements HTTP, HTML extraction, and YouTube transcript fetching.
-- `provider/deepseek` implements the OpenAI-compatible completion contract.
+`internal/domain` owns the state and document entities used by the workflows and
+storage adapter. It has no dependency on the root package or external adapters.
 
-The root package does not select concrete adapters or inspect local paths. The
-command package wires the local, source, and DeepSeek implementations together.
+`internal/agent` owns the provider-neutral agent runtime. A use case supplies a
+provider and the tool set it permits.
 
-## Boundaries
+`internal/application` owns the use-case workflows, including `seed`, `snap`,
+`state`, and `synth`. It depends on domain types and application contracts, not
+on concrete adapters. Synthesis supplies its own bounded local tools to the
+agent runtime.
 
-Presentation parses transport input, invokes one use case, and formats its
-result. Business decisions and concrete I/O do not belong in presentation.
+`internal/application/contracts.go` owns the storage, source, and workspace
+contracts used by application code and adapters. `internal/agent` owns the
+completion and tool contracts. The root API re-exports both contract groups
+for callers that need to compose the package.
 
-Application code coordinates a user-visible workflow and returns explicit
-success or failure. It may own a contract for an external capability when a
-useful test or replaceable implementation requires one. Local workspace
-operations and filesystem-backed agent tools belong to `storage/local`, not to the
-reusable application package.
+Storage and source adapters implement the application contracts; provider
+adapters implement the agent completion contract. The root package does not
+import the adapters.
 
-Domain rules express application meaning and invariants. They do not perform
-I/O or read environment variables.
+### Domain
 
-Infrastructure performs filesystem, HTTP, serialization, clock, and operating
-system work. It contains integration mechanics, not business decisions.
+Representations of stable product concepts, independent rules and lifecycles. They are long-lived and can be abstracted into use cases.
 
-## When to split code
+### Application
 
-Extract a boundary only when at least one of these is true:
-
-- a use case needs testing without real I/O;
-- a second implementation or entrypoint exists;
-- unrelated capabilities force changes in the same module;
-- a concrete dependency is leaking into business rules.
-
-Keep related code together otherwise. Do not create layers, traits, shared
-modules, or reusable libraries for hypothetical consumers.
-
-## Go conventions
-
-- Use structs and typed errors for meaningful domain values and failures.
-- Use functions or small structs for workflows.
-- Use interfaces only at real external boundaries.
-- Prefer constructors, explicit parameters, and compile-time wiring.
-- Keep provider and persistence types at their boundaries.
-- Test behavior, not directory layout.
-
-For each change, start from the user-visible use case, put each decision in its
-owning boundary, and make the smallest structural change that keeps dependencies
-pointing inward.
+Abstractions that orchestrate the internal functionality and domain entities of the system.

@@ -9,7 +9,7 @@ if [ ! -x "$bo" ]; then
 fi
 : "${DEEPSEEK_API_KEY:?DEEPSEEK_API_KEY is required}"
 
-run_id="agent-$(date +%s)-$$"
+run_id="synth-$(date +%s)-$$"
 work="$repo/evals/work/$run_id"
 report="$repo/evals/results/$run_id"
 home="$work/home"
@@ -45,8 +45,8 @@ else
 fi
 
 set +e
-HOME="$home" "$bo" agent "$run_id" >"$report/agent.log" 2>&1
-agent_status=$?
+HOME="$home" "$bo" synth "$run_id" >"$report/synth.log" 2>&1
+synth_status=$?
 set -e
 
 cp "$target/state.json" "$report/state.json"
@@ -89,6 +89,6 @@ if ! diff -u "$report/raw-before.sha256" "$report/raw-after.sha256" >"$report/ra
     missing=$((missing + 1))
 fi
 
-printf 'snap status: %s\nagent status: %s\nmissing summaries or hash changes: %s\nexpected failures: %s\nreport: %s\n' \
-    "$snap_status" "$agent_status" "$missing" "$(wc -l <"$report/expected-failures.log" | tr -d ' ')" "$report"
-[ "$agent_status" -eq 0 ] && [ "$missing" -eq 0 ]
+printf 'snap status: %s\nsynth status: %s\nmissing summaries or hash changes: %s\nexpected failures: %s\nreport: %s\n' \
+    "$snap_status" "$synth_status" "$missing" "$(wc -l <"$report/expected-failures.log" | tr -d ' ')" "$report"
+[ "$synth_status" -eq 0 ] && [ "$missing" -eq 0 ]

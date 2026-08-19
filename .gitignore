@@ -6,12 +6,6 @@
 /tmp*/
 tmp/
 
-# internal
-internal/
-
-# agents
-.agents/
-
 # generated agent evaluation corpus and reports
 /evals/*
 !/evals/AGENTS.md
@@ -21,5 +15,5 @@ internal/
 !/evals/evaluate.py
 !/evals/test_evaluate.py
 
-/.pi/*
-!/.pi/extensions/
+# os
+.DS_Store

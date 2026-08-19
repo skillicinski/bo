@@ -4,17 +4,15 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/skillicinski/bo"
-	"github.com/skillicinski/bo/provider/deepseek"
-	"github.com/skillicinski/bo/source"
-	"github.com/skillicinski/bo/storage/local"
+	"github.com/skillicinski/bo/internal/provider/deepseek"
+	urlsource "github.com/skillicinski/bo/internal/source/url"
+	"github.com/skillicinski/bo/internal/storage/local"
 )
 
-const usage = "usage: bo seed [--name <name>] | bo snap <dir> <url>... | bo state <name> [--full] | bo agent <dir> [options]"
+const usage = "usage: bo seed [--name <name>] | bo snap <name> <url>... | bo state <name> [--full] | bo synth <name> [options]"
 
 func main() {
 	args := os.Args[1:]
@@ -29,8 +27,8 @@ func main() {
 		runSnap(args[1:])
 	case "state":
 		runState(args[1:])
-	case "agent":
-		runAgent(args[1:])
+	case "synth":
+		runSynth(args[1:])
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(1)
@@ -38,27 +36,26 @@ func main() {
 }
 
 func runSeed(args []string) {
-	var name *string
+	name := ""
 	for index := 0; index < len(args); index++ {
-		if args[index] != "--name" || name != nil {
+		if args[index] != "--name" || name != "" {
 			fail("seeding", "usage: bo seed [--name <name>]")
 		}
 		if index+1 >= len(args) {
 			fail("seeding", "missing value for --name")
 		}
-		value := args[index+1]
-		name = &value
+		name = args[index+1]
 		index++
 	}
 	home, err := local.HomeDir()
 	if err != nil {
 		fail("seeding", err.Error())
 	}
-	path, err := local.Seed(home, name)
+	created, err := bo.Seed(context.Background(), local.NewManager(home), name)
 	if err != nil {
 		fail("seeding", err.Error())
 	}
-	fmt.Printf("seeded at %s\n", path)
+	fmt.Printf("seeded: %s\n", created)
 }
 
 func runSnap(args []string) {
@@ -81,7 +78,7 @@ func runSnap(args []string) {
 		fail("snap", err.Error())
 	}
 	defer storage.Close()
-	outcomes, commandErr := bo.Snap(context.Background(), storage, source.NewHTTP(), args[1:])
+	outcomes, commandErr := bo.Snap(context.Background(), storage, urlsource.NewHTTP(), args[1:])
 	if commandErr != nil {
 		fatal, ok := commandErr.(*bo.SnapCommandError)
 		if !ok {
@@ -127,43 +124,28 @@ func runState(args []string) {
 	fmt.Println(output)
 }
 
-func runAgent(args []string) {
+func runSynth(args []string) {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		fail("agent", agentUsage())
+		fail("synth", synthUsage())
 	}
 	name := args[0]
-	config, err := parseAgentOptions(args[1:])
+	config, err := parseSynthOptions(args[1:])
 	if err != nil {
-		fail("agent", err.Error())
+		fail("synth", err.Error())
 	}
 	apiKey := os.Getenv("DEEPSEEK_API_KEY")
 	if apiKey == "" {
-		fail("agent", "DEEPSEEK_API_KEY is not set")
+		fail("synth", "DEEPSEEK_API_KEY is not set")
 	}
 	home, err := local.HomeDir()
 	if err != nil {
-		fail("agent", err.Error())
+		fail("synth", err.Error())
 	}
-	target, err := local.ResolveTarget(home, name)
-	if err != nil {
-		fail("agent", err.Error())
-	}
-	root, err := filepath.EvalSymlinks(filepath.Dir(target))
-	if err != nil {
-		fail("agent", err.Error())
-	}
-	storage, err := local.Open(target)
-	if err != nil {
-		fail("agent", err.Error())
-	}
-	defer storage.Close()
 	endpoint := os.Getenv("DEEPSEEK_API_URL")
 	provider := deepseek.New(apiKey, endpoint)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.TimeoutSeconds)*time.Second)
-	defer cancel()
-	written, err := local.RunAgent(ctx, root, target, storage, provider, config)
+	written, err := bo.Synthesize(context.Background(), local.NewManager(home), name, provider, config)
 	if err != nil {
-		fail("agent", err.Error())
+		fail("synth", err.Error())
 	}
 	fmt.Printf("%d summaries written\n", written)
 }
