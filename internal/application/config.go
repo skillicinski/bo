@@ -20,6 +20,11 @@ type SynthesisOptions struct {
 	TimeoutSeconds     int
 }
 
+type SynthesisResult struct {
+	SummariesWritten int           `json:"summaries_written"`
+	Metrics          agent.Metrics `json:"metrics"`
+}
+
 func DefaultSynthesisOptions() SynthesisOptions {
 	return SynthesisOptions{
 		MaxTurns: DefaultMaxTurns, MaxToolCalls: DefaultMaxToolCalls,

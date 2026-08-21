@@ -29,12 +29,16 @@ func TestCompleteUsesProviderDefaultModel(t *testing.T) {
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(bytes.NewReader([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))),
+			Body:       io.NopCloser(bytes.NewReader([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`))),
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
 			Request:    request,
 		}, nil
 	})}
-	if _, err := client.Complete(context.Background(), agent.CompletionRequest{}); err != nil {
+	result, err := client.Complete(context.Background(), agent.CompletionRequest{})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if result.Usage == nil || result.Usage.TotalTokens != 5 {
+		t.Fatalf("usage = %#v", result.Usage)
 	}
 }

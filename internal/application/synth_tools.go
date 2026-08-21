@@ -1,7 +1,6 @@
 package application
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,19 +15,58 @@ import (
 	"github.com/skillicinski/bo/internal/domain"
 )
 
-func synthTools(contextState *agentContext, summarized map[string]bool) []agent.Tool {
+const (
+	toolReadCorpus   = "read_corpus"
+	toolReadDocument = "read_document"
+	toolReadSummary  = "read_summary"
+	toolWriteSummary = "write_summary"
+	toolEditSummary  = "edit_summary"
+)
+
+var allSynthesisTools = []string{toolReadCorpus, toolReadDocument, toolReadSummary, toolWriteSummary, toolEditSummary}
+
+func normalizeSynthesisTools(names []string) ([]string, error) {
+	if len(names) == 0 || len(names) == 1 && names[0] == "all" {
+		return append([]string{}, allSynthesisTools...), nil
+	}
+	known := make(map[string]bool, len(allSynthesisTools))
+	for _, name := range allSynthesisTools {
+		known[name] = true
+	}
+	seen := make(map[string]bool, len(names))
+	validated := make([]string, 0, len(names))
+	for _, name := range names {
+		if !known[name] {
+			return nil, fmt.Errorf("unknown synthesis tool: %s", name)
+		}
+		if seen[name] {
+			return nil, fmt.Errorf("duplicate synthesis tool: %s", name)
+		}
+		seen[name] = true
+		validated = append(validated, name)
+	}
+	return validated, nil
+}
+
+func synthTools(contextState *agentContext, summarized map[string]bool, names []string) []agent.Tool {
 	objectParameters := func(properties map[string]any, required []string) map[string]any {
 		return map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}
 	}
 	execute := func(_ context.Context, call agent.ToolCall) (string, error) {
 		return executeToolCall(contextState, call, summarized)
 	}
-	return []agent.Tool{
-		{Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: "bash", Description: "Run one bounded facade command: ls [path], cd path, cat raw.md, or grep literal [path]. This is not a shell.", Parameters: objectParameters(map[string]any{"command": map[string]any{"type": "string"}}, []string{"command"})}}, Execute: execute},
-		{Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: "read_state", Description: "Read the authoritative state for the target directory.", Parameters: objectParameters(map[string]any{}, []string{})}}, Execute: execute},
-		{Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: "read_summary", Description: "Read the existing Markdown summary for one source identity.", Parameters: objectParameters(map[string]any{"source_key": map[string]any{"type": "string"}}, []string{"source_key"})}}, Execute: execute},
-		{Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: "write_summary", Description: "Write or replace the Markdown summary for one source identity using its newest raw snapshot.", Parameters: objectParameters(map[string]any{"source_key": map[string]any{"type": "string"}, "markdown": map[string]any{"type": "string"}}, []string{"source_key", "markdown"})}}, Execute: execute},
+	definitions := map[string]agent.Tool{
+		toolReadCorpus:   {Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: toolReadCorpus, Description: "Read the authoritative corpus state, including raw snapshots and summaries.", Parameters: objectParameters(map[string]any{}, []string{})}}, Execute: execute},
+		toolReadDocument: {Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: toolReadDocument, Description: "Read the newest raw Markdown document for one source identity. Use its exact filename.", Parameters: objectParameters(map[string]any{"filename": map[string]any{"type": "string"}}, []string{"filename"})}}, Execute: execute},
+		toolReadSummary:  {Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: toolReadSummary, Description: "Read the existing Markdown summary for one source identity.", Parameters: objectParameters(map[string]any{"source_key": map[string]any{"type": "string"}}, []string{"source_key"})}}, Execute: execute},
+		toolWriteSummary: {Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: toolWriteSummary, Description: "Create a Markdown summary for one source identity using its newest raw snapshot.", Parameters: objectParameters(map[string]any{"source_key": map[string]any{"type": "string"}, "markdown": map[string]any{"type": "string"}}, []string{"source_key", "markdown"})}}, Execute: execute},
+		toolEditSummary:  {Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: toolEditSummary, Description: "Replace an existing Markdown summary for one source identity in full.", Parameters: objectParameters(map[string]any{"source_key": map[string]any{"type": "string"}, "markdown": map[string]any{"type": "string"}}, []string{"source_key", "markdown"})}}, Execute: execute},
 	}
+	tools := make([]agent.Tool, 0, len(names))
+	for _, name := range names {
+		tools = append(tools, definitions[name])
+	}
+	return tools
 }
 
 type agentSource struct {
@@ -39,19 +77,22 @@ type agentSource struct {
 
 type agentContext struct {
 	ctx            context.Context
-	root, target   string
+	target         string
 	storage        Storage
 	documents      map[string]string
 	sources        map[string]agentSource
 	state          domain.State
 	generation     Generation
-	cwd            string
 	maxOutputBytes int
-	stateRead      bool
 }
 
 func systemPrompt(context *agentContext, documentNames []string) string {
-	return fmt.Sprintf("You are bo's bounded document-summary agent for %s. Call read_state before any other tool. The state object is authoritative: each exact raw URL is one source identity, and raw:filename identifies a Markdown file with no state record. For each source identity, use the newest raw snapshot by written_at as evidence. If a summary record exists, call read_summary with its source_key before replacing it. Never modify or delete raw files. Summarize only facts present in each source. Preserve epistemic status: clearly attribute author experience or measurements (for example, 'the author reports'), recommendations or opinions (for example, 'the article recommends'), and predictions or forecasts (for example, 'the author predicts'); do not present those as general facts. Preserve qualifications and uncertainty while staying concise. Write one concise Markdown summary per source identity with write_summary using source_key, not a raw filename. Use only the provided bounded tools; bash is a strict facade, not a shell. The raw filenames discovered at start are: %s.", context.target, strings.Join(documentNames, ", "))
+	identities := make([]string, 0, len(context.sources))
+	for sourceKey, source := range context.sources {
+		identities = append(identities, sourceKey+" ("+source.LatestFilename+")")
+	}
+	sort.Strings(identities)
+	return fmt.Sprintf("You are bo's document-summary agent for %s. Purpose: turn each source into a concise Markdown summary that retains its key claims. Ontology: raw documents are immutable snapshots; a source identity is an exact URL or raw:filename; a summary is one mutable document derived from the newest raw snapshot; state is the authoritative record of these links. Rules: use only evidence from the source, preserve qualifications and uncertainty, attribute experience, measurements, recommendations, opinions, and forecasts to their author, and never modify raw documents or invent facts. The host owns paths, newest-snapshot selection, provenance, state publication, and completion. Use the available bounded tools. Source identities: %s. Latest raw documents: %s.", context.target, strings.Join(identities, ", "), strings.Join(documentNames, ", "))
 }
 
 func DiscoverDocuments(root, target string) (map[string]string, error) {
@@ -96,9 +137,11 @@ func sourceGroups(documents map[string]string, state domain.State) map[string]ag
 	sources := map[string]agentSource{}
 	for _, filename := range names {
 		sourceKey, writtenAt, stateIndex := "raw:"+filename, uint64(0), 0
+		found := false
 		for index, record := range state.Raw {
-			if record.Filename == filename && (stateIndex == 0 && writtenAt == 0 || record.WrittenAt > writtenAt || record.WrittenAt == writtenAt && index > stateIndex) {
+			if record.Filename == filename && (!found || record.WrittenAt > writtenAt || record.WrittenAt == writtenAt && index > stateIndex) {
 				sourceKey, writtenAt, stateIndex = record.URL, record.WrittenAt, index
+				found = true
 			}
 		}
 		current, ok := sources[sourceKey]
@@ -111,9 +154,6 @@ func sourceGroups(documents map[string]string, state domain.State) map[string]ag
 
 func executeToolCall(context *agentContext, call agent.ToolCall, summarized map[string]bool) (string, error) {
 	name := call.Function.Name
-	if name != "read_state" && !context.stateRead {
-		return "", fmt.Errorf("read_state must be called before other tools")
-	}
 	var arguments map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(call.Function.Arguments), &arguments); err != nil {
 		return "", fmt.Errorf("%s arguments are malformed JSON: %v", name, err)
@@ -122,26 +162,25 @@ func executeToolCall(context *agentContext, call agent.ToolCall, summarized map[
 		return "", fmt.Errorf("%s arguments must be a JSON object", name)
 	}
 	switch name {
-	case "read_state":
+	case toolReadCorpus:
 		if len(arguments) != 0 {
-			return "", fmt.Errorf("read_state arguments must be empty")
+			return "", fmt.Errorf("read_corpus arguments must be empty")
 		}
-		context.stateRead = true
 		data, err := json.MarshalIndent(context.state, "", "  ")
 		if err != nil {
 			return "", fmt.Errorf("serializing state failed: %v", err)
 		}
 		return agent.BoundedOutput(string(data), context.maxOutputBytes), nil
-	case "bash":
+	case toolReadDocument:
 		if len(arguments) != 1 {
-			return "", fmt.Errorf("bash arguments must contain only command")
+			return "", fmt.Errorf("read_document arguments must contain only filename")
 		}
-		command, err := stringArgument(arguments, "command")
+		filename, err := stringArgument(arguments, "filename")
 		if err != nil {
-			return "", fmt.Errorf("bash.command must be a string")
+			return "", fmt.Errorf("read_document.filename must be a string")
 		}
-		return executeBash(context, command)
-	case "read_summary":
+		return readDocument(context, filename)
+	case toolReadSummary:
 		if len(arguments) != 1 {
 			return "", fmt.Errorf("read_summary arguments must contain only source_key")
 		}
@@ -150,23 +189,33 @@ func executeToolCall(context *agentContext, call agent.ToolCall, summarized map[
 			return "", fmt.Errorf("read_summary.source_key must be a string")
 		}
 		return readSummary(context, sourceKey)
-	case "write_summary":
+	case toolWriteSummary, toolEditSummary:
 		if len(arguments) != 2 {
-			return "", fmt.Errorf("write_summary arguments must contain only source_key and markdown")
+			return "", fmt.Errorf("%s arguments must contain only source_key and markdown", name)
 		}
 		sourceKey, err := stringArgument(arguments, "source_key")
 		if err != nil {
-			return "", fmt.Errorf("write_summary.source_key must be a string")
+			return "", fmt.Errorf("%s.source_key must be a string", name)
 		}
 		markdown, err := stringArgument(arguments, "markdown")
 		if err != nil {
-			return "", fmt.Errorf("write_summary.markdown must be a string")
+			return "", fmt.Errorf("%s.markdown must be a string", name)
 		}
-		if err := writeSummary(context, sourceKey, markdown); err != nil {
+		if _, ok := context.sources[sourceKey]; !ok {
+			return "", fmt.Errorf("unknown source: %s", sourceKey)
+		}
+		existing := summaryRecord(context.state, sourceKey)
+		if name == toolWriteSummary && existing != nil {
+			return "", fmt.Errorf("summary already exists for source: %s", sourceKey)
+		}
+		if name == toolEditSummary && existing == nil {
+			return "", fmt.Errorf("no summary exists for source: %s", sourceKey)
+		}
+		if err := writeSummary(context, sourceKey, markdown, existing); err != nil {
 			return "", err
 		}
 		summarized[sourceKey] = true
-		return "summary written: " + sourceKey, nil
+		return name + " succeeded: " + sourceKey, nil
 	default:
 		return "", fmt.Errorf("unsupported tool: %s", name)
 	}
@@ -180,170 +229,26 @@ func stringArgument(arguments map[string]json.RawMessage, name string) (string, 
 	return value, nil
 }
 
-func executeBash(context *agentContext, command string) (string, error) {
-	if command == "" || strings.ContainsAny(command, "|&;><$`(){}\n\r") {
-		return "", fmt.Errorf("unsupported shell syntax")
+func readDocument(context *agentContext, filename string) (string, error) {
+	filename = strings.TrimPrefix(filename, "raw/")
+	if filename == "" || filepath.Base(filename) != filename || strings.ContainsAny(filename, `/\\`) {
+		return "", fmt.Errorf("read_document.filename must be a raw Markdown filename")
 	}
-	parts := strings.Fields(command)
-	if len(parts) == 0 {
-		return "", fmt.Errorf("unsupported shell syntax")
-	}
-	switch {
-	case len(parts) == 1 && parts[0] == "ls":
-		return listDirectory(context, context.cwd)
-	case len(parts) == 2 && parts[0] == "ls":
-		path, err := context.resolve(parts[1])
-		if err != nil {
-			return "", err
+	latest := false
+	for _, source := range context.sources {
+		if source.LatestFilename == filename {
+			latest = true
+			break
 		}
-		return listDirectory(context, path)
-	case len(parts) == 2 && parts[0] == "cd":
-		path, err := context.resolve(parts[1])
-		if err != nil {
-			return "", err
-		}
-		info, err := os.Stat(path)
-		if err != nil || !info.IsDir() {
-			return "", fmt.Errorf("not a directory: %s", path)
-		}
-		context.cwd = path
-		return "directory: " + path, nil
-	case len(parts) == 2 && parts[0] == "cat":
-		path, err := context.resolve(parts[1])
-		if err != nil {
-			return "", err
-		}
-		for _, raw := range context.documents {
-			if raw == path {
-				return readBounded(path, context.maxOutputBytes)
-			}
-		}
-		return "", fmt.Errorf("cat is limited to raw Markdown documents")
-	case len(parts) == 2 && parts[0] == "grep":
-		return grep(context, parts[1], "")
-	case len(parts) == 3 && parts[0] == "grep":
-		return grep(context, parts[1], parts[2])
-	default:
-		return "", fmt.Errorf("unsupported command grammar")
 	}
-}
-
-func (context *agentContext) resolve(input string) (string, error) {
-	if input == "" || strings.ContainsRune(input, 0) {
-		return "", fmt.Errorf("path is empty or contains NUL")
+	if !latest {
+		return "", fmt.Errorf("document is not a newest raw snapshot: %s", filename)
 	}
-	path := input
-	switch {
-	case input == "~/.bo":
-		path = context.root
-	case strings.HasPrefix(input, "~/.bo/"):
-		path = filepath.Join(context.root, strings.TrimPrefix(input, "~/.bo/"))
-	case !filepath.IsAbs(input):
-		path = filepath.Join(context.cwd, input)
+	path, ok := context.documents[filename]
+	if !ok {
+		return "", fmt.Errorf("unknown raw document: %s", filename)
 	}
-	path, err := filepath.EvalSymlinks(filepath.Clean(path))
-	if err != nil {
-		return "", fmt.Errorf("resolving %s failed: %v", input, err)
-	}
-	if err := ensureInside(path, context.root); err != nil {
-		return "", err
-	}
-	return path, nil
-}
-
-func listDirectory(context *agentContext, path string) (string, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return "", fmt.Errorf("not a file or directory: %s", path)
-	}
-	if info.Mode().IsRegular() {
-		return filepath.Base(path) + "\n", nil
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("not a file or directory: %s", path)
-	}
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return "", fmt.Errorf("listing %s failed: %v", path, err)
-	}
-	names := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		resolved, err := filepath.EvalSymlinks(filepath.Join(path, entry.Name()))
-		if err != nil {
-			return "", fmt.Errorf("resolving %s failed: %v", filepath.Join(path, entry.Name()), err)
-		}
-		if err := ensureInside(resolved, context.root); err != nil {
-			return "", err
-		}
-		names = append(names, entry.Name())
-	}
-	sort.Strings(names)
-	return agent.BoundedOutput(strings.Join(names, "\n")+"\n", context.maxOutputBytes), nil
-}
-
-func grep(context *agentContext, pattern, pathInput string) (string, error) {
-	paths := make([]struct{ name, path string }, 0)
-	if pathInput == "" {
-		names := make([]string, 0, len(context.documents))
-		for name := range context.documents {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			paths = append(paths, struct{ name, path string }{name, context.documents[name]})
-		}
-	} else {
-		path, err := context.resolve(pathInput)
-		if err != nil {
-			return "", err
-		}
-		info, err := os.Stat(path)
-		if err != nil {
-			return "", fmt.Errorf("not a file or directory: %s", path)
-		}
-		for name, raw := range context.documents {
-			if info.IsDir() {
-				if err := ensureInside(raw, path); err == nil {
-					paths = append(paths, struct{ name, path string }{name, raw})
-				}
-			} else if raw == path {
-				paths = append(paths, struct{ name, path string }{name, raw})
-			}
-		}
-		sort.Slice(paths, func(i, j int) bool { return paths[i].name < paths[j].name })
-	}
-	var output strings.Builder
-	for _, candidate := range paths {
-		file, err := os.Open(candidate.path)
-		if err != nil {
-			return "", fmt.Errorf("reading %s failed: %v", candidate.path, err)
-		}
-		reader := bufio.NewReader(file)
-		lineNumber := 0
-		for {
-			line, readErr := reader.ReadString('\n')
-			if len(line) == 0 && readErr == io.EOF {
-				break
-			}
-			lineNumber++
-			line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
-			if strings.Contains(line, pattern) {
-				fmt.Fprintf(&output, "%s:%d:%s\n", candidate.name, lineNumber, line)
-			}
-			if readErr == io.EOF {
-				break
-			}
-			if readErr != nil {
-				file.Close()
-				return "", fmt.Errorf("reading %s failed: %v", candidate.path, readErr)
-			}
-		}
-		file.Close()
-	}
-	if output.Len() == 0 {
-		output.WriteString("(no matches)\n")
-	}
-	return agent.BoundedOutput(output.String(), context.maxOutputBytes), nil
+	return readBounded(path, context.maxOutputBytes)
 }
 
 func readBounded(path string, limit int) (string, error) {
@@ -360,13 +265,10 @@ func readBounded(path string, limit int) (string, error) {
 }
 
 func readSummary(context *agentContext, sourceKey string) (string, error) {
-	var record *domain.SummaryRecord
-	for index := range context.state.Summaries {
-		if context.state.Summaries[index].SourceKey == sourceKey {
-			record = &context.state.Summaries[index]
-			break
-		}
+	if _, ok := context.sources[sourceKey]; !ok {
+		return "", fmt.Errorf("unknown source: %s", sourceKey)
 	}
+	record := summaryRecord(context.state, sourceKey)
 	if record == nil {
 		return "", fmt.Errorf("no summary exists for source: %s", sourceKey)
 	}
@@ -377,7 +279,16 @@ func readSummary(context *agentContext, sourceKey string) (string, error) {
 	return agent.BoundedOutput(string(data), context.maxOutputBytes), nil
 }
 
-func writeSummary(context *agentContext, sourceKey, markdown string) error {
+func summaryRecord(state domain.State, sourceKey string) *domain.SummaryRecord {
+	for index := range state.Summaries {
+		if state.Summaries[index].SourceKey == sourceKey {
+			return &state.Summaries[index]
+		}
+	}
+	return nil
+}
+
+func writeSummary(context *agentContext, sourceKey, markdown string, existing *domain.SummaryRecord) error {
 	source, ok := context.sources[sourceKey]
 	if !ok {
 		return fmt.Errorf("unknown source: %s", sourceKey)
@@ -387,13 +298,6 @@ func writeSummary(context *agentContext, sourceKey, markdown string) error {
 	}
 	if len(markdown) > context.maxOutputBytes {
 		return fmt.Errorf("summary exceeds max tool output bytes (%d)", context.maxOutputBytes)
-	}
-	var existing *domain.SummaryRecord
-	for index := range context.state.Summaries {
-		if context.state.Summaries[index].SourceKey == sourceKey {
-			existing = &context.state.Summaries[index]
-			break
-		}
 	}
 	filename := source.LatestFilename
 	createdAt := uint64(0)

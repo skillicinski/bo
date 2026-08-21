@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/skillicinski/bo"
+	"github.com/skillicinski/bo/internal/application"
 	"github.com/skillicinski/bo/internal/provider/deepseek"
 	urlsource "github.com/skillicinski/bo/internal/source/url"
 	"github.com/skillicinski/bo/internal/storage/local"
@@ -143,11 +144,17 @@ func runSynth(args []string) {
 	}
 	endpoint := os.Getenv("DEEPSEEK_API_URL")
 	provider := deepseek.New(apiKey, endpoint)
-	written, err := bo.Synthesize(context.Background(), local.NewManager(home), name, provider, config)
+	var result bo.SynthesisResult
+	toolSet, hasToolSet := os.LookupEnv("BO_EVAL_TOOLS")
+	if hasToolSet {
+		result, err = application.SynthesizeWithTools(context.Background(), local.NewManager(home), name, provider, config, strings.Split(toolSet, ","))
+	} else {
+		result, err = bo.Synthesize(context.Background(), local.NewManager(home), name, provider, config)
+	}
 	if err != nil {
 		fail("synth", err.Error())
 	}
-	fmt.Printf("%d summaries written\n", written)
+	fmt.Printf("%d summaries written\n", result.SummariesWritten)
 }
 
 func printSnapReport(outcomes []bo.SnapOutcome, fatal *bo.SnapCommandError) bool {

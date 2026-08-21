@@ -12,111 +12,115 @@ import (
 	"github.com/skillicinski/bo/internal/agent"
 )
 
-func Synthesize(ctx context.Context, opener WorkspaceOpener, workspaceName string, provider agent.CompletionProvider, config SynthesisOptions) (int, error) {
+func Synthesize(ctx context.Context, opener WorkspaceOpener, workspaceName string, provider agent.CompletionProvider, config SynthesisOptions) (SynthesisResult, error) {
+	return SynthesizeWithTools(ctx, opener, workspaceName, provider, config, allSynthesisTools)
+}
+
+func SynthesizeWithTools(ctx context.Context, opener WorkspaceOpener, workspaceName string, provider agent.CompletionProvider, config SynthesisOptions, toolNames []string) (SynthesisResult, error) {
+	toolNames, err := normalizeSynthesisTools(toolNames)
+	if err != nil {
+		return SynthesisResult{}, InputError(err.Error())
+	}
 	if opener == nil {
-		return 0, RequestError("workspace opener is not configured")
+		return SynthesisResult{}, RequestError("workspace opener is not configured")
 	}
 	workspace, err := opener.Open(ctx, workspaceName)
 	if err != nil {
-		return 0, err
+		return SynthesisResult{}, err
 	}
 	if workspace == nil {
-		return 0, RequestError("workspace opener returned no workspace")
+		return SynthesisResult{}, RequestError("workspace opener returned no workspace")
 	}
 	defer workspace.Close()
-	return runSynthesis(ctx, workspace.RootPath(), workspace.TargetPath(), workspace.Storage(), provider, config)
+	return runSynthesis(ctx, workspace.RootPath(), workspace.TargetPath(), workspace.Storage(), provider, config, toolNames)
 }
 
-func runSynthesis(ctx context.Context, rootPath, targetPath string, storage Storage, provider agent.CompletionProvider, config SynthesisOptions) (int, error) {
+func runSynthesis(ctx context.Context, rootPath, targetPath string, storage Storage, provider agent.CompletionProvider, config SynthesisOptions, toolNames []string) (SynthesisResult, error) {
 	if provider == nil {
-		return 0, RequestError("synthesis provider is not configured")
+		return SynthesisResult{}, RequestError("synthesis provider is not configured")
 	}
 	config = normalizedSynthesisOptions(config)
 	runContext, cancel := context.WithTimeout(ctx, time.Duration(config.TimeoutSeconds)*time.Second)
 	defer cancel()
 	root, err := filepath.EvalSymlinks(rootPath)
 	if err != nil {
-		return 0, fmt.Errorf("canonicalizing %s failed: %w", rootPath, err)
+		return SynthesisResult{}, fmt.Errorf("canonicalizing %s failed: %w", rootPath, err)
 	}
 	target, err := filepath.EvalSymlinks(targetPath)
 	if err != nil {
-		return 0, fmt.Errorf("canonicalizing %s failed: %w", targetPath, err)
+		return SynthesisResult{}, fmt.Errorf("canonicalizing %s failed: %w", targetPath, err)
 	}
 	if err := ensureInside(target, root); err != nil {
-		return 0, err
+		return SynthesisResult{}, err
 	}
 	info, err := os.Stat(target)
 	if err != nil {
-		return 0, fmt.Errorf("reading %s failed: %w", target, err)
+		return SynthesisResult{}, fmt.Errorf("reading %s failed: %w", target, err)
 	}
 	if !info.IsDir() {
-		return 0, fmt.Errorf("target is not a directory: %s", target)
+		return SynthesisResult{}, fmt.Errorf("target is not a directory: %s", target)
 	}
 	documents, err := DiscoverDocuments(root, target)
 	if err != nil {
-		return 0, err
+		return SynthesisResult{}, err
 	}
 	if len(documents) == 0 {
-		return 0, fmt.Errorf("no raw Markdown documents in %s", target)
+		return SynthesisResult{}, fmt.Errorf("no raw Markdown documents in %s", target)
 	}
 	state, generation, err := storage.ReadState(runContext)
 	if err != nil {
-		return 0, err
+		return SynthesisResult{}, err
 	}
 	sources := sourceGroups(documents, state)
 	contextState := &agentContext{
-		ctx: runContext, root: root, target: target, storage: storage, documents: documents, sources: sources,
-		state: state, generation: generation, cwd: target, maxOutputBytes: config.MaxToolOutputBytes,
+		ctx: runContext, target: target, storage: storage, documents: documents, sources: sources,
+		state: state, generation: generation, maxOutputBytes: config.MaxToolOutputBytes,
 	}
-	names := make([]string, 0, len(documents))
-	for name := range documents {
-		names = append(names, name)
+	names := make([]string, 0, len(sources))
+	for _, source := range sources {
+		names = append(names, source.LatestFilename)
 	}
 	sort.Strings(names)
+	sourceKeys := make([]string, 0, len(sources))
+	for sourceKey := range sources {
+		sourceKeys = append(sourceKeys, sourceKey)
+	}
+	sort.Strings(sourceKeys)
 	messages := []agent.ChatMessage{
 		{Role: "system", Content: systemPrompt(contextState, names)},
-		{Role: "user", Content: fmt.Sprintf("Call read_state first. Then inspect the latest raw snapshot for every source identity and write one concise Markdown summary per source. Raw documents: %s", strings.Join(names, ", "))},
+		{Role: "user", Content: fmt.Sprintf("Produce one concise Markdown summary for every source identity. Use the newest raw snapshot as evidence and preserve each source's epistemic status. Source identities: %s", strings.Join(sourceKeys, ", "))},
 	}
 	summarized := map[string]bool{}
-	runtime := agent.Runtime{Provider: provider, Tools: synthTools(contextState, summarized)}
-	turns, toolCalls := 0, 0
-	correctionSent := false
-	for {
-		if err := runContext.Err(); err != nil {
-			return 0, err
-		}
-		if turns >= config.MaxTurns {
-			return 0, fmt.Errorf("max turns reached (%d) with %d of %d summaries written", config.MaxTurns, len(summarized), len(sources))
-		}
-		if toolCalls >= config.MaxToolCalls {
-			return 0, fmt.Errorf("max tool calls reached (%d) with %d of %d summaries written", config.MaxToolCalls, len(summarized), len(sources))
-		}
-		result, err := runtime.Run(runContext, messages, agent.Options{
-			MaxTurns: config.MaxTurns - turns, MaxToolCalls: config.MaxToolCalls - toolCalls,
-			MaxToolOutputBytes: config.MaxToolOutputBytes, MaxResponseTokens: config.MaxResponseTokens,
-		})
-		turns += result.Turns
-		toolCalls += result.ToolCalls
-		if err != nil {
-			return 0, err
-		}
-		messages = result.Messages
-		missing := make([]string, 0)
-		for sourceKey := range sources {
-			if !summarized[sourceKey] {
-				missing = append(missing, sourceKey)
-			}
-		}
-		sort.Strings(missing)
-		if len(missing) == 0 {
-			return len(summarized), nil
-		}
-		if correctionSent {
-			return 0, fmt.Errorf("model stopped with missing summaries: %s", strings.Join(missing, ", "))
-		}
-		correctionSent = true
-		messages = append(messages, agent.ChatMessage{Role: "user", Content: fmt.Sprintf("You stopped before completing the task. Use the bounded tools now and write successful summaries for every missing source identity: %s", strings.Join(missing, ", "))})
+	runtime := agent.Runtime{
+		Provider: provider,
+		Tools:    synthTools(contextState, summarized, toolNames),
+		Done: func() bool {
+			return len(summarized) == len(sources)
+		},
 	}
+	runtimeResult, err := runtime.Run(runContext, messages, agent.Options{
+		MaxTurns: config.MaxTurns, MaxToolCalls: config.MaxToolCalls,
+		MaxToolOutputBytes: config.MaxToolOutputBytes, MaxResponseTokens: config.MaxResponseTokens,
+	})
+	result := SynthesisResult{SummariesWritten: len(summarized), Metrics: runtimeResult.Metrics}
+	if err != nil {
+		return result, err
+	}
+	if result.SummariesWritten != len(sources) {
+		return result, fmt.Errorf("model stopped with missing summaries: %s", strings.Join(missingSources(sources, summarized), ", "))
+	}
+	return result, nil
+}
+
+func missingSources(sources map[string]agentSource, summarized map[string]bool) []string {
+	missing := make([]string, 0)
+	for sourceKey := range sources {
+		if !summarized[sourceKey] {
+			missing = append(missing, sourceKey)
+		}
+	}
+	sort.Strings(missing)
+	return missing
 }
 
 func normalizedSynthesisOptions(config SynthesisOptions) SynthesisOptions {

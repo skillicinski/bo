@@ -68,6 +68,7 @@ func (c *Client) Complete(ctx context.Context, request agent.CompletionRequest) 
 			Message      agent.ChatMessage `json:"message"`
 			FinishReason string            `json:"finish_reason"`
 		} `json:"choices"`
+		Usage *agent.TokenUsage `json:"usage"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		return agent.CompletionResponse{}, fmt.Errorf("malformed API response: %v", err)
@@ -79,5 +80,5 @@ func (c *Client) Complete(ctx context.Context, request agent.CompletionRequest) 
 	if message.Role == "" {
 		message.Role = "assistant"
 	}
-	return agent.CompletionResponse{Message: message, FinishReason: payload.Choices[0].FinishReason}, nil
+	return agent.CompletionResponse{Message: message, FinishReason: payload.Choices[0].FinishReason, Usage: payload.Usage}, nil
 }

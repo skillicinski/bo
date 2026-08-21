@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/skillicinski/bo/internal/agent"
@@ -51,5 +52,67 @@ func TestRuntimeUsesConfiguredToolSet(t *testing.T) {
 	}
 	if len(result.Messages) != 4 || result.Message.Content != "done" {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestRuntimeStopsAfterCompletedToolBatch(t *testing.T) {
+	provider := &fakeProvider{responses: []agent.CompletionResponse{{Message: agent.ChatMessage{Role: "assistant", ToolCalls: []agent.ToolCall{{
+		ID: "write-1", Type: "function", Function: agent.ToolFunction{Name: "write"},
+	}}}, Usage: &agent.TokenUsage{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5}}}}
+	done := false
+	runtime := agent.Runtime{
+		Provider: provider,
+		Done:     func() bool { return done },
+		Tools: []agent.Tool{{
+			Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: "write"}},
+			Execute: func(context.Context, agent.ToolCall) (string, error) {
+				done = true
+				return "ok", nil
+			},
+		}},
+	}
+	result, err := runtime.Run(context.Background(), nil, agent.Options{MaxTurns: 2, MaxToolCalls: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.requests) != 1 || result.Turns != 1 || result.ToolCalls != 1 {
+		t.Fatalf("result = %#v, requests = %d", result, len(provider.requests))
+	}
+	if result.Usage == nil || result.Usage.TotalTokens != 5 || result.Duration <= 0 {
+		t.Fatalf("metrics = %#v", result.Metrics)
+	}
+}
+
+type failingProvider struct {
+	response agent.CompletionResponse
+	err      error
+	calls    int
+}
+
+func (p *failingProvider) Complete(_ context.Context, _ agent.CompletionRequest) (agent.CompletionResponse, error) {
+	p.calls++
+	if p.calls > 1 {
+		return agent.CompletionResponse{}, p.err
+	}
+	return p.response, nil
+}
+
+func TestRuntimeReturnsPartialMetricsOnFailure(t *testing.T) {
+	provider := &failingProvider{
+		response: agent.CompletionResponse{Message: agent.ChatMessage{Role: "assistant", ToolCalls: []agent.ToolCall{{
+			ID: "read-1", Type: "function", Function: agent.ToolFunction{Name: "read"},
+		}}}, Usage: &agent.TokenUsage{PromptTokens: 7, CompletionTokens: 4, TotalTokens: 11}},
+		err: errors.New("provider stopped"),
+	}
+	runtime := agent.Runtime{Provider: provider, Tools: []agent.Tool{{
+		Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: "read"}},
+		Execute:    func(context.Context, agent.ToolCall) (string, error) { return "ok", nil },
+	}}}
+	result, err := runtime.Run(context.Background(), nil, agent.Options{MaxTurns: 3, MaxToolCalls: 3})
+	if err == nil || result.Turns != 2 || result.ToolCalls != 1 || result.Duration <= 0 {
+		t.Fatalf("result = %#v, err = %v", result, err)
+	}
+	if result.Usage == nil || result.Usage.TotalTokens != 11 {
+		t.Fatalf("usage = %#v", result.Usage)
 	}
 }

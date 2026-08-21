@@ -93,7 +93,7 @@ func Seed(ctx context.Context, creator WorkspaceCreator, name string) (string, e
 	return application.Seed(ctx, creator, name)
 }
 
-func Synthesize(ctx context.Context, opener WorkspaceOpener, workspaceName string, provider CompletionProvider, options SynthesisOptions) (int, error) {
+func Synthesize(ctx context.Context, opener WorkspaceOpener, workspaceName string, provider CompletionProvider, options SynthesisOptions) (SynthesisResult, error) {
 	return application.Synthesize(ctx, opener, workspaceName, provider, options)
 }
 
@@ -106,6 +106,10 @@ const (
 )
 
 type SynthesisOptions = application.SynthesisOptions
+type SynthesisResult = application.SynthesisResult
+type Metrics = agent.Metrics
+type TokenUsage = agent.TokenUsage
+type Usage = agent.Usage
 
 func DefaultSynthesisOptions() SynthesisOptions { return application.DefaultSynthesisOptions() }
 

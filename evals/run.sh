@@ -3,6 +3,60 @@ set -eu
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bo=${BO_BIN:-$repo/bin/bo}
+
+toolset=all
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --tools)
+            [ "$#" -eq 1 ] && { printf '%s\n' 'usage: ./evals/run.sh [--tools all|name,name,...]' >&2; exit 2; }
+            toolset=$2
+            shift 2
+            ;;
+        *)
+            printf '%s\n' 'usage: ./evals/run.sh [--tools all|name,name,...]' >&2
+            exit 2
+            ;;
+    esac
+done
+
+validate_tools() {
+    value=$1
+    [ "$value" = all ] && return 0
+    case ",$value," in
+        *,,*)
+            printf 'invalid --tools value: %s\n' "$value" >&2
+            return 1
+            ;;
+    esac
+    old_ifs=$IFS
+    IFS=,
+    set -- $value
+    IFS=$old_ifs
+    seen=
+    for name in "$@"; do
+        case "$name" in
+            read_corpus|read_document|read_summary|write_summary|edit_summary)
+                ;;
+            *)
+                printf 'unknown synthesis tool: %s\n' "$name" >&2
+                return 1
+                ;;
+        esac
+        case ",$seen," in
+            *,"$name",*)
+                printf 'duplicate synthesis tool: %s\n' "$name" >&2
+                return 1
+                ;;
+        esac
+        if [ -n "$seen" ]; then
+            seen="$seen,$name"
+        else
+            seen=$name
+        fi
+    done
+}
+
+validate_tools "$toolset"
 if [ ! -x "$bo" ]; then
     mkdir -p "$(dirname "$bo")"
     go build -o "$bo" "$repo/cmd/bo"
@@ -16,6 +70,7 @@ home="$work/home"
 target="$home/.bo/$run_id"
 raw="$report/raw"
 mkdir -p "$home" "$report" "$raw"
+printf '%s\n' "$toolset" >"$report/tools.txt"
 
 HOME="$home" "$bo" seed --name "$run_id" >"$report/seed.log"
 urls=$(awk 'NF && $1 !~ /^#/ { print $1 }' "$repo/evals/manifest.txt")
@@ -45,7 +100,7 @@ else
 fi
 
 set +e
-HOME="$home" "$bo" synth "$run_id" >"$report/synth.log" 2>&1
+BO_EVAL_TOOLS="$toolset" HOME="$home" "$bo" synth "$run_id" >"$report/synth.log" 2>&1
 synth_status=$?
 set -e
 

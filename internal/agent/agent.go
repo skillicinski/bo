@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"time"
 	"unicode/utf8"
 )
 
@@ -71,7 +72,16 @@ type CompletionRequest struct {
 type CompletionResponse struct {
 	Message      ChatMessage
 	FinishReason string
+	Usage        *TokenUsage
 }
+
+type TokenUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+type Usage = TokenUsage
 
 type CompletionProvider interface {
 	Complete(context.Context, CompletionRequest) (CompletionResponse, error)
@@ -87,18 +97,36 @@ type Tool struct {
 type Runtime struct {
 	Provider CompletionProvider
 	Tools    []Tool
+	Done     func() bool
+}
+
+type Metrics struct {
+	Turns     int           `json:"turns"`
+	ToolCalls int           `json:"tool_calls"`
+	Usage     *TokenUsage   `json:"usage,omitempty"`
+	Duration  time.Duration `json:"duration"`
 }
 
 type Result struct {
-	Messages  []ChatMessage
-	Message   ChatMessage
-	Turns     int
-	ToolCalls int
+	Messages []ChatMessage
+	Message  ChatMessage
+	Metrics
 }
 
 func (runtime Runtime) Run(ctx context.Context, messages []ChatMessage, options Options) (Result, error) {
+	started := time.Now()
+	turns, toolCalls := 0, 0
+	var usage TokenUsage
+	usageKnown := true
+	finish := func(message ChatMessage, err error) (Result, error) {
+		metrics := Metrics{Turns: turns, ToolCalls: toolCalls, Duration: time.Since(started)}
+		if usageKnown && turns > 0 {
+			metrics.Usage = &usage
+		}
+		return Result{Messages: messages, Message: message, Metrics: metrics}, err
+	}
 	if runtime.Provider == nil {
-		return Result{}, fmt.Errorf("agent provider is not configured")
+		return finish(ChatMessage{}, fmt.Errorf("agent provider is not configured"))
 	}
 	options = normalizedOptions(options)
 	definitions := make([]ToolDefinition, 0, len(runtime.Tools))
@@ -108,13 +136,12 @@ func (runtime Runtime) Run(ctx context.Context, messages []ChatMessage, options 
 		definitions = append(definitions, tool.Definition)
 		executors[name] = tool.Execute
 	}
-	turns, toolCalls := 0, 0
 	for {
 		if err := ctx.Err(); err != nil {
-			return Result{Messages: messages, Turns: turns, ToolCalls: toolCalls}, err
+			return finish(ChatMessage{}, err)
 		}
 		if turns >= options.MaxTurns {
-			return Result{Messages: messages, Turns: turns, ToolCalls: toolCalls}, fmt.Errorf("max turns reached (%d)", options.MaxTurns)
+			return finish(ChatMessage{}, fmt.Errorf("max turns reached (%d)", options.MaxTurns))
 		}
 		turns++
 		response, err := runtime.Provider.Complete(ctx, CompletionRequest{
@@ -122,7 +149,14 @@ func (runtime Runtime) Run(ctx context.Context, messages []ChatMessage, options 
 			MaxTokens: options.MaxResponseTokens, Thinking: map[string]string{"type": "disabled"},
 		})
 		if err != nil {
-			return Result{Messages: messages, Turns: turns, ToolCalls: toolCalls}, err
+			return finish(ChatMessage{}, err)
+		}
+		if response.Usage != nil && usageKnown {
+			usage.PromptTokens += response.Usage.PromptTokens
+			usage.CompletionTokens += response.Usage.CompletionTokens
+			usage.TotalTokens += response.Usage.TotalTokens
+		} else {
+			usageKnown = false
 		}
 		message := response.Message
 		if message.Role == "" {
@@ -132,11 +166,11 @@ func (runtime Runtime) Run(ctx context.Context, messages []ChatMessage, options 
 			messages = append(messages, message)
 			for _, call := range message.ToolCalls {
 				if toolCalls >= options.MaxToolCalls {
-					return Result{Messages: messages, Turns: turns, ToolCalls: toolCalls}, fmt.Errorf("max tool calls reached (%d)", options.MaxToolCalls)
+					return finish(message, fmt.Errorf("max tool calls reached (%d)", options.MaxToolCalls))
 				}
 				toolCalls++
 				if call.ID == "" {
-					return Result{Messages: messages, Turns: turns, ToolCalls: toolCalls}, fmt.Errorf("assistant tool call has no id")
+					return finish(message, fmt.Errorf("assistant tool call has no id"))
 				}
 				execute, ok := executors[call.Function.Name]
 				var output string
@@ -153,10 +187,13 @@ func (runtime Runtime) Run(ctx context.Context, messages []ChatMessage, options 
 				}
 				messages = append(messages, ChatMessage{Role: "tool", ToolCallID: call.ID, Content: BoundedOutput(output, options.MaxToolOutputBytes)})
 			}
+			if runtime.Done != nil && runtime.Done() {
+				return finish(message, nil)
+			}
 			continue
 		}
 		messages = append(messages, message)
-		return Result{Messages: messages, Message: message, Turns: turns, ToolCalls: toolCalls}, nil
+		return finish(message, nil)
 	}
 }
 
