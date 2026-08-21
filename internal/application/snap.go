@@ -39,7 +39,22 @@ func NewSnapInputError(detail string) *SnapCommandError {
 	return &SnapCommandError{Err: InputError(detail)}
 }
 
-func Snap(ctx context.Context, storage Storage, fetcher Source, urls []string) ([]SnapOutcome, error) {
+func Snap(ctx context.Context, storage Storage, fetcher Source, directory string, urls []string, options OperationOptions) ([]SnapOutcome, error) {
+	var err error
+	options, err = normalizeOperationOptions(options)
+	if err != nil {
+		return nil, err
+	}
+	logSnap := func(url, filename string, operationErr error) {
+		details := map[string]any{"url": url}
+		if filename != "" {
+			details["filename"] = filename
+		}
+		for key, value := range operationErrorDetails(operationErr) {
+			details[key] = value
+		}
+		recordOperation(options, directory, CommandSnap, operationErr == nil, details)
+	}
 	if len(urls) == 0 {
 		return nil, NewSnapInputError("usage: bo snap <dir> <url>...")
 	}
@@ -48,13 +63,17 @@ func Snap(ctx context.Context, storage Storage, fetcher Source, urls []string) (
 		if !IsCategory(err, CategoryFilesystem) {
 			err = FilesystemError(err.Error())
 		}
+		for _, input := range urls {
+			logSnap(input, "", err)
+		}
 		return nil, &SnapCommandError{Err: err}
 	}
 	outcomes := make([]SnapOutcome, 0, len(urls))
-	for _, input := range urls {
+	for index, input := range urls {
 		page, fetchErr := fetcher.Fetch(ctx, input)
 		if fetchErr != nil {
 			outcomes = append(outcomes, SnapOutcome{SourceURL: input, Err: fetchErr})
+			logSnap(input, "", fetchErr)
 			continue
 		}
 		sourceURL := page.SourceURL
@@ -64,12 +83,14 @@ func Snap(ctx context.Context, storage Storage, fetcher Source, urls []string) (
 		slug, slugErr := KebabCase(page.Title)
 		if slugErr != nil {
 			outcomes = append(outcomes, SnapOutcome{SourceURL: input, Err: slugErr})
+			logSnap(input, "", slugErr)
 			continue
 		}
 		writtenAt := uint64(time.Now().UnixMilli())
 		filename, document, writeErr := createRaw(ctx, storage, slug, writtenAt, []byte(page.Markdown))
 		if writeErr != nil {
 			outcomes = append(outcomes, SnapOutcome{SourceURL: input, Err: writeErr})
+			logSnap(input, "", writeErr)
 			continue
 		}
 		next := state
@@ -87,10 +108,15 @@ func Snap(ctx context.Context, storage Storage, fetcher Source, urls []string) (
 			if IsConflict(publishErr) {
 				failure = ConflictError(detail)
 			}
+			logSnap(input, "", failure)
+			for _, skipped := range urls[index+1:] {
+				logSnap(skipped, "", fmt.Errorf("snap batch aborted after %s", input))
+			}
 			return outcomes, &SnapCommandError{Completed: outcomes, SourceURL: input, Err: failure}
 		}
 		state, generation = next, newGeneration
 		outcomes = append(outcomes, SnapOutcome{SourceURL: input, Filename: filename})
+		logSnap(input, filename, nil)
 	}
 	return outcomes, nil
 }

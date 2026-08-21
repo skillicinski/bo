@@ -43,6 +43,36 @@ type Storage interface {
 type DocumentStorage = Storage
 type DocumentStore = Storage
 
+type Operation = domain.Operation
+type OperationCommand = domain.OperationCommand
+
+const (
+	CommandSeed         = domain.CommandSeed
+	CommandSnap         = domain.CommandSnap
+	CommandState        = domain.CommandState
+	CommandSynth        = domain.CommandSynth
+	CommandWriteSummary = domain.CommandWriteSummary
+)
+
+type OperationPage struct {
+	Directory  string      `json:"directory"`
+	Entries    []Operation `json:"entries"`
+	Offset     int         `json:"offset"`
+	Limit      int         `json:"limit"`
+	NextOffset int         `json:"next_offset"`
+	HasMore    bool        `json:"has_more"`
+}
+
+type OperationLog interface {
+	Append(context.Context, Operation) error
+	Read(context.Context, string, int, int) (OperationPage, error)
+}
+
+type OperationOptions struct {
+	Log   OperationLog
+	Actor string
+}
+
 // Workspace is the current local synthesis boundary.
 // ponytail: synthesis currently requires workspace paths; replace them with document access methods when a remote workspace adapter is needed.
 type Workspace interface {

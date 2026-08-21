@@ -29,6 +29,10 @@ func seededStore(t *testing.T) (*local.Store, string) {
 
 func stringPtr(value string) *string { return &value }
 
+func operationOptionsFor(target string) application.OperationOptions {
+	return application.OperationOptions{Log: local.NewOperationLog(filepath.Dir(filepath.Dir(target))), Actor: "test"}
+}
+
 type fakeProvider struct {
 	responses []agent.CompletionResponse
 	requests  []agent.CompletionRequest
@@ -76,7 +80,7 @@ func TestSynthesizeReplaysToolMessagesAndUpsertsSummary(t *testing.T) {
 		toolResponse("read-1", "read_summary", "{\"source_key\":\"https://example.test/article\"}"),
 		toolResponse("edit-1", "edit_summary", "{\"source_key\":\"https://example.test/article\",\"markdown\":\"# Summary\\n\\nfact\\n\"}"),
 	}}
-	result, err := application.Synthesize(context.Background(), local.NewManager(filepath.Dir(filepath.Dir(target))), "notes", provider, application.SynthesisOptions{MaxTurns: 4, MaxToolCalls: 3, MaxToolOutputBytes: 256, MaxResponseTokens: 16, TimeoutSeconds: 5})
+	result, err := application.Synthesize(context.Background(), local.NewManager(filepath.Dir(filepath.Dir(target))), "notes", provider, application.SynthesisOptions{MaxTurns: 4, MaxToolCalls: 3, MaxToolOutputBytes: 256, MaxResponseTokens: 16, TimeoutSeconds: 5}, operationOptionsFor(target))
 	if err != nil || result.SummariesWritten != 1 {
 		t.Fatalf("Synthesize = %#v, %v", result, err)
 	}
@@ -87,7 +91,7 @@ func TestSynthesizeReplaysToolMessagesAndUpsertsSummary(t *testing.T) {
 	for _, tool := range provider.requests[0].Tools {
 		toolNames = append(toolNames, tool.Function.Name)
 	}
-	if want := "read_corpus,read_document,read_summary,write_summary,edit_summary"; strings.Join(toolNames, ",") != want {
+	if want := "read_corpus,read_logs,read_document,read_summary,write_summary,edit_summary"; strings.Join(toolNames, ",") != want {
 		t.Fatalf("tools = %v", toolNames)
 	}
 	if len(provider.requests[1].Messages) != 4 || provider.requests[1].Messages[2].ToolCalls[0].ID != "corpus-1" || provider.requests[1].Messages[3].ToolCallID != "corpus-1" {
@@ -120,7 +124,7 @@ func TestSynthesizeToolsRejectRawEscape(t *testing.T) {
 		toolResponse("bad-1", "read_document", "{\"filename\":\"raw/../article.md\"}"),
 		toolResponse("write-1", "write_summary", "{\"source_key\":\"raw:article.md\",\"markdown\":\"summary\\n\"}"),
 	}}
-	result, err := application.Synthesize(context.Background(), local.NewManager(filepath.Dir(filepath.Dir(target))), "notes", provider, application.DefaultSynthesisOptions())
+	result, err := application.Synthesize(context.Background(), local.NewManager(filepath.Dir(filepath.Dir(target))), "notes", provider, application.DefaultSynthesisOptions(), operationOptionsFor(target))
 	if err != nil || result.SummariesWritten != 1 {
 		t.Fatalf("Synthesize = %#v, %v", result, err)
 	}
@@ -144,7 +148,7 @@ func TestSynthesizeWithReducedToolSet(t *testing.T) {
 		toolResponse("read-1", "read_document", "{\"filename\":\"article.md\"}"),
 		toolResponse("write-1", "write_summary", "{\"source_key\":\"https://example.test/article\",\"markdown\":\"latest fact\\n\"}"),
 	}}
-	result, err := application.SynthesizeWithTools(context.Background(), local.NewManager(filepath.Dir(filepath.Dir(target))), "notes", provider, application.SynthesisOptions{MaxTurns: 2, MaxToolCalls: 2, MaxToolOutputBytes: 256, MaxResponseTokens: 16, TimeoutSeconds: 5}, []string{"read_document", "write_summary"})
+	result, err := application.SynthesizeWithTools(context.Background(), local.NewManager(filepath.Dir(filepath.Dir(target))), "notes", provider, application.SynthesisOptions{MaxTurns: 2, MaxToolCalls: 2, MaxToolOutputBytes: 256, MaxResponseTokens: 16, TimeoutSeconds: 5}, []string{"read_document", "write_summary"}, operationOptionsFor(target))
 	if err != nil || result.SummariesWritten != 1 {
 		t.Fatalf("SynthesizeWithTools = %#v, %v", result, err)
 	}
@@ -153,6 +157,25 @@ func TestSynthesizeWithReducedToolSet(t *testing.T) {
 	}
 	if provider.requests[1].Messages[len(provider.requests[1].Messages)-1].Content != "# Article\n\nlatest fact\n" {
 		t.Fatalf("document output = %#v", provider.requests[1].Messages[len(provider.requests[1].Messages)-1])
+	}
+	page, err := operationOptionsFor(target).Log.Read(context.Background(), "notes", 0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundWrite := false
+	for _, operation := range page.Entries {
+		if operation.Command == application.CommandWriteSummary {
+			foundWrite = true
+			if _, ok := operation.Details["markdown"]; ok {
+				t.Fatal("write_summary log contains Markdown")
+			}
+			if operation.Details["source_key"] != "https://example.test/article" {
+				t.Fatalf("write_summary details = %#v", operation.Details)
+			}
+		}
+	}
+	if !foundWrite {
+		t.Fatal("write_summary event missing")
 	}
 }
 
@@ -189,7 +212,7 @@ func TestSynthesizeSelectsNewestSnapshotAndPreservesRaw(t *testing.T) {
 		toolResponse("read-1", "read_document", "{\"filename\":\"new.md\"}"),
 		toolResponse("write-1", "write_summary", "{\"source_key\":\"https://example.test/article\",\"markdown\":\"new\\n\"}"),
 	}}
-	result, err := application.SynthesizeWithTools(context.Background(), local.NewManager(filepath.Dir(filepath.Dir(target))), "notes", provider, application.DefaultSynthesisOptions(), []string{"read_document", "write_summary"})
+	result, err := application.SynthesizeWithTools(context.Background(), local.NewManager(filepath.Dir(filepath.Dir(target))), "notes", provider, application.DefaultSynthesisOptions(), []string{"read_document", "write_summary"}, operationOptionsFor(target))
 	if err != nil || result.SummariesWritten != 1 {
 		t.Fatalf("SynthesizeWithTools = %#v, %v", result, err)
 	}
@@ -215,7 +238,7 @@ func TestSynthesizeSelectsNewestSnapshotAndPreservesRaw(t *testing.T) {
 
 func TestSynthesizeWithToolsValidatesNames(t *testing.T) {
 	for _, names := range [][]string{{"read_document", "read_document"}, {"unknown"}} {
-		if _, err := application.SynthesizeWithTools(context.Background(), nil, "notes", nil, application.DefaultSynthesisOptions(), names); err == nil {
+		if _, err := application.SynthesizeWithTools(context.Background(), nil, "notes", nil, application.DefaultSynthesisOptions(), names, application.OperationOptions{Log: local.NewOperationLog(t.TempDir())}); err == nil {
 			t.Fatalf("tool names accepted: %v", names)
 		}
 	}

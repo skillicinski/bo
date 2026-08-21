@@ -52,7 +52,7 @@ func runSeed(args []string) {
 	if err != nil {
 		fail("seeding", err.Error())
 	}
-	created, err := bo.Seed(context.Background(), local.NewManager(home), name)
+	created, err := bo.Seed(context.Background(), local.NewManager(home), name, bo.OperationOptions{Log: local.NewOperationLog(home), Actor: "cli"})
 	if err != nil {
 		fail("seeding", err.Error())
 	}
@@ -79,7 +79,7 @@ func runSnap(args []string) {
 		fail("snap", err.Error())
 	}
 	defer storage.Close()
-	outcomes, commandErr := bo.Snap(context.Background(), storage, urlsource.NewHTTP(), args[1:])
+	outcomes, commandErr := bo.Snap(context.Background(), storage, urlsource.NewHTTP(), args[0], args[1:], bo.OperationOptions{Log: local.NewOperationLog(home), Actor: "cli"})
 	if commandErr != nil {
 		fatal, ok := commandErr.(*bo.SnapCommandError)
 		if !ok {
@@ -118,7 +118,7 @@ func runState(args []string) {
 		fail("state", err.Error())
 	}
 	defer storage.Close()
-	output, err := bo.StateOutput(context.Background(), storage, len(args) == 2)
+	output, err := bo.StateOutput(context.Background(), storage, args[0], len(args) == 2, bo.OperationOptions{Log: local.NewOperationLog(home), Actor: "cli"})
 	if err != nil {
 		fail("state", err.Error())
 	}
@@ -144,12 +144,13 @@ func runSynth(args []string) {
 	}
 	endpoint := os.Getenv("DEEPSEEK_API_URL")
 	provider := deepseek.New(apiKey, endpoint)
+	operationOptions := bo.OperationOptions{Log: local.NewOperationLog(home), Actor: "cli"}
 	var result bo.SynthesisResult
 	toolSet, hasToolSet := os.LookupEnv("BO_EVAL_TOOLS")
 	if hasToolSet {
-		result, err = application.SynthesizeWithTools(context.Background(), local.NewManager(home), name, provider, config, strings.Split(toolSet, ","))
+		result, err = application.SynthesizeWithTools(context.Background(), local.NewManager(home), name, provider, config, strings.Split(toolSet, ","), operationOptions)
 	} else {
-		result, err = bo.Synthesize(context.Background(), local.NewManager(home), name, provider, config)
+		result, err = bo.Synthesize(context.Background(), local.NewManager(home), name, provider, config, operationOptions)
 	}
 	if err != nil {
 		fail("synth", err.Error())

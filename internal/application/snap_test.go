@@ -22,7 +22,7 @@ func TestSnapPublishesStateSequentially(t *testing.T) {
 		"https://example.test/one": {Title: "First Page", Markdown: "# First Page\n\ncontent\n"},
 		"https://example.test/two": {Title: "Second Page", Markdown: "# Second Page\n\ncontent\n"},
 	}
-	outcomes, err := application.Snap(context.Background(), store, source, []string{"https://example.test/one", "https://example.test/two"})
+	outcomes, err := application.Snap(context.Background(), store, source, "notes", []string{"https://example.test/one", "https://example.test/two"}, operationOptionsFor(target))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestSnapRollsBackRawWhenStatePublicationFails(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(target, ".state.json.tmp"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, err := application.Snap(context.Background(), store, pageSource{"url": {Title: "Page", Markdown: "content\n"}}, []string{"url"})
+	_, err := application.Snap(context.Background(), store, pageSource{"url": {Title: "Page", Markdown: "content\n"}}, "notes", []string{"url"}, operationOptionsFor(target))
 	if err == nil {
 		t.Fatal("Snap succeeded")
 	}
@@ -67,7 +67,7 @@ func (failingPageSource) Fetch(context.Context, string) (application.Page, error
 
 func TestSnapDoesNotStoreFailedFetch(t *testing.T) {
 	store, target := seededStore(t)
-	outcomes, err := application.Snap(context.Background(), store, failingPageSource{}, []string{"https://www.youtube.com/watch?v=a1mhk7mAetk"})
+	outcomes, err := application.Snap(context.Background(), store, failingPageSource{}, "notes", []string{"https://www.youtube.com/watch?v=a1mhk7mAetk"}, operationOptionsFor(target))
 	if err != nil {
 		t.Fatal(err)
 	}

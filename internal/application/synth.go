@@ -12,12 +12,34 @@ import (
 	"github.com/skillicinski/bo/internal/agent"
 )
 
-func Synthesize(ctx context.Context, opener WorkspaceOpener, workspaceName string, provider agent.CompletionProvider, config SynthesisOptions) (SynthesisResult, error) {
-	return SynthesizeWithTools(ctx, opener, workspaceName, provider, config, allSynthesisTools)
+func Synthesize(ctx context.Context, opener WorkspaceOpener, workspaceName string, provider agent.CompletionProvider, config SynthesisOptions, options OperationOptions) (SynthesisResult, error) {
+	return SynthesizeWithTools(ctx, opener, workspaceName, provider, config, allSynthesisTools, options)
 }
 
-func SynthesizeWithTools(ctx context.Context, opener WorkspaceOpener, workspaceName string, provider agent.CompletionProvider, config SynthesisOptions, toolNames []string) (SynthesisResult, error) {
-	toolNames, err := normalizeSynthesisTools(toolNames)
+func SynthesizeWithTools(ctx context.Context, opener WorkspaceOpener, workspaceName string, provider agent.CompletionProvider, config SynthesisOptions, toolNames []string, options OperationOptions) (result SynthesisResult, returnErr error) {
+	var err error
+	options, err = normalizeOperationOptions(options)
+	if err != nil {
+		return SynthesisResult{}, err
+	}
+	directory := workspaceName
+	defer func() {
+		details := map[string]any{
+			"turns":             result.Metrics.Turns,
+			"tool_calls":        result.Metrics.ToolCalls,
+			"duration":          result.Metrics.Duration,
+			"summaries_written": result.SummariesWritten,
+			"summaries_skipped": result.SummariesSkipped,
+		}
+		if result.Metrics.Usage != nil {
+			details["usage"] = result.Metrics.Usage
+		}
+		for key, value := range operationErrorDetails(returnErr) {
+			details[key] = value
+		}
+		recordOperation(options, directory, CommandSynth, returnErr == nil, details)
+	}()
+	toolNames, err = normalizeSynthesisTools(toolNames)
 	if err != nil {
 		return SynthesisResult{}, InputError(err.Error())
 	}
@@ -32,10 +54,14 @@ func SynthesizeWithTools(ctx context.Context, opener WorkspaceOpener, workspaceN
 		return SynthesisResult{}, RequestError("workspace opener returned no workspace")
 	}
 	defer workspace.Close()
-	return runSynthesis(ctx, workspace.RootPath(), workspace.TargetPath(), workspace.Storage(), provider, config, toolNames)
+	if name := workspace.Name(); name != "" {
+		directory = name
+	}
+	result, returnErr = runSynthesis(ctx, directory, workspace.RootPath(), workspace.TargetPath(), workspace.Storage(), provider, config, toolNames, options)
+	return result, returnErr
 }
 
-func runSynthesis(ctx context.Context, rootPath, targetPath string, storage Storage, provider agent.CompletionProvider, config SynthesisOptions, toolNames []string) (SynthesisResult, error) {
+func runSynthesis(ctx context.Context, directory, rootPath, targetPath string, storage Storage, provider agent.CompletionProvider, config SynthesisOptions, toolNames []string, options OperationOptions) (SynthesisResult, error) {
 	if provider == nil {
 		return SynthesisResult{}, RequestError("synthesis provider is not configured")
 	}
@@ -72,9 +98,13 @@ func runSynthesis(ctx context.Context, rootPath, targetPath string, storage Stor
 		return SynthesisResult{}, err
 	}
 	sources := sourceGroups(documents, state)
+	completed := map[string]bool{}
+	written := map[string]bool{}
 	contextState := &agentContext{
 		ctx: runContext, target: target, storage: storage, documents: documents, sources: sources,
 		state: state, generation: generation, maxOutputBytes: config.MaxToolOutputBytes,
+		directory: directory, actor: options.Actor, operationLog: options.Log,
+		completed: completed, written: written,
 	}
 	names := make([]string, 0, len(sources))
 	for _, source := range sources {
@@ -90,24 +120,23 @@ func runSynthesis(ctx context.Context, rootPath, targetPath string, storage Stor
 		{Role: "system", Content: systemPrompt(contextState, names)},
 		{Role: "user", Content: fmt.Sprintf("Produce one concise Markdown summary for every source identity. Use the newest raw snapshot as evidence and preserve each source's epistemic status. Source identities: %s", strings.Join(sourceKeys, ", "))},
 	}
-	summarized := map[string]bool{}
 	runtime := agent.Runtime{
 		Provider: provider,
-		Tools:    synthTools(contextState, summarized, toolNames),
+		Tools:    synthTools(contextState, toolNames),
 		Done: func() bool {
-			return len(summarized) == len(sources)
+			return len(completed) == len(sources)
 		},
 	}
 	runtimeResult, err := runtime.Run(runContext, messages, agent.Options{
 		MaxTurns: config.MaxTurns, MaxToolCalls: config.MaxToolCalls,
 		MaxToolOutputBytes: config.MaxToolOutputBytes, MaxResponseTokens: config.MaxResponseTokens,
 	})
-	result := SynthesisResult{SummariesWritten: len(summarized), Metrics: runtimeResult.Metrics}
+	result := SynthesisResult{SummariesWritten: len(written), SummariesSkipped: len(completed) - len(written), Metrics: runtimeResult.Metrics}
 	if err != nil {
 		return result, err
 	}
-	if result.SummariesWritten != len(sources) {
-		return result, fmt.Errorf("model stopped with missing summaries: %s", strings.Join(missingSources(sources, summarized), ", "))
+	if len(completed) != len(sources) {
+		return result, fmt.Errorf("model stopped with missing summaries: %s", strings.Join(missingSources(sources, completed), ", "))
 	}
 	return result, nil
 }

@@ -17,13 +17,14 @@ import (
 
 const (
 	toolReadCorpus   = "read_corpus"
+	toolReadLogs     = "read_logs"
 	toolReadDocument = "read_document"
 	toolReadSummary  = "read_summary"
 	toolWriteSummary = "write_summary"
 	toolEditSummary  = "edit_summary"
 )
 
-var allSynthesisTools = []string{toolReadCorpus, toolReadDocument, toolReadSummary, toolWriteSummary, toolEditSummary}
+var allSynthesisTools = []string{toolReadCorpus, toolReadLogs, toolReadDocument, toolReadSummary, toolWriteSummary, toolEditSummary}
 
 func normalizeSynthesisTools(names []string) ([]string, error) {
 	if len(names) == 0 || len(names) == 1 && names[0] == "all" {
@@ -48,15 +49,16 @@ func normalizeSynthesisTools(names []string) ([]string, error) {
 	return validated, nil
 }
 
-func synthTools(contextState *agentContext, summarized map[string]bool, names []string) []agent.Tool {
+func synthTools(contextState *agentContext, names []string) []agent.Tool {
 	objectParameters := func(properties map[string]any, required []string) map[string]any {
 		return map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}
 	}
 	execute := func(_ context.Context, call agent.ToolCall) (string, error) {
-		return executeToolCall(contextState, call, summarized)
+		return executeToolCall(contextState, call)
 	}
 	definitions := map[string]agent.Tool{
 		toolReadCorpus:   {Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: toolReadCorpus, Description: "Read the authoritative corpus state, including raw snapshots and summaries.", Parameters: objectParameters(map[string]any{}, []string{})}}, Execute: execute},
+		toolReadLogs:     {Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: toolReadLogs, Description: "Read paginated operation log entries for the current directory.", Parameters: objectParameters(map[string]any{"offset": map[string]any{"type": "integer", "default": 0, "minimum": 0}, "limit": map[string]any{"type": "integer", "default": 20, "minimum": 1, "maximum": 100}}, []string{})}}, Execute: execute},
 		toolReadDocument: {Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: toolReadDocument, Description: "Read the newest raw Markdown document for one source identity. Use its exact filename.", Parameters: objectParameters(map[string]any{"filename": map[string]any{"type": "string"}}, []string{"filename"})}}, Execute: execute},
 		toolReadSummary:  {Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: toolReadSummary, Description: "Read the existing Markdown summary for one source identity.", Parameters: objectParameters(map[string]any{"source_key": map[string]any{"type": "string"}}, []string{"source_key"})}}, Execute: execute},
 		toolWriteSummary: {Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: toolWriteSummary, Description: "Create a Markdown summary for one source identity using its newest raw snapshot.", Parameters: objectParameters(map[string]any{"source_key": map[string]any{"type": "string"}, "markdown": map[string]any{"type": "string"}}, []string{"source_key", "markdown"})}}, Execute: execute},
@@ -78,12 +80,17 @@ type agentSource struct {
 type agentContext struct {
 	ctx            context.Context
 	target         string
+	directory      string
+	actor          string
 	storage        Storage
+	operationLog   OperationLog
 	documents      map[string]string
 	sources        map[string]agentSource
 	state          domain.State
 	generation     Generation
 	maxOutputBytes int
+	completed      map[string]bool
+	written        map[string]bool
 }
 
 func systemPrompt(context *agentContext, documentNames []string) string {
@@ -92,7 +99,7 @@ func systemPrompt(context *agentContext, documentNames []string) string {
 		identities = append(identities, sourceKey+" ("+source.LatestFilename+")")
 	}
 	sort.Strings(identities)
-	return fmt.Sprintf("You are bo's document-summary agent for %s. Purpose: turn each source into a concise Markdown summary that retains its key claims. Ontology: raw documents are immutable snapshots; a source identity is an exact URL or raw:filename; a summary is one mutable document derived from the newest raw snapshot; state is the authoritative record of these links. Rules: use only evidence from the source, preserve qualifications and uncertainty, attribute experience, measurements, recommendations, opinions, and forecasts to their author, and never modify raw documents or invent facts. The host owns paths, newest-snapshot selection, provenance, state publication, and completion. Use the available bounded tools. Source identities: %s. Latest raw documents: %s.", context.target, strings.Join(identities, ", "), strings.Join(documentNames, ", "))
+	return fmt.Sprintf("You are bo's document-summary agent for %s. Purpose: turn each source into a concise Markdown summary that retains its key claims. Ontology: raw documents are immutable snapshots; a source identity is an exact URL or raw:filename; a summary is one mutable document derived from the newest raw snapshot; state is the authoritative record of these links. Rules: use only evidence from the source, preserve qualifications and uncertainty, attribute experience, measurements, recommendations, opinions, and forecasts to their author, and never modify raw documents or invent facts. The host owns paths, newest-snapshot selection, provenance, state publication, and completion. Before reading raw documents, inspect recent scoped operation entries with read_logs and follow next_offset while has_more is true. A successful write_summary entry for the current raw filename with an existing current summary means that source is complete; do not rewrite it. Use the available bounded tools. Source identities: %s. Latest raw documents: %s.", context.target, strings.Join(identities, ", "), strings.Join(documentNames, ", "))
 }
 
 func DiscoverDocuments(root, target string) (map[string]string, error) {
@@ -152,8 +159,17 @@ func sourceGroups(documents map[string]string, state domain.State) map[string]ag
 	return sources
 }
 
-func executeToolCall(context *agentContext, call agent.ToolCall, summarized map[string]bool) (string, error) {
+func executeToolCall(context *agentContext, call agent.ToolCall) (output string, returnErr error) {
 	name := call.Function.Name
+	writeDetails := map[string]any{}
+	if name == toolWriteSummary {
+		defer func() {
+			for key, value := range operationErrorDetails(returnErr) {
+				writeDetails[key] = value
+			}
+			recordOperation(OperationOptions{Log: context.operationLog, Actor: context.actor}, context.directory, CommandWriteSummary, returnErr == nil, writeDetails)
+		}()
+	}
 	var arguments map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(call.Function.Arguments), &arguments); err != nil {
 		return "", fmt.Errorf("%s arguments are malformed JSON: %v", name, err)
@@ -171,6 +187,24 @@ func executeToolCall(context *agentContext, call agent.ToolCall, summarized map[
 			return "", fmt.Errorf("serializing state failed: %v", err)
 		}
 		return agent.BoundedOutput(string(data), context.maxOutputBytes), nil
+	case toolReadLogs:
+		if len(arguments) > 2 {
+			return "", fmt.Errorf("read_logs arguments must contain only offset and limit")
+		}
+		for key := range arguments {
+			if key != "offset" && key != "limit" {
+				return "", fmt.Errorf("read_logs arguments must contain only offset and limit")
+			}
+		}
+		offset, err := intArgument(arguments, "offset", 0)
+		if err != nil || offset < 0 {
+			return "", fmt.Errorf("read_logs.offset must be a non-negative integer")
+		}
+		limit, err := intArgument(arguments, "limit", 20)
+		if err != nil || limit < 1 || limit > 100 {
+			return "", fmt.Errorf("read_logs.limit must be an integer from 1 to 100")
+		}
+		return readLogs(context, offset, limit)
 	case toolReadDocument:
 		if len(arguments) != 1 {
 			return "", fmt.Errorf("read_document arguments must contain only filename")
@@ -197,12 +231,19 @@ func executeToolCall(context *agentContext, call agent.ToolCall, summarized map[
 		if err != nil {
 			return "", fmt.Errorf("%s.source_key must be a string", name)
 		}
+		if name == toolWriteSummary {
+			writeDetails["source_key"] = sourceKey
+		}
 		markdown, err := stringArgument(arguments, "markdown")
 		if err != nil {
 			return "", fmt.Errorf("%s.markdown must be a string", name)
 		}
 		if _, ok := context.sources[sourceKey]; !ok {
 			return "", fmt.Errorf("unknown source: %s", sourceKey)
+		}
+		if name == toolWriteSummary {
+			writeDetails["derived_from"] = context.sources[sourceKey].LatestFilename
+			writeDetails["filename"] = context.sources[sourceKey].LatestFilename
 		}
 		existing := summaryRecord(context.state, sourceKey)
 		if name == toolWriteSummary && existing != nil {
@@ -214,10 +255,69 @@ func executeToolCall(context *agentContext, call agent.ToolCall, summarized map[
 		if err := writeSummary(context, sourceKey, markdown, existing); err != nil {
 			return "", err
 		}
-		summarized[sourceKey] = true
+		context.completed[sourceKey] = true
+		context.written[sourceKey] = true
 		return name + " succeeded: " + sourceKey, nil
 	default:
 		return "", fmt.Errorf("unsupported tool: %s", name)
+	}
+}
+
+func intArgument(arguments map[string]json.RawMessage, name string, defaultValue int) (int, error) {
+	raw, ok := arguments[name]
+	if !ok {
+		return defaultValue, nil
+	}
+	var value int
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return 0, err
+	}
+	return value, nil
+}
+
+func readLogs(context *agentContext, offset, limit int) (string, error) {
+	page, err := context.operationLog.Read(context.ctx, context.directory, offset, limit)
+	if err != nil {
+		return "", err
+	}
+	page.Directory = context.directory
+	page.Offset = offset
+	page.Limit = limit
+	if page.Entries == nil {
+		page.Entries = []Operation{}
+	}
+	if page.NextOffset < offset || page.NextOffset == 0 && len(page.Entries) > 0 {
+		page.NextOffset = offset + len(page.Entries)
+	}
+	for _, operation := range page.Entries {
+		markCompletedFromOperation(context, operation)
+	}
+	data, err := json.Marshal(page)
+	if err != nil {
+		return "", fmt.Errorf("serializing operation log failed: %v", err)
+	}
+	return agent.BoundedOutput(string(data), context.maxOutputBytes), nil
+}
+
+func markCompletedFromOperation(context *agentContext, operation Operation) {
+	if !operation.Success || operation.Command != CommandWriteSummary {
+		return
+	}
+	sourceKey, _ := operation.Details["source_key"].(string)
+	filename, _ := operation.Details["derived_from"].(string)
+	if filename == "" {
+		filename, _ = operation.Details["filename"].(string)
+	}
+	if filename == "" {
+		filename, _ = operation.Details["raw_filename"].(string)
+	}
+	source, ok := context.sources[sourceKey]
+	if !ok || filename != source.LatestFilename {
+		return
+	}
+	record := summaryRecord(context.state, sourceKey)
+	if record != nil && record.DerivedFrom == source.LatestFilename {
+		context.completed[sourceKey] = true
 	}
 }
 

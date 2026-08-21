@@ -64,6 +64,20 @@ type Storage = application.Storage
 type DocumentStorage = Storage
 type DocumentStore = Storage
 
+type Operation = application.Operation
+type OperationCommand = application.OperationCommand
+type OperationLog = application.OperationLog
+type OperationPage = application.OperationPage
+type OperationOptions = application.OperationOptions
+
+const (
+	CommandSeed         = application.CommandSeed
+	CommandSnap         = application.CommandSnap
+	CommandState        = application.CommandState
+	CommandSynth        = application.CommandSynth
+	CommandWriteSummary = application.CommandWriteSummary
+)
+
 type Page = application.Page
 type Source = application.Source
 type Fetcher = application.Fetcher
@@ -75,12 +89,12 @@ func NewSnapInputError(detail string) *SnapCommandError {
 	return application.NewSnapInputError(detail)
 }
 
-func Snap(ctx context.Context, storage Storage, fetcher Source, urls []string) ([]SnapOutcome, error) {
-	return application.Snap(ctx, storage, fetcher, urls)
+func Snap(ctx context.Context, storage Storage, fetcher Source, directory string, urls []string, options OperationOptions) ([]SnapOutcome, error) {
+	return application.Snap(ctx, storage, fetcher, directory, urls, options)
 }
 
-func StateOutput(ctx context.Context, storage Storage, full bool) (string, error) {
-	return application.StateOutput(ctx, storage, full)
+func StateOutput(ctx context.Context, storage Storage, directory string, full bool, options OperationOptions) (string, error) {
+	return application.StateOutput(ctx, storage, directory, full, options)
 }
 
 func KebabCase(value string) (string, error) { return application.KebabCase(value) }
@@ -89,12 +103,12 @@ type Workspace = application.Workspace
 type WorkspaceCreator = application.WorkspaceCreator
 type WorkspaceOpener = application.WorkspaceOpener
 
-func Seed(ctx context.Context, creator WorkspaceCreator, name string) (string, error) {
-	return application.Seed(ctx, creator, name)
+func Seed(ctx context.Context, creator WorkspaceCreator, name string, options OperationOptions) (string, error) {
+	return application.Seed(ctx, creator, name, options)
 }
 
-func Synthesize(ctx context.Context, opener WorkspaceOpener, workspaceName string, provider CompletionProvider, options SynthesisOptions) (SynthesisResult, error) {
-	return application.Synthesize(ctx, opener, workspaceName, provider, options)
+func Synthesize(ctx context.Context, opener WorkspaceOpener, workspaceName string, provider CompletionProvider, options SynthesisOptions, operationOptions OperationOptions) (SynthesisResult, error) {
+	return application.Synthesize(ctx, opener, workspaceName, provider, options, operationOptions)
 }
 
 const (

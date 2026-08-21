@@ -22,6 +22,7 @@ type SynthesisOptions struct {
 
 type SynthesisResult struct {
 	SummariesWritten int           `json:"summaries_written"`
+	SummariesSkipped int           `json:"summaries_skipped"`
 	Metrics          agent.Metrics `json:"metrics"`
 }
 
