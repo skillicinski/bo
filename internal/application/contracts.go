@@ -8,18 +8,6 @@ import (
 	"github.com/skillicinski/bo/internal/domain"
 )
 
-type Page struct {
-	Title     string
-	Markdown  string
-	SourceURL string
-}
-
-type Source interface {
-	Fetch(context.Context, string) (Page, error)
-}
-
-type Fetcher = Source
-
 // Generation is an opaque storage version. Callers can only compare it or
 // pass it back to a storage implementation.
 type Generation struct{ digest [sha256.Size]byte }

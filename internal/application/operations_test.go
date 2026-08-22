@@ -66,7 +66,7 @@ func (failingCompletionProvider) Complete(context.Context, agent.CompletionReque
 
 func TestWorkflowsRejectMissingOperationLog(t *testing.T) {
 	store, target := seededStore(t)
-	if _, err := application.Snap(context.Background(), store, pageSource{}, "notes", []string{"url"}, application.OperationOptions{}); !application.IsCategory(err, application.CategoryRequest) {
+	if _, err := application.SnapWithWorkflow(context.Background(), store, rawSource{}, "notes", []string{"url"}, application.OperationOptions{}); !application.IsCategory(err, application.CategoryRequest) {
 		t.Fatalf("Snap error = %v", err)
 	}
 	if _, err := application.StateOutput(context.Background(), store, "notes", false, application.OperationOptions{}); !application.IsCategory(err, application.CategoryRequest) {
@@ -104,11 +104,11 @@ func TestSeedLogsSuccessAndFailure(t *testing.T) {
 func TestSnapLogsEachURLAndIgnoresLoggerFailure(t *testing.T) {
 	store, target := seededStore(t)
 	log := local.NewOperationLog(filepath.Dir(filepath.Dir(target)))
-	source := pageSource{
-		"one": {Title: "One", Markdown: "one\n"},
-		"two": {Title: "Two", Markdown: "two\n"},
+	source := rawSource{
+		"one": {Title: "One", Markdown: []byte("one\n")},
+		"two": {Title: "Two", Markdown: []byte("two\n")},
 	}
-	if _, err := application.Snap(context.Background(), store, source, "notes", []string{"one", "missing", "two"}, application.OperationOptions{Log: log}); err != nil {
+	if _, err := application.SnapWithWorkflow(context.Background(), store, source, "notes", []string{"one", "missing", "two"}, application.OperationOptions{Log: log}); err != nil {
 		t.Fatal(err)
 	}
 	page, err := log.Read(context.Background(), "notes", 0, 20)
@@ -119,7 +119,7 @@ func TestSnapLogsEachURLAndIgnoresLoggerFailure(t *testing.T) {
 		t.Fatalf("entries = %#v", page.Entries)
 	}
 	failingLog := &operationRecorder{err: errors.New("log unavailable")}
-	outcomes, err := application.Snap(context.Background(), store, source, "notes", []string{"one"}, application.OperationOptions{Log: failingLog})
+	outcomes, err := application.SnapWithWorkflow(context.Background(), store, source, "notes", []string{"one"}, application.OperationOptions{Log: failingLog})
 	if err != nil || len(outcomes) != 1 || outcomes[0].Err != nil {
 		t.Fatalf("best effort snap = %#v, %v", outcomes, err)
 	}

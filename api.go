@@ -78,10 +78,6 @@ const (
 	CommandWriteSummary = application.CommandWriteSummary
 )
 
-type Page = application.Page
-type Source = application.Source
-type Fetcher = application.Fetcher
-
 type SnapOutcome = application.SnapOutcome
 type SnapCommandError = application.SnapCommandError
 
@@ -89,8 +85,8 @@ func NewSnapInputError(detail string) *SnapCommandError {
 	return application.NewSnapInputError(detail)
 }
 
-func Snap(ctx context.Context, storage Storage, fetcher Source, directory string, urls []string, options OperationOptions) ([]SnapOutcome, error) {
-	return application.Snap(ctx, storage, fetcher, directory, urls, options)
+func Snap(ctx context.Context, storage Storage, directory string, sources []string, options OperationOptions) ([]SnapOutcome, error) {
+	return application.Snap(ctx, storage, directory, sources, options)
 }
 
 func StateOutput(ctx context.Context, storage Storage, directory string, full bool, options OperationOptions) (string, error) {

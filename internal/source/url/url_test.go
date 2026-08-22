@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/skillicinski/bo/internal/source"
 )
 
 func TestExtractHTMLRemovesChromeAndDuplicateTitle(t *testing.T) {
@@ -16,7 +18,7 @@ func TestExtractHTMLRemovesChromeAndDuplicateTitle(t *testing.T) {
 	if page.Title != "Example Page" {
 		t.Fatalf("title = %q", page.Title)
 	}
-	if page.Markdown != "# Example Page\n\nHello **world**.\n" {
+	if string(page.Markdown) != "# Example Page\n\nHello **world**.\n" {
 		t.Fatalf("markdown = %q", page.Markdown)
 	}
 }
@@ -26,7 +28,7 @@ func TestExtractHTMLUsesMainAndPreservesCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(page.Markdown, "one\ntwo") {
+	if !strings.Contains(string(page.Markdown), "one\ntwo") {
 		t.Fatalf("code block was not preserved: %q", page.Markdown)
 	}
 }
@@ -40,7 +42,7 @@ func TestExtractHTMLErrorsOnMissingTitleOrContent(t *testing.T) {
 	}
 }
 
-func TestHTTPFetchClassifiesResponses(t *testing.T) {
+func TestURLWorkflowFetchesHTMLAndClassifiesResponses(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		header := make(http.Header)
 		if request.URL.Path == "/missing" {
@@ -50,14 +52,32 @@ func TestHTTPFetchClassifiesResponses(t *testing.T) {
 		header.Set("Content-Type", "text/html; charset=utf-8")
 		return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader("<html><head><title>Page</title></head><body><article>content</article></body></html>"))}, nil
 	})}
-	httpSource := New(client)
-	page, err := httpSource.Fetch(context.Background(), "https://example.test/ok")
-	if err != nil || page.SourceURL != "https://example.test/ok" || page.Markdown != "# Page\n\ncontent\n" {
+	workflow := source.NewWorkflow(
+		[]source.Transport{NewTransport()},
+		map[source.OriginType]source.Plugin{source.OriginHTML: NewHTML(client)},
+	)
+	page, err := workflow.Fetch(context.Background(), "https://example.test/ok")
+	if err != nil || page.SourceKey != "https://example.test/ok" || string(page.Markdown) != "# Page\n\ncontent\n" {
 		t.Fatalf("page = %#v, err = %v", page, err)
 	}
-	_, err = httpSource.Fetch(context.Background(), "https://example.test/missing")
+	_, err = workflow.Fetch(context.Background(), "https://example.test/missing")
 	if err == nil || err.Error() != "http: HTTP 404 (request_id: request-123)" {
 		t.Fatalf("HTTP error = %v", err)
+	}
+}
+
+func TestTransportRoutesURLsAndRejectsUnsupportedYouTubeURLs(t *testing.T) {
+	transport := NewTransport()
+	origin, err := transport.Route(context.Background(), "https://example.test/article")
+	if err != nil || origin.Type != source.OriginHTML || origin.SourceKey != "https://example.test/article" {
+		t.Fatalf("origin = %#v, err = %v", origin, err)
+	}
+	origin, err = transport.Route(context.Background(), "https://www.youtube.com/watch?v=a1mhk7mAetk")
+	if err != nil || origin.Type != source.OriginYouTube {
+		t.Fatalf("YouTube origin = %#v, err = %v", origin, err)
+	}
+	if _, err := transport.Route(context.Background(), "https://www.youtube.com/playlist?list=x"); err == nil || !strings.Contains(err.Error(), "out of scope") {
+		t.Fatalf("unsupported YouTube error = %v", err)
 	}
 }
 

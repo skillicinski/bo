@@ -9,11 +9,10 @@ import (
 	"github.com/skillicinski/bo"
 	"github.com/skillicinski/bo/internal/application"
 	"github.com/skillicinski/bo/internal/provider/deepseek"
-	urlsource "github.com/skillicinski/bo/internal/source/url"
 	"github.com/skillicinski/bo/internal/storage/local"
 )
 
-const usage = "usage: bo seed [--name <name>] | bo snap <name> <url>... | bo state <name> [--full] | bo synth <name> [options]"
+const usage = "usage: bo seed [--name <name>] | bo snap <name> <source>... | bo state <name> [--full] | bo synth <name> [options]"
 
 func main() {
 	args := os.Args[1:]
@@ -61,7 +60,7 @@ func runSeed(args []string) {
 
 func runSnap(args []string) {
 	if len(args) < 2 || strings.HasPrefix(args[0], "-") {
-		fail("snap", "usage: bo snap <dir> <url>...")
+		fail("snap", "usage: bo snap <dir> <source>...")
 	}
 	home, err := local.HomeDir()
 	if err != nil {
@@ -79,14 +78,14 @@ func runSnap(args []string) {
 		fail("snap", err.Error())
 	}
 	defer storage.Close()
-	outcomes, commandErr := bo.Snap(context.Background(), storage, urlsource.NewHTTP(), args[0], args[1:], bo.OperationOptions{Log: local.NewOperationLog(home), Actor: "cli"})
+	outcomes, commandErr := bo.Snap(context.Background(), storage, args[0], args[1:], bo.OperationOptions{Log: local.NewOperationLog(home), Actor: "cli"})
 	if commandErr != nil {
 		fatal, ok := commandErr.(*bo.SnapCommandError)
 		if !ok {
 			fmt.Fprintf(os.Stderr, "snap failed: %v\n", commandErr)
 			os.Exit(1)
 		}
-		if len(fatal.Completed) > 0 || fatal.SourceURL != "" {
+		if len(fatal.Completed) > 0 || fatal.SourceKey != "" {
 			if len(fatal.Completed) > 0 {
 				outcomes = fatal.Completed
 			}
@@ -164,15 +163,15 @@ func printSnapReport(outcomes []bo.SnapOutcome, fatal *bo.SnapCommandError) bool
 	for _, outcome := range outcomes {
 		if outcome.Err != nil {
 			failed++
-			fmt.Fprintf(os.Stderr, "failed: %s (%v)\n", outcome.SourceURL, outcome.Err)
+			fmt.Fprintf(os.Stderr, "failed: %s (%v)\n", outcome.SourceKey, outcome.Err)
 		} else {
-			fmt.Printf("snapped: %s -> %s\n", outcome.SourceURL, outcome.Filename)
+			fmt.Printf("snapped: %s -> %s\n", outcome.SourceKey, outcome.Filename)
 		}
 	}
 	aborted := fatal != nil
 	if fatal != nil {
-		if fatal.SourceURL != "" {
-			fmt.Fprintf(os.Stderr, "failed: %s (%v)\n", fatal.SourceURL, fatal.Err)
+		if fatal.SourceKey != "" {
+			fmt.Fprintf(os.Stderr, "failed: %s (%v)\n", fatal.SourceKey, fatal.Err)
 		} else {
 			fmt.Fprintf(os.Stderr, "snap failed: %v\n", fatal.Err)
 		}

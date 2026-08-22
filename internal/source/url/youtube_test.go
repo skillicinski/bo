@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/skillicinski/bo/internal/source"
 )
 
 func TestYouTubeURLClassification(t *testing.T) {
@@ -56,7 +58,7 @@ func TestTranscriptParser(t *testing.T) {
 	}
 }
 
-func TestHTTPFetchesJSON3YouTubeTranscript(t *testing.T) {
+func TestYouTubePluginFetchesJSON3Transcript(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		header := make(http.Header)
 		if request.URL.Path == "/player" {
@@ -64,18 +66,22 @@ func TestHTTPFetchesJSON3YouTubeTranscript(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(`{"events":[{"segs":[{"utf8":"Hello"},{"utf8":" world"}]}]}`))}, nil
 	})}
-	httpSource := New(client)
-	httpSource.PlayerEndpoint = "https://example.test/player"
-	page, err := httpSource.Fetch(context.Background(), "https://www.youtube.com/watch?v=a1mhk7mAetk")
+	plugin := NewYouTube(client)
+	plugin.PlayerEndpoint = "https://example.test/player"
+	workflow := source.NewWorkflow(
+		[]source.Transport{NewTransport()},
+		map[source.OriginType]source.Plugin{source.OriginYouTube: plugin},
+	)
+	page, err := workflow.Fetch(context.Background(), "https://www.youtube.com/watch?v=a1mhk7mAetk")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if page.Title != "Video title" || page.Markdown != "# Video title\n\nHello world\n" || page.SourceURL != "https://www.youtube.com/watch?v=a1mhk7mAetk" {
+	if page.Title != "Video title" || string(page.Markdown) != "# Video title\n\nHello world\n" || page.SourceKey != "https://www.youtube.com/watch?v=a1mhk7mAetk" {
 		t.Fatalf("page = %#v", page)
 	}
 }
 
-func TestHTTPRetriesYouTubePlayerWithWatchPageAPIKey(t *testing.T) {
+func TestYouTubePluginRetriesPlayerWithWatchPageAPIKey(t *testing.T) {
 	var playerKeys []string
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		header := make(http.Header)
@@ -96,13 +102,17 @@ func TestHTTPRetriesYouTubePlayerWithWatchPageAPIKey(t *testing.T) {
 			return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(`<timedtext><text>Recovered transcript</text></timedtext>`))}, nil
 		}
 	})}
-	httpSource := New(client)
-	httpSource.PlayerEndpoint = "https://example.test/player?prettyPrint=false"
-	page, err := httpSource.Fetch(context.Background(), "https://www.youtube.com/watch?v=a1mhk7mAetk")
+	plugin := NewYouTube(client)
+	plugin.PlayerEndpoint = "https://example.test/player?prettyPrint=false"
+	workflow := source.NewWorkflow(
+		[]source.Transport{NewTransport()},
+		map[source.OriginType]source.Plugin{source.OriginYouTube: plugin},
+	)
+	page, err := workflow.Fetch(context.Background(), "https://www.youtube.com/watch?v=a1mhk7mAetk")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if page.Title != "Recovered title" || page.Markdown != "# Recovered title\n\nRecovered transcript\n" {
+	if page.Title != "Recovered title" || string(page.Markdown) != "# Recovered title\n\nRecovered transcript\n" {
 		t.Fatalf("page = %#v", page)
 	}
 	if len(playerKeys) != 2 || playerKeys[0] != "" || playerKeys[1] != "current-key" {

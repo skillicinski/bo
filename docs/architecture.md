@@ -1,50 +1,44 @@
 # Architecture
 
-## Layout
+## Dependency graph
 
 ```text
-cmd/bo/                 CLI parsing, output, and dependency wiring
-api.go                  public Go façade for workflows and contracts
-internal/agent/         provider-neutral agent runtime and tool boundary
-internal/application/   use-case orchestration
-internal/domain/        private state and document entities
-internal/provider/      provider adapters
-internal/source/url/     URL, HTML, and YouTube source adapter
-internal/storage/        filesystem and workspace adapters
+cmd/bo              -> bo API -> application -> domain
+                              |              -> source
+                              |              -> Storage contract
+                              -> agent / provider contracts
+storage adapters    -> application contracts and shared errors
+source adapters     -> source contracts, domain, and shared errors
 ```
 
-The root `bo` package exposes the reusable workflows and contracts through
-`api.go`. It does not select concrete providers, sources, or storage
-implementations.
+The root `bo` package exposes workflows and contracts. It does not select
+concrete storage, source, or provider adapters.
 
-`cmd/bo` is the composition root. It selects local storage and workspace
-adapters, the HTTP source, and the DeepSeek provider. It parses CLI input and
-formats CLI output.
+`cmd/bo` is a consumer and composition root for local storage, workspaces, and
+the DeepSeek provider. `application.Snap` owns the product-specific default
+source assembly, so the CLI only opens storage and passes source inputs.
 
-`internal/domain` owns the state and document entities used by the workflows and
-storage adapter. It has no dependency on the root package or external adapters.
+## Source workflow
 
-`internal/agent` owns the provider-neutral agent runtime. A use case supplies a
-provider and the tool set it permits.
+The source package owns the adapter contracts:
 
-`internal/application` owns the use-case workflows, including `seed`, `snap`,
-`state`, and `synth`. It depends on domain types and application contracts, not
-on concrete adapters. Synthesis supplies its own bounded local tools to the
-agent runtime.
+1. ordered transports classify an input into a typed `Origin`;
+2. the workflow looks up the plugin for that origin type;
+3. the plugin returns a domain `RawSnapshot` with a transport-neutral
+   `SourceKey`, title, and Markdown bytes.
 
-`internal/application/contracts.go` owns the storage, source, and workspace
-contracts used by application code and adapters. `internal/agent` owns the
-completion and tool contracts. The root API re-exports both contract groups
-for callers that need to compose the package.
+The default workflow routes HTTP URLs to HTML or YouTube plugins and local
+`.md` paths to the Markdown plugin. The URL and file adapters do not import
+`application`. HTTP request policy remains inside the source plugins; storage
+construction remains outside the use case.
 
-Storage and source adapters implement the application contracts; provider
-adapters implement the agent completion contract. The root package does not
-import the adapters.
+## Internals
 
-### Domain
+`internal/domain` owns stable product entities and the unchanged state format.
+`internal/application` owns use-case orchestration and composes the default
+source workflow. `internal/agent` owns the provider-neutral completion and tool
+runtime. `internal/storage` owns filesystem and workspace adapters.
 
-Representations of stable product concepts, independent rules and lifecycles. They are long-lived and can be abstracted into use cases.
-
-### Application
-
-Abstractions that orchestrate the internal functionality and domain entities of the system.
+Categorized errors live in the dependency-neutral shared error package so
+source, storage, and application code can use the same error vocabulary without
+an adapter importing a use case.

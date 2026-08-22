@@ -4,13 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/skillicinski/bo/internal/domain"
+	"github.com/skillicinski/bo/internal/source"
+	filesource "github.com/skillicinski/bo/internal/source/file"
+	urlsource "github.com/skillicinski/bo/internal/source/url"
 )
 
 type SnapOutcome struct {
-	SourceURL string
+	SourceKey string
 	Filename  string
 	Err       error
 }
@@ -19,13 +23,13 @@ func (o SnapOutcome) Failed() bool { return o.Err != nil }
 
 type SnapCommandError struct {
 	Completed []SnapOutcome
-	SourceURL string
+	SourceKey string
 	Err       error
 }
 
 func (e *SnapCommandError) Error() string {
-	if e.SourceURL != "" && e.Err != nil {
-		return fmt.Sprintf("%s (%s)", e.SourceURL, e.Err)
+	if e.SourceKey != "" && e.Err != nil {
+		return fmt.Sprintf("%s (%s)", e.SourceKey, e.Err)
 	}
 	if e.Err != nil {
 		return e.Err.Error()
@@ -39,14 +43,18 @@ func NewSnapInputError(detail string) *SnapCommandError {
 	return &SnapCommandError{Err: InputError(detail)}
 }
 
-func Snap(ctx context.Context, storage Storage, fetcher Source, directory string, urls []string, options OperationOptions) ([]SnapOutcome, error) {
+func Snap(ctx context.Context, storage Storage, directory string, inputs []string, options OperationOptions) ([]SnapOutcome, error) {
+	return SnapWithWorkflow(ctx, storage, defaultSourceWorkflow(), directory, inputs, options)
+}
+
+func SnapWithWorkflow(ctx context.Context, storage Storage, workflow source.Fetcher, directory string, inputs []string, options OperationOptions) ([]SnapOutcome, error) {
 	var err error
 	options, err = normalizeOperationOptions(options)
 	if err != nil {
 		return nil, err
 	}
-	logSnap := func(url, filename string, operationErr error) {
-		details := map[string]any{"url": url}
+	logSnap := func(sourceKey, filename string, operationErr error) {
+		details := map[string]any{"source_key": sourceKey}
 		if filename != "" {
 			details["filename"] = filename
 		}
@@ -55,47 +63,50 @@ func Snap(ctx context.Context, storage Storage, fetcher Source, directory string
 		}
 		recordOperation(options, directory, CommandSnap, operationErr == nil, details)
 	}
-	if len(urls) == 0 {
-		return nil, NewSnapInputError("usage: bo snap <dir> <url>...")
+	if len(inputs) == 0 {
+		return nil, NewSnapInputError("usage: bo snap <dir> <source>...")
+	}
+	if workflow == nil {
+		return nil, NewSnapInputError("source workflow is not configured")
 	}
 	state, generation, err := storage.ReadState(ctx)
 	if err != nil {
 		if !IsCategory(err, CategoryFilesystem) {
 			err = FilesystemError(err.Error())
 		}
-		for _, input := range urls {
+		for _, input := range inputs {
 			logSnap(input, "", err)
 		}
 		return nil, &SnapCommandError{Err: err}
 	}
-	outcomes := make([]SnapOutcome, 0, len(urls))
-	for index, input := range urls {
-		page, fetchErr := fetcher.Fetch(ctx, input)
+	outcomes := make([]SnapOutcome, 0, len(inputs))
+	for index, input := range inputs {
+		snapshot, fetchErr := workflow.Fetch(ctx, input)
 		if fetchErr != nil {
-			outcomes = append(outcomes, SnapOutcome{SourceURL: input, Err: fetchErr})
+			outcomes = append(outcomes, SnapOutcome{SourceKey: input, Err: fetchErr})
 			logSnap(input, "", fetchErr)
 			continue
 		}
-		sourceURL := page.SourceURL
-		if sourceURL == "" {
-			sourceURL = input
+		sourceKey := snapshot.SourceKey
+		if sourceKey == "" {
+			sourceKey = input
 		}
-		slug, slugErr := KebabCase(page.Title)
+		slug, slugErr := KebabCase(snapshot.Title)
 		if slugErr != nil {
-			outcomes = append(outcomes, SnapOutcome{SourceURL: input, Err: slugErr})
+			outcomes = append(outcomes, SnapOutcome{SourceKey: input, Err: slugErr})
 			logSnap(input, "", slugErr)
 			continue
 		}
 		writtenAt := uint64(time.Now().UnixMilli())
-		filename, document, writeErr := createRaw(ctx, storage, slug, writtenAt, []byte(page.Markdown))
+		filename, document, writeErr := createRaw(ctx, storage, slug, writtenAt, snapshot.Markdown)
 		if writeErr != nil {
-			outcomes = append(outcomes, SnapOutcome{SourceURL: input, Err: writeErr})
+			outcomes = append(outcomes, SnapOutcome{SourceKey: input, Err: writeErr})
 			logSnap(input, "", writeErr)
 			continue
 		}
 		next := state
 		next.Raw = append(append([]domain.RawRecord{}, state.Raw...), domain.RawRecord{
-			Filename: filename, URL: sourceURL, WrittenAt: writtenAt,
+			Filename: filename, URL: sourceKey, WrittenAt: writtenAt,
 		})
 		newGeneration, publishErr := storage.PublishState(ctx, next, generation)
 		if publishErr != nil {
@@ -109,16 +120,28 @@ func Snap(ctx context.Context, storage Storage, fetcher Source, directory string
 				failure = ConflictError(detail)
 			}
 			logSnap(input, "", failure)
-			for _, skipped := range urls[index+1:] {
+			for _, skipped := range inputs[index+1:] {
 				logSnap(skipped, "", fmt.Errorf("snap batch aborted after %s", input))
 			}
-			return outcomes, &SnapCommandError{Completed: outcomes, SourceURL: input, Err: failure}
+			return outcomes, &SnapCommandError{Completed: outcomes, SourceKey: input, Err: failure}
 		}
 		state, generation = next, newGeneration
-		outcomes = append(outcomes, SnapOutcome{SourceURL: input, Filename: filename})
-		logSnap(input, filename, nil)
+		outcomes = append(outcomes, SnapOutcome{SourceKey: sourceKey, Filename: filename})
+		logSnap(sourceKey, filename, nil)
 	}
 	return outcomes, nil
+}
+
+func defaultSourceWorkflow() *source.Workflow {
+	client := &http.Client{Timeout: 30 * time.Second}
+	return source.NewWorkflow(
+		[]source.Transport{urlsource.NewTransport(), filesource.NewTransport()},
+		map[source.OriginType]source.Plugin{
+			source.OriginHTML:     urlsource.NewHTML(client),
+			source.OriginYouTube:  urlsource.NewYouTube(client),
+			source.OriginMarkdown: filesource.NewMarkdownPlugin(),
+		},
+	)
 }
 
 func createRaw(ctx context.Context, storage Storage, slug string, timestamp uint64, contents []byte) (string, domain.DocumentRef, error) {
