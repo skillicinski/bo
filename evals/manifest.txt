@@ -17,3 +17,6 @@ https://towardsdatascience.com/layered-architecture-for-building-readable-robust
 https://www.youtube.com/watch?v=TQdLgzVk2T8
 https://www.youtube.com/watch?v=rxGVLSlUfaQ
 https://www.youtube.com/watch?v=OcZSS37SUCE
+
+# Issue #275 markdown file path
+/Users/simon/projects/bo/evals/demystifying-evals-for-ai-agents-anthropic.md

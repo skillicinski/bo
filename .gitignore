@@ -10,6 +10,7 @@ tmp/
 /evals/*
 !/evals/AGENTS.md
 !/evals/manifest.txt
+!/evals/demystifying-evals-for-ai-agents-anthropic.md
 !/evals/RUBRIC.md
 !/evals/run.sh
 !/evals/evaluate.py
