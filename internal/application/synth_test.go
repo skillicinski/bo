@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/skillicinski/bo/internal/agent"
 	"github.com/skillicinski/bo/internal/application"
@@ -63,7 +64,7 @@ func TestSynthesizeReplaysToolMessagesAndUpsertsSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state.Raw = append(state.Raw, domain.RawRecord{Filename: raw.Name, URL: "https://example.test/article", WrittenAt: 1})
+	state.Sources = append(state.Sources, domain.SourceRecord{SourceKey: "https://example.test/article", Snapshots: []domain.RawRecord{{Filename: raw.Name, WrittenAt: time.Unix(1, 0).UTC()}}})
 	generation, err = store.PublishState(context.Background(), state, generation)
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +72,7 @@ func TestSynthesizeReplaysToolMessagesAndUpsertsSummary(t *testing.T) {
 	if err := store.ReplaceSummary(context.Background(), domain.SummaryRef("article.md"), []byte("old summary")); err != nil {
 		t.Fatal(err)
 	}
-	state.Summaries = append(state.Summaries, domain.SummaryRecord{Filename: "article.md", SourceKey: "https://example.test/article", DerivedFrom: "article.md", CreatedAt: 2, UpdatedAt: 3})
+	state.Sources[0].Summary = &domain.SummaryRecord{Filename: "article.md", DerivedFrom: "article.md", CreatedAt: time.Unix(2, 0).UTC(), UpdatedAt: time.Unix(3, 0).UTC()}
 	if generation, err = store.PublishState(context.Background(), state, generation); err != nil {
 		t.Fatal(err)
 	}
@@ -104,6 +105,13 @@ func TestSynthesizeReplaysToolMessagesAndUpsertsSummary(t *testing.T) {
 	if string(data) != "# Summary\n\nfact\n" {
 		t.Fatalf("summary = %q", data)
 	}
+	state, _, err = store.ReadState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Sources[0].Summary == nil || !state.Sources[0].Summary.UpdatedAt.After(time.Unix(3, 0).UTC()) {
+		t.Fatalf("summary timestamp did not advance: %#v", state.Sources[0].Summary)
+	}
 }
 
 func TestSynthesizeToolsRejectRawEscape(t *testing.T) {
@@ -116,7 +124,7 @@ func TestSynthesizeToolsRejectRawEscape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state.Raw = append(state.Raw, domain.RawRecord{Filename: raw.Name, URL: "raw:article.md"})
+	state.Sources = append(state.Sources, domain.SourceRecord{SourceKey: "raw:article.md", Snapshots: []domain.RawRecord{{Filename: raw.Name, WrittenAt: time.Unix(1, 0).UTC()}}})
 	if _, err := store.PublishState(context.Background(), state, generation); err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +148,7 @@ func TestSynthesizeWithReducedToolSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state.Raw = append(state.Raw, domain.RawRecord{Filename: raw.Name, URL: "https://example.test/article", WrittenAt: 2})
+	state.Sources = append(state.Sources, domain.SourceRecord{SourceKey: "https://example.test/article", Snapshots: []domain.RawRecord{{Filename: raw.Name, WrittenAt: time.Unix(2, 0).UTC()}}})
 	if _, err := store.PublishState(context.Background(), state, generation); err != nil {
 		t.Fatal(err)
 	}
@@ -179,6 +187,36 @@ func TestSynthesizeWithReducedToolSet(t *testing.T) {
 	}
 }
 
+func TestSynthesizeRegistersUntrackedRawDocument(t *testing.T) {
+	store, target := seededStore(t)
+	if _, err := store.CreateRaw(context.Background(), "article.md", []byte("fact\n")); err != nil {
+		t.Fatal(err)
+	}
+	state, generation, err := store.ReadState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Sources = []domain.SourceRecord{{SourceKey: "raw:article.md"}}
+	if _, err := store.PublishState(context.Background(), state, generation); err != nil {
+		t.Fatal(err)
+	}
+	provider := &fakeProvider{responses: []agent.CompletionResponse{
+		toolResponse("read-1", "read_document", `{"filename":"article.md"}`),
+		toolResponse("write-1", "write_summary", `{"source_key":"raw:article.md","markdown":"summary\n"}`),
+	}}
+	result, err := application.SynthesizeWithTools(context.Background(), local.NewManager(filepath.Dir(filepath.Dir(target))), "notes", provider, application.DefaultSynthesisOptions(), []string{"read_document", "write_summary"}, operationOptionsFor(target))
+	if err != nil || result.SummariesWritten != 1 {
+		t.Fatalf("SynthesizeWithTools = %#v, %v", result, err)
+	}
+	state, _, err = store.ReadState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Sources) != 1 || len(state.Sources[0].Snapshots) != 1 || state.Sources[0].Summary == nil {
+		t.Fatalf("state = %#v", state)
+	}
+}
+
 func TestSynthesizeSelectsNewestSnapshotAndPreservesRaw(t *testing.T) {
 	store, target := seededStore(t)
 	oldRaw, err := store.CreateRaw(context.Background(), "old.md", []byte("old\n"))
@@ -193,10 +231,10 @@ func TestSynthesizeSelectsNewestSnapshotAndPreservesRaw(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state.Raw = append(state.Raw,
-		domain.RawRecord{Filename: oldRaw.Name, URL: "https://example.test/article", WrittenAt: 1},
-		domain.RawRecord{Filename: newRaw.Name, URL: "https://example.test/article", WrittenAt: 2},
-	)
+	state.Sources = append(state.Sources, domain.SourceRecord{SourceKey: "https://example.test/article", Snapshots: []domain.RawRecord{
+		{Filename: oldRaw.Name, WrittenAt: time.Unix(1, 0).UTC()},
+		{Filename: newRaw.Name, WrittenAt: time.Unix(2, 0).UTC()},
+	}})
 	if _, err := store.PublishState(context.Background(), state, generation); err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +269,7 @@ func TestSynthesizeSelectsNewestSnapshotAndPreservesRaw(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.Summaries) != 1 || state.Summaries[0].DerivedFrom != "new.md" {
+	if len(state.Sources) != 1 || state.Sources[0].Summary == nil || state.Sources[0].Summary.DerivedFrom != "new.md" {
 		t.Fatalf("state = %#v", state)
 	}
 }

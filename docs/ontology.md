@@ -1,72 +1,67 @@
 # Document ontology
 
-`state.json` is the system-managed index for a seeded directory:
+`state.json` is the system-managed index for a seeded directory. It stores
+one aggregate for each exact source identity:
 
 ```mermaid
 erDiagram
-    SOURCE_IDENTITY ||--|{ RAW_DOCUMENT : identifies
+    SOURCE_IDENTITY ||--o{ RAW_SNAPSHOT : contains
     SOURCE_IDENTITY ||--o| SUMMARY_DOCUMENT : has_current
-    RAW_DOCUMENT |o..|| SUMMARY_DOCUMENT : is_derived_from
+    RAW_SNAPSHOT |o..|| SUMMARY_DOCUMENT : is_derived_from
 
     SOURCE_IDENTITY {
         string source_key PK
     }
-    RAW_DOCUMENT {
+    RAW_SNAPSHOT {
         string filename
-        string url
-        number written_at
+        timestamp written_at
     }
     SUMMARY_DOCUMENT {
         string filename
-        string source_key
-        string derived_from
-        number created_at
-        number updated_at
+        string derived_from FK
+        timestamp created_at
+        timestamp updated_at
     }
 ```
 
-The diagram uses Mermaid ER cardinality notation: one source identity can
-have many raw snapshots and at most one current summary. A summary derives
-from exactly one raw snapshot, while older snapshots have no summary edge.
-
 ## SourceIdentity
 
-A source identity is the exact URL string recorded by `bo snap`. URL
-canonicalization is intentionally deferred. A Markdown file added without a
-raw state record uses `raw:<filename>` as its source identity.
+A source identity is the exact source key recorded by `bo snap`. HTTP and
+HTTPS URLs are stored as-is. A Markdown file uses `raw:<filename>` as its
+source identity. URL canonicalization is intentionally deferred.
 
-## RawDocument
+## SourceRecord
 
-Each successful snapshot is an immutable Markdown file in the target
-directory. Its state record contains `filename`, `url`, and `written_at`.
-Multiple raw records may have the same URL. The newest record by `written_at`
-is the current evidence for that source; older snapshots remain available for
-comparison and provenance.
+Each source aggregate contains zero or more immutable raw snapshots and at
+most one current summary. Snapshot filenames are unique in the target
+directory. A summary's `derived_from` value must identify one snapshot in the
+same aggregate.
 
-## SummaryDocument
-
-Each source identity has at most one current Markdown summary in `summaries/`.
-Its state record contains:
+Timestamps use UTC RFC 3339 values throughout the state format:
 
 ```json
 {
-  "filename": "foo.md",
-  "source_key": "https://example.com/foo",
-  "derived_from": "foo--123456.md",
-  "created_at": 123456,
-  "updated_at": 123789
+  "sources": [
+    {
+      "source_key": "https://example.com/foo",
+      "snapshots": [
+        {
+          "filename": "foo--123456.md",
+          "written_at": "2026-08-23T12:34:56.123456789Z"
+        }
+      ],
+      "summary": {
+        "filename": "foo.md",
+        "derived_from": "foo--123456.md",
+        "created_at": "2026-08-23T12:35:00Z",
+        "updated_at": "2026-08-23T12:35:00Z"
+      }
+    }
+  ]
 }
 ```
 
-`derived_from` identifies the newest raw snapshot used for the current
-summary. Rewriting a summary preserves `filename` and `created_at`, updates
-`updated_at`, and replaces `derived_from`. Summary Markdown contains no
-duplicated state metadata.
-
-## Versioning and provenance
-
-Raw documents are append-only evidence. Summary records are upserted by exact
-`source_key`; a summary rewrite never deletes an older raw snapshot. State is
-authoritative for the relationship between source identities, raw snapshots,
-and summaries. Local state publication checks the generation of the exact
-previous `state.json`; a concurrent change fails with a conflict.
+State is validated when it is loaded and before it is published. Raw
+snapshots remain append-only evidence. Rewriting a summary preserves its
+filename and creation time, updates its timestamp, and replaces its
+`derived_from` reference.

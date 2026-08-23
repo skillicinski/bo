@@ -73,7 +73,7 @@ func synthTools(contextState *agentContext, names []string) []agent.Tool {
 
 type agentSource struct {
 	LatestFilename   string
-	LatestWrittenAt  uint64
+	LatestWrittenAt  time.Time
 	LatestStateIndex int
 }
 
@@ -143,16 +143,21 @@ func sourceGroups(documents map[string]string, state domain.State) map[string]ag
 	sort.Strings(names)
 	sources := map[string]agentSource{}
 	for _, filename := range names {
-		sourceKey, writtenAt, stateIndex := "raw:"+filename, uint64(0), 0
+		sourceKey, writtenAt, stateIndex := "raw:"+filename, time.Time{}, 0
 		found := false
-		for index, record := range state.Raw {
-			if record.Filename == filename && (!found || record.WrittenAt > writtenAt || record.WrittenAt == writtenAt && index > stateIndex) {
-				sourceKey, writtenAt, stateIndex = record.URL, record.WrittenAt, index
-				found = true
+		recordIndex := 0
+		for _, source := range state.Sources {
+			for _, snapshot := range source.Snapshots {
+				index := recordIndex
+				recordIndex++
+				if snapshot.Filename == filename && (!found || snapshot.WrittenAt.After(writtenAt) || snapshot.WrittenAt.Equal(writtenAt) && index > stateIndex) {
+					sourceKey, writtenAt, stateIndex = source.SourceKey, snapshot.WrittenAt, index
+					found = true
+				}
 			}
 		}
 		current, ok := sources[sourceKey]
-		if !ok || writtenAt > current.LatestWrittenAt || writtenAt == current.LatestWrittenAt && stateIndex > current.LatestStateIndex {
+		if !ok || writtenAt.After(current.LatestWrittenAt) || writtenAt.Equal(current.LatestWrittenAt) && stateIndex > current.LatestStateIndex {
 			sources[sourceKey] = agentSource{LatestFilename: filename, LatestWrittenAt: writtenAt, LatestStateIndex: stateIndex}
 		}
 	}
@@ -380,9 +385,9 @@ func readSummary(context *agentContext, sourceKey string) (string, error) {
 }
 
 func summaryRecord(state domain.State, sourceKey string) *domain.SummaryRecord {
-	for index := range state.Summaries {
-		if state.Summaries[index].SourceKey == sourceKey {
-			return &state.Summaries[index]
+	for index := range state.Sources {
+		if state.Sources[index].SourceKey == sourceKey {
+			return state.Sources[index].Summary
 		}
 	}
 	return nil
@@ -400,7 +405,7 @@ func writeSummary(context *agentContext, sourceKey, markdown string, existing *d
 		return fmt.Errorf("summary exceeds max tool output bytes (%d)", context.maxOutputBytes)
 	}
 	filename := source.LatestFilename
-	createdAt := uint64(0)
+	createdAt := time.Time{}
 	if existing != nil {
 		filename = existing.Filename
 		createdAt = existing.CreatedAt
@@ -408,33 +413,38 @@ func writeSummary(context *agentContext, sourceKey, markdown string, existing *d
 	if err := context.storage.ReplaceSummary(context.ctx, domain.SummaryRef(filename), []byte(markdown)); err != nil {
 		return err
 	}
-	now, err := nowNanos()
-	if err != nil {
-		return err
+	now := time.Now().UTC()
+	writtenAt := source.LatestWrittenAt
+	if writtenAt.IsZero() {
+		writtenAt = now
 	}
 	updatedAt := now
-	if existing != nil {
-		updatedAt = existing.UpdatedAt + 1
-		if now > updatedAt {
-			updatedAt = now
-		}
+	if existing != nil && !now.After(existing.UpdatedAt) {
+		updatedAt = existing.UpdatedAt.Add(time.Nanosecond)
 	}
-	record := domain.SummaryRecord{Filename: filename, SourceKey: sourceKey, DerivedFrom: source.LatestFilename, CreatedAt: createdAt, UpdatedAt: updatedAt}
+	record := domain.SummaryRecord{Filename: filename, DerivedFrom: source.LatestFilename, CreatedAt: createdAt, UpdatedAt: updatedAt}
 	if existing == nil {
 		record.CreatedAt = now
 	}
 	next := context.state
-	next.Summaries = append([]domain.SummaryRecord{}, context.state.Summaries...)
+	next.Sources = append([]domain.SourceRecord{}, context.state.Sources...)
 	replaced := false
-	for index := range next.Summaries {
-		if next.Summaries[index].SourceKey == sourceKey {
-			next.Summaries[index] = record
+	for index := range next.Sources {
+		if next.Sources[index].SourceKey == sourceKey {
+			if len(next.Sources[index].Snapshots) == 0 {
+				next.Sources[index].Snapshots = []domain.RawRecord{{Filename: source.LatestFilename, WrittenAt: writtenAt}}
+			}
+			next.Sources[index].Summary = &record
 			replaced = true
 			break
 		}
 	}
 	if !replaced {
-		next.Summaries = append(next.Summaries, record)
+		next.Sources = append(next.Sources, domain.SourceRecord{
+			SourceKey: sourceKey,
+			Snapshots: []domain.RawRecord{{Filename: source.LatestFilename, WrittenAt: writtenAt}},
+			Summary:   &record,
+		})
 	}
 	generation, err := context.storage.PublishState(context.ctx, next, context.generation)
 	if err != nil {
@@ -450,12 +460,4 @@ func ensureInside(path, root string) error {
 		return fmt.Errorf("path escapes %s: %s", root, path)
 	}
 	return nil
-}
-
-func nowNanos() (uint64, error) {
-	now := time.Now().UnixNano()
-	if now < 0 {
-		return 0, fmt.Errorf("clock returned a time before Unix epoch")
-	}
-	return uint64(now), nil
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/skillicinski/bo"
+	"github.com/skillicinski/bo/internal/domain"
 	"github.com/skillicinski/bo/internal/storage/local"
 )
 
@@ -51,5 +52,27 @@ func TestLocalGenerationConflict(t *testing.T) {
 	_, err = store.PublishState(context.Background(), state, generation)
 	if !bo.IsConflict(err) {
 		t.Fatalf("expected conflict, got %v", err)
+	}
+}
+
+func TestLocalPublishRejectsInvalidState(t *testing.T) {
+	store, _ := seededStore(t)
+	state, generation, err := store.ReadState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Sources = []domain.SourceRecord{{
+		SourceKey: "raw:note.md",
+		Snapshots: []domain.RawRecord{{Filename: "note.md"}},
+	}}
+	if _, err := store.PublishState(context.Background(), state, generation); err == nil {
+		t.Fatal("invalid state was published")
+	}
+	loaded, _, err := store.ReadState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Sources) != 0 {
+		t.Fatalf("state changed after rejected publish: %#v", loaded)
 	}
 }

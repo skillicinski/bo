@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/skillicinski/bo/internal/agent"
 	"github.com/skillicinski/bo/internal/application"
@@ -105,10 +106,10 @@ func TestSnapLogsEachURLAndIgnoresLoggerFailure(t *testing.T) {
 	store, target := seededStore(t)
 	log := local.NewOperationLog(filepath.Dir(filepath.Dir(target)))
 	source := rawSource{
-		"one": {Title: "One", Markdown: []byte("one\n")},
-		"two": {Title: "Two", Markdown: []byte("two\n")},
+		"https://example.test/one": {Title: "One", Markdown: []byte("one\n")},
+		"https://example.test/two": {Title: "Two", Markdown: []byte("two\n")},
 	}
-	if _, err := application.SnapWithWorkflow(context.Background(), store, source, "notes", []string{"one", "missing", "two"}, application.OperationOptions{Log: log}); err != nil {
+	if _, err := application.SnapWithWorkflow(context.Background(), store, source, "notes", []string{"https://example.test/one", "https://example.test/missing", "https://example.test/two"}, application.OperationOptions{Log: log}); err != nil {
 		t.Fatal(err)
 	}
 	page, err := log.Read(context.Background(), "notes", 0, 20)
@@ -119,7 +120,7 @@ func TestSnapLogsEachURLAndIgnoresLoggerFailure(t *testing.T) {
 		t.Fatalf("entries = %#v", page.Entries)
 	}
 	failingLog := &operationRecorder{err: errors.New("log unavailable")}
-	outcomes, err := application.SnapWithWorkflow(context.Background(), store, source, "notes", []string{"one"}, application.OperationOptions{Log: failingLog})
+	outcomes, err := application.SnapWithWorkflow(context.Background(), store, source, "notes", []string{"https://example.test/one"}, application.OperationOptions{Log: failingLog})
 	if err != nil || len(outcomes) != 1 || outcomes[0].Err != nil {
 		t.Fatalf("best effort snap = %#v, %v", outcomes, err)
 	}
@@ -153,7 +154,7 @@ func TestSynthesisUsesSuccessfulCurrentWriteLogWithoutWriting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state.Raw = append(state.Raw, domain.RawRecord{Filename: raw.Name, URL: "https://example.test/article", WrittenAt: 1})
+	state.Sources = append(state.Sources, domain.SourceRecord{SourceKey: "https://example.test/article", Snapshots: []domain.RawRecord{{Filename: raw.Name, WrittenAt: time.Unix(1, 0).UTC()}}})
 	if _, err = store.PublishState(context.Background(), state, generation); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +165,7 @@ func TestSynthesisUsesSuccessfulCurrentWriteLogWithoutWriting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state.Summaries = append(state.Summaries, domain.SummaryRecord{Filename: raw.Name, SourceKey: "https://example.test/article", DerivedFrom: raw.Name, CreatedAt: 1, UpdatedAt: 1})
+	state.Sources[0].Summary = &domain.SummaryRecord{Filename: raw.Name, DerivedFrom: raw.Name, CreatedAt: time.Unix(2, 0).UTC(), UpdatedAt: time.Unix(2, 0).UTC()}
 	if _, err = store.PublishState(context.Background(), state, generation); err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +202,7 @@ func TestSynthesisLogsFailureMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state.Raw = append(state.Raw, domain.RawRecord{Filename: raw.Name, URL: "https://example.test/article", WrittenAt: 1})
+	state.Sources = append(state.Sources, domain.SourceRecord{SourceKey: "https://example.test/article", Snapshots: []domain.RawRecord{{Filename: raw.Name, WrittenAt: time.Unix(1, 0).UTC()}}})
 	if _, err := store.PublishState(context.Background(), state, generation); err != nil {
 		t.Fatal(err)
 	}

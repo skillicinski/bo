@@ -24,7 +24,11 @@ func StateOutput(ctx context.Context, storage Storage, directory string, full bo
 		return "", err
 	}
 	if !full {
-		return fmt.Sprintf("%d documents snapped", len(state.Raw)), nil
+		snapshots := 0
+		for _, source := range state.Sources {
+			snapshots += len(source.Snapshots)
+		}
+		return fmt.Sprintf("%d documents snapped", snapshots), nil
 	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {

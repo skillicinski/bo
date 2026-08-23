@@ -40,11 +40,29 @@ func TestSnapPublishesStateSequentially(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.Raw) != 2 || state.Raw[0].URL != "https://example.test/one" {
+	if len(state.Sources) != 2 || state.Sources[0].SourceKey != "https://example.test/one" {
 		t.Fatalf("unexpected state: %#v", state)
 	}
 	if _, err := os.Stat(filepath.Join(target, "first-page.md")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSnapStoresRepeatedSourceSnapshotsInOneAggregate(t *testing.T) {
+	store, target := seededStore(t)
+	key := "https://example.test/article"
+	outcomes, err := application.SnapWithWorkflow(context.Background(), store, rawSource{
+		key: {Title: "Article", Markdown: []byte("latest\n")},
+	}, "notes", []string{key, key}, operationOptionsFor(target))
+	if err != nil || len(outcomes) != 2 {
+		t.Fatalf("outcomes = %#v, err = %v", outcomes, err)
+	}
+	state, _, err := store.ReadState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Sources) != 1 || state.Sources[0].SourceKey != key || len(state.Sources[0].Snapshots) != 2 {
+		t.Fatalf("state = %#v", state)
 	}
 }
 
@@ -53,12 +71,12 @@ func TestSnapRollsBackRawWhenStatePublicationFails(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(target, ".state.json.tmp"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, err := application.SnapWithWorkflow(context.Background(), store, rawSource{"url": {Title: "Page", Markdown: []byte("content\n")}}, "notes", []string{"url"}, operationOptionsFor(target))
+	_, err := application.SnapWithWorkflow(context.Background(), store, rawSource{"https://example.test/url": {Title: "Page", Markdown: []byte("content\n")}}, "notes", []string{"https://example.test/url"}, operationOptionsFor(target))
 	if err == nil {
 		t.Fatal("Snap succeeded")
 	}
 	var commandErr *application.SnapCommandError
-	if !errors.As(err, &commandErr) || commandErr.SourceKey != "url" {
+	if !errors.As(err, &commandErr) || commandErr.SourceKey != "https://example.test/url" {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(target, "page.md")); !os.IsNotExist(statErr) {
@@ -85,7 +103,7 @@ func TestSnapDoesNotStoreFailedFetch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.Raw) != 0 {
+	if len(state.Sources) != 0 {
 		t.Fatalf("state = %#v", state)
 	}
 	entries, err := os.ReadDir(target)
@@ -126,7 +144,7 @@ func TestSnapAcceptsMixedURLAndMarkdownInputs(t *testing.T) {
 		t.Fatalf("outcomes = %#v", outcomes)
 	}
 	state, _, err := store.ReadState(context.Background())
-	if err != nil || len(state.Raw) != 2 || state.Raw[1].URL != "raw:local.md" {
+	if err != nil || len(state.Sources) != 2 || state.Sources[1].SourceKey != "raw:local.md" {
 		t.Fatalf("state = %#v, err = %v", state, err)
 	}
 }

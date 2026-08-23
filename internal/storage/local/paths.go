@@ -98,7 +98,7 @@ func Seed(home string, requestedName *string) (string, error) {
 	if err := os.Mkdir(target, 0o755); err != nil {
 		return "", err
 	}
-	if err := initializeState(target, domain.State{Raw: []domain.RawRecord{}, Summaries: []domain.SummaryRecord{}}); err != nil {
+	if err := initializeState(target, domain.State{Sources: []domain.SourceRecord{}}); err != nil {
 		return "", err
 	}
 	return target, nil

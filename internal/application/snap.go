@@ -91,23 +91,42 @@ func SnapWithWorkflow(ctx context.Context, storage Storage, workflow source.Fetc
 		if sourceKey == "" {
 			sourceKey = input
 		}
+		if sourceErr := domain.ValidateSourceKey(sourceKey); sourceErr != nil {
+			sourceErr = InputError(sourceErr.Error())
+			outcomes = append(outcomes, SnapOutcome{SourceKey: input, Err: sourceErr})
+			logSnap(input, "", sourceErr)
+			continue
+		}
 		slug, slugErr := KebabCase(snapshot.Title)
 		if slugErr != nil {
 			outcomes = append(outcomes, SnapOutcome{SourceKey: input, Err: slugErr})
 			logSnap(input, "", slugErr)
 			continue
 		}
-		writtenAt := uint64(time.Now().UnixMilli())
-		filename, document, writeErr := createRaw(ctx, storage, slug, writtenAt, snapshot.Markdown)
+		writtenAt := time.Now().UTC()
+		filename, document, writeErr := createRaw(ctx, storage, slug, writtenAt.UnixNano(), snapshot.Markdown)
 		if writeErr != nil {
 			outcomes = append(outcomes, SnapOutcome{SourceKey: input, Err: writeErr})
 			logSnap(input, "", writeErr)
 			continue
 		}
 		next := state
-		next.Raw = append(append([]domain.RawRecord{}, state.Raw...), domain.RawRecord{
-			Filename: filename, URL: sourceKey, WrittenAt: writtenAt,
-		})
+		next.Sources = append([]domain.SourceRecord{}, state.Sources...)
+		found := false
+		for index := range next.Sources {
+			if next.Sources[index].SourceKey == sourceKey {
+				next.Sources[index].Snapshots = append(append([]domain.RawRecord{}, next.Sources[index].Snapshots...), domain.RawRecord{
+					Filename: filename, WrittenAt: writtenAt,
+				})
+				found = true
+				break
+			}
+		}
+		if !found {
+			next.Sources = append(next.Sources, domain.SourceRecord{SourceKey: sourceKey, Snapshots: []domain.RawRecord{{
+				Filename: filename, WrittenAt: writtenAt,
+			}}})
+		}
 		newGeneration, publishErr := storage.PublishState(ctx, next, generation)
 		if publishErr != nil {
 			rollbackErr := storage.DeleteDocument(ctx, document)
@@ -144,7 +163,7 @@ func defaultSourceWorkflow() *source.Workflow {
 	)
 }
 
-func createRaw(ctx context.Context, storage Storage, slug string, timestamp uint64, contents []byte) (string, domain.DocumentRef, error) {
+func createRaw(ctx context.Context, storage Storage, slug string, timestamp int64, contents []byte) (string, domain.DocumentRef, error) {
 	for attempt := 0; ; attempt++ {
 		filename := slug + ".md"
 		if attempt == 1 {

@@ -344,11 +344,7 @@ func (s *Store) writeAtomic(destination, temporary string, data []byte) error {
 }
 
 func validMarkdownName(name string) error {
-	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) || strings.ContainsRune(name, 0) ||
-		!strings.EqualFold(filepath.Ext(name), ".md") {
-		return fmt.Errorf("document name must be a Markdown file name")
-	}
-	return nil
+	return domain.ValidateDocumentName(name)
 }
 
 func filesystem(path string, err error) *application.Error {
