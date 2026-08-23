@@ -71,13 +71,13 @@ func TestWorkflowsRejectMissingOperationLog(t *testing.T) {
 	if _, err := application.SnapWithWorkflow(context.Background(), store, rawSource{}, "notes", []string{"url"}, application.OperationOptions{}); !internalerrors.IsKind(err, internalerrors.KindRequest) {
 		t.Fatalf("Snap error = %v", err)
 	}
-	if _, err := application.ReadState(context.Background(), store, "notes", application.OperationOptions{}); !internalerrors.IsKind(err, internalerrors.KindRequest) {
+	if _, _, err := application.ReadState(context.Background(), store, "notes", application.OperationOptions{}); !internalerrors.IsKind(err, internalerrors.KindRequest) {
 		t.Fatalf("ReadState error = %v", err)
 	}
 	if _, err := application.Seed(context.Background(), failingCreator{}, "notes", application.OperationOptions{}); !internalerrors.IsKind(err, internalerrors.KindRequest) {
 		t.Fatalf("Seed error = %v", err)
 	}
-	if _, err := application.SynthesizeWithTools(context.Background(), nil, "notes", nil, application.DefaultSynthesisOptions(), []string{"read_logs"}, application.OperationOptions{}); !internalerrors.IsKind(err, internalerrors.KindRequest) {
+	if _, err := application.SynthesizeWithTools(context.Background(), nil, nil, application.DefaultSynthesisOptions(), []string{"read_logs"}, application.OperationOptions{}); !internalerrors.IsKind(err, internalerrors.KindRequest) {
 		t.Fatalf("Synthesize error = %v", err)
 	}
 }
@@ -129,13 +129,13 @@ func TestSnapLogsEachURLAndIgnoresLoggerFailure(t *testing.T) {
 func TestStateLogsSuccessAndFailure(t *testing.T) {
 	store, target := seededStore(t)
 	log := local.NewOperationLog(filepath.Dir(filepath.Dir(target)))
-	if _, err := application.ReadState(context.Background(), store, "notes", application.OperationOptions{Log: log}); err != nil {
+	if _, _, err := application.ReadState(context.Background(), store, "notes", application.OperationOptions{Log: log}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(filepath.Join(target, "state.json")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := application.ReadState(context.Background(), store, "notes", application.OperationOptions{Log: log}); err == nil {
+	if _, _, err := application.ReadState(context.Background(), store, "notes", application.OperationOptions{Log: log}); err == nil {
 		t.Fatal("ReadState succeeded after state removal")
 	}
 	page, err := log.Read(context.Background(), "notes", 0, 20)
@@ -146,35 +146,17 @@ func TestStateLogsSuccessAndFailure(t *testing.T) {
 
 func TestSynthesisUsesSuccessfulCurrentWriteLogWithoutWriting(t *testing.T) {
 	store, target := seededStore(t)
-	raw, err := store.CreateRaw(context.Background(), "article.md", []byte("fact\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, generation, err := store.ReadState(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	state.Sources = append(state.Sources, domain.SourceRecord{SourceKey: "https://example.test/article", Snapshots: []domain.RawRecord{{Filename: raw.Name, WrittenAt: time.Unix(1, 0).UTC()}}})
-	if _, err = store.PublishState(context.Background(), state, generation); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ReplaceSummary(context.Background(), domain.SummaryRef(raw.Name), []byte("summary\n")); err != nil {
-		t.Fatal(err)
-	}
-	state, generation, err = store.ReadState(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	state.Sources[0].Summary = &domain.SummaryRecord{Filename: raw.Name, DerivedFrom: raw.Name, CreatedAt: time.Unix(2, 0).UTC(), UpdatedAt: time.Unix(2, 0).UTC()}
-	if _, err = store.PublishState(context.Background(), state, generation); err != nil {
-		t.Fatal(err)
-	}
+	raw := commitRaw(t, store, "https://example.test/article", "article.md", time.Unix(1, 0).UTC(), []byte("fact\n"))
+	commitSummary(t, store, application.SummaryCommit{
+		SourceKey: "https://example.test/article", Filename: raw.Name, DerivedFrom: raw.Name,
+		RawWrittenAt: time.Unix(1, 0).UTC(), CreatedAt: time.Unix(2, 0).UTC(), UpdatedAt: time.Unix(2, 0).UTC(), Contents: []byte("summary\n"),
+	})
 	log := local.NewOperationLog(filepath.Dir(filepath.Dir(target)))
 	if err := log.Append(context.Background(), domain.Operation{Timestamp: "2026-08-21T10:00:00Z", Actor: "test", Directory: "notes", Command: domain.CommandWriteSummary, Success: true, Details: map[string]any{"source_key": "https://example.test/article", "derived_from": raw.Name}}); err != nil {
 		t.Fatal(err)
 	}
 	provider := &fakeProvider{responses: []agent.CompletionResponse{toolResponse("logs-1", "read_logs", "{}")}}
-	result, err := application.SynthesizeWithTools(context.Background(), local.NewManager(filepath.Dir(filepath.Dir(target))), "notes", provider, application.DefaultSynthesisOptions(), []string{"read_logs"}, application.OperationOptions{Log: log, Actor: "test"})
+	result, err := application.SynthesizeWithTools(context.Background(), store, provider, application.DefaultSynthesisOptions(), []string{"read_logs"}, application.OperationOptions{Log: log, Actor: "test"})
 	if err != nil || result.SummariesWritten != 0 || result.SummariesSkipped != 1 {
 		t.Fatalf("result = %#v, %v", result, err)
 	}
@@ -194,20 +176,9 @@ func TestSynthesisUsesSuccessfulCurrentWriteLogWithoutWriting(t *testing.T) {
 
 func TestSynthesisLogsFailureMetrics(t *testing.T) {
 	store, target := seededStore(t)
-	raw, err := store.CreateRaw(context.Background(), "article.md", []byte("fact\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, generation, err := store.ReadState(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	state.Sources = append(state.Sources, domain.SourceRecord{SourceKey: "https://example.test/article", Snapshots: []domain.RawRecord{{Filename: raw.Name, WrittenAt: time.Unix(1, 0).UTC()}}})
-	if _, err := store.PublishState(context.Background(), state, generation); err != nil {
-		t.Fatal(err)
-	}
+	commitRaw(t, store, "https://example.test/article", "article.md", time.Unix(1, 0).UTC(), []byte("fact\n"))
 	log := local.NewOperationLog(filepath.Dir(filepath.Dir(target)))
-	_, err = application.SynthesizeWithTools(context.Background(), local.NewManager(filepath.Dir(filepath.Dir(target))), "notes", failingCompletionProvider{}, application.DefaultSynthesisOptions(), []string{"read_logs"}, application.OperationOptions{Log: log})
+	_, err := application.SynthesizeWithTools(context.Background(), store, failingCompletionProvider{}, application.DefaultSynthesisOptions(), []string{"read_logs"}, application.OperationOptions{Log: log})
 	if err == nil {
 		t.Fatal("SynthesizeWithTools succeeded")
 	}

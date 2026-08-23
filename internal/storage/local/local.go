@@ -1,8 +1,11 @@
-// Package local implements the local filesystem storage adapter.
+// Package local implements the local filesystem workspace adapter.
 package local
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -21,11 +24,56 @@ import (
 type Store struct {
 	root *os.Root
 	path string
-	mu   sync.Mutex
+	mu   *sync.Mutex
+}
+
+var (
+	workspaceLocksMu sync.Mutex
+	workspaceLocks   = map[string]*sync.Mutex{}
+)
+
+const (
+	workspaceTransactionFile         = ".bo-transaction.json"
+	workspaceTransactionVersion      = 1
+	workspaceTransactionPhaseReady   = "prepared"
+	workspaceTransactionPhaseCommit  = "commit"
+	workspaceTransactionKindSnapshot = "snapshot"
+	workspaceTransactionKindSummary  = "summary"
+)
+
+type workspaceTransaction struct {
+	Version              int    `json:"version"`
+	Phase                string `json:"phase"`
+	Kind                 string `json:"kind"`
+	DocumentName         string `json:"document_name"`
+	DocumentTemporary    string `json:"document_temporary"`
+	StateTemporary       string `json:"state_temporary"`
+	TransactionTemporary string `json:"transaction_temporary"`
+	HadOldDocument       bool   `json:"had_old_document"`
+	OldDocument          []byte `json:"old_document,omitempty"`
+	NewDocument          []byte `json:"new_document"`
+	OldState             []byte `json:"old_state"`
+	NewState             []byte `json:"new_state"`
+}
+
+// ponytail: one process-wide lock per workspace; use an inter-process lock if local storage becomes multi-process.
+func lockForWorkspace(path string) *sync.Mutex {
+	workspaceLocksMu.Lock()
+	defer workspaceLocksMu.Unlock()
+	if lock := workspaceLocks[path]; lock != nil {
+		return lock
+	}
+	lock := &sync.Mutex{}
+	workspaceLocks[path] = lock
+	return lock
 }
 
 func Open(path string) (*Store, error) {
-	canonical, err := filepath.EvalSymlinks(path)
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return nil, filesystem(path, err)
+	}
+	canonical, err := filepath.EvalSymlinks(absolute)
 	if err != nil {
 		return nil, filesystem(path, err)
 	}
@@ -40,14 +88,22 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, filesystem(canonical, err)
 	}
-	return &Store{root: root, path: canonical}, nil
+	store := &Store{root: root, path: canonical, mu: lockForWorkspace(canonical)}
+	store.mu.Lock()
+	recoveryErr := store.recoverWorkspaceTransaction()
+	store.mu.Unlock()
+	if recoveryErr != nil {
+		_ = root.Close()
+		return nil, recoveryErr
+	}
+	return store, nil
 }
 
 func New(path string) (*Store, error) { return Open(path) }
 
 func (s *Store) Close() error { return s.root.Close() }
 
-func (s *Store) RootPath() string { return s.path }
+func (s *Store) Name() string { return filepath.Base(s.path) }
 
 func (s *Store) InitializeState(ctx context.Context, state domain.State) error {
 	if err := contextErr(ctx); err != nil {
@@ -64,67 +120,72 @@ func (s *Store) InitializeState(ctx context.Context, state domain.State) error {
 	if err != nil {
 		return normalizeStorageError("serializing state.json", err)
 	}
-	if err := s.writeAtomic("state.json", ".state.json.tmp", data); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (s *Store) CreateRaw(ctx context.Context, name string, contents []byte) (domain.DocumentRef, error) {
-	if err := contextErr(ctx); err != nil {
-		return domain.DocumentRef{}, err
-	}
-	if err := validMarkdownName(name); err != nil {
-		return domain.DocumentRef{}, err
-	}
-	file, err := s.root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		if os.IsExist(err) {
-			wrapped := internalerrors.Wrap(internalerrors.KindAlreadyExists, fmt.Sprintf("creating %s failed", filepath.Join(s.path, name)), internalerrors.ErrAlreadyExists)
-			return domain.DocumentRef{}, wrapped
-		}
-		return domain.DocumentRef{}, filesystem(filepath.Join(s.path, name), err)
-	}
-	if _, err = file.Write(contents); err == nil {
-		err = file.Sync()
-	}
-	closeErr := file.Close()
-	if err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		_ = s.root.Remove(name)
-		return domain.DocumentRef{}, filesystem(fmt.Sprintf("writing %s", filepath.Join(s.path, name)), err)
-	}
-	return domain.RawRef(name), nil
-}
-
-func (s *Store) WriteRaw(ctx context.Context, ref domain.DocumentRef, contents []byte) error {
-	if ref.Kind != domain.DocumentKindRaw {
-		return internalerrors.Validation("raw writes require a raw document")
-	}
-	created, err := s.CreateRaw(ctx, ref.Name, contents)
-	if err != nil {
-		return err
-	}
-	if created.Name != ref.Name {
-		return internalerrors.Filesystem("raw document name changed")
-	}
-	return nil
-}
-
-func (s *Store) DeleteRaw(ctx context.Context, ref domain.DocumentRef) error {
-	return s.DeleteDocument(ctx, ref)
+	return s.writeAtomic("state.json", ".state.json.tmp", data)
 }
 
 func (s *Store) ListDocuments(ctx context.Context, kind domain.DocumentKind) ([]domain.DocumentRef, error) {
-	return s.ListMarkdownDocuments(ctx, kind)
+	if err := contextErr(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.recoverWorkspaceTransaction(); err != nil {
+		return nil, err
+	}
+	return s.listDocuments(kind)
+}
+
+func (s *Store) listDocuments(kind domain.DocumentKind) ([]domain.DocumentRef, error) {
+	directory := "."
+	if kind == domain.DocumentKindSummary {
+		directory = "summaries"
+		if info, err := s.root.Lstat(directory); err != nil {
+			if os.IsNotExist(err) {
+				return []domain.DocumentRef{}, nil
+			}
+			return nil, filesystem(filepath.Join(s.path, directory), err)
+		} else if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return nil, internalerrors.Filesystem(fmt.Sprintf("summaries must be a directory: %s", filepath.Join(s.path, directory)))
+		}
+	} else if kind != domain.DocumentKindRaw {
+		return nil, internalerrors.Validation("unsupported document kind")
+	}
+	entries, err := fs.ReadDir(s.root.FS(), directory)
+	if err != nil {
+		return nil, filesystem(filepath.Join(s.path, directory), err)
+	}
+	refs := make([]domain.DocumentRef, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.EqualFold(filepath.Ext(name), ".md") {
+			continue
+		}
+		path := filepath.Join(directory, name)
+		info, err := s.root.Stat(path)
+		if err != nil {
+			return nil, filesystem(filepath.Join(s.path, path), err)
+		}
+		if info.Mode().IsRegular() {
+			refs = append(refs, domain.DocumentRef{Kind: kind, Name: name})
+		}
+	}
+	sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
+	return refs, nil
 }
 
 func (s *Store) ReadDocument(ctx context.Context, ref domain.DocumentRef) ([]byte, error) {
 	if err := contextErr(ctx); err != nil {
 		return nil, err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.recoverWorkspaceTransaction(); err != nil {
+		return nil, err
+	}
+	return s.readDocument(ref)
+}
+
+func (s *Store) readDocument(ref domain.DocumentRef) ([]byte, error) {
 	path, err := s.documentPath(ref)
 	if err != nil {
 		return nil, err
@@ -143,149 +204,589 @@ func (s *Store) ReadDocument(ctx context.Context, ref domain.DocumentRef) ([]byt
 	return data, nil
 }
 
-func (s *Store) ListMarkdownDocuments(ctx context.Context, kind domain.DocumentKind) ([]domain.DocumentRef, error) {
+func (s *Store) ReadState(ctx context.Context) (domain.State, application.Revision, error) {
 	if err := contextErr(ctx); err != nil {
-		return nil, err
+		return domain.State{}, application.Revision{}, err
 	}
-	directory := "."
-	if kind == domain.DocumentKindSummary {
-		directory = "summaries"
-	} else if kind != domain.DocumentKindRaw {
-		return nil, internalerrors.Validation("unsupported document kind")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, _, revision, err := s.readState()
+	return state, revision, err
+}
+
+func (s *Store) CommitSnapshot(ctx context.Context, commit application.SnapshotCommit, expected application.Revision) (domain.State, application.Revision, error) {
+	if err := contextErr(ctx); err != nil {
+		return domain.State{}, application.Revision{}, err
 	}
-	entries, err := fs.ReadDir(s.root.FS(), directory)
+	if err := validateSnapshotCommit(commit); err != nil {
+		return domain.State{}, application.Revision{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, oldState, currentRevision, err := s.readState()
 	if err != nil {
-		if kind == domain.DocumentKindSummary && errors.Is(err, fs.ErrNotExist) {
-			return []domain.DocumentRef{}, nil
-		}
-		return nil, filesystem(filepath.Join(s.path, directory), err)
+		return domain.State{}, application.Revision{}, err
 	}
-	refs := make([]domain.DocumentRef, 0, len(entries))
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.EqualFold(filepath.Ext(name), ".md") {
-			continue
-		}
-		path := filepath.Join(directory, name)
-		info, err := s.root.Stat(path)
-		if err != nil {
-			return nil, filesystem(filepath.Join(s.path, path), err)
-		}
-		if !info.Mode().IsRegular() {
-			continue
-		}
-		refs = append(refs, domain.DocumentRef{Kind: kind, Name: name})
+	if !currentRevision.Equal(expected) {
+		return domain.State{}, application.Revision{}, internalerrors.Conflict("workspace revision changed")
 	}
-	sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
-	return refs, nil
+	if _, err := s.root.Lstat(commit.Filename); err == nil {
+		return domain.State{}, application.Revision{}, internalerrors.Wrap(internalerrors.KindAlreadyExists, "raw document already exists", internalerrors.ErrAlreadyExists)
+	} else if !os.IsNotExist(err) {
+		return domain.State{}, application.Revision{}, filesystem(filepath.Join(s.path, commit.Filename), err)
+	}
+	next, err := appendSnapshot(current, commit)
+	if err != nil {
+		return domain.State{}, application.Revision{}, err
+	}
+	data, err := domain.MarshalState(next)
+	if err != nil {
+		return domain.State{}, application.Revision{}, normalizeStorageError("serializing state.json", err)
+	}
+	transaction := newWorkspaceTransaction(workspaceTransactionKindSnapshot, commit.Filename, nil, false, commit.Contents, oldState, data)
+	if err := s.beginWorkspaceTransaction(transaction); err != nil {
+		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
+	}
+	if err := s.writeNewRaw(commit.Filename, transaction.DocumentTemporary, commit.Contents); err != nil {
+		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
+	}
+	if err := s.writeAtomic("state.json", transaction.StateTemporary, data); err != nil {
+		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
+	}
+	revision, err := s.workspaceRevision(data)
+	if err != nil {
+		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
+	}
+	if err := s.publishWorkspaceCommit(transaction); err != nil {
+		return domain.State{}, application.Revision{}, err
+	}
+	if err := s.removeWorkspaceTransaction(transaction); err != nil {
+		return domain.State{}, application.Revision{}, err
+	}
+	return next, revision, nil
 }
 
-func (s *Store) ReplaceSummary(ctx context.Context, ref domain.DocumentRef, contents []byte) error {
+func (s *Store) CommitSummary(ctx context.Context, commit application.SummaryCommit, expected application.Revision) (domain.State, application.Revision, error) {
 	if err := contextErr(ctx); err != nil {
-		return err
+		return domain.State{}, application.Revision{}, err
 	}
-	if ref.Kind != domain.DocumentKindSummary {
-		return internalerrors.Validation("summary writes require a summary document")
+	if err := validateSummaryCommit(commit); err != nil {
+		return domain.State{}, application.Revision{}, err
 	}
-	if err := validMarkdownName(ref.Name); err != nil {
-		return err
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, oldState, currentRevision, err := s.readState()
+	if err != nil {
+		return domain.State{}, application.Revision{}, err
 	}
-	if info, err := s.root.Lstat("summaries"); err == nil {
-		if info.Mode()&os.ModeSymlink != 0 {
-			return internalerrors.Filesystem("summaries must not be a symlink")
-		}
-		if !info.IsDir() {
-			return internalerrors.Filesystem("summaries is not a directory")
-		}
-	} else if os.IsNotExist(err) {
-		if err := s.root.Mkdir("summaries", 0o755); err != nil {
-			return filesystem(filepath.Join(s.path, "summaries"), err)
-		}
-	} else {
-		return filesystem(filepath.Join(s.path, "summaries"), err)
+	if !currentRevision.Equal(expected) {
+		return domain.State{}, application.Revision{}, internalerrors.Conflict("workspace revision changed")
 	}
-	temporary := fmt.Sprintf("summaries/.bo-summary-tmp-%d-%d", os.Getpid(), time.Now().UnixNano())
-	for attempt := 0; ; attempt++ {
-		if attempt > 0 {
-			temporary = fmt.Sprintf("summaries/.bo-summary-tmp-%d-%d-%d", os.Getpid(), time.Now().UnixNano(), attempt)
+	next, err := applySummary(current, commit)
+	if err != nil {
+		return domain.State{}, application.Revision{}, err
+	}
+	if _, err := s.readDocument(domain.RawRef(commit.DerivedFrom)); err != nil {
+		return domain.State{}, application.Revision{}, err
+	}
+	if err := s.ensureSummaryDirectory(); err != nil {
+		return domain.State{}, application.Revision{}, err
+	}
+	path := filepath.Join("summaries", commit.Filename)
+	oldContents, hadOldContents, err := s.optionalDocument(domain.SummaryRef(commit.Filename))
+	if err != nil {
+		return domain.State{}, application.Revision{}, err
+	}
+	if summary := summaryRecord(current, commit.SourceKey); summary != nil {
+		if summary.Filename != commit.Filename {
+			return domain.State{}, application.Revision{}, internalerrors.Validation("summary filename cannot change")
 		}
-		file, err := s.root.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-		if err != nil {
-			if os.IsExist(err) {
-				continue
-			}
-			return filesystem(filepath.Join(s.path, temporary), err)
+		if !hadOldContents {
+			return domain.State{}, application.Revision{}, internalerrors.MissingResource("referenced summary is missing")
 		}
-		if _, err = file.Write(contents); err == nil {
-			err = file.Sync()
-		}
-		closeErr := file.Close()
-		if err == nil {
-			err = closeErr
-		}
-		if err == nil {
-			err = s.root.Rename(temporary, filepath.Join("summaries", ref.Name))
-		}
-		if err != nil {
-			_ = s.root.Remove(temporary)
-			return filesystem(filepath.Join(s.path, "summaries", ref.Name), err)
-		}
-		return syncFilesystem(filepath.Join(s.path, "summaries"), syncDirectory(s.root, "summaries"))
+	}
+	if summary := summaryRecord(current, commit.SourceKey); summary == nil && hadOldContents {
+		return domain.State{}, application.Revision{}, internalerrors.Conflict("summary exists outside workspace state")
+	}
+	data, err := domain.MarshalState(next)
+	if err != nil {
+		return domain.State{}, application.Revision{}, normalizeStorageError("serializing state.json", err)
+	}
+	transaction := newWorkspaceTransaction(workspaceTransactionKindSummary, commit.Filename, oldContents, hadOldContents, commit.Contents, oldState, data)
+	if err := s.beginWorkspaceTransaction(transaction); err != nil {
+		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
+	}
+	if err := s.writeAtomic(path, transaction.DocumentTemporary, commit.Contents); err != nil {
+		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
+	}
+	if err := s.writeAtomic("state.json", transaction.StateTemporary, data); err != nil {
+		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
+	}
+	revision, err := s.workspaceRevision(data)
+	if err != nil {
+		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
+	}
+	if err := s.publishWorkspaceCommit(transaction); err != nil {
+		return domain.State{}, application.Revision{}, err
+	}
+	if err := s.removeWorkspaceTransaction(transaction); err != nil {
+		return domain.State{}, application.Revision{}, err
+	}
+	return next, revision, nil
+}
+
+func (s *Store) readState() (domain.State, []byte, application.Revision, error) {
+	if err := s.recoverWorkspaceTransaction(); err != nil {
+		return domain.State{}, nil, application.Revision{}, err
+	}
+	data, err := s.stateBytes()
+	if err != nil {
+		return domain.State{}, nil, application.Revision{}, err
+	}
+	state, err := domain.UnmarshalState(data)
+	if err != nil {
+		return domain.State{}, nil, application.Revision{}, normalizeStorageError("parsing "+filepath.Join(s.path, "state.json"), err)
+	}
+	revision, err := s.workspaceRevision(data)
+	if err != nil {
+		return domain.State{}, nil, application.Revision{}, err
+	}
+	return state, data, revision, nil
+}
+
+func validTransactionTemporary(path, directory, prefix string) bool {
+	if filepath.IsAbs(path) || filepath.Dir(path) != directory {
+		return false
+	}
+	base := filepath.Base(path)
+	return strings.HasPrefix(base, prefix) && strings.HasSuffix(base, ".tmp") && !strings.ContainsAny(base, `/\\`)
+}
+
+func newWorkspaceTransaction(kind, name string, oldDocument []byte, hadOldDocument bool, newDocument, oldState, newState []byte) workspaceTransaction {
+	id := fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
+	documentTemporary := ".bo-raw-" + id + ".tmp"
+	if kind == workspaceTransactionKindSummary {
+		documentTemporary = filepath.Join("summaries", ".bo-summary-"+id+".tmp")
+	}
+	return workspaceTransaction{
+		Version:              workspaceTransactionVersion,
+		Phase:                workspaceTransactionPhaseReady,
+		Kind:                 kind,
+		DocumentName:         name,
+		DocumentTemporary:    documentTemporary,
+		StateTemporary:       ".bo-state-" + id + ".tmp",
+		TransactionTemporary: ".bo-transaction-" + id + ".tmp",
+		HadOldDocument:       hadOldDocument,
+		OldDocument:          append([]byte(nil), oldDocument...),
+		NewDocument:          append([]byte(nil), newDocument...),
+		OldState:             append([]byte(nil), oldState...),
+		NewState:             append([]byte(nil), newState...),
 	}
 }
 
-func (s *Store) DeleteDocument(ctx context.Context, ref domain.DocumentRef) error {
-	if err := contextErr(ctx); err != nil {
+func (transaction workspaceTransaction) validate() error {
+	if transaction.Version != workspaceTransactionVersion {
+		return internalerrors.Validation("unsupported workspace transaction version")
+	}
+	if transaction.Phase != workspaceTransactionPhaseReady && transaction.Phase != workspaceTransactionPhaseCommit {
+		return internalerrors.Validation("invalid workspace transaction phase")
+	}
+	if transaction.Kind != workspaceTransactionKindSnapshot && transaction.Kind != workspaceTransactionKindSummary {
+		return internalerrors.Validation("invalid workspace transaction kind")
+	}
+	if err := domain.ValidateDocumentName(transaction.DocumentName); err != nil {
 		return err
 	}
-	if ref.Kind != domain.DocumentKindRaw {
-		return internalerrors.Validation("only raw documents can be deleted")
+	if transaction.Kind == workspaceTransactionKindSnapshot {
+		if !validTransactionTemporary(transaction.DocumentTemporary, ".", ".bo-raw-") {
+			return internalerrors.Validation("invalid snapshot transaction temporary path")
+		}
+	} else if !validTransactionTemporary(transaction.DocumentTemporary, "summaries", ".bo-summary-") {
+		return internalerrors.Validation("invalid summary transaction temporary path")
 	}
-	if err := validMarkdownName(ref.Name); err != nil {
-		return err
+	if !validTransactionTemporary(transaction.StateTemporary, ".", ".bo-state-") ||
+		!validTransactionTemporary(transaction.TransactionTemporary, ".", ".bo-transaction-") {
+		return internalerrors.Validation("invalid workspace transaction temporary path")
 	}
-	if err := s.root.Remove(ref.Name); err != nil {
-		return filesystem(filepath.Join(s.path, ref.Name), err)
+	if len(transaction.OldState) == 0 || len(transaction.NewState) == 0 {
+		return internalerrors.Validation("workspace transaction has incomplete state")
 	}
 	return nil
 }
 
-func (s *Store) ReadState(ctx context.Context) (domain.State, application.Generation, error) {
-	if err := contextErr(ctx); err != nil {
-		return domain.State{}, application.Generation{}, err
-	}
-	data, err := s.stateBytes()
-	if err != nil {
-		return domain.State{}, application.Generation{}, err
-	}
-	state, err := domain.UnmarshalState(data)
-	if err != nil {
-		return domain.State{}, application.Generation{}, normalizeStorageError("parsing "+filepath.Join(s.path, "state.json"), err)
-	}
-	return state, application.NewGeneration(data), nil
+func (s *Store) beginWorkspaceTransaction(transaction workspaceTransaction) error {
+	return s.writeWorkspaceTransaction(transaction)
 }
 
-func (s *Store) PublishState(ctx context.Context, state domain.State, expected application.Generation) (application.Generation, error) {
-	if err := contextErr(ctx); err != nil {
-		return application.Generation{}, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	current, err := s.stateBytes()
+func (s *Store) writeWorkspaceTransaction(transaction workspaceTransaction) error {
+	data, err := json.Marshal(transaction)
 	if err != nil {
-		return application.Generation{}, err
+		return normalizeStorageError("serializing workspace transaction", err)
 	}
-	if !application.NewGeneration(current).Equal(expected) {
-		return application.Generation{}, internalerrors.Conflict("state generation changed")
-	}
-	data, err := domain.MarshalState(state)
+	return s.writeAtomic(workspaceTransactionFile, transaction.TransactionTemporary, data)
+}
+
+func (s *Store) readWorkspaceTransaction() (*workspaceTransaction, error) {
+	data, err := s.root.ReadFile(workspaceTransactionFile)
 	if err != nil {
-		return application.Generation{}, normalizeStorageError("serializing "+filepath.Join(s.path, "state.json"), err)
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, filesystem(filepath.Join(s.path, workspaceTransactionFile), err)
 	}
-	if err := s.writeAtomic("state.json", ".state.json.tmp", data); err != nil {
-		return application.Generation{}, err
+	var transaction workspaceTransaction
+	if err := json.Unmarshal(data, &transaction); err != nil {
+		return nil, normalizeStorageError("parsing workspace transaction", err)
 	}
-	return application.NewGeneration(data), nil
+	if err := transaction.validate(); err != nil {
+		return nil, err
+	}
+	return &transaction, nil
+}
+
+func (s *Store) recoverWorkspaceTransaction() error {
+	transaction, err := s.readWorkspaceTransaction()
+	if err != nil || transaction == nil {
+		return err
+	}
+	if transaction.Phase == workspaceTransactionPhaseCommit {
+		return s.finishWorkspaceTransaction(*transaction)
+	}
+	return s.rollbackWorkspaceTransaction(*transaction)
+}
+
+func (s *Store) publishWorkspaceCommit(transaction workspaceTransaction) error {
+	transaction.Phase = workspaceTransactionPhaseCommit
+	if err := s.writeWorkspaceTransaction(transaction); err != nil {
+		return errors.Join(err, s.recoverWorkspaceTransaction())
+	}
+	return nil
+}
+
+func (s *Store) finishWorkspaceTransaction(transaction workspaceTransaction) error {
+	state, err := s.stateBytes()
+	if err != nil {
+		return err
+	}
+	stateIsOld := bytes.Equal(state, transaction.OldState)
+	stateIsNew := bytes.Equal(state, transaction.NewState)
+	if !stateIsOld && !stateIsNew {
+		return internalerrors.Conflict("workspace transaction state changed during recovery")
+	}
+	contents, exists, err := s.optionalTransactionDocument(transaction)
+	if err != nil {
+		return err
+	}
+	documentIsOld := transaction.documentIsOld(contents, exists)
+	documentIsNew := transaction.documentIsNew(contents, exists)
+	if !documentIsOld && !documentIsNew {
+		return internalerrors.Conflict("workspace transaction content changed during recovery")
+	}
+	if err := s.clearWorkspaceTransactionTemps(transaction); err != nil {
+		return err
+	}
+	if !documentIsNew {
+		if err := s.writeAtomic(transaction.documentPath(), transaction.DocumentTemporary, transaction.NewDocument); err != nil {
+			return err
+		}
+	}
+	if !stateIsNew {
+		if err := s.writeAtomic("state.json", transaction.StateTemporary, transaction.NewState); err != nil {
+			return err
+		}
+	}
+	return s.removeWorkspaceTransaction(transaction)
+}
+
+func (s *Store) abortWorkspaceTransaction(transaction workspaceTransaction, cause error) error {
+	transaction.Phase = workspaceTransactionPhaseReady
+	phaseErr := s.writeWorkspaceTransaction(transaction)
+	rollbackErr := s.rollbackWorkspaceTransaction(transaction)
+	return errors.Join(cause, phaseErr, rollbackErr)
+}
+
+func (s *Store) rollbackWorkspaceTransaction(transaction workspaceTransaction) error {
+	state, err := s.stateBytes()
+	if err != nil {
+		return err
+	}
+	stateIsOld := bytes.Equal(state, transaction.OldState)
+	stateIsNew := bytes.Equal(state, transaction.NewState)
+	if !stateIsOld && !stateIsNew {
+		return internalerrors.Conflict("workspace transaction state changed during rollback")
+	}
+	contents, exists, err := s.optionalTransactionDocument(transaction)
+	if err != nil {
+		return err
+	}
+	documentIsOld := transaction.documentIsOld(contents, exists)
+	documentIsNew := transaction.documentIsNew(contents, exists)
+	if !documentIsOld && !documentIsNew {
+		return internalerrors.Conflict("workspace transaction content changed during rollback")
+	}
+	if err := s.clearWorkspaceTransactionTemps(transaction); err != nil {
+		return err
+	}
+	if !documentIsOld {
+		if transaction.HadOldDocument {
+			if err := s.writeAtomic(transaction.documentPath(), transaction.DocumentTemporary, transaction.OldDocument); err != nil {
+				return err
+			}
+		} else {
+			path := transaction.documentPath()
+			if err := s.root.Remove(path); err != nil && !os.IsNotExist(err) {
+				return filesystem(filepath.Join(s.path, path), err)
+			}
+			if err := syncDirectoryError(s.root, filepath.Dir(path)); err != nil {
+				return err
+			}
+		}
+	}
+	if !stateIsOld {
+		if err := s.writeAtomic("state.json", transaction.StateTemporary, transaction.OldState); err != nil {
+			return err
+		}
+	}
+	return s.removeWorkspaceTransaction(transaction)
+}
+
+func (s *Store) optionalTransactionDocument(transaction workspaceTransaction) ([]byte, bool, error) {
+	kind := domain.DocumentKindRaw
+	if transaction.Kind == workspaceTransactionKindSummary {
+		kind = domain.DocumentKindSummary
+	}
+	return s.optionalDocument(domain.DocumentRef{Kind: kind, Name: transaction.DocumentName})
+}
+
+func (transaction workspaceTransaction) documentPath() string {
+	if transaction.Kind == workspaceTransactionKindSummary {
+		return filepath.Join("summaries", transaction.DocumentName)
+	}
+	return transaction.DocumentName
+}
+
+func (transaction workspaceTransaction) documentIsOld(contents []byte, exists bool) bool {
+	return exists == transaction.HadOldDocument && (!exists || bytes.Equal(contents, transaction.OldDocument))
+}
+
+func (transaction workspaceTransaction) documentIsNew(contents []byte, exists bool) bool {
+	return exists && bytes.Equal(contents, transaction.NewDocument)
+}
+
+func (s *Store) clearWorkspaceTransactionTemps(transaction workspaceTransaction) error {
+	for _, path := range []string{transaction.DocumentTemporary, transaction.StateTemporary, transaction.TransactionTemporary} {
+		if err := s.root.Remove(path); err != nil && !os.IsNotExist(err) {
+			return filesystem(filepath.Join(s.path, path), err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) removeWorkspaceTransaction(transaction workspaceTransaction) error {
+	if err := s.clearWorkspaceTransactionTemps(transaction); err != nil {
+		return err
+	}
+	if err := s.root.Remove(workspaceTransactionFile); err != nil && !os.IsNotExist(err) {
+		return filesystem(filepath.Join(s.path, workspaceTransactionFile), err)
+	}
+	return syncRoot(s.root)
+}
+
+func (s *Store) workspaceRevision(state []byte) (application.Revision, error) {
+	var data bytes.Buffer
+	writeRevisionPart(&data, state)
+	for _, kind := range []domain.DocumentKind{domain.DocumentKindRaw, domain.DocumentKindSummary} {
+		refs, err := s.listDocuments(kind)
+		if err != nil {
+			return application.Revision{}, err
+		}
+		for _, ref := range refs {
+			writeRevisionPart(&data, []byte(kind))
+			writeRevisionPart(&data, []byte(ref.Name))
+			contents, err := s.readDocument(ref)
+			if err != nil {
+				return application.Revision{}, err
+			}
+			writeRevisionPart(&data, contents)
+		}
+	}
+	return application.NewRevision(data.Bytes()), nil
+}
+
+func writeRevisionPart(buffer *bytes.Buffer, value []byte) {
+	var length [8]byte
+	binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+	buffer.Write(length[:])
+	buffer.Write(value)
+}
+
+func validateSnapshotCommit(commit application.SnapshotCommit) error {
+	if err := domain.ValidateSourceKey(commit.SourceKey); err != nil {
+		return err
+	}
+	if err := domain.ValidateDocumentName(commit.Filename); err != nil {
+		return err
+	}
+	return domain.ValidateTimestamp(commit.WrittenAt)
+}
+
+func validateSummaryCommit(commit application.SummaryCommit) error {
+	if err := domain.ValidateSourceKey(commit.SourceKey); err != nil {
+		return err
+	}
+	if err := domain.ValidateDocumentName(commit.Filename); err != nil {
+		return err
+	}
+	if err := domain.ValidateDocumentName(commit.DerivedFrom); err != nil {
+		return err
+	}
+	if err := domain.ValidateTimestamp(commit.RawWrittenAt); err != nil {
+		return err
+	}
+	if err := domain.ValidateTimestamp(commit.CreatedAt); err != nil {
+		return err
+	}
+	return domain.ValidateTimestamp(commit.UpdatedAt)
+}
+
+func appendSnapshot(state domain.State, commit application.SnapshotCommit) (domain.State, error) {
+	next := cloneState(state)
+	for index := range next.Sources {
+		if next.Sources[index].SourceKey != commit.SourceKey {
+			continue
+		}
+		for _, snapshot := range next.Sources[index].Snapshots {
+			if snapshot.Filename == commit.Filename {
+				return domain.State{}, internalerrors.AlreadyExists("snapshot already belongs to workspace state")
+			}
+		}
+		next.Sources[index].Snapshots = append(next.Sources[index].Snapshots, domain.RawRecord{Filename: commit.Filename, WrittenAt: commit.WrittenAt})
+		return next, next.Validate()
+	}
+	next.Sources = append(next.Sources, domain.SourceRecord{
+		SourceKey: commit.SourceKey,
+		Snapshots: []domain.RawRecord{{Filename: commit.Filename, WrittenAt: commit.WrittenAt}},
+	})
+	return next, next.Validate()
+}
+
+func applySummary(state domain.State, commit application.SummaryCommit) (domain.State, error) {
+	next := cloneState(state)
+	record := &domain.SummaryRecord{Filename: commit.Filename, DerivedFrom: commit.DerivedFrom, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt}
+	for index := range next.Sources {
+		if next.Sources[index].SourceKey != commit.SourceKey {
+			continue
+		}
+		if !hasSnapshot(next.Sources[index].Snapshots, commit.DerivedFrom) {
+			if len(next.Sources[index].Snapshots) != 0 {
+				return domain.State{}, internalerrors.Validation("summary must derive from a workspace snapshot")
+			}
+			next.Sources[index].Snapshots = []domain.RawRecord{{Filename: commit.DerivedFrom, WrittenAt: commit.RawWrittenAt}}
+		}
+		next.Sources[index].Summary = record
+		return next, next.Validate()
+	}
+	next.Sources = append(next.Sources, domain.SourceRecord{
+		SourceKey: commit.SourceKey,
+		Snapshots: []domain.RawRecord{{Filename: commit.DerivedFrom, WrittenAt: commit.RawWrittenAt}},
+		Summary:   record,
+	})
+	return next, next.Validate()
+}
+
+func cloneState(state domain.State) domain.State {
+	next := domain.State{Sources: make([]domain.SourceRecord, len(state.Sources))}
+	for index, source := range state.Sources {
+		next.Sources[index] = domain.SourceRecord{SourceKey: source.SourceKey, Snapshots: append([]domain.RawRecord(nil), source.Snapshots...)}
+		if source.Summary != nil {
+			summary := *source.Summary
+			next.Sources[index].Summary = &summary
+		}
+	}
+	return next
+}
+
+func hasSnapshot(snapshots []domain.RawRecord, filename string) bool {
+	for _, snapshot := range snapshots {
+		if snapshot.Filename == filename {
+			return true
+		}
+	}
+	return false
+}
+
+func summaryRecord(state domain.State, sourceKey string) *domain.SummaryRecord {
+	for _, source := range state.Sources {
+		if source.SourceKey == sourceKey {
+			return source.Summary
+		}
+	}
+	return nil
+}
+
+func (s *Store) writeNewRaw(name, temporary string, data []byte) error {
+	file, err := s.root.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return filesystem(filepath.Join(s.path, temporary), err)
+	}
+	if _, err = file.Write(data); err == nil {
+		err = file.Sync()
+	}
+	closeErr := file.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		if _, statErr := s.root.Lstat(name); statErr == nil {
+			err = internalerrors.Wrap(internalerrors.KindAlreadyExists, "raw document already exists", internalerrors.ErrAlreadyExists)
+		} else if !os.IsNotExist(statErr) {
+			err = filesystem(filepath.Join(s.path, name), statErr)
+		}
+	}
+	if err == nil {
+		err = s.root.Rename(temporary, name)
+	}
+	if err == nil {
+		err = syncRoot(s.root)
+	}
+	if err != nil {
+		_ = s.root.Remove(temporary)
+		if errors.Is(err, internalerrors.ErrAlreadyExists) {
+			return err
+		}
+		return filesystem(filepath.Join(s.path, name), err)
+	}
+	return nil
+}
+
+func (s *Store) optionalDocument(ref domain.DocumentRef) ([]byte, bool, error) {
+	path, err := s.documentPath(ref)
+	if err != nil {
+		return nil, false, err
+	}
+	if _, err := s.root.Lstat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, filesystem(filepath.Join(s.path, path), err)
+	}
+	data, err := s.readDocument(ref)
+	return data, true, err
+}
+
+func (s *Store) ensureSummaryDirectory() error {
+	if info, err := s.root.Lstat("summaries"); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return internalerrors.Filesystem("summaries must be a directory")
+		}
+		return nil
+	} else if !os.IsNotExist(err) {
+		return filesystem(filepath.Join(s.path, "summaries"), err)
+	}
+	if err := s.root.Mkdir("summaries", 0o755); err != nil {
+		return filesystem(filepath.Join(s.path, "summaries"), err)
+	}
+	return syncRoot(s.root)
 }
 
 func (s *Store) stateBytes() ([]byte, error) {
@@ -321,8 +822,7 @@ func (s *Store) documentPath(ref domain.DocumentRef) (string, error) {
 }
 
 func (s *Store) writeAtomic(destination, temporary string, data []byte) error {
-	flags := os.O_WRONLY | os.O_CREATE | os.O_EXCL
-	file, err := s.root.OpenFile(temporary, flags, 0o600)
+	file, err := s.root.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return filesystem(filepath.Join(s.path, temporary), err)
 	}
@@ -340,7 +840,7 @@ func (s *Store) writeAtomic(destination, temporary string, data []byte) error {
 		_ = s.root.Remove(temporary)
 		return filesystem(filepath.Join(s.path, destination), err)
 	}
-	return syncRoot(s.root)
+	return syncDirectoryError(s.root, filepath.Dir(destination))
 }
 
 func validMarkdownName(name string) error {
@@ -366,13 +866,6 @@ func normalizeStorageError(operation string, err error) error {
 	return internalerrors.Wrap(internalerrors.KindFilesystem, operation+" failed", err)
 }
 
-func syncFilesystem(path string, err error) error {
-	if err == nil {
-		return nil
-	}
-	return filesystem(path, err)
-}
-
 func contextErr(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
@@ -383,14 +876,17 @@ func contextErr(ctx context.Context) error {
 }
 
 func syncRoot(root *os.Root) error {
-	return syncFilesystem("workspace root", syncDirectory(root, "."))
+	return syncDirectoryError(root, ".")
 }
 
-func syncDirectory(root *os.Root, path string) error {
+func syncDirectoryError(root *os.Root, path string) error {
 	directory, err := root.Open(path)
 	if err != nil {
-		return err
+		return filesystem(path, err)
 	}
 	defer directory.Close()
-	return directory.Sync()
+	if err := directory.Sync(); err != nil {
+		return filesystem(path, err)
+	}
+	return nil
 }

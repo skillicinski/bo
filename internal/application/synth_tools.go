@@ -4,9 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -80,15 +77,14 @@ type agentSource struct {
 
 type agentContext struct {
 	ctx            context.Context
-	target         string
 	directory      string
 	actor          string
-	storage        Storage
+	workspace      Workspace
 	operationLog   OperationLog
-	documents      map[string]string
+	documents      map[string]domain.DocumentRef
 	sources        map[string]agentSource
 	state          domain.State
-	generation     Generation
+	revision       Revision
 	maxOutputBytes int
 	completed      map[string]bool
 	written        map[string]bool
@@ -100,43 +96,28 @@ func systemPrompt(context *agentContext, documentNames []string) string {
 		identities = append(identities, sourceKey+" ("+source.LatestFilename+")")
 	}
 	sort.Strings(identities)
-	return fmt.Sprintf("You are bo's document-summary agent for %s. Purpose: turn each source into a concise Markdown summary that retains its key claims. Ontology: raw documents are immutable snapshots; a source identity is an exact URL or raw:filename; a summary is one mutable document derived from the newest raw snapshot; state is the authoritative record of these links. Rules: use only evidence from the source, preserve qualifications and uncertainty, attribute experience, measurements, recommendations, opinions, and forecasts to their author, and never modify raw documents or invent facts. The host owns paths, newest-snapshot selection, provenance, state publication, and completion. Before reading raw documents, inspect recent scoped operation entries with read_logs and follow next_offset while has_more is true. A successful write_summary entry for the current raw filename with an existing current summary means that source is complete; do not rewrite it. Use the available bounded tools. Source identities: %s. Latest raw documents: %s.", context.target, strings.Join(identities, ", "), strings.Join(documentNames, ", "))
+	return fmt.Sprintf("You are bo's document-summary agent for %s. Purpose: turn each source into a concise Markdown summary that retains its key claims. Ontology: raw documents are immutable snapshots; a source identity is an exact URL or raw:filename; a summary is one mutable document derived from the newest raw snapshot; state is the authoritative record of these links. Rules: use only evidence from the source, preserve qualifications and uncertainty, attribute experience, measurements, recommendations, opinions, and forecasts to their author, and never modify raw documents or invent facts. The host owns document access, newest-snapshot selection, provenance, state publication, and completion. Before reading raw documents, inspect recent scoped operation entries with read_logs and follow next_offset while has_more is true. A successful write_summary entry for the current raw filename with an existing current summary means that source is complete; do not rewrite it. Use the available bounded tools. Source identities: %s. Latest raw documents: %s.", context.directory, strings.Join(identities, ", "), strings.Join(documentNames, ", "))
 }
 
-func DiscoverDocuments(root, target string) (map[string]string, error) {
-	entries, err := os.ReadDir(target)
+func DiscoverDocuments(ctx context.Context, workspace Workspace) (map[string]domain.DocumentRef, error) {
+	refs, err := workspace.ListDocuments(ctx, domain.DocumentKindRaw)
 	if err != nil {
-		return nil, pathError("reading "+target, err)
+		return nil, normalizeError(err, internalerrors.KindFilesystem, "listing raw documents")
 	}
-	documents := map[string]string{}
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.EqualFold(filepath.Ext(name), ".md") {
-			continue
+	documents := make(map[string]domain.DocumentRef, len(refs))
+	for _, ref := range refs {
+		if ref.Kind != domain.DocumentKindRaw {
+			return nil, internalerrors.Validation("workspace returned a non-raw document")
 		}
-		path := filepath.Join(target, name)
-		resolved, err := filepath.EvalSymlinks(path)
-		if err != nil {
-			return nil, pathError("resolving "+path, err)
-		}
-		if err := ensureInside(resolved, root); err != nil {
+		if err := domain.ValidateDocumentName(ref.Name); err != nil {
 			return nil, err
 		}
-		if err := ensureInside(resolved, target); err != nil {
-			return nil, err
-		}
-		info, err := os.Stat(resolved)
-		if err != nil {
-			return nil, pathError("reading "+resolved, err)
-		}
-		if info.Mode().IsRegular() {
-			documents[name] = resolved
-		}
+		documents[ref.Name] = ref
 	}
 	return documents, nil
 }
 
-func sourceGroups(documents map[string]string, state domain.State) map[string]agentSource {
+func sourceGroups(documents map[string]domain.DocumentRef, state domain.State) map[string]agentSource {
 	names := make([]string, 0, len(documents))
 	for name := range documents {
 		names = append(names, name)
@@ -337,7 +318,7 @@ func stringArgument(arguments map[string]json.RawMessage, name string) (string, 
 
 func readDocument(context *agentContext, filename string) (string, error) {
 	filename = strings.TrimPrefix(filename, "raw/")
-	if filename == "" || filepath.Base(filename) != filename || strings.ContainsAny(filename, `/\\`) {
+	if filename == "" || strings.ContainsAny(filename, `/\\`) || domain.ValidateDocumentName(filename) != nil {
 		return "", fmt.Errorf("read_document.filename must be a raw Markdown filename")
 	}
 	latest := false
@@ -350,24 +331,15 @@ func readDocument(context *agentContext, filename string) (string, error) {
 	if !latest {
 		return "", fmt.Errorf("document is not a newest raw snapshot: %s", filename)
 	}
-	path, ok := context.documents[filename]
+	ref, ok := context.documents[filename]
 	if !ok {
 		return "", fmt.Errorf("unknown raw document: %s", filename)
 	}
-	return readBounded(path, context.maxOutputBytes)
-}
-
-func readBounded(path string, limit int) (string, error) {
-	file, err := os.Open(path)
+	data, err := context.workspace.ReadDocument(context.ctx, ref)
 	if err != nil {
-		return "", pathError("reading "+path, err)
+		return "", normalizeError(err, internalerrors.KindFilesystem, "reading raw document")
 	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, int64(limit)+4))
-	if err != nil {
-		return "", pathError("reading "+path, err)
-	}
-	return agent.BoundedOutput(string(data), limit), nil
+	return agent.BoundedOutput(string(data), context.maxOutputBytes), nil
 }
 
 func readSummary(context *agentContext, sourceKey string) (string, error) {
@@ -378,7 +350,7 @@ func readSummary(context *agentContext, sourceKey string) (string, error) {
 	if record == nil {
 		return "", fmt.Errorf("no summary exists for source: %s", sourceKey)
 	}
-	data, err := context.storage.ReadDocument(context.ctx, domain.SummaryRef(record.Filename))
+	data, err := context.workspace.ReadDocument(context.ctx, domain.SummaryRef(record.Filename))
 	if err != nil {
 		return "", normalizeError(err, internalerrors.KindFilesystem, "reading summary")
 	}
@@ -411,9 +383,6 @@ func writeSummary(context *agentContext, sourceKey, markdown string, existing *d
 		filename = existing.Filename
 		createdAt = existing.CreatedAt
 	}
-	if err := context.storage.ReplaceSummary(context.ctx, domain.SummaryRef(filename), []byte(markdown)); err != nil {
-		return normalizeError(err, internalerrors.KindFilesystem, "writing summary")
-	}
 	now := time.Now().UTC()
 	writtenAt := source.LatestWrittenAt
 	if writtenAt.IsZero() {
@@ -427,38 +396,14 @@ func writeSummary(context *agentContext, sourceKey, markdown string, existing *d
 	if existing == nil {
 		record.CreatedAt = now
 	}
-	next := context.state
-	next.Sources = append([]domain.SourceRecord{}, context.state.Sources...)
-	replaced := false
-	for index := range next.Sources {
-		if next.Sources[index].SourceKey == sourceKey {
-			if len(next.Sources[index].Snapshots) == 0 {
-				next.Sources[index].Snapshots = []domain.RawRecord{{Filename: source.LatestFilename, WrittenAt: writtenAt}}
-			}
-			next.Sources[index].Summary = &record
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		next.Sources = append(next.Sources, domain.SourceRecord{
-			SourceKey: sourceKey,
-			Snapshots: []domain.RawRecord{{Filename: source.LatestFilename, WrittenAt: writtenAt}},
-			Summary:   &record,
-		})
-	}
-	generation, err := context.storage.PublishState(context.ctx, next, context.generation)
+	state, revision, err := context.workspace.CommitSummary(context.ctx, SummaryCommit{
+		SourceKey: sourceKey, Filename: filename, DerivedFrom: source.LatestFilename,
+		RawWrittenAt: writtenAt, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt,
+		Contents: []byte(markdown),
+	}, context.revision)
 	if err != nil {
-		return normalizeError(err, internalerrors.KindFilesystem, "publishing workspace state")
+		return normalizeError(err, internalerrors.KindFilesystem, "writing summary")
 	}
-	context.state, context.generation = next, generation
-	return nil
-}
-
-func ensureInside(path, root string) error {
-	relative, err := filepath.Rel(root, path)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
-		return internalerrors.Validation(fmt.Sprintf("path escapes %s: %s", root, path))
-	}
+	context.state, context.revision = state, revision
 	return nil
 }

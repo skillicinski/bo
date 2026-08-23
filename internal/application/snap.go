@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -44,18 +43,18 @@ func NewSnapInputError(detail string) *SnapCommandError {
 	return &SnapCommandError{Err: internalerrors.Validation(detail)}
 }
 
-func Snap(ctx context.Context, storage Storage, directory string, inputs []string, options OperationOptions) ([]SnapOutcome, error) {
-	return SnapWithWorkflow(ctx, storage, defaultSourceWorkflow(), directory, inputs, options)
+func Snap(ctx context.Context, workspace Workspace, directory string, inputs []string, options OperationOptions) ([]SnapOutcome, error) {
+	return SnapWithWorkflow(ctx, workspace, defaultSourceWorkflow(), directory, inputs, options)
 }
 
-func SnapWithWorkflow(ctx context.Context, storage Storage, workflow source.Fetcher, directory string, inputs []string, options OperationOptions) ([]SnapOutcome, error) {
+func SnapWithWorkflow(ctx context.Context, workspace Workspace, workflow source.Fetcher, directory string, inputs []string, options OperationOptions) ([]SnapOutcome, error) {
 	var err error
 	options, err = normalizeOperationOptions(options)
 	if err != nil {
 		return nil, err
 	}
-	if storage == nil {
-		return nil, internalerrors.Request("workspace storage is not configured")
+	if workspace == nil {
+		return nil, internalerrors.Request("workspace is not configured")
 	}
 	logSnap := func(sourceKey, filename string, operationErr error) {
 		details := map[string]any{"source_key": sourceKey}
@@ -73,7 +72,7 @@ func SnapWithWorkflow(ctx context.Context, storage Storage, workflow source.Fetc
 	if workflow == nil {
 		return nil, NewSnapInputError("source workflow is not configured")
 	}
-	state, generation, err := storage.ReadState(ctx)
+	_, revision, err := workspace.ReadState(ctx)
 	if err != nil {
 		err = normalizeError(err, internalerrors.KindFilesystem, "reading workspace state")
 		for _, input := range inputs {
@@ -108,50 +107,15 @@ func SnapWithWorkflow(ctx context.Context, storage Storage, workflow source.Fetc
 			continue
 		}
 		writtenAt := time.Now().UTC()
-		filename, document, writeErr := createRaw(ctx, storage, slug, writtenAt.UnixNano(), snapshot.Markdown)
+		filename, newRevision, writeErr := createRaw(ctx, workspace, revision, sourceKey, slug, writtenAt, snapshot.Markdown)
 		if writeErr != nil {
-			outcomes = append(outcomes, SnapOutcome{SourceKey: input, Err: writeErr})
 			logSnap(input, "", writeErr)
-			continue
-		}
-		next := state
-		next.Sources = append([]domain.SourceRecord{}, state.Sources...)
-		found := false
-		for index := range next.Sources {
-			if next.Sources[index].SourceKey == sourceKey {
-				next.Sources[index].Snapshots = append(append([]domain.RawRecord{}, next.Sources[index].Snapshots...), domain.RawRecord{
-					Filename: filename, WrittenAt: writtenAt,
-				})
-				found = true
-				break
-			}
-		}
-		if !found {
-			next.Sources = append(next.Sources, domain.SourceRecord{SourceKey: sourceKey, Snapshots: []domain.RawRecord{{
-				Filename: filename, WrittenAt: writtenAt,
-			}}})
-		}
-		newGeneration, publishErr := storage.PublishState(ctx, next, generation)
-		if publishErr != nil {
-			rollbackErr := storage.DeleteDocument(ctx, document)
-			detail := fmt.Sprintf("updating state failed: %s; snapshot written then deleted", errorDetail(publishErr))
-			cause := publishErr
-			if rollbackErr != nil {
-				detail = fmt.Sprintf("updating state failed: %s; snapshot cleanup failed: %s", errorDetail(publishErr), errorDetail(rollbackErr))
-				cause = errors.Join(publishErr, rollbackErr)
-			}
-			failureKind := internalerrors.KindFilesystem
-			if internalerrors.IsKind(publishErr, internalerrors.KindConflict) {
-				failureKind = internalerrors.KindConflict
-			}
-			failure := internalerrors.Wrap(failureKind, detail, cause)
-			logSnap(input, "", failure)
 			for _, skipped := range inputs[index+1:] {
 				logSnap(skipped, "", fmt.Errorf("snap batch aborted after %s", input))
 			}
-			return outcomes, &SnapCommandError{Completed: outcomes, SourceKey: input, Err: failure}
+			return outcomes, &SnapCommandError{Completed: outcomes, SourceKey: input, Err: writeErr}
 		}
-		state, generation = next, newGeneration
+		revision = newRevision
 		outcomes = append(outcomes, SnapOutcome{SourceKey: sourceKey, Filename: filename})
 		logSnap(sourceKey, filename, nil)
 	}
@@ -170,28 +134,22 @@ func defaultSourceWorkflow() *source.Workflow {
 	)
 }
 
-func createRaw(ctx context.Context, storage Storage, slug string, timestamp int64, contents []byte) (string, domain.DocumentRef, error) {
+func createRaw(ctx context.Context, workspace Workspace, revision Revision, sourceKey, slug string, writtenAt time.Time, contents []byte) (string, Revision, error) {
 	for attempt := 0; ; attempt++ {
 		filename := slug + ".md"
 		if attempt == 1 {
-			filename = fmt.Sprintf("%s--%d.md", slug, timestamp)
+			filename = fmt.Sprintf("%s--%d.md", slug, writtenAt.UnixNano())
 		} else if attempt > 1 {
-			filename = fmt.Sprintf("%s--%d--%d.md", slug, timestamp, attempt)
+			filename = fmt.Sprintf("%s--%d--%d.md", slug, writtenAt.UnixNano(), attempt)
 		}
-		ref, err := storage.CreateRaw(ctx, filename, contents)
+		_, revision, err := workspace.CommitSnapshot(ctx, SnapshotCommit{
+			SourceKey: sourceKey, Filename: filename, WrittenAt: writtenAt, Contents: contents,
+		}, revision)
 		if err == nil {
-			return filename, ref, nil
+			return filename, revision, nil
 		}
 		if !internalerrors.IsAlreadyExists(err) {
-			return "", domain.DocumentRef{}, err
+			return "", Revision{}, err
 		}
 	}
-}
-
-func errorDetail(err error) string {
-	var categorized *internalerrors.Error
-	if errors.As(err, &categorized) {
-		return categorized.Detail
-	}
-	return err.Error()
 }

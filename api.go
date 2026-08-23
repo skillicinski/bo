@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	stderrors "errors"
 	"fmt"
 	"net/http"
@@ -102,13 +103,28 @@ type DocumentRef struct {
 func RawRef(name string) DocumentRef     { return DocumentRef{Kind: DocumentKindRaw, Name: name} }
 func SummaryRef(name string) DocumentRef { return DocumentRef{Kind: DocumentKindSummary, Name: name} }
 
-type Generation struct{ digest [sha256.Size]byte }
+type Revision struct{ digest [sha256.Size]byte }
 
-func NewGeneration(data []byte) Generation { return Generation{digest: sha256.Sum256(data)} }
+func NewRevision(data []byte) Revision { return Revision{digest: sha256.Sum256(data)} }
 
-func (g Generation) Equal(other Generation) bool { return g == other }
-func (g Generation) IsZero() bool                { return g == Generation{} }
-func (g Generation) String() string              { return hex.EncodeToString(g.digest[:]) }
+func (r Revision) Equal(other Revision) bool { return r == other }
+func (r Revision) IsZero() bool              { return r == Revision{} }
+func (r Revision) String() string            { return hex.EncodeToString(r.digest[:]) }
+
+func (r Revision) MarshalJSON() ([]byte, error) { return json.Marshal(r.String()) }
+
+func (r *Revision) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	decoded, err := hex.DecodeString(value)
+	if err != nil || len(decoded) != sha256.Size {
+		return fmt.Errorf("invalid revision")
+	}
+	copy(r.digest[:], decoded)
+	return nil
+}
 
 type RawRecord struct {
 	Filename  string    `json:"filename"`
@@ -140,23 +156,33 @@ func (s State) SnapshotCount() int {
 	return count
 }
 
-type Storage interface {
-	CreateRaw(context.Context, string, []byte) (DocumentRef, error)
-	ReadDocument(context.Context, DocumentRef) ([]byte, error)
-	ReplaceSummary(context.Context, DocumentRef, []byte) error
-	DeleteDocument(context.Context, DocumentRef) error
-	ReadState(context.Context) (State, Generation, error)
-	PublishState(context.Context, State, Generation) (Generation, error)
-}
-
 // Workspace is a caller-scoped workspace. bo does not select or mutate the
 // tenant, authentication, routing, or storage configuration for a workspace.
 type Workspace interface {
 	Name() string
-	RootPath() string
-	TargetPath() string
-	Storage() Storage
+	ListDocuments(context.Context, DocumentKind) ([]DocumentRef, error)
+	ReadDocument(context.Context, DocumentRef) ([]byte, error)
+	ReadState(context.Context) (State, Revision, error)
+	CommitSnapshot(context.Context, SnapshotCommit, Revision) (State, Revision, error)
+	CommitSummary(context.Context, SummaryCommit, Revision) (State, Revision, error)
 	Close() error
+}
+
+type SnapshotCommit struct {
+	SourceKey string
+	Filename  string
+	WrittenAt time.Time
+	Contents  []byte
+}
+
+type SummaryCommit struct {
+	SourceKey    string
+	Filename     string
+	DerivedFrom  string
+	RawWrittenAt time.Time
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	Contents     []byte
 }
 
 type WorkspaceCreator interface {
@@ -238,7 +264,8 @@ type StateRequest struct {
 }
 
 type StateResult struct {
-	State State `json:"state"`
+	State    State    `json:"state"`
+	Revision Revision `json:"revision"`
 }
 
 const (
@@ -340,7 +367,7 @@ func (m *LocalManager) Open(ctx context.Context, name string) (Workspace, error)
 	if workspace == nil {
 		return nil, NewError(ErrorKindRequest, "local workspace manager returned no workspace")
 	}
-	return &localWorkspace{workspace: workspace, storage: &localStorage{storage: workspace.Storage()}}, nil
+	return &localWorkspace{workspace: workspace}, nil
 }
 
 func NewOperationLog(home string) OperationLog {
@@ -371,11 +398,7 @@ func Snap(ctx context.Context, request SnapRequest) (SnapResult, error) {
 	if request.Workspace == nil {
 		return result, NewError(ErrorKindRequest, "workspace is not configured")
 	}
-	storage := request.Workspace.Storage()
-	if storage == nil {
-		return result, NewError(ErrorKindRequest, "workspace storage is not configured")
-	}
-	outcomes, err := app.Snap(ctx, &publicStorage{storage: storage}, request.Workspace.Name(), request.Sources, internalOperationOptions(request.Operations))
+	outcomes, err := app.Snap(ctx, &publicWorkspace{workspace: request.Workspace}, request.Workspace.Name(), request.Sources, internalOperationOptions(request.Operations))
 	result.Outcomes = publicSnapOutcomes(outcomes)
 	var commandErr *app.SnapCommandError
 	if stderrors.As(err, &commandErr) {
@@ -391,11 +414,7 @@ func ReadState(ctx context.Context, request StateRequest) (StateResult, error) {
 	if request.Workspace == nil {
 		return StateResult{}, NewError(ErrorKindRequest, "workspace is not configured")
 	}
-	storage := request.Workspace.Storage()
-	if storage == nil {
-		return StateResult{}, NewError(ErrorKindRequest, "workspace storage is not configured")
-	}
-	state, err := app.ReadState(ctx, &publicStorage{storage: storage}, request.Workspace.Name(), internalOperationOptions(request.Operations))
+	state, revision, err := app.ReadState(ctx, &publicWorkspace{workspace: request.Workspace}, request.Workspace.Name(), internalOperationOptions(request.Operations))
 	if err != nil {
 		return StateResult{}, publicError(err)
 	}
@@ -403,18 +422,15 @@ func ReadState(ctx context.Context, request StateRequest) (StateResult, error) {
 	if err != nil {
 		return StateResult{}, publicError(err)
 	}
-	return StateResult{State: converted}, nil
+	return StateResult{State: converted, Revision: publicRevision(revision)}, nil
 }
 
 func Synth(ctx context.Context, request SynthRequest) (SynthResult, error) {
 	if request.Workspace == nil {
 		return SynthResult{}, NewError(ErrorKindRequest, "workspace is not configured")
 	}
-	if request.Workspace.Storage() == nil {
-		return SynthResult{}, NewError(ErrorKindRequest, "workspace storage is not configured")
-	}
-	workspace := &scopedWorkspace{workspace: request.Workspace, storage: &publicStorage{storage: request.Workspace.Storage()}}
-	result, err := app.Synthesize(ctx, fixedWorkspaceOpener{workspace: workspace}, request.Workspace.Name(), request.Provider.completion, app.SynthesisOptions{
+	workspace := &publicWorkspace{workspace: request.Workspace}
+	result, err := app.Synthesize(ctx, workspace, request.Provider.completion, app.SynthesisOptions{
 		MaxTurns: request.Options.MaxTurns, MaxToolCalls: request.Options.MaxToolCalls,
 		MaxToolOutputBytes: request.Options.MaxToolOutputBytes, MaxResponseTokens: request.Options.MaxResponseTokens,
 		TimeoutSeconds: request.Options.TimeoutSeconds,
@@ -422,26 +438,73 @@ func Synth(ctx context.Context, request SynthRequest) (SynthResult, error) {
 	return publicSynthResult(result), publicError(err)
 }
 
-type publicStorage struct{ storage Storage }
-
-func (s *publicStorage) CreateRaw(ctx context.Context, name string, contents []byte) (internaldomain.DocumentRef, error) {
-	ref, err := s.storage.CreateRaw(ctx, name, contents)
-	return internalDocumentRef(ref), internalErrorAs(err, internalerrors.KindFilesystem, "creating raw document")
+type localWorkspace struct {
+	workspace *loc.Workspace
 }
 
-func (s *publicStorage) ReadDocument(ctx context.Context, ref internaldomain.DocumentRef) ([]byte, error) {
-	data, err := s.storage.ReadDocument(ctx, publicDocumentRef(ref))
-	return data, internalErrorAs(err, internalerrors.KindFilesystem, "reading document")
-}
+func (w *localWorkspace) Name() string { return w.workspace.Name() }
 
-func (s *publicStorage) ListMarkdownDocuments(ctx context.Context, kind internaldomain.DocumentKind) ([]internaldomain.DocumentRef, error) {
-	lister, ok := s.storage.(interface {
-		ListMarkdownDocuments(context.Context, DocumentKind) ([]DocumentRef, error)
-	})
-	if !ok {
-		return []internaldomain.DocumentRef{}, nil
+func (w *localWorkspace) ListDocuments(ctx context.Context, kind DocumentKind) ([]DocumentRef, error) {
+	refs, err := w.workspace.ListDocuments(ctx, internaldomain.DocumentKind(kind))
+	if err != nil {
+		return nil, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "listing documents"))
 	}
-	refs, err := lister.ListMarkdownDocuments(ctx, DocumentKind(kind))
+	return publicDocumentRefs(refs), nil
+}
+
+func (w *localWorkspace) ReadDocument(ctx context.Context, ref DocumentRef) ([]byte, error) {
+	data, err := w.workspace.ReadDocument(ctx, internalDocumentRef(ref))
+	return data, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "reading document"))
+}
+
+func (w *localWorkspace) ReadState(ctx context.Context) (State, Revision, error) {
+	state, revision, err := w.workspace.ReadState(ctx)
+	if err != nil {
+		return State{}, Revision{}, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "reading workspace state"))
+	}
+	converted, err := publicState(state)
+	if err != nil {
+		return State{}, Revision{}, publicError(err)
+	}
+	return converted, publicRevision(revision), nil
+}
+
+func (w *localWorkspace) CommitSnapshot(ctx context.Context, commit SnapshotCommit, expected Revision) (State, Revision, error) {
+	state, revision, err := w.workspace.CommitSnapshot(ctx, internalSnapshotCommit(commit), internalRevision(expected))
+	if err != nil {
+		return State{}, Revision{}, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "committing snapshot"))
+	}
+	converted, err := publicState(state)
+	if err != nil {
+		return State{}, Revision{}, publicError(err)
+	}
+	return converted, publicRevision(revision), nil
+}
+
+func (w *localWorkspace) CommitSummary(ctx context.Context, commit SummaryCommit, expected Revision) (State, Revision, error) {
+	state, revision, err := w.workspace.CommitSummary(ctx, internalSummaryCommit(commit), internalRevision(expected))
+	if err != nil {
+		return State{}, Revision{}, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "committing summary"))
+	}
+	converted, err := publicState(state)
+	if err != nil {
+		return State{}, Revision{}, publicError(err)
+	}
+	return converted, publicRevision(revision), nil
+}
+
+func (w *localWorkspace) Close() error {
+	return publicError(internalErrorAs(w.workspace.Close(), internalerrors.KindFilesystem, "closing workspace"))
+}
+
+type publicWorkspace struct {
+	workspace Workspace
+}
+
+func (w *publicWorkspace) Name() string { return w.workspace.Name() }
+
+func (w *publicWorkspace) ListDocuments(ctx context.Context, kind internaldomain.DocumentKind) ([]internaldomain.DocumentRef, error) {
+	refs, err := w.workspace.ListDocuments(ctx, DocumentKind(kind))
 	if err != nil {
 		return nil, internalErrorAs(err, internalerrors.KindFilesystem, "listing documents")
 	}
@@ -452,134 +515,57 @@ func (s *publicStorage) ListMarkdownDocuments(ctx context.Context, kind internal
 	return result, nil
 }
 
-func (s *publicStorage) ReplaceSummary(ctx context.Context, ref internaldomain.DocumentRef, contents []byte) error {
-	return internalErrorAs(s.storage.ReplaceSummary(ctx, publicDocumentRef(ref), contents), internalerrors.KindFilesystem, "writing summary")
+func (w *publicWorkspace) ReadDocument(ctx context.Context, ref internaldomain.DocumentRef) ([]byte, error) {
+	data, err := w.workspace.ReadDocument(ctx, publicDocumentRef(ref))
+	return data, internalErrorAs(err, internalerrors.KindFilesystem, "reading document")
 }
 
-func (s *publicStorage) DeleteDocument(ctx context.Context, ref internaldomain.DocumentRef) error {
-	return internalErrorAs(s.storage.DeleteDocument(ctx, publicDocumentRef(ref)), internalerrors.KindFilesystem, "deleting document")
-}
-
-func (s *publicStorage) ReadState(ctx context.Context) (internaldomain.State, app.Generation, error) {
-	state, generation, err := s.storage.ReadState(ctx)
+func (w *publicWorkspace) ReadState(ctx context.Context) (internaldomain.State, app.Revision, error) {
+	state, revision, err := w.workspace.ReadState(ctx)
 	if err != nil {
-		return internaldomain.State{}, app.Generation{}, internalErrorAs(err, internalerrors.KindFilesystem, "reading workspace state")
+		return internaldomain.State{}, app.Revision{}, internalErrorAs(err, internalerrors.KindFilesystem, "reading workspace state")
 	}
 	converted, err := internalState(state)
 	if err != nil {
-		return internaldomain.State{}, app.Generation{}, internalError(err)
+		return internaldomain.State{}, app.Revision{}, internalError(err)
 	}
-	internalGeneration, err := app.GenerationFromString(generation.String())
+	internalRevision, err := app.RevisionFromString(revision.String())
 	if err != nil {
-		return internaldomain.State{}, app.Generation{}, internalError(err)
+		return internaldomain.State{}, app.Revision{}, internalError(err)
 	}
-	return converted, internalGeneration, nil
+	return converted, internalRevision, nil
 }
 
-func (s *publicStorage) PublishState(ctx context.Context, state internaldomain.State, expected app.Generation) (app.Generation, error) {
-	converted, err := publicState(state)
+func (w *publicWorkspace) CommitSnapshot(ctx context.Context, commit app.SnapshotCommit, expected app.Revision) (internaldomain.State, app.Revision, error) {
+	state, revision, err := w.workspace.CommitSnapshot(ctx, publicSnapshotCommit(commit), publicRevision(expected))
 	if err != nil {
-		return app.Generation{}, internalError(err)
+		return internaldomain.State{}, app.Revision{}, internalErrorAs(err, internalerrors.KindFilesystem, "committing snapshot")
 	}
-	expectedGeneration, err := app.GenerationFromString(expected.String())
-	if err != nil {
-		return app.Generation{}, internalError(err)
-	}
-	newGeneration, err := s.storage.PublishState(ctx, converted, publicGeneration(expectedGeneration))
-	if err != nil {
-		return app.Generation{}, internalErrorAs(err, internalerrors.KindFilesystem, "publishing workspace state")
-	}
-	result, err := app.GenerationFromString(newGeneration.String())
-	if err != nil {
-		return app.Generation{}, internalError(err)
-	}
-	return result, nil
-}
-
-type localStorage struct{ storage app.Storage }
-
-func (s *localStorage) CreateRaw(ctx context.Context, name string, contents []byte) (DocumentRef, error) {
-	ref, err := s.storage.CreateRaw(ctx, name, contents)
-	return publicDocumentRef(ref), publicError(internalErrorAs(err, internalerrors.KindFilesystem, "creating raw document"))
-}
-
-func (s *localStorage) ReadDocument(ctx context.Context, ref DocumentRef) ([]byte, error) {
-	data, err := s.storage.ReadDocument(ctx, internalDocumentRef(ref))
-	return data, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "reading document"))
-}
-
-func (s *localStorage) ListMarkdownDocuments(ctx context.Context, kind DocumentKind) ([]DocumentRef, error) {
-	refs, err := s.storage.ListMarkdownDocuments(ctx, internaldomain.DocumentKind(kind))
-	if err != nil {
-		return nil, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "listing documents"))
-	}
-	result := make([]DocumentRef, len(refs))
-	for index, ref := range refs {
-		result[index] = publicDocumentRef(ref)
-	}
-	return result, nil
-}
-
-func (s *localStorage) ReplaceSummary(ctx context.Context, ref DocumentRef, contents []byte) error {
-	return publicError(internalErrorAs(s.storage.ReplaceSummary(ctx, internalDocumentRef(ref), contents), internalerrors.KindFilesystem, "writing summary"))
-}
-
-func (s *localStorage) DeleteDocument(ctx context.Context, ref DocumentRef) error {
-	return publicError(internalErrorAs(s.storage.DeleteDocument(ctx, internalDocumentRef(ref)), internalerrors.KindFilesystem, "deleting document"))
-}
-
-func (s *localStorage) ReadState(ctx context.Context) (State, Generation, error) {
-	state, generation, err := s.storage.ReadState(ctx)
-	if err != nil {
-		return State{}, Generation{}, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "reading workspace state"))
-	}
-	converted, err := publicState(state)
-	if err != nil {
-		return State{}, Generation{}, publicError(err)
-	}
-	return converted, publicGeneration(generation), nil
-}
-
-func (s *localStorage) PublishState(ctx context.Context, state State, expected Generation) (Generation, error) {
 	converted, err := internalState(state)
 	if err != nil {
-		return Generation{}, publicError(internalErrorAs(err, internalerrors.KindValidation, "validating workspace state"))
+		return internaldomain.State{}, app.Revision{}, internalError(err)
 	}
-	result, err := s.storage.PublishState(ctx, converted, internalGeneration(expected))
-	return publicGeneration(result), publicError(internalErrorAs(err, internalerrors.KindFilesystem, "publishing workspace state"))
-}
-
-type localWorkspace struct {
-	workspace app.Workspace
-	storage   Storage
-}
-
-func (w *localWorkspace) Name() string       { return w.workspace.Name() }
-func (w *localWorkspace) RootPath() string   { return w.workspace.RootPath() }
-func (w *localWorkspace) TargetPath() string { return w.workspace.TargetPath() }
-func (w *localWorkspace) Storage() Storage   { return w.storage }
-func (w *localWorkspace) Close() error {
-	return publicError(internalErrorAs(w.workspace.Close(), internalerrors.KindFilesystem, "closing workspace"))
-}
-
-type scopedWorkspace struct {
-	workspace Workspace
-	storage   app.Storage
-}
-
-func (w *scopedWorkspace) Name() string         { return w.workspace.Name() }
-func (w *scopedWorkspace) RootPath() string     { return w.workspace.RootPath() }
-func (w *scopedWorkspace) TargetPath() string   { return w.workspace.TargetPath() }
-func (w *scopedWorkspace) Storage() app.Storage { return w.storage }
-func (w *scopedWorkspace) Close() error         { return nil }
-
-type fixedWorkspaceOpener struct{ workspace app.Workspace }
-
-func (o fixedWorkspaceOpener) Open(context.Context, string) (app.Workspace, error) {
-	if o.workspace == nil {
-		return nil, internalerrors.Request("workspace is not configured")
+	internalRevision, err := app.RevisionFromString(revision.String())
+	if err != nil {
+		return internaldomain.State{}, app.Revision{}, internalError(err)
 	}
-	return o.workspace, nil
+	return converted, internalRevision, nil
+}
+
+func (w *publicWorkspace) CommitSummary(ctx context.Context, commit app.SummaryCommit, expected app.Revision) (internaldomain.State, app.Revision, error) {
+	state, revision, err := w.workspace.CommitSummary(ctx, publicSummaryCommit(commit), publicRevision(expected))
+	if err != nil {
+		return internaldomain.State{}, app.Revision{}, internalErrorAs(err, internalerrors.KindFilesystem, "committing summary")
+	}
+	converted, err := internalState(state)
+	if err != nil {
+		return internaldomain.State{}, app.Revision{}, internalError(err)
+	}
+	internalRevision, err := app.RevisionFromString(revision.String())
+	if err != nil {
+		return internaldomain.State{}, app.Revision{}, internalError(err)
+	}
+	return converted, internalRevision, nil
 }
 
 type operationLogBridge struct{ log OperationLog }
@@ -626,16 +612,16 @@ func internalOperationOptions(options OperationOptions) app.OperationOptions {
 	return app.OperationOptions{Log: log, Actor: options.Actor}
 }
 
-func internalGeneration(generation Generation) app.Generation {
-	result, _ := app.GenerationFromString(generation.String())
+func internalRevision(revision Revision) app.Revision {
+	result, _ := app.RevisionFromString(revision.String())
 	return result
 }
 
-func publicGeneration(generation app.Generation) Generation {
-	data, _ := hex.DecodeString(generation.String())
+func publicRevision(revision app.Revision) Revision {
+	data, _ := hex.DecodeString(revision.String())
 	var digest [sha256.Size]byte
 	copy(digest[:], data)
-	return Generation{digest: digest}
+	return Revision{digest: digest}
 }
 
 func internalDocumentRef(ref DocumentRef) internaldomain.DocumentRef {
@@ -644,6 +630,30 @@ func internalDocumentRef(ref DocumentRef) internaldomain.DocumentRef {
 
 func publicDocumentRef(ref internaldomain.DocumentRef) DocumentRef {
 	return DocumentRef{Kind: DocumentKind(ref.Kind), Name: ref.Name}
+}
+
+func publicDocumentRefs(refs []internaldomain.DocumentRef) []DocumentRef {
+	result := make([]DocumentRef, len(refs))
+	for index, ref := range refs {
+		result[index] = publicDocumentRef(ref)
+	}
+	return result
+}
+
+func internalSnapshotCommit(commit SnapshotCommit) app.SnapshotCommit {
+	return app.SnapshotCommit{SourceKey: commit.SourceKey, Filename: commit.Filename, WrittenAt: commit.WrittenAt, Contents: commit.Contents}
+}
+
+func publicSnapshotCommit(commit app.SnapshotCommit) SnapshotCommit {
+	return SnapshotCommit{SourceKey: commit.SourceKey, Filename: commit.Filename, WrittenAt: commit.WrittenAt, Contents: commit.Contents}
+}
+
+func internalSummaryCommit(commit SummaryCommit) app.SummaryCommit {
+	return app.SummaryCommit{SourceKey: commit.SourceKey, Filename: commit.Filename, DerivedFrom: commit.DerivedFrom, RawWrittenAt: commit.RawWrittenAt, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt, Contents: commit.Contents}
+}
+
+func publicSummaryCommit(commit app.SummaryCommit) SummaryCommit {
+	return SummaryCommit{SourceKey: commit.SourceKey, Filename: commit.Filename, DerivedFrom: commit.DerivedFrom, RawWrittenAt: commit.RawWrittenAt, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt, Contents: commit.Contents}
 }
 
 func internalState(state State) (internaldomain.State, error) {

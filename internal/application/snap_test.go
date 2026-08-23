@@ -66,18 +66,18 @@ func TestSnapStoresRepeatedSourceSnapshotsInOneAggregate(t *testing.T) {
 	}
 }
 
-func TestSnapRollsBackRawWhenStatePublicationFails(t *testing.T) {
+func TestSnapDoesNotPublishWhenTransactionMarkerCannotBeWritten(t *testing.T) {
 	store, target := seededStore(t)
-	if err := os.Mkdir(filepath.Join(target, ".state.json.tmp"), 0o755); err != nil {
+	transactionMarker := filepath.Join(target, ".bo-transaction.json")
+	if err := os.Mkdir(transactionMarker, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(transactionMarker, "blocked"), []byte("blocked\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err := application.SnapWithWorkflow(context.Background(), store, rawSource{"https://example.test/url": {Title: "Page", Markdown: []byte("content\n")}}, "notes", []string{"https://example.test/url"}, operationOptionsFor(target))
 	if err == nil {
 		t.Fatal("Snap succeeded")
-	}
-	var commandErr *application.SnapCommandError
-	if !errors.As(err, &commandErr) || commandErr.SourceKey != "https://example.test/url" {
-		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(target, "page.md")); !os.IsNotExist(statErr) {
 		t.Fatalf("raw document remains: %v", statErr)

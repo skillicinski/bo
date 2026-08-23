@@ -7,19 +7,19 @@ import (
 	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
-func ReadState(ctx context.Context, storage Storage, directory string, options OperationOptions) (state domain.State, returnErr error) {
+func ReadState(ctx context.Context, workspace Workspace, directory string, options OperationOptions) (state domain.State, revision Revision, returnErr error) {
 	var err error
 	options, err = normalizeOperationOptions(options)
 	if err != nil {
-		return domain.State{}, err
+		return domain.State{}, Revision{}, err
 	}
-	if storage == nil {
-		return domain.State{}, internalerrors.Request("workspace storage is not configured")
+	if workspace == nil {
+		return domain.State{}, Revision{}, internalerrors.Request("workspace is not configured")
 	}
 	defer func() {
 		recordOperation(options, directory, CommandState, returnErr == nil, operationErrorDetails(returnErr))
 	}()
-	state, _, returnErr = storage.ReadState(ctx)
+	state, revision, returnErr = workspace.ReadState(ctx)
 	returnErr = normalizeError(returnErr, internalerrors.KindFilesystem, "reading workspace state")
-	return state, returnErr
+	return state, revision, returnErr
 }

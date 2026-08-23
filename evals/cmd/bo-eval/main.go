@@ -33,10 +33,14 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	workspace, err := local.NewManager(home).Open(context.Background(), name)
+	if err != nil {
+		return err
+	}
+	defer workspace.Close()
 	result, err := application.SynthesizeWithTools(
 		context.Background(),
-		local.NewManager(home),
-		name,
+		workspace,
 		deepseek.New(apiKey, os.Getenv("DEEPSEEK_API_URL")),
 		application.DefaultSynthesisOptions(),
 		toolNames,

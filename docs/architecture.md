@@ -27,7 +27,8 @@ inputs.
 `internal/domain` owns stable product entities and the source-aggregate state format.
 `internal/application` owns use-case orchestration and composes the default
 source workflow. `internal/agent` owns the provider-neutral completion and tool
-runtime. `internal/storage` owns filesystem and workspace adapters.
+runtime. `internal/storage` owns workspace adapters; application workflows use
+the workspace persistence port and do not receive filesystem paths.
 
 Stable error kinds live in the dependency-neutral shared error package so
 source, storage, and application code can use the same error vocabulary without
@@ -72,3 +73,21 @@ SourceRecord groups data that must remain consistent:
 That matches DDD’s aggregate concept: a cluster with a root that protects its invariants.
 Fowler’s definition (https://martinfowler.com/bliki/DDD_Aggregate.html) also treats
 aggregates as consistency and persistence boundaries.
+
+## Workspace abstraction
+
+A workspace is the persistence boundary for one scoped workspace. The port
+lists and reads documents, loads state with an opaque revision, and accepts a
+semantic snapshot or summary commit only with that revision. The local
+revision covers serialized state and the contents of all raw and summary
+documents, so external edits produce a typed conflict and bo does not
+reconcile them.
+
+Adapters own publication, cleanup, rollback, and atomicity. The local adapter
+stages document and state writes, syncs each destination parent directory, and
+restores the previous state and document content when a commit fails. A durable
+transaction marker records a rollback-safe prepared phase, records commit only
+after both new artifacts are durable, and recovers a process crash before reads
+resume. Every adapter must advance its revision for each successful mutation.
+Workspace selection and lifetime ownership remain at the API boundary;
+application workflows use an already-open workspace and do not close it.

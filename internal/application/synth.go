@@ -2,10 +2,7 @@ package application
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -14,17 +11,17 @@ import (
 	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
-func Synthesize(ctx context.Context, opener WorkspaceOpener, workspaceName string, provider agent.CompletionProvider, config SynthesisOptions, options OperationOptions) (SynthesisResult, error) {
-	return SynthesizeWithTools(ctx, opener, workspaceName, provider, config, allSynthesisTools, options)
+func Synthesize(ctx context.Context, workspace Workspace, provider agent.CompletionProvider, config SynthesisOptions, options OperationOptions) (SynthesisResult, error) {
+	return SynthesizeWithTools(ctx, workspace, provider, config, allSynthesisTools, options)
 }
 
-func SynthesizeWithTools(ctx context.Context, opener WorkspaceOpener, workspaceName string, provider agent.CompletionProvider, config SynthesisOptions, toolNames []string, options OperationOptions) (result SynthesisResult, returnErr error) {
+func SynthesizeWithTools(ctx context.Context, workspace Workspace, provider agent.CompletionProvider, config SynthesisOptions, toolNames []string, options OperationOptions) (result SynthesisResult, returnErr error) {
 	var err error
 	options, err = normalizeOperationOptions(options)
 	if err != nil {
 		return SynthesisResult{}, err
 	}
-	directory := workspaceName
+	directory := ""
 	defer func() {
 		details := map[string]any{
 			"turns":             result.Metrics.Turns,
@@ -45,27 +42,17 @@ func SynthesizeWithTools(ctx context.Context, opener WorkspaceOpener, workspaceN
 	if err != nil {
 		return SynthesisResult{}, internalerrors.Validation(err.Error())
 	}
-	if opener == nil {
-		return SynthesisResult{}, internalerrors.Request("workspace opener is not configured")
-	}
-	workspace, err := opener.Open(ctx, workspaceName)
-	if err != nil {
-		return SynthesisResult{}, normalizeError(err, internalerrors.KindMissingResource, "opening workspace")
-	}
 	if workspace == nil {
-		return SynthesisResult{}, internalerrors.Request("workspace opener returned no workspace")
+		return SynthesisResult{}, internalerrors.Request("workspace is not configured")
 	}
-	defer workspace.Close()
-	if name := workspace.Name(); name != "" {
-		directory = name
-	}
-	result, returnErr = runSynthesis(ctx, directory, workspace.RootPath(), workspace.TargetPath(), workspace.Storage(), provider, config, toolNames, options)
+	directory = workspace.Name()
+	result, returnErr = runSynthesis(ctx, directory, workspace, provider, config, toolNames, options)
 	return result, returnErr
 }
 
-func runSynthesis(ctx context.Context, directory, rootPath, targetPath string, storage Storage, provider agent.CompletionProvider, config SynthesisOptions, toolNames []string, options OperationOptions) (SynthesisResult, error) {
-	if storage == nil {
-		return SynthesisResult{}, internalerrors.Request("workspace storage is not configured")
+func runSynthesis(ctx context.Context, directory string, workspace Workspace, provider agent.CompletionProvider, config SynthesisOptions, toolNames []string, options OperationOptions) (SynthesisResult, error) {
+	if workspace == nil {
+		return SynthesisResult{}, internalerrors.Request("workspace is not configured")
 	}
 	if provider == nil {
 		return SynthesisResult{}, internalerrors.Request("synthesis provider is not configured")
@@ -73,32 +60,14 @@ func runSynthesis(ctx context.Context, directory, rootPath, targetPath string, s
 	config = normalizedSynthesisOptions(config)
 	runContext, cancel := context.WithTimeout(ctx, time.Duration(config.TimeoutSeconds)*time.Second)
 	defer cancel()
-	root, err := filepath.EvalSymlinks(rootPath)
-	if err != nil {
-		return SynthesisResult{}, pathError("canonicalizing "+rootPath, err)
-	}
-	target, err := filepath.EvalSymlinks(targetPath)
-	if err != nil {
-		return SynthesisResult{}, pathError("canonicalizing "+targetPath, err)
-	}
-	if err := ensureInside(target, root); err != nil {
-		return SynthesisResult{}, err
-	}
-	info, err := os.Stat(target)
-	if err != nil {
-		return SynthesisResult{}, pathError("reading "+target, err)
-	}
-	if !info.IsDir() {
-		return SynthesisResult{}, internalerrors.Validation(fmt.Sprintf("target is not a directory: %s", target))
-	}
-	documents, err := DiscoverDocuments(root, target)
+	documents, err := DiscoverDocuments(runContext, workspace)
 	if err != nil {
 		return SynthesisResult{}, err
 	}
 	if len(documents) == 0 {
-		return SynthesisResult{}, internalerrors.MissingResource(fmt.Sprintf("no raw Markdown documents in %s", target))
+		return SynthesisResult{}, internalerrors.MissingResource("no raw Markdown documents in workspace")
 	}
-	state, generation, err := storage.ReadState(runContext)
+	state, revision, err := workspace.ReadState(runContext)
 	if err != nil {
 		return SynthesisResult{}, normalizeError(err, internalerrors.KindFilesystem, "reading workspace state")
 	}
@@ -106,8 +75,8 @@ func runSynthesis(ctx context.Context, directory, rootPath, targetPath string, s
 	completed := map[string]bool{}
 	written := map[string]bool{}
 	contextState := &agentContext{
-		ctx: runContext, target: target, storage: storage, documents: documents, sources: sources,
-		state: state, generation: generation, maxOutputBytes: config.MaxToolOutputBytes,
+		ctx: runContext, workspace: workspace, documents: documents, sources: sources,
+		state: state, revision: revision, maxOutputBytes: config.MaxToolOutputBytes,
 		directory: directory, actor: options.Actor, operationLog: options.Log,
 		completed: completed, written: written,
 	}
@@ -144,14 +113,6 @@ func runSynthesis(ctx context.Context, directory, rootPath, targetPath string, s
 		return result, internalerrors.ProviderMalformed(fmt.Sprintf("model stopped with missing summaries: %s", strings.Join(missingSources(sources, completed), ", ")), nil)
 	}
 	return result, nil
-}
-
-func pathError(operation string, err error) error {
-	kind := internalerrors.KindFilesystem
-	if errors.Is(err, os.ErrNotExist) {
-		kind = internalerrors.KindMissingResource
-	}
-	return internalerrors.Wrap(kind, operation+" failed", err)
 }
 
 func missingSources(sources map[string]agentSource, summarized map[string]bool) []string {

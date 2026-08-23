@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -17,7 +16,7 @@ import (
 func TestPublicWorkflows(t *testing.T) {
 	ctx := context.Background()
 	path := writeSource(t)
-	store := &storage{generation: bo.NewGeneration(nil)}
+	store := &storage{revision: bo.NewRevision(nil)}
 	ws := workspace{name: "consumer", store: store}
 	options := bo.OperationOptions{Log: operationLog{}, Actor: "consumer"}
 
@@ -36,19 +35,15 @@ func TestPublicWorkflows(t *testing.T) {
 		t.Fatalf("state = %#v, error = %v", state, err)
 	}
 
-	synthDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(synthDir, "article.md"), []byte("# Article\n\ncontent\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	synthStore := &storage{
 		state: bo.State{Sources: []bo.SourceRecord{{
 			SourceKey: "https://example.test/article",
 			Snapshots: []bo.RawRecord{{Filename: "article.md", WrittenAt: time.Unix(1, 0).UTC()}},
 		}}},
-		generation: bo.NewGeneration(nil),
-		documents:  map[string][]byte{},
+		revision:  bo.NewRevision(nil),
+		documents: map[string][]byte{"article.md": []byte("# Article\n\ncontent\n")},
 	}
-	synthWorkspace := workspace{name: "consumer", store: synthStore, rootPath: synthDir, targetPath: synthDir}
+	synthWorkspace := workspace{name: "consumer", store: synthStore}
 	response, err := json.Marshal(map[string]any{
 		"choices": []any{map[string]any{
 			"message": map[string]any{
@@ -100,8 +95,8 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 func TestScopedWorkspacesDoNotShareState(t *testing.T) {
 	ctx := context.Background()
 	path := writeSource(t)
-	first := &storage{generation: bo.NewGeneration(nil)}
-	second := &storage{generation: bo.NewGeneration(nil)}
+	first := &storage{revision: bo.NewRevision(nil)}
+	second := &storage{revision: bo.NewRevision(nil)}
 	options := bo.OperationOptions{Log: operationLog{}, Actor: "consumer"}
 	for _, store := range []*storage{first, second} {
 		result, err := bo.Snap(ctx, bo.SnapRequest{

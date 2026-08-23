@@ -2,22 +2,36 @@ package main
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/skillicinski/bo"
 )
 
 type storage struct {
-	state      bo.State
-	generation bo.Generation
-	documents  map[string][]byte
+	state     bo.State
+	revision  bo.Revision
+	mutations uint64
+	documents map[string][]byte
 }
 
-func (s *storage) CreateRaw(_ context.Context, name string, contents []byte) (bo.DocumentRef, error) {
-	if s.documents == nil {
-		s.documents = map[string][]byte{}
+func (s *storage) advanceRevision() bo.Revision {
+	s.mutations++
+	return bo.NewRevision([]byte(strconv.FormatUint(s.mutations, 10)))
+}
+
+func (s *storage) ListDocuments(_ context.Context, kind bo.DocumentKind) ([]bo.DocumentRef, error) {
+	refs := []bo.DocumentRef{}
+	for _, source := range s.state.Sources {
+		for _, snapshot := range source.Snapshots {
+			if kind == bo.DocumentKindRaw {
+				refs = append(refs, bo.RawRef(snapshot.Filename))
+			}
+		}
+		if kind == bo.DocumentKindSummary && source.Summary != nil {
+			refs = append(refs, bo.SummaryRef(source.Summary.Filename))
+		}
 	}
-	s.documents[name] = append([]byte(nil), contents...)
-	return bo.RawRef(name), nil
+	return refs, nil
 }
 
 func (s *storage) ReadDocument(_ context.Context, ref bo.DocumentRef) ([]byte, error) {
@@ -28,53 +42,78 @@ func (s *storage) ReadDocument(_ context.Context, ref bo.DocumentRef) ([]byte, e
 	return append([]byte(nil), contents...), nil
 }
 
-func (s *storage) ReplaceSummary(_ context.Context, ref bo.DocumentRef, contents []byte) error {
+func (s *storage) ReadState(context.Context) (bo.State, bo.Revision, error) {
+	return s.state, s.revision, nil
+}
+
+func (s *storage) CommitSnapshot(_ context.Context, commit bo.SnapshotCommit, expected bo.Revision) (bo.State, bo.Revision, error) {
+	if !expected.Equal(s.revision) {
+		return bo.State{}, bo.Revision{}, bo.NewError(bo.ErrorKindConflict, "workspace revision changed")
+	}
 	if s.documents == nil {
 		s.documents = map[string][]byte{}
 	}
-	s.documents[ref.Name] = append([]byte(nil), contents...)
-	return nil
-}
-
-func (s *storage) DeleteDocument(_ context.Context, ref bo.DocumentRef) error {
-	delete(s.documents, ref.Name)
-	return nil
-}
-
-func (s *storage) ReadState(context.Context) (bo.State, bo.Generation, error) {
-	return s.state, s.generation, nil
-}
-
-func (s *storage) PublishState(_ context.Context, state bo.State, expected bo.Generation) (bo.Generation, error) {
-	if !expected.Equal(s.generation) {
-		return bo.Generation{}, bo.NewError(bo.ErrorKindConflict, "state generation changed")
+	if _, exists := s.documents[commit.Filename]; exists {
+		return bo.State{}, bo.Revision{}, bo.NewError(bo.ErrorKindAlreadyExists, "document already exists")
 	}
-	s.state = state
-	s.generation = bo.NewGeneration([]byte{byte(len(state.Sources))})
-	return s.generation, nil
+	s.documents[commit.Filename] = append([]byte(nil), commit.Contents...)
+	for index := range s.state.Sources {
+		if s.state.Sources[index].SourceKey == commit.SourceKey {
+			s.state.Sources[index].Snapshots = append(s.state.Sources[index].Snapshots, bo.RawRecord{Filename: commit.Filename, WrittenAt: commit.WrittenAt})
+			s.revision = s.advanceRevision()
+			return s.state, s.revision, nil
+		}
+	}
+	s.state.Sources = append(s.state.Sources, bo.SourceRecord{SourceKey: commit.SourceKey, Snapshots: []bo.RawRecord{{Filename: commit.Filename, WrittenAt: commit.WrittenAt}}})
+	s.revision = s.advanceRevision()
+	return s.state, s.revision, nil
+}
+
+func (s *storage) CommitSummary(_ context.Context, commit bo.SummaryCommit, expected bo.Revision) (bo.State, bo.Revision, error) {
+	if !expected.Equal(s.revision) {
+		return bo.State{}, bo.Revision{}, bo.NewError(bo.ErrorKindConflict, "workspace revision changed")
+	}
+	if s.documents == nil {
+		s.documents = map[string][]byte{}
+	}
+	s.documents[commit.Filename] = append([]byte(nil), commit.Contents...)
+	for index := range s.state.Sources {
+		if s.state.Sources[index].SourceKey == commit.SourceKey {
+			if len(s.state.Sources[index].Snapshots) == 0 {
+				s.state.Sources[index].Snapshots = []bo.RawRecord{{Filename: commit.DerivedFrom, WrittenAt: commit.RawWrittenAt}}
+			}
+			s.state.Sources[index].Summary = &bo.SummaryRecord{Filename: commit.Filename, DerivedFrom: commit.DerivedFrom, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt}
+			s.revision = s.advanceRevision()
+			return s.state, s.revision, nil
+		}
+	}
+	s.state.Sources = append(s.state.Sources, bo.SourceRecord{SourceKey: commit.SourceKey, Snapshots: []bo.RawRecord{{Filename: commit.DerivedFrom, WrittenAt: commit.RawWrittenAt}}, Summary: &bo.SummaryRecord{Filename: commit.Filename, DerivedFrom: commit.DerivedFrom, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt}})
+	s.revision = s.advanceRevision()
+	return s.state, s.revision, nil
 }
 
 type workspace struct {
-	name                 string
-	store                bo.Storage
-	rootPath, targetPath string
+	name  string
+	store *storage
 }
 
 func (w workspace) Name() string { return w.name }
-func (w workspace) RootPath() string {
-	if w.rootPath != "" {
-		return w.rootPath
-	}
-	return "."
+func (w workspace) ListDocuments(ctx context.Context, kind bo.DocumentKind) ([]bo.DocumentRef, error) {
+	return w.store.ListDocuments(ctx, kind)
 }
-func (w workspace) TargetPath() string {
-	if w.targetPath != "" {
-		return w.targetPath
-	}
-	return "."
+func (w workspace) ReadDocument(ctx context.Context, ref bo.DocumentRef) ([]byte, error) {
+	return w.store.ReadDocument(ctx, ref)
 }
-func (w workspace) Storage() bo.Storage { return w.store }
-func (w workspace) Close() error        { return nil }
+func (w workspace) ReadState(ctx context.Context) (bo.State, bo.Revision, error) {
+	return w.store.ReadState(ctx)
+}
+func (w workspace) CommitSnapshot(ctx context.Context, commit bo.SnapshotCommit, expected bo.Revision) (bo.State, bo.Revision, error) {
+	return w.store.CommitSnapshot(ctx, commit, expected)
+}
+func (w workspace) CommitSummary(ctx context.Context, commit bo.SummaryCommit, expected bo.Revision) (bo.State, bo.Revision, error) {
+	return w.store.CommitSummary(ctx, commit, expected)
+}
+func (w workspace) Close() error { return nil }
 
 type creator struct{}
 

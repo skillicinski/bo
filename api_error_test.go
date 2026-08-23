@@ -2,11 +2,36 @@ package bo_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
 	"github.com/skillicinski/bo"
 )
+
+func TestStateResultRevisionUsesOpaqueJSONString(t *testing.T) {
+	revision := bo.NewRevision([]byte("revision"))
+	data, err := json.Marshal(bo.StateResult{Revision: revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var encoded struct {
+		Revision string `json:"revision"`
+	}
+	if err := json.Unmarshal(data, &encoded); err != nil {
+		t.Fatal(err)
+	}
+	if encoded.Revision != revision.String() {
+		t.Fatalf("revision JSON = %q, want %q", encoded.Revision, revision.String())
+	}
+	var decoded bo.Revision
+	if err := json.Unmarshal([]byte(`"`+revision.String()+`"`), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.Equal(revision) {
+		t.Fatal("decoded revision differs")
+	}
+}
 
 func TestErrorContractWrapsCause(t *testing.T) {
 	cause := errors.New("disk unavailable")
@@ -73,7 +98,7 @@ func TestWorkflowPreservesContextErrorIdentity(t *testing.T) {
 		{name: "deadline", cause: context.DeadlineExceeded, kind: bo.ErrorKindDeadline},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			workspace := errorWorkspace{storage: errorStorage{err: test.cause}}
+			workspace := errorWorkspace{err: test.cause}
 			_, err := bo.Snap(context.Background(), bo.SnapRequest{
 				Workspace:  workspace,
 				Sources:    []string{"https://example.test/source"},
@@ -90,7 +115,7 @@ func TestWorkflowPreservesContextErrorIdentity(t *testing.T) {
 	}
 }
 
-type errorStorage struct{ err error }
+type errorWorkspace struct{ err error }
 
 type workspaceCreatorFunc func(context.Context, string) (string, error)
 
@@ -98,33 +123,29 @@ func (f workspaceCreatorFunc) Create(ctx context.Context, name string) (string, 
 	return f(ctx, name)
 }
 
-func (s errorStorage) CreateRaw(context.Context, string, []byte) (bo.DocumentRef, error) {
-	return bo.DocumentRef{}, nil
+func (w errorWorkspace) Name() string { return "test" }
+
+func (w errorWorkspace) ListDocuments(context.Context, bo.DocumentKind) ([]bo.DocumentRef, error) {
+	return nil, w.err
 }
 
-func (s errorStorage) ReadDocument(context.Context, bo.DocumentRef) ([]byte, error) {
-	return nil, s.err
+func (w errorWorkspace) ReadDocument(context.Context, bo.DocumentRef) ([]byte, error) {
+	return nil, w.err
 }
 
-func (s errorStorage) ReplaceSummary(context.Context, bo.DocumentRef, []byte) error { return s.err }
-
-func (s errorStorage) DeleteDocument(context.Context, bo.DocumentRef) error { return s.err }
-
-func (s errorStorage) ReadState(context.Context) (bo.State, bo.Generation, error) {
-	return bo.State{}, bo.NewGeneration(nil), s.err
+func (w errorWorkspace) ReadState(context.Context) (bo.State, bo.Revision, error) {
+	return bo.State{}, bo.NewRevision(nil), w.err
 }
 
-func (s errorStorage) PublishState(context.Context, bo.State, bo.Generation) (bo.Generation, error) {
-	return bo.Generation{}, s.err
+func (w errorWorkspace) CommitSnapshot(context.Context, bo.SnapshotCommit, bo.Revision) (bo.State, bo.Revision, error) {
+	return bo.State{}, bo.Revision{}, w.err
 }
 
-type errorWorkspace struct{ storage bo.Storage }
+func (w errorWorkspace) CommitSummary(context.Context, bo.SummaryCommit, bo.Revision) (bo.State, bo.Revision, error) {
+	return bo.State{}, bo.Revision{}, w.err
+}
 
-func (w errorWorkspace) Name() string        { return "test" }
-func (w errorWorkspace) RootPath() string    { return "." }
-func (w errorWorkspace) TargetPath() string  { return "." }
-func (w errorWorkspace) Storage() bo.Storage { return w.storage }
-func (w errorWorkspace) Close() error        { return nil }
+func (w errorWorkspace) Close() error { return nil }
 
 type errorLog struct{}
 

@@ -2,6 +2,7 @@ package application_test
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -30,6 +31,32 @@ func seededStore(t *testing.T) (*local.Store, string) {
 
 func stringPtr(value string) *string { return &value }
 
+func commitRaw(t *testing.T, workspace application.Workspace, sourceKey, filename string, writtenAt time.Time, contents []byte) domain.DocumentRef {
+	t.Helper()
+	_, revision, err := workspace.ReadState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = workspace.CommitSnapshot(context.Background(), application.SnapshotCommit{
+		SourceKey: sourceKey, Filename: filename, WrittenAt: writtenAt, Contents: contents,
+	}, revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return domain.RawRef(filename)
+}
+
+func commitSummary(t *testing.T, workspace application.Workspace, commit application.SummaryCommit) {
+	t.Helper()
+	_, revision, err := workspace.ReadState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = workspace.CommitSummary(context.Background(), commit, revision); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func operationOptionsFor(target string) application.OperationOptions {
 	return application.OperationOptions{Log: local.NewOperationLog(filepath.Dir(filepath.Dir(target))), Actor: "test"}
 }
@@ -56,32 +83,17 @@ func toolResponse(id, name, arguments string) agent.CompletionResponse {
 
 func TestSynthesizeReplaysToolMessagesAndUpsertsSummary(t *testing.T) {
 	store, target := seededStore(t)
-	raw, err := store.CreateRaw(context.Background(), "article.md", []byte("# Article\n\nfact\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, generation, err := store.ReadState(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	state.Sources = append(state.Sources, domain.SourceRecord{SourceKey: "https://example.test/article", Snapshots: []domain.RawRecord{{Filename: raw.Name, WrittenAt: time.Unix(1, 0).UTC()}}})
-	generation, err = store.PublishState(context.Background(), state, generation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ReplaceSummary(context.Background(), domain.SummaryRef("article.md"), []byte("old summary")); err != nil {
-		t.Fatal(err)
-	}
-	state.Sources[0].Summary = &domain.SummaryRecord{Filename: "article.md", DerivedFrom: "article.md", CreatedAt: time.Unix(2, 0).UTC(), UpdatedAt: time.Unix(3, 0).UTC()}
-	if generation, err = store.PublishState(context.Background(), state, generation); err != nil {
-		t.Fatal(err)
-	}
+	raw := commitRaw(t, store, "https://example.test/article", "article.md", time.Unix(1, 0).UTC(), []byte("# Article\n\nfact\n"))
+	commitSummary(t, store, application.SummaryCommit{
+		SourceKey: "https://example.test/article", Filename: "article.md", DerivedFrom: raw.Name,
+		RawWrittenAt: time.Unix(1, 0).UTC(), CreatedAt: time.Unix(2, 0).UTC(), UpdatedAt: time.Unix(3, 0).UTC(), Contents: []byte("old summary"),
+	})
 	provider := &fakeProvider{responses: []agent.CompletionResponse{
 		toolResponse("corpus-1", "read_corpus", "{}"),
 		toolResponse("read-1", "read_summary", "{\"source_key\":\"https://example.test/article\"}"),
 		toolResponse("edit-1", "edit_summary", "{\"source_key\":\"https://example.test/article\",\"markdown\":\"# Summary\\n\\nfact\\n\"}"),
 	}}
-	result, err := application.Synthesize(context.Background(), local.NewManager(filepath.Dir(filepath.Dir(target))), "notes", provider, application.SynthesisOptions{MaxTurns: 4, MaxToolCalls: 3, MaxToolOutputBytes: 256, MaxResponseTokens: 16, TimeoutSeconds: 5}, operationOptionsFor(target))
+	result, err := application.Synthesize(context.Background(), store, provider, application.SynthesisOptions{MaxTurns: 4, MaxToolCalls: 3, MaxToolOutputBytes: 256, MaxResponseTokens: 16, TimeoutSeconds: 5}, operationOptionsFor(target))
 	if err != nil || result.SummariesWritten != 1 {
 		t.Fatalf("Synthesize = %#v, %v", result, err)
 	}
@@ -105,7 +117,7 @@ func TestSynthesizeReplaysToolMessagesAndUpsertsSummary(t *testing.T) {
 	if string(data) != "# Summary\n\nfact\n" {
 		t.Fatalf("summary = %q", data)
 	}
-	state, _, err = store.ReadState(context.Background())
+	state, _, err := store.ReadState(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,23 +128,12 @@ func TestSynthesizeReplaysToolMessagesAndUpsertsSummary(t *testing.T) {
 
 func TestSynthesizeToolsRejectRawEscape(t *testing.T) {
 	store, target := seededStore(t)
-	raw, err := store.CreateRaw(context.Background(), "article.md", []byte("fact\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, generation, err := store.ReadState(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	state.Sources = append(state.Sources, domain.SourceRecord{SourceKey: "raw:article.md", Snapshots: []domain.RawRecord{{Filename: raw.Name, WrittenAt: time.Unix(1, 0).UTC()}}})
-	if _, err := store.PublishState(context.Background(), state, generation); err != nil {
-		t.Fatal(err)
-	}
+	commitRaw(t, store, "raw:article.md", "article.md", time.Unix(1, 0).UTC(), []byte("fact\n"))
 	provider := &fakeProvider{responses: []agent.CompletionResponse{
 		toolResponse("bad-1", "read_document", "{\"filename\":\"raw/../article.md\"}"),
 		toolResponse("write-1", "write_summary", "{\"source_key\":\"raw:article.md\",\"markdown\":\"summary\\n\"}"),
 	}}
-	result, err := application.Synthesize(context.Background(), local.NewManager(filepath.Dir(filepath.Dir(target))), "notes", provider, application.DefaultSynthesisOptions(), operationOptionsFor(target))
+	result, err := application.Synthesize(context.Background(), store, provider, application.DefaultSynthesisOptions(), operationOptionsFor(target))
 	if err != nil || result.SummariesWritten != 1 {
 		t.Fatalf("Synthesize = %#v, %v", result, err)
 	}
@@ -140,23 +141,12 @@ func TestSynthesizeToolsRejectRawEscape(t *testing.T) {
 
 func TestSynthesizeWithReducedToolSet(t *testing.T) {
 	store, target := seededStore(t)
-	raw, err := store.CreateRaw(context.Background(), "article.md", []byte("# Article\n\nlatest fact\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, generation, err := store.ReadState(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	state.Sources = append(state.Sources, domain.SourceRecord{SourceKey: "https://example.test/article", Snapshots: []domain.RawRecord{{Filename: raw.Name, WrittenAt: time.Unix(2, 0).UTC()}}})
-	if _, err := store.PublishState(context.Background(), state, generation); err != nil {
-		t.Fatal(err)
-	}
+	commitRaw(t, store, "https://example.test/article", "article.md", time.Unix(2, 0).UTC(), []byte("# Article\n\nlatest fact\n"))
 	provider := &fakeProvider{responses: []agent.CompletionResponse{
 		toolResponse("read-1", "read_document", "{\"filename\":\"article.md\"}"),
 		toolResponse("write-1", "write_summary", "{\"source_key\":\"https://example.test/article\",\"markdown\":\"latest fact\\n\"}"),
 	}}
-	result, err := application.SynthesizeWithTools(context.Background(), local.NewManager(filepath.Dir(filepath.Dir(target))), "notes", provider, application.SynthesisOptions{MaxTurns: 2, MaxToolCalls: 2, MaxToolOutputBytes: 256, MaxResponseTokens: 16, TimeoutSeconds: 5}, []string{"read_document", "write_summary"}, operationOptionsFor(target))
+	result, err := application.SynthesizeWithTools(context.Background(), store, provider, application.SynthesisOptions{MaxTurns: 2, MaxToolCalls: 2, MaxToolOutputBytes: 256, MaxResponseTokens: 16, TimeoutSeconds: 5}, []string{"read_document", "write_summary"}, operationOptionsFor(target))
 	if err != nil || result.SummariesWritten != 1 {
 		t.Fatalf("SynthesizeWithTools = %#v, %v", result, err)
 	}
@@ -189,26 +179,18 @@ func TestSynthesizeWithReducedToolSet(t *testing.T) {
 
 func TestSynthesizeRegistersUntrackedRawDocument(t *testing.T) {
 	store, target := seededStore(t)
-	if _, err := store.CreateRaw(context.Background(), "article.md", []byte("fact\n")); err != nil {
-		t.Fatal(err)
-	}
-	state, generation, err := store.ReadState(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	state.Sources = []domain.SourceRecord{{SourceKey: "raw:article.md"}}
-	if _, err := store.PublishState(context.Background(), state, generation); err != nil {
+	if err := os.WriteFile(filepath.Join(target, "article.md"), []byte("fact\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	provider := &fakeProvider{responses: []agent.CompletionResponse{
 		toolResponse("read-1", "read_document", `{"filename":"article.md"}`),
 		toolResponse("write-1", "write_summary", `{"source_key":"raw:article.md","markdown":"summary\n"}`),
 	}}
-	result, err := application.SynthesizeWithTools(context.Background(), local.NewManager(filepath.Dir(filepath.Dir(target))), "notes", provider, application.DefaultSynthesisOptions(), []string{"read_document", "write_summary"}, operationOptionsFor(target))
+	result, err := application.SynthesizeWithTools(context.Background(), store, provider, application.DefaultSynthesisOptions(), []string{"read_document", "write_summary"}, operationOptionsFor(target))
 	if err != nil || result.SummariesWritten != 1 {
 		t.Fatalf("SynthesizeWithTools = %#v, %v", result, err)
 	}
-	state, _, err = store.ReadState(context.Background())
+	state, _, err := store.ReadState(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,25 +201,8 @@ func TestSynthesizeRegistersUntrackedRawDocument(t *testing.T) {
 
 func TestSynthesizeSelectsNewestSnapshotAndPreservesRaw(t *testing.T) {
 	store, target := seededStore(t)
-	oldRaw, err := store.CreateRaw(context.Background(), "old.md", []byte("old\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	newRaw, err := store.CreateRaw(context.Background(), "new.md", []byte("new\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, generation, err := store.ReadState(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	state.Sources = append(state.Sources, domain.SourceRecord{SourceKey: "https://example.test/article", Snapshots: []domain.RawRecord{
-		{Filename: oldRaw.Name, WrittenAt: time.Unix(1, 0).UTC()},
-		{Filename: newRaw.Name, WrittenAt: time.Unix(2, 0).UTC()},
-	}})
-	if _, err := store.PublishState(context.Background(), state, generation); err != nil {
-		t.Fatal(err)
-	}
+	oldRaw := commitRaw(t, store, "https://example.test/article", "old.md", time.Unix(1, 0).UTC(), []byte("old\n"))
+	newRaw := commitRaw(t, store, "https://example.test/article", "new.md", time.Unix(2, 0).UTC(), []byte("new\n"))
 	oldBefore, err := store.ReadDocument(context.Background(), domain.RawRef(oldRaw.Name))
 	if err != nil {
 		t.Fatal(err)
@@ -250,7 +215,7 @@ func TestSynthesizeSelectsNewestSnapshotAndPreservesRaw(t *testing.T) {
 		toolResponse("read-1", "read_document", "{\"filename\":\"new.md\"}"),
 		toolResponse("write-1", "write_summary", "{\"source_key\":\"https://example.test/article\",\"markdown\":\"new\\n\"}"),
 	}}
-	result, err := application.SynthesizeWithTools(context.Background(), local.NewManager(filepath.Dir(filepath.Dir(target))), "notes", provider, application.DefaultSynthesisOptions(), []string{"read_document", "write_summary"}, operationOptionsFor(target))
+	result, err := application.SynthesizeWithTools(context.Background(), store, provider, application.DefaultSynthesisOptions(), []string{"read_document", "write_summary"}, operationOptionsFor(target))
 	if err != nil || result.SummariesWritten != 1 {
 		t.Fatalf("SynthesizeWithTools = %#v, %v", result, err)
 	}
@@ -265,7 +230,7 @@ func TestSynthesizeSelectsNewestSnapshotAndPreservesRaw(t *testing.T) {
 	if string(oldBefore) != string(oldAfter) || string(newBefore) != string(newAfter) {
 		t.Fatal("raw document changed")
 	}
-	state, _, err = store.ReadState(context.Background())
+	state, _, err := store.ReadState(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +241,7 @@ func TestSynthesizeSelectsNewestSnapshotAndPreservesRaw(t *testing.T) {
 
 func TestSynthesizeWithToolsValidatesNames(t *testing.T) {
 	for _, names := range [][]string{{"read_document", "read_document"}, {"unknown"}} {
-		if _, err := application.SynthesizeWithTools(context.Background(), nil, "notes", nil, application.DefaultSynthesisOptions(), names, application.OperationOptions{Log: local.NewOperationLog(t.TempDir())}); err == nil {
+		if _, err := application.SynthesizeWithTools(context.Background(), nil, nil, application.DefaultSynthesisOptions(), names, application.OperationOptions{Log: local.NewOperationLog(t.TempDir())}); err == nil {
 			t.Fatalf("tool names accepted: %v", names)
 		}
 	}

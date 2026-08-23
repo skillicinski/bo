@@ -4,43 +4,58 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"time"
 
 	"github.com/skillicinski/bo/internal/domain"
 	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
-// Generation is an opaque storage version. Callers can only compare it or
-// pass it back to a storage implementation.
-type Generation struct{ digest [sha256.Size]byte }
+// Revision is an opaque workspace version. Callers can only compare it or
+// pass it back to a workspace implementation.
+type Revision struct{ digest [sha256.Size]byte }
 
-func NewGeneration(data []byte) Generation { return Generation{digest: sha256.Sum256(data)} }
+func NewRevision(data []byte) Revision { return Revision{digest: sha256.Sum256(data)} }
 
-func GenerationFromString(value string) (Generation, error) {
+func RevisionFromString(value string) (Revision, error) {
 	data, err := hex.DecodeString(value)
 	if err != nil || len(data) != sha256.Size {
-		return Generation{}, internalerrors.Validation("invalid generation")
+		return Revision{}, internalerrors.Validation("invalid revision")
 	}
 	var digest [sha256.Size]byte
 	copy(digest[:], data)
-	return Generation{digest: digest}, nil
+	return Revision{digest: digest}, nil
 }
 
-func (g Generation) Equal(other Generation) bool { return g == other }
-func (g Generation) IsZero() bool                { return g == Generation{} }
-func (g Generation) String() string              { return hex.EncodeToString(g.digest[:]) }
+func (r Revision) Equal(other Revision) bool { return r == other }
+func (r Revision) IsZero() bool              { return r == Revision{} }
+func (r Revision) String() string            { return hex.EncodeToString(r.digest[:]) }
 
-type Storage interface {
-	CreateRaw(context.Context, string, []byte) (domain.DocumentRef, error)
+type SnapshotCommit struct {
+	SourceKey string
+	Filename  string
+	WrittenAt time.Time
+	Contents  []byte
+}
+
+type SummaryCommit struct {
+	SourceKey    string
+	Filename     string
+	DerivedFrom  string
+	RawWrittenAt time.Time
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	Contents     []byte
+}
+
+// Workspace is the persistence boundary for one workspace.
+type Workspace interface {
+	Name() string
+	ListDocuments(context.Context, domain.DocumentKind) ([]domain.DocumentRef, error)
 	ReadDocument(context.Context, domain.DocumentRef) ([]byte, error)
-	ListMarkdownDocuments(context.Context, domain.DocumentKind) ([]domain.DocumentRef, error)
-	ReplaceSummary(context.Context, domain.DocumentRef, []byte) error
-	DeleteDocument(context.Context, domain.DocumentRef) error
-	ReadState(context.Context) (domain.State, Generation, error)
-	PublishState(context.Context, domain.State, Generation) (Generation, error)
+	ReadState(context.Context) (domain.State, Revision, error)
+	CommitSnapshot(context.Context, SnapshotCommit, Revision) (domain.State, Revision, error)
+	CommitSummary(context.Context, SummaryCommit, Revision) (domain.State, Revision, error)
 }
-
-type DocumentStorage = Storage
-type DocumentStore = Storage
 
 type Operation = domain.Operation
 type OperationCommand = domain.OperationCommand
@@ -72,20 +87,6 @@ type OperationOptions struct {
 	Actor string
 }
 
-// Workspace is the current local synthesis boundary.
-// ponytail: synthesis currently requires workspace paths; replace them with document access methods when a remote workspace adapter is needed.
-type Workspace interface {
-	Name() string
-	RootPath() string
-	TargetPath() string
-	Storage() Storage
-	Close() error
-}
-
 type WorkspaceCreator interface {
 	Create(context.Context, string) (string, error)
-}
-
-type WorkspaceOpener interface {
-	Open(context.Context, string) (Workspace, error)
 }
