@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 
 	"github.com/skillicinski/bo/internal/domain"
 )
@@ -13,6 +14,16 @@ import (
 type Generation struct{ digest [sha256.Size]byte }
 
 func NewGeneration(data []byte) Generation { return Generation{digest: sha256.Sum256(data)} }
+
+func GenerationFromString(value string) (Generation, error) {
+	data, err := hex.DecodeString(value)
+	if err != nil || len(data) != sha256.Size {
+		return Generation{}, fmt.Errorf("invalid generation")
+	}
+	var digest [sha256.Size]byte
+	copy(digest[:], data)
+	return Generation{digest: digest}, nil
+}
 
 func (g Generation) Equal(other Generation) bool { return g == other }
 func (g Generation) IsZero() bool                { return g == Generation{} }

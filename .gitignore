@@ -15,6 +15,9 @@ tmp/
 !/evals/run.sh
 !/evals/evaluate.py
 !/evals/test_evaluate.py
+!/evals/cmd/
+!/evals/cmd/bo-eval/
+!/evals/cmd/bo-eval/*.go
 
 # os
 .DS_Store

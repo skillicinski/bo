@@ -66,12 +66,12 @@ func (failingCompletionProvider) Complete(context.Context, agent.CompletionReque
 }
 
 func TestWorkflowsRejectMissingOperationLog(t *testing.T) {
-	store, target := seededStore(t)
+	store, _ := seededStore(t)
 	if _, err := application.SnapWithWorkflow(context.Background(), store, rawSource{}, "notes", []string{"url"}, application.OperationOptions{}); !application.IsCategory(err, application.CategoryRequest) {
 		t.Fatalf("Snap error = %v", err)
 	}
-	if _, err := application.StateOutput(context.Background(), store, "notes", false, application.OperationOptions{}); !application.IsCategory(err, application.CategoryRequest) {
-		t.Fatalf("StateOutput error = %v", err)
+	if _, err := application.ReadState(context.Background(), store, "notes", application.OperationOptions{}); !application.IsCategory(err, application.CategoryRequest) {
+		t.Fatalf("ReadState error = %v", err)
 	}
 	if _, err := application.Seed(context.Background(), failingCreator{}, "notes", application.OperationOptions{}); !application.IsCategory(err, application.CategoryRequest) {
 		t.Fatalf("Seed error = %v", err)
@@ -79,7 +79,6 @@ func TestWorkflowsRejectMissingOperationLog(t *testing.T) {
 	if _, err := application.SynthesizeWithTools(context.Background(), nil, "notes", nil, application.DefaultSynthesisOptions(), []string{"read_logs"}, application.OperationOptions{}); !application.IsCategory(err, application.CategoryRequest) {
 		t.Fatalf("Synthesize error = %v", err)
 	}
-	_ = target
 }
 
 func TestSeedLogsSuccessAndFailure(t *testing.T) {
@@ -129,14 +128,14 @@ func TestSnapLogsEachURLAndIgnoresLoggerFailure(t *testing.T) {
 func TestStateLogsSuccessAndFailure(t *testing.T) {
 	store, target := seededStore(t)
 	log := local.NewOperationLog(filepath.Dir(filepath.Dir(target)))
-	if _, err := application.StateOutput(context.Background(), store, "notes", false, application.OperationOptions{Log: log}); err != nil {
+	if _, err := application.ReadState(context.Background(), store, "notes", application.OperationOptions{Log: log}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(filepath.Join(target, "state.json")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := application.StateOutput(context.Background(), store, "notes", false, application.OperationOptions{Log: log}); err == nil {
-		t.Fatal("StateOutput succeeded after state removal")
+	if _, err := application.ReadState(context.Background(), store, "notes", application.OperationOptions{Log: log}); err == nil {
+		t.Fatal("ReadState succeeded after state removal")
 	}
 	page, err := log.Read(context.Background(), "notes", 0, 20)
 	if err != nil || len(page.Entries) != 2 || !page.Entries[0].Success || page.Entries[1].Success {

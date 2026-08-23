@@ -3,20 +3,24 @@
 ## Dependency graph
 
 ```text
-cmd/bo              -> bo API -> application -> domain
-                              |              -> source
-                              |              -> Storage contract
-                              -> agent / provider contracts
-storage adapters    -> application contracts and shared errors
-source adapters     -> source contracts, domain, and shared errors
+cmd/bo                    -> bo API -> application -> domain
+                                              |     -> source
+                                              |     -> public domain and workspace contracts
+                                              -> agent / provider contracts
+evals/cmd/bo-eval         -> application -> agent / provider adapters
+supported adapters        -> bo contracts and internal adapters
+source adapters           -> source contracts, domain, and shared errors
 ```
 
-The root `bo` package exposes workflows and contracts. It does not select
-concrete storage, source, or provider adapters.
+The root `bo` package owns the workflow requests, results, domain contracts,
+and supported local and DeepSeek constructors. It does not expose source
+routing or the generic agent protocol.
 
-`cmd/bo` is a consumer and composition root for local storage, workspaces, and
-the DeepSeek provider. `application.Snap` owns the product-specific default
-source assembly, so the CLI only opens storage and passes source inputs.
+`cmd/bo` is the production presentation layer and uses only the public `bo`
+API. `evals/cmd/bo-eval` is an evaluation-only composition root for explicit
+tool-set selection. `application.Snap` owns the product-specific default source
+assembly, so the production CLI only opens a scoped workspace and passes source
+inputs.
 
 ## Internals
 

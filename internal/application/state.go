@@ -2,37 +2,19 @@ package application
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
+
+	"github.com/skillicinski/bo/internal/domain"
 )
 
-func StateOutput(ctx context.Context, storage Storage, directory string, full bool, options OperationOptions) (output string, returnErr error) {
+func ReadState(ctx context.Context, storage Storage, directory string, options OperationOptions) (state domain.State, returnErr error) {
 	var err error
 	options, err = normalizeOperationOptions(options)
 	if err != nil {
-		return "", err
+		return domain.State{}, err
 	}
 	defer func() {
-		details := map[string]any{"full": full}
-		for key, value := range operationErrorDetails(returnErr) {
-			details[key] = value
-		}
-		recordOperation(options, directory, CommandState, returnErr == nil, details)
+		recordOperation(options, directory, CommandState, returnErr == nil, operationErrorDetails(returnErr))
 	}()
-	state, _, err := storage.ReadState(ctx)
-	if err != nil {
-		return "", err
-	}
-	if !full {
-		snapshots := 0
-		for _, source := range state.Sources {
-			snapshots += len(source.Snapshots)
-		}
-		return fmt.Sprintf("%d documents snapped", snapshots), nil
-	}
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
+	state, _, returnErr = storage.ReadState(ctx)
+	return state, returnErr
 }

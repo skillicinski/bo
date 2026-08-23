@@ -73,8 +73,7 @@ class EvaluateTests(unittest.TestCase):
         summary_dir = run / "summaries"
         raw_dir.mkdir(parents=True)
         summary_dir.mkdir()
-        raw_records = []
-        summary_records = []
+        sources = {}
         for index in range(count):
             filename = f"article-{index}.md"
             source = "https://example.test/article" if same_source else f"https://example.test/{index}"
@@ -83,10 +82,24 @@ class EvaluateTests(unittest.TestCase):
             raw_path.write_text(raw, encoding="utf-8")
             summary_filename = f"summary-{index}.md"
             (summary_dir / summary_filename).write_text("summary\n", encoding="utf-8")
-            raw_records.append({"filename": filename, "url": source, "written_at": index + 1})
-            summary_records.append({"filename": summary_filename, "source_key": source})
+            source_record = sources.setdefault(
+                source,
+                {"source_key": source, "snapshots": [], "summary": None},
+            )
+            source_record["snapshots"].append(
+                {
+                    "filename": filename,
+                    "written_at": f"2026-08-23T00:00:{index:02d}.000000000Z",
+                }
+            )
+            source_record["summary"] = {
+                "filename": summary_filename,
+                "derived_from": filename,
+                "created_at": f"2026-08-23T00:01:{index:02d}.000000000Z",
+                "updated_at": f"2026-08-23T00:01:{index:02d}.000000000Z",
+            }
         (run / "state.json").write_text(
-            json.dumps({"raw": raw_records, "summaries": summary_records}), encoding="utf-8"
+            json.dumps({"sources": list(sources.values())}), encoding="utf-8"
         )
         return run
 
@@ -129,19 +142,36 @@ class EvaluateTests(unittest.TestCase):
     def test_latest_raw_snapshot_is_selected_per_source(self):
         run = self.make_run(count=2, same_source=True)
         state = json.loads((run / "state.json").read_text())
-        state["raw"][0]["written_at"] = 10
-        state["raw"][1]["written_at"] = 20
-        state["summaries"] = [{"filename": "summary-1.md", "source_key": "https://example.test/article"}]
+        state["sources"][0]["snapshots"][0]["written_at"] = "2026-08-23T00:00:10Z"
+        state["sources"][0]["snapshots"][1]["written_at"] = "2026-08-23T00:00:20Z"
+        state["sources"][0]["summary"]["derived_from"] = "article-1.md"
         (run / "state.json").write_text(json.dumps(state))
         pairs = evaluate.load_pairs(run)
         self.assertEqual(len(pairs), 1)
         self.assertEqual(pairs[0]["raw_filename"], "article-1.md")
 
+    def test_summary_derived_from_selects_snapshot(self):
+        run = self.make_run(count=2, same_source=True)
+        state = json.loads((run / "state.json").read_text())
+        state["sources"][0]["summary"]["derived_from"] = "article-0.md"
+        (run / "state.json").write_text(json.dumps(state))
+        pairs = evaluate.load_pairs(run)
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0]["raw_filename"], "article-0.md")
+
+    def test_rfc3339_timestamps_are_required(self):
+        run = self.make_run()
+        state = json.loads((run / "state.json").read_text())
+        state["sources"][0]["snapshots"][0]["written_at"] = 1
+        (run / "state.json").write_text(json.dumps(state))
+        with self.assertRaises(evaluate.EvaluationError):
+            evaluate.load_pairs(run)
+
     def test_missing_summary_publishes_partial_scores(self):
         run = self.make_run(count=2)
         state = json.loads((run / "state.json").read_text())
-        missing_source = state["raw"][1]["url"]
-        state["summaries"] = state["summaries"][:1]
+        missing_source = state["sources"][1]["source_key"]
+        state["sources"][1]["summary"] = None
         (run / "state.json").write_text(json.dumps(state))
         opener = self.use_valid_opener()
 

@@ -25,6 +25,10 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Public API consumer test
+        working-directory: testdata/public-api
+        run: go test -mod=readonly ./...
+
       - name: Module verification
         run: go mod verify
 

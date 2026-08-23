@@ -3,6 +3,7 @@ set -eu
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bo=${BO_BIN:-$repo/bin/bo}
+bo_eval=${BO_EVAL_BIN:-$repo/bin/bo-eval}
 
 toolset=all
 while [ "$#" -gt 0 ]; do
@@ -19,48 +20,10 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-validate_tools() {
-    value=$1
-    [ "$value" = all ] && return 0
-    case ",$value," in
-        *,,*)
-            printf 'invalid --tools value: %s\n' "$value" >&2
-            return 1
-            ;;
-    esac
-    old_ifs=$IFS
-    IFS=,
-    set -- $value
-    IFS=$old_ifs
-    seen=
-    for name in "$@"; do
-        case "$name" in
-            read_corpus|read_document|read_summary|write_summary|edit_summary)
-                ;;
-            *)
-                printf 'unknown synthesis tool: %s\n' "$name" >&2
-                return 1
-                ;;
-        esac
-        case ",$seen," in
-            *,"$name",*)
-                printf 'duplicate synthesis tool: %s\n' "$name" >&2
-                return 1
-                ;;
-        esac
-        if [ -n "$seen" ]; then
-            seen="$seen,$name"
-        else
-            seen=$name
-        fi
-    done
-}
-
-validate_tools "$toolset"
-if [ ! -x "$bo" ]; then
-    mkdir -p "$(dirname "$bo")"
-    go build -o "$bo" "$repo/cmd/bo"
-fi
+mkdir -p "$(dirname "$bo")"
+go build -o "$bo" "$repo/cmd/bo"
+mkdir -p "$(dirname "$bo_eval")"
+go build -o "$bo_eval" "$repo/evals/cmd/bo-eval"
 : "${DEEPSEEK_API_KEY:?DEEPSEEK_API_KEY is required}"
 
 run_id="synth-$(date +%s)-$$"
@@ -100,7 +63,7 @@ else
 fi
 
 set +e
-BO_EVAL_TOOLS="$toolset" HOME="$home" "$bo" synth "$run_id" >"$report/synth.log" 2>&1
+HOME="$home" "$bo_eval" synth "$run_id" --tools "$toolset" >"$report/synth.log" 2>&1
 synth_status=$?
 set -e
 
@@ -123,13 +86,21 @@ state_path, target = sys.argv[1:]
 with open(state_path, encoding="utf-8") as file:
     state = json.load(file)
 
-raw_records = {record["filename"]: record["url"] for record in state["raw"]}
+raw_records = {
+    snapshot["filename"]: source["source_key"]
+    for source in state["sources"]
+    for snapshot in source["snapshots"]
+}
 source_keys = set()
 for filename in os.listdir(target):
     if filename.lower().endswith(".md") and os.path.isfile(os.path.join(target, filename)):
         source_keys.add(raw_records.get(filename, f"raw:{filename}"))
 
-summaries = {record["source_key"]: record for record in state["summaries"]}
+summaries = {
+    source["source_key"]: source["summary"]
+    for source in state["sources"]
+    if source.get("summary") is not None
+}
 for source_key in sorted(source_keys):
     record = summaries.get(source_key)
     path = os.path.join(target, "summaries", record["filename"]) if record else ""

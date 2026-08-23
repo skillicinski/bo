@@ -11,6 +11,7 @@ import shutil
 import socket
 import sys
 import tempfile
+from datetime import datetime, timezone
 from typing import List, Optional, Tuple, Union
 import urllib.error
 import urllib.request
@@ -149,9 +150,28 @@ def validate_structured_output(value: object) -> dict:
     return normalized
 
 
-def _safe_summary_filename(filename: object) -> str:
+def _parse_rfc3339(value: object, label: str) -> datetime:
+    if not isinstance(value, str) or not value:
+        raise EvaluationError(f"{label} must be an RFC 3339 timestamp")
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    fraction = re.fullmatch(r"(.+)\.(\d+)([+-]\d{2}:\d{2})", normalized)
+    if fraction:
+        normalized = (
+            f"{fraction.group(1)}.{fraction.group(2)[:6].ljust(6, '0')}"
+            f"{fraction.group(3)}"
+        )
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as error:
+        raise EvaluationError(f"{label} must be an RFC 3339 timestamp") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise EvaluationError(f"{label} must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def _safe_markdown_filename(filename: object, label: str) -> str:
     if not isinstance(filename, str) or not filename:
-        raise EvaluationError("summary filename must be a Markdown file name")
+        raise EvaluationError(f"{label} must be a Markdown file name")
     path = Path(filename)
     if (
         path.name != filename
@@ -159,8 +179,16 @@ def _safe_summary_filename(filename: object) -> str:
         or "\\" in filename
         or path.suffix.lower() != ".md"
     ):
-        raise EvaluationError("summary filename must be a Markdown file name")
+        raise EvaluationError(f"{label} must be a Markdown file name")
     return filename
+
+
+def _safe_summary_filename(filename: object) -> str:
+    return _safe_markdown_filename(filename, "summary filename")
+
+
+def _safe_snapshot_filename(filename: object) -> str:
+    return _safe_markdown_filename(filename, "snapshot filename")
 
 
 def load_pairs_with_missing(run_dir: Path) -> tuple[list[dict], list[dict]]:
@@ -169,38 +197,81 @@ def load_pairs_with_missing(run_dir: Path) -> tuple[list[dict], list[dict]]:
     state = _read_json(run_dir / "state.json", "state.json")
     if not isinstance(state, dict):
         raise EvaluationError("state.json must contain an object")
-    raw_records = state.get("raw")
-    summary_records = state.get("summaries")
-    if not isinstance(raw_records, list) or not isinstance(summary_records, list):
-        raise EvaluationError("state.json must contain raw and summaries arrays")
 
-    raw_by_filename = {}
-    for index, record in enumerate(raw_records):
-        if not isinstance(record, dict):
-            raise EvaluationError("state raw records must be objects")
-        filename = record.get("filename")
-        source_key = record.get("url")
-        written_at = record.get("written_at")
-        if (
-            not isinstance(filename, str)
-            or Path(filename).name != filename
-            or not filename
-            or not isinstance(source_key, str)
-            or not source_key
-            or not _is_integer(written_at)
-            or written_at < 0
-        ):
-            raise EvaluationError("state raw record has invalid filename, url, or written_at")
-        raw_by_filename.setdefault(filename, (source_key, written_at, index))
+    source_records = state.get("sources")
+    if not isinstance(source_records, list):
+        raise EvaluationError("state.json must contain a sources array")
 
-    summaries_by_source = {}
-    for record in summary_records:
+    snapshots_by_filename = {}
+    sources_by_key = {}
+    summary_filenames = {}
+    for source_index, record in enumerate(source_records):
         if not isinstance(record, dict):
-            raise EvaluationError("state summary records must be objects")
+            raise EvaluationError("state source records must be objects")
         source_key = record.get("source_key")
         if not isinstance(source_key, str) or not source_key:
-            raise EvaluationError("state summary record has an invalid source_key")
-        summaries_by_source.setdefault(source_key, record)
+            raise EvaluationError("state source record has an invalid source_key")
+        if source_key in sources_by_key:
+            raise EvaluationError(f"state contains duplicate source_key: {source_key}")
+
+        snapshot_records = record.get("snapshots")
+        if not isinstance(snapshot_records, list):
+            raise EvaluationError(f"state source {source_key} must contain snapshots")
+        snapshots = {}
+        for snapshot_index, snapshot in enumerate(snapshot_records):
+            if not isinstance(snapshot, dict):
+                raise EvaluationError("state snapshot records must be objects")
+            filename = _safe_snapshot_filename(snapshot.get("filename"))
+            if filename in snapshots:
+                raise EvaluationError(f"state source {source_key} has duplicate snapshot: {filename}")
+            if filename in snapshots_by_filename:
+                raise EvaluationError(f"state contains duplicate snapshot: {filename}")
+            written_at = _parse_rfc3339(
+                snapshot.get("written_at"),
+                f"state sources[{source_index}].snapshots[{snapshot_index}].written_at",
+            )
+            snapshots[filename] = {
+                "written_at": written_at,
+                "state_index": snapshot_index,
+            }
+            snapshots_by_filename[filename] = {
+                "source_key": source_key,
+                "written_at": written_at,
+                "state_index": snapshot_index,
+            }
+
+        summary = record.get("summary")
+        summary_record = None
+        if summary is not None:
+            if not isinstance(summary, dict):
+                raise EvaluationError(f"state source {source_key} summary must be an object")
+            summary_filename = _safe_summary_filename(summary.get("filename"))
+            if summary_filename in summary_filenames:
+                raise EvaluationError(f"state contains duplicate summary: {summary_filename}")
+            derived_from = _safe_snapshot_filename(summary.get("derived_from"))
+            if derived_from not in snapshots:
+                raise EvaluationError(
+                    f"state source {source_key} summary references unknown snapshot: {derived_from}"
+                )
+            created_at = _parse_rfc3339(
+                summary.get("created_at"),
+                f"state sources[{source_index}].summary.created_at",
+            )
+            updated_at = _parse_rfc3339(
+                summary.get("updated_at"),
+                f"state sources[{source_index}].summary.updated_at",
+            )
+            if updated_at < created_at:
+                raise EvaluationError(f"state source {source_key} summary updated_at is before created_at")
+            summary_filenames[summary_filename] = source_key
+            summary_record = {
+                "filename": summary_filename,
+                "derived_from": derived_from,
+            }
+        sources_by_key[source_key] = {
+            "snapshots": snapshots,
+            "summary": summary_record,
+        }
 
     raw_dir = run_dir / "raw"
     summaries_dir = run_dir / "summaries"
@@ -208,7 +279,9 @@ def load_pairs_with_missing(run_dir: Path) -> tuple[list[dict], list[dict]]:
         raise EvaluationError(f"raw directory does not exist: {raw_dir}")
     summaries_available = summaries_dir.is_dir()
 
+    raw_paths = {}
     sources = {}
+    minimum_timestamp = datetime.min.replace(tzinfo=timezone.utc)
     try:
         raw_files = sorted(raw_dir.iterdir(), key=lambda path: path.name)
     except OSError as error:
@@ -218,18 +291,20 @@ def load_pairs_with_missing(run_dir: Path) -> tuple[list[dict], list[dict]]:
             continue
         if raw_path.is_symlink() or not raw_path.is_file():
             raise EvaluationError(f"raw document is not a regular file: {raw_path.name}")
-        record = raw_by_filename.get(raw_path.name)
+        raw_paths[raw_path.name] = raw_path
+        record = snapshots_by_filename.get(raw_path.name)
         if record is None:
-            source_key, written_at, state_index = f"raw:{raw_path.name}", 0, 0
+            source_key, written_at, state_index = f"raw:{raw_path.name}", minimum_timestamp, 0
         else:
-            source_key, written_at, state_index = record
+            source_key = record["source_key"]
+            written_at = record["written_at"]
+            state_index = record["state_index"]
         candidate = (written_at, state_index)
         current = sources.get(source_key)
         if current is None or candidate > current["order"]:
             sources[source_key] = {
                 "source_key": source_key,
                 "raw_filename": raw_path.name,
-                "raw_path": raw_path,
                 "order": candidate,
             }
 
@@ -240,7 +315,8 @@ def load_pairs_with_missing(run_dir: Path) -> tuple[list[dict], list[dict]]:
     missing = []
     for source_key in sorted(sources):
         source = sources[source_key]
-        summary_record = summaries_by_source.get(source_key)
+        source_record = sources_by_key.get(source_key)
+        summary_record = source_record["summary"] if source_record else None
         if summary_record is None:
             missing.append({
                 "source_key": source_key,
@@ -258,12 +334,22 @@ def load_pairs_with_missing(run_dir: Path) -> tuple[list[dict], list[dict]]:
                 "reason": "missing summary file",
             })
             continue
-        raw = _read_text(source["raw_path"], f"raw document {source['raw_filename']}")
+        raw_filename = summary_record["derived_from"]
+        raw_path = raw_paths.get(raw_filename)
+        if raw_path is None:
+            missing.append({
+                "source_key": source_key,
+                "raw_filename": raw_filename,
+                "summary_filename": summary_filename,
+                "reason": "missing raw document",
+            })
+            continue
+        raw = _read_text(raw_path, f"raw document {raw_filename}")
         summary = _read_text(summary_path, f"summary {summary_filename}")
         pairs.append(
             {
                 "source_key": source_key,
-                "raw_filename": source["raw_filename"],
+                "raw_filename": raw_filename,
                 "summary_filename": summary_filename,
                 "raw": raw,
                 "summary": summary,

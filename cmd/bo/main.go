@@ -2,14 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/skillicinski/bo"
-	"github.com/skillicinski/bo/internal/application"
-	"github.com/skillicinski/bo/internal/provider/deepseek"
-	"github.com/skillicinski/bo/internal/storage/local"
 )
 
 const usage = "usage: bo seed [--name <name>] | bo snap <name> <source>... | bo state <name> [--full] | bo synth <name> [options]"
@@ -47,55 +45,47 @@ func runSeed(args []string) {
 		name = args[index+1]
 		index++
 	}
-	home, err := local.HomeDir()
+	home, err := homeDir()
 	if err != nil {
 		fail("seeding", err.Error())
 	}
-	created, err := bo.Seed(context.Background(), local.NewManager(home), name, bo.OperationOptions{Log: local.NewOperationLog(home), Actor: "cli"})
+	result, err := bo.Seed(context.Background(), bo.SeedRequest{
+		Creator:    bo.NewLocalManager(home),
+		Name:       name,
+		Operations: bo.OperationOptions{Log: bo.NewOperationLog(home), Actor: "cli"},
+	})
 	if err != nil {
 		fail("seeding", err.Error())
 	}
-	fmt.Printf("seeded: %s\n", created)
+	fmt.Printf("seeded: %s\n", result.Name)
 }
 
 func runSnap(args []string) {
 	if len(args) < 2 || strings.HasPrefix(args[0], "-") {
 		fail("snap", "usage: bo snap <dir> <source>...")
 	}
-	home, err := local.HomeDir()
+	home, err := homeDir()
 	if err != nil {
 		fail("snap", err.Error())
 	}
-	target, err := local.ResolveTarget(home, args[0])
+	workspace, err := bo.NewLocalManager(home).Open(context.Background(), args[0])
 	if err != nil {
 		if strings.HasPrefix(err.Error(), "target directory does not exist:") {
 			err = fmt.Errorf("%s (run bo seed --name %s)", err, args[0])
 		}
 		fail("snap", err.Error())
 	}
-	storage, err := local.Open(target)
+	defer workspace.Close()
+	result, err := bo.Snap(context.Background(), bo.SnapRequest{
+		Workspace:  workspace,
+		Sources:    args[1:],
+		Operations: bo.OperationOptions{Log: bo.NewOperationLog(home), Actor: "cli"},
+	})
 	if err != nil {
-		fail("snap", err.Error())
-	}
-	defer storage.Close()
-	outcomes, commandErr := bo.Snap(context.Background(), storage, args[0], args[1:], bo.OperationOptions{Log: local.NewOperationLog(home), Actor: "cli"})
-	if commandErr != nil {
-		fatal, ok := commandErr.(*bo.SnapCommandError)
-		if !ok {
-			fmt.Fprintf(os.Stderr, "snap failed: %v\n", commandErr)
-			os.Exit(1)
-		}
-		if len(fatal.Completed) > 0 || fatal.SourceKey != "" {
-			if len(fatal.Completed) > 0 {
-				outcomes = fatal.Completed
-			}
-			printSnapReport(outcomes, fatal)
-		} else {
-			fmt.Fprintf(os.Stderr, "snap failed: %v\n", fatal)
-		}
+		printSnapReport(result, err)
 		os.Exit(1)
 	}
-	if printSnapReport(outcomes, nil) {
+	if printSnapReport(result, nil) {
 		os.Exit(1)
 	}
 }
@@ -104,24 +94,31 @@ func runState(args []string) {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") || len(args) > 2 || len(args) == 2 && args[1] != "--full" {
 		fail("state", "usage: bo state <name> [--full]")
 	}
-	home, err := local.HomeDir()
+	home, err := homeDir()
 	if err != nil {
 		fail("state", err.Error())
 	}
-	target, err := local.ResolveTarget(home, args[0])
+	workspace, err := bo.NewLocalManager(home).Open(context.Background(), args[0])
 	if err != nil {
 		fail("state", err.Error())
 	}
-	storage, err := local.Open(target)
+	defer workspace.Close()
+	result, err := bo.ReadState(context.Background(), bo.StateRequest{
+		Workspace:  workspace,
+		Operations: bo.OperationOptions{Log: bo.NewOperationLog(home), Actor: "cli"},
+	})
 	if err != nil {
 		fail("state", err.Error())
 	}
-	defer storage.Close()
-	output, err := bo.StateOutput(context.Background(), storage, args[0], len(args) == 2, bo.OperationOptions{Log: local.NewOperationLog(home), Actor: "cli"})
-	if err != nil {
-		fail("state", err.Error())
+	if len(args) == 2 {
+		data, err := json.MarshalIndent(result.State, "", "  ")
+		if err != nil {
+			fail("state", err.Error())
+		}
+		fmt.Println(string(data))
+		return
 	}
-	fmt.Println(output)
+	fmt.Printf("%d documents snapped\n", result.State.SnapshotCount())
 }
 
 func runSynth(args []string) {
@@ -137,30 +134,33 @@ func runSynth(args []string) {
 	if apiKey == "" {
 		fail("synth", "DEEPSEEK_API_KEY is not set")
 	}
-	home, err := local.HomeDir()
+	home, err := homeDir()
 	if err != nil {
 		fail("synth", err.Error())
 	}
 	endpoint := os.Getenv("DEEPSEEK_API_URL")
-	provider := deepseek.New(apiKey, endpoint)
-	operationOptions := bo.OperationOptions{Log: local.NewOperationLog(home), Actor: "cli"}
-	var result bo.SynthesisResult
-	toolSet, hasToolSet := os.LookupEnv("BO_EVAL_TOOLS")
-	if hasToolSet {
-		result, err = application.SynthesizeWithTools(context.Background(), local.NewManager(home), name, provider, config, strings.Split(toolSet, ","), operationOptions)
-	} else {
-		result, err = bo.Synthesize(context.Background(), local.NewManager(home), name, provider, config, operationOptions)
+	workspace, err := bo.NewLocalManager(home).Open(context.Background(), name)
+	if err != nil {
+		fail("synth", err.Error())
 	}
+	defer workspace.Close()
+	provider := bo.NewDeepSeekProvider(bo.DeepSeekConfig{APIKey: apiKey, Endpoint: endpoint})
+	result, err := bo.Synth(context.Background(), bo.SynthRequest{
+		Workspace:  workspace,
+		Provider:   provider,
+		Options:    config,
+		Operations: bo.OperationOptions{Log: bo.NewOperationLog(home), Actor: "cli"},
+	})
 	if err != nil {
 		fail("synth", err.Error())
 	}
 	fmt.Printf("%d summaries written\n", result.SummariesWritten)
 }
 
-func printSnapReport(outcomes []bo.SnapOutcome, fatal *bo.SnapCommandError) bool {
-	total := len(outcomes)
+func printSnapReport(result bo.SnapResult, fatal error) bool {
+	total := len(result.Outcomes)
 	failed := 0
-	for _, outcome := range outcomes {
+	for _, outcome := range result.Outcomes {
 		if outcome.Err != nil {
 			failed++
 			fmt.Fprintf(os.Stderr, "failed: %s (%v)\n", outcome.SourceKey, outcome.Err)
@@ -168,12 +168,12 @@ func printSnapReport(outcomes []bo.SnapOutcome, fatal *bo.SnapCommandError) bool
 			fmt.Printf("snapped: %s -> %s\n", outcome.SourceKey, outcome.Filename)
 		}
 	}
-	aborted := fatal != nil
+	aborted := result.Aborted || fatal != nil
 	if fatal != nil {
-		if fatal.SourceKey != "" {
-			fmt.Fprintf(os.Stderr, "failed: %s (%v)\n", fatal.SourceKey, fatal.Err)
+		if result.FailedSource != "" {
+			fmt.Fprintf(os.Stderr, "failed: %s (%v)\n", result.FailedSource, fatal)
 		} else {
-			fmt.Fprintf(os.Stderr, "snap failed: %v\n", fatal.Err)
+			fmt.Fprintf(os.Stderr, "snap failed: %v\n", fatal)
 		}
 	}
 	totalFailed := failed
@@ -186,6 +186,15 @@ func printSnapReport(outcomes []bo.SnapOutcome, fatal *bo.SnapCommandError) bool
 		fmt.Fprintf(os.Stderr, "%d succeeded / %d failed\n", total-failed, totalFailed)
 	}
 	return aborted || failed > 0
+}
+
+func homeDir() (string, error) {
+	for _, name := range []string{"HOME", "USERPROFILE"} {
+		if value := os.Getenv(name); value != "" {
+			return value, nil
+		}
+	}
+	return "", fmt.Errorf("HOME or USERPROFILE is not set")
 }
 
 func fail(operation, detail string) {

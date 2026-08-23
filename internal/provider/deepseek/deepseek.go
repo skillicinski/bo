@@ -9,7 +9,7 @@ import (
 	"net/http"
 
 	"github.com/skillicinski/bo/internal/agent"
-	"github.com/skillicinski/bo/internal/application"
+	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
 const (
@@ -20,6 +20,7 @@ const (
 type Client struct {
 	APIKey     string
 	Endpoint   string
+	Model      string
 	HTTPClient *http.Client
 }
 
@@ -34,11 +35,14 @@ func NewClient(apiKey, endpoint string) *Client { return New(apiKey, endpoint) }
 
 func (c *Client) Complete(ctx context.Context, request agent.CompletionRequest) (agent.CompletionResponse, error) {
 	if request.Model == "" {
-		request.Model = DefaultModel
+		request.Model = c.Model
+		if request.Model == "" {
+			request.Model = DefaultModel
+		}
 	}
 	body, err := json.Marshal(request)
 	if err != nil {
-		return agent.CompletionResponse{}, application.RequestError(fmt.Sprintf("encoding API request failed: %v", err))
+		return agent.CompletionResponse{}, internalerrors.Request(fmt.Sprintf("encoding API request failed: %v", err))
 	}
 	endpoint := c.Endpoint
 	if endpoint == "" {
@@ -50,7 +54,7 @@ func (c *Client) Complete(ctx context.Context, request agent.CompletionRequest) 
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return agent.CompletionResponse{}, application.RequestError(fmt.Sprintf("creating API request failed: %v", err))
+		return agent.CompletionResponse{}, internalerrors.Request(fmt.Sprintf("creating API request failed: %v", err))
 	}
 	req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	req.Header.Set("Content-Type", "application/json")
