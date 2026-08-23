@@ -29,9 +29,10 @@ inputs.
 source workflow. `internal/agent` owns the provider-neutral completion and tool
 runtime. `internal/storage` owns filesystem and workspace adapters.
 
-Categorized errors live in the dependency-neutral shared error package so
+Stable error kinds live in the dependency-neutral shared error package so
 source, storage, and application code can use the same error vocabulary without
-an adapter importing a use case.
+an adapter importing a use case. The root package translates those kinds into
+one public error contract and keeps HTTP protocol status selection outside bo.
 
 ## Source workflow
 

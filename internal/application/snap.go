@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/skillicinski/bo/internal/domain"
+	internalerrors "github.com/skillicinski/bo/internal/errors"
 	"github.com/skillicinski/bo/internal/source"
 	filesource "github.com/skillicinski/bo/internal/source/file"
 	urlsource "github.com/skillicinski/bo/internal/source/url"
@@ -40,7 +41,7 @@ func (e *SnapCommandError) Error() string {
 func (e *SnapCommandError) Unwrap() error { return e.Err }
 
 func NewSnapInputError(detail string) *SnapCommandError {
-	return &SnapCommandError{Err: InputError(detail)}
+	return &SnapCommandError{Err: internalerrors.Validation(detail)}
 }
 
 func Snap(ctx context.Context, storage Storage, directory string, inputs []string, options OperationOptions) ([]SnapOutcome, error) {
@@ -52,6 +53,9 @@ func SnapWithWorkflow(ctx context.Context, storage Storage, workflow source.Fetc
 	options, err = normalizeOperationOptions(options)
 	if err != nil {
 		return nil, err
+	}
+	if storage == nil {
+		return nil, internalerrors.Request("workspace storage is not configured")
 	}
 	logSnap := func(sourceKey, filename string, operationErr error) {
 		details := map[string]any{"source_key": sourceKey}
@@ -71,9 +75,7 @@ func SnapWithWorkflow(ctx context.Context, storage Storage, workflow source.Fetc
 	}
 	state, generation, err := storage.ReadState(ctx)
 	if err != nil {
-		if !IsCategory(err, CategoryFilesystem) {
-			err = FilesystemError(err.Error())
-		}
+		err = normalizeError(err, internalerrors.KindFilesystem, "reading workspace state")
 		for _, input := range inputs {
 			logSnap(input, "", err)
 		}
@@ -83,6 +85,7 @@ func SnapWithWorkflow(ctx context.Context, storage Storage, workflow source.Fetc
 	for index, input := range inputs {
 		snapshot, fetchErr := workflow.Fetch(ctx, input)
 		if fetchErr != nil {
+			fetchErr = normalizeError(fetchErr, internalerrors.KindSource, "fetching source")
 			outcomes = append(outcomes, SnapOutcome{SourceKey: input, Err: fetchErr})
 			logSnap(input, "", fetchErr)
 			continue
@@ -92,13 +95,14 @@ func SnapWithWorkflow(ctx context.Context, storage Storage, workflow source.Fetc
 			sourceKey = input
 		}
 		if sourceErr := domain.ValidateSourceKey(sourceKey); sourceErr != nil {
-			sourceErr = InputError(sourceErr.Error())
+			sourceErr = normalizeError(sourceErr, internalerrors.KindValidation, "validating source key")
 			outcomes = append(outcomes, SnapOutcome{SourceKey: input, Err: sourceErr})
 			logSnap(input, "", sourceErr)
 			continue
 		}
 		slug, slugErr := KebabCase(snapshot.Title)
 		if slugErr != nil {
+			slugErr = normalizeError(slugErr, internalerrors.KindValidation, "creating snapshot filename")
 			outcomes = append(outcomes, SnapOutcome{SourceKey: input, Err: slugErr})
 			logSnap(input, "", slugErr)
 			continue
@@ -131,13 +135,16 @@ func SnapWithWorkflow(ctx context.Context, storage Storage, workflow source.Fetc
 		if publishErr != nil {
 			rollbackErr := storage.DeleteDocument(ctx, document)
 			detail := fmt.Sprintf("updating state failed: %s; snapshot written then deleted", errorDetail(publishErr))
+			cause := publishErr
 			if rollbackErr != nil {
 				detail = fmt.Sprintf("updating state failed: %s; snapshot cleanup failed: %s", errorDetail(publishErr), errorDetail(rollbackErr))
+				cause = errors.Join(publishErr, rollbackErr)
 			}
-			failure := FilesystemError(detail)
-			if IsConflict(publishErr) {
-				failure = ConflictError(detail)
+			failureKind := internalerrors.KindFilesystem
+			if internalerrors.IsKind(publishErr, internalerrors.KindConflict) {
+				failureKind = internalerrors.KindConflict
 			}
+			failure := internalerrors.Wrap(failureKind, detail, cause)
 			logSnap(input, "", failure)
 			for _, skipped := range inputs[index+1:] {
 				logSnap(skipped, "", fmt.Errorf("snap batch aborted after %s", input))
@@ -175,14 +182,14 @@ func createRaw(ctx context.Context, storage Storage, slug string, timestamp int6
 		if err == nil {
 			return filename, ref, nil
 		}
-		if !IsAlreadyExists(err) {
+		if !internalerrors.IsAlreadyExists(err) {
 			return "", domain.DocumentRef{}, err
 		}
 	}
 }
 
 func errorDetail(err error) string {
-	var categorized *Error
+	var categorized *internalerrors.Error
 	if errors.As(err, &categorized) {
 		return categorized.Detail
 	}

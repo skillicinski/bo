@@ -50,7 +50,7 @@ func TestLocalGenerationConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = store.PublishState(context.Background(), state, generation)
-	if !bo.IsConflict(err) {
+	if !bo.IsKind(err, bo.ErrorKindConflict) {
 		t.Fatalf("expected conflict, got %v", err)
 	}
 }

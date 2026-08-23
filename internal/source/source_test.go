@@ -48,13 +48,13 @@ func TestWorkflowReportsUnsupportedAndMissingPlugins(t *testing.T) {
 	workflow := source.NewWorkflow([]source.Transport{transportFunc(func(context.Context, string) (source.Origin, error) {
 		return source.Origin{}, source.ErrNotHandled
 	})}, nil)
-	if _, err := workflow.Fetch(context.Background(), "input"); !internalerrors.IsCategory(err, internalerrors.CategoryUnsupported) {
+	if _, err := workflow.Fetch(context.Background(), "input"); !internalerrors.IsKind(err, internalerrors.KindSource) {
 		t.Fatalf("unsupported error = %v", err)
 	}
 	workflow = source.NewWorkflow([]source.Transport{transportFunc(func(context.Context, string) (source.Origin, error) {
 		return source.NewOrigin(source.OriginHTML, "key", "value"), nil
 	})}, nil)
-	if _, err := workflow.Fetch(context.Background(), "input"); !internalerrors.IsCategory(err, internalerrors.CategoryUnsupported) {
+	if _, err := workflow.Fetch(context.Background(), "input"); !internalerrors.IsKind(err, internalerrors.KindSource) {
 		t.Fatalf("missing plugin error = %v", err)
 	}
 }

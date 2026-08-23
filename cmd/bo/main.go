@@ -70,9 +70,7 @@ func runSnap(args []string) {
 	}
 	workspace, err := bo.NewLocalManager(home).Open(context.Background(), args[0])
 	if err != nil {
-		if strings.HasPrefix(err.Error(), "target directory does not exist:") {
-			err = fmt.Errorf("%s (run bo seed --name %s)", err, args[0])
-		}
+		err = addSeedHint(err, args[0])
 		fail("snap", err.Error())
 	}
 	defer workspace.Close()
@@ -155,6 +153,13 @@ func runSynth(args []string) {
 		fail("synth", err.Error())
 	}
 	fmt.Printf("%d summaries written\n", result.SummariesWritten)
+}
+
+func addSeedHint(err error, name string) error {
+	if !bo.IsKind(err, bo.ErrorKindMissingResource) {
+		return err
+	}
+	return fmt.Errorf("%w (run bo seed --name %s)", err, name)
 }
 
 func printSnapReport(result bo.SnapResult, fatal error) bool {

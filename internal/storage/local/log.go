@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/skillicinski/bo/internal/application"
 	"github.com/skillicinski/bo/internal/domain"
+	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
 const operationsFile = "log.jsonl"
@@ -45,36 +45,36 @@ func (l *OperationLog) Append(ctx context.Context, operation domain.Operation) e
 	}
 	data, err := json.Marshal(operation)
 	if err != nil {
-		return fmt.Errorf("serializing operation failed: %w", err)
+		return internalerrors.Wrap(internalerrors.KindFilesystem, "serializing operation failed", err)
 	}
 	data = append(data, '\n')
 
 	operationsMu.Lock()
 	defer operationsMu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(l.path), 0o700); err != nil {
-		return fmt.Errorf("creating operation log directory failed: %w", err)
+		return filesystem(filepath.Dir(l.path), err)
 	}
 	file, err := os.OpenFile(l.path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
-		return fmt.Errorf("opening operation log failed: %w", err)
+		return filesystem(l.path, err)
 	}
 	if err := file.Chmod(0o600); err != nil {
 		_ = file.Close()
-		return fmt.Errorf("setting operation log permissions failed: %w", err)
+		return filesystem(l.path, err)
 	}
 	if written, err := file.Write(data); err != nil {
 		_ = file.Close()
-		return fmt.Errorf("appending operation failed: %w", err)
+		return filesystem(l.path, err)
 	} else if written != len(data) {
 		_ = file.Close()
-		return io.ErrShortWrite
+		return internalerrors.Wrap(internalerrors.KindFilesystem, "appending operation failed", io.ErrShortWrite)
 	}
 	if err := file.Sync(); err != nil {
 		_ = file.Close()
-		return fmt.Errorf("syncing operation log failed: %w", err)
+		return filesystem(l.path, err)
 	}
 	if err := file.Close(); err != nil {
-		return fmt.Errorf("closing operation log failed: %w", err)
+		return filesystem(l.path, err)
 	}
 	return nil
 }
@@ -84,7 +84,7 @@ func (l *OperationLog) Read(ctx context.Context, directory string, offset, limit
 		return application.OperationPage{}, err
 	}
 	if offset < 0 {
-		return application.OperationPage{}, fmt.Errorf("operation log offset must not be negative")
+		return application.OperationPage{}, internalerrors.Validation("operation log offset must not be negative")
 	}
 	if limit <= 0 {
 		limit = 20
@@ -98,7 +98,7 @@ func (l *OperationLog) Read(ctx context.Context, directory string, offset, limit
 		if errors.Is(err, os.ErrNotExist) {
 			return page, nil
 		}
-		return application.OperationPage{}, fmt.Errorf("opening operation log failed: %w", err)
+		return application.OperationPage{}, filesystem(l.path, err)
 	}
 	defer file.Close()
 
@@ -124,7 +124,7 @@ func (l *OperationLog) Read(ctx context.Context, directory string, offset, limit
 			break
 		}
 		if readErr != nil {
-			return application.OperationPage{}, fmt.Errorf("reading operation log failed: %w", readErr)
+			return application.OperationPage{}, filesystem(l.path, readErr)
 		}
 	}
 	page.NextOffset = offset + len(page.Entries)

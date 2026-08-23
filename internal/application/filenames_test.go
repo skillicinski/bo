@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/skillicinski/bo/internal/application"
+	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
 func TestKebabCase(t *testing.T) {
@@ -11,7 +12,7 @@ func TestKebabCase(t *testing.T) {
 	if err != nil || got != "hello-world" {
 		t.Fatalf("got %q, %v", got, err)
 	}
-	if _, err := application.KebabCase("!!!"); !application.IsCategory(err, application.CategoryContent) {
-		t.Fatalf("expected content error, got %v", err)
+	if _, err := application.KebabCase("!!!"); !internalerrors.IsKind(err, internalerrors.KindValidation) {
+		t.Fatalf("expected validation error, got %v", err)
 	}
 }

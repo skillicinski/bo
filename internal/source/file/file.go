@@ -2,6 +2,7 @@ package file
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,7 +21,7 @@ func (t *Transport) Route(_ context.Context, input string) (source.Origin, error
 	extension := filepath.Ext(input)
 	if !strings.EqualFold(extension, ".md") {
 		if extension != "" {
-			return source.Origin{}, internalerrors.Unsupported("file extension must be .md")
+			return source.Origin{}, internalerrors.Source("file extension must be .md")
 		}
 		return source.Origin{}, source.ErrNotHandled
 	}
@@ -35,13 +36,20 @@ func NewMarkdown() *MarkdownPlugin       { return NewMarkdownPlugin() }
 
 func (p *MarkdownPlugin) Type() source.OriginType { return source.OriginMarkdown }
 
-func (p *MarkdownPlugin) Handle(_ context.Context, origin source.Origin) (domain.RawSnapshot, error) {
+func (p *MarkdownPlugin) Handle(ctx context.Context, origin source.Origin) (domain.RawSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.RawSnapshot{}, internalerrors.Context(err)
+	}
 	data, err := os.ReadFile(origin.Value)
 	if err != nil {
-		return domain.RawSnapshot{}, internalerrors.Filesystem(fmt.Sprintf("reading %s failed: %v", origin.Value, err))
+		kind := internalerrors.KindFilesystem
+		if errors.Is(err, os.ErrNotExist) {
+			kind = internalerrors.KindMissingResource
+		}
+		return domain.RawSnapshot{}, internalerrors.Wrap(kind, fmt.Sprintf("reading %s failed", origin.Value), err)
 	}
 	if len(strings.TrimSpace(string(data))) == 0 {
-		return domain.RawSnapshot{}, internalerrors.Content("Markdown file is empty")
+		return domain.RawSnapshot{}, internalerrors.Source("Markdown file is empty")
 	}
 	title := markdownTitle(data, filepath.Base(origin.Value))
 	return domain.NewRawSnapshot(origin.SourceKey, title, data), nil

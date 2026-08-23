@@ -15,6 +15,7 @@ import (
 
 	"github.com/skillicinski/bo/internal/application"
 	"github.com/skillicinski/bo/internal/domain"
+	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
 type Store struct {
@@ -26,18 +27,18 @@ type Store struct {
 func Open(path string) (*Store, error) {
 	canonical, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return nil, application.FilesystemError(fmt.Sprintf("canonicalizing %s failed: %v", path, err))
+		return nil, filesystem(path, err)
 	}
 	info, err := os.Stat(canonical)
 	if err != nil {
-		return nil, application.FilesystemError(fmt.Sprintf("reading %s failed: %v", canonical, err))
+		return nil, filesystem(canonical, err)
 	}
 	if !info.IsDir() {
-		return nil, application.FilesystemError(fmt.Sprintf("target is not a directory: %s", canonical))
+		return nil, internalerrors.Validation(fmt.Sprintf("target is not a directory: %s", canonical))
 	}
 	root, err := os.OpenRoot(canonical)
 	if err != nil {
-		return nil, application.FilesystemError(fmt.Sprintf("opening %s failed: %v", canonical, err))
+		return nil, filesystem(canonical, err)
 	}
 	return &Store{root: root, path: canonical}, nil
 }
@@ -55,13 +56,13 @@ func (s *Store) InitializeState(ctx context.Context, state domain.State) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, err := s.root.Lstat("state.json"); err == nil {
-		return application.FilesystemError("state file already exists")
+		return internalerrors.AlreadyExists("state file already exists")
 	} else if !os.IsNotExist(err) {
 		return filesystem("reading state.json", err)
 	}
 	data, err := domain.MarshalState(state)
 	if err != nil {
-		return application.FilesystemError(fmt.Sprintf("serializing state.json failed: %v", err))
+		return normalizeStorageError("serializing state.json", err)
 	}
 	if err := s.writeAtomic("state.json", ".state.json.tmp", data); err != nil {
 		return err
@@ -74,13 +75,12 @@ func (s *Store) CreateRaw(ctx context.Context, name string, contents []byte) (do
 		return domain.DocumentRef{}, err
 	}
 	if err := validMarkdownName(name); err != nil {
-		return domain.DocumentRef{}, application.InputError(err.Error())
+		return domain.DocumentRef{}, err
 	}
 	file, err := s.root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		if os.IsExist(err) {
-			wrapped := application.FilesystemError(fmt.Sprintf("creating %s failed: %v", filepath.Join(s.path, name), err))
-			wrapped.Cause = application.ErrAlreadyExists
+			wrapped := internalerrors.Wrap(internalerrors.KindAlreadyExists, fmt.Sprintf("creating %s failed", filepath.Join(s.path, name)), internalerrors.ErrAlreadyExists)
 			return domain.DocumentRef{}, wrapped
 		}
 		return domain.DocumentRef{}, filesystem(filepath.Join(s.path, name), err)
@@ -101,14 +101,14 @@ func (s *Store) CreateRaw(ctx context.Context, name string, contents []byte) (do
 
 func (s *Store) WriteRaw(ctx context.Context, ref domain.DocumentRef, contents []byte) error {
 	if ref.Kind != domain.DocumentKindRaw {
-		return application.InputError("raw writes require a raw document")
+		return internalerrors.Validation("raw writes require a raw document")
 	}
 	created, err := s.CreateRaw(ctx, ref.Name, contents)
 	if err != nil {
 		return err
 	}
 	if created.Name != ref.Name {
-		return application.FilesystemError("raw document name changed")
+		return internalerrors.Filesystem("raw document name changed")
 	}
 	return nil
 }
@@ -127,14 +127,14 @@ func (s *Store) ReadDocument(ctx context.Context, ref domain.DocumentRef) ([]byt
 	}
 	path, err := s.documentPath(ref)
 	if err != nil {
-		return nil, application.InputError(err.Error())
+		return nil, err
 	}
 	info, err := s.root.Stat(path)
 	if err != nil {
 		return nil, filesystem(filepath.Join(s.path, path), err)
 	}
 	if !info.Mode().IsRegular() {
-		return nil, application.FilesystemError(fmt.Sprintf("document is not a regular file: %s", filepath.Join(s.path, path)))
+		return nil, internalerrors.Filesystem(fmt.Sprintf("document is not a regular file: %s", filepath.Join(s.path, path)))
 	}
 	data, err := s.root.ReadFile(path)
 	if err != nil {
@@ -151,7 +151,7 @@ func (s *Store) ListMarkdownDocuments(ctx context.Context, kind domain.DocumentK
 	if kind == domain.DocumentKindSummary {
 		directory = "summaries"
 	} else if kind != domain.DocumentKindRaw {
-		return nil, application.InputError("unsupported document kind")
+		return nil, internalerrors.Validation("unsupported document kind")
 	}
 	entries, err := fs.ReadDir(s.root.FS(), directory)
 	if err != nil {
@@ -185,17 +185,17 @@ func (s *Store) ReplaceSummary(ctx context.Context, ref domain.DocumentRef, cont
 		return err
 	}
 	if ref.Kind != domain.DocumentKindSummary {
-		return application.InputError("summary writes require a summary document")
+		return internalerrors.Validation("summary writes require a summary document")
 	}
 	if err := validMarkdownName(ref.Name); err != nil {
-		return application.InputError(err.Error())
+		return err
 	}
 	if info, err := s.root.Lstat("summaries"); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 {
-			return application.FilesystemError("summaries must not be a symlink")
+			return internalerrors.Filesystem("summaries must not be a symlink")
 		}
 		if !info.IsDir() {
-			return application.FilesystemError("summaries is not a directory")
+			return internalerrors.Filesystem("summaries is not a directory")
 		}
 	} else if os.IsNotExist(err) {
 		if err := s.root.Mkdir("summaries", 0o755); err != nil {
@@ -230,7 +230,7 @@ func (s *Store) ReplaceSummary(ctx context.Context, ref domain.DocumentRef, cont
 			_ = s.root.Remove(temporary)
 			return filesystem(filepath.Join(s.path, "summaries", ref.Name), err)
 		}
-		return syncDirectory(s.root, "summaries")
+		return syncFilesystem(filepath.Join(s.path, "summaries"), syncDirectory(s.root, "summaries"))
 	}
 }
 
@@ -239,10 +239,10 @@ func (s *Store) DeleteDocument(ctx context.Context, ref domain.DocumentRef) erro
 		return err
 	}
 	if ref.Kind != domain.DocumentKindRaw {
-		return application.InputError("only raw documents can be deleted")
+		return internalerrors.Validation("only raw documents can be deleted")
 	}
 	if err := validMarkdownName(ref.Name); err != nil {
-		return application.InputError(err.Error())
+		return err
 	}
 	if err := s.root.Remove(ref.Name); err != nil {
 		return filesystem(filepath.Join(s.path, ref.Name), err)
@@ -260,7 +260,7 @@ func (s *Store) ReadState(ctx context.Context) (domain.State, application.Genera
 	}
 	state, err := domain.UnmarshalState(data)
 	if err != nil {
-		return domain.State{}, application.Generation{}, application.FilesystemError(fmt.Sprintf("parsing %s failed: %v", filepath.Join(s.path, "state.json"), err))
+		return domain.State{}, application.Generation{}, normalizeStorageError("parsing "+filepath.Join(s.path, "state.json"), err)
 	}
 	return state, application.NewGeneration(data), nil
 }
@@ -276,11 +276,11 @@ func (s *Store) PublishState(ctx context.Context, state domain.State, expected a
 		return application.Generation{}, err
 	}
 	if !application.NewGeneration(current).Equal(expected) {
-		return application.Generation{}, application.ConflictError("state generation changed")
+		return application.Generation{}, internalerrors.Conflict("state generation changed")
 	}
 	data, err := domain.MarshalState(state)
 	if err != nil {
-		return application.Generation{}, application.FilesystemError(fmt.Sprintf("serializing %s failed: %v", filepath.Join(s.path, "state.json"), err))
+		return application.Generation{}, normalizeStorageError("serializing "+filepath.Join(s.path, "state.json"), err)
 	}
 	if err := s.writeAtomic("state.json", ".state.json.tmp", data); err != nil {
 		return application.Generation{}, err
@@ -294,10 +294,10 @@ func (s *Store) stateBytes() ([]byte, error) {
 		return nil, filesystem(filepath.Join(s.path, "state.json"), err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return nil, application.FilesystemError(fmt.Sprintf("state.json must not be a symlink: %s", filepath.Join(s.path, "state.json")))
+		return nil, internalerrors.Filesystem(fmt.Sprintf("state.json must not be a symlink: %s", filepath.Join(s.path, "state.json")))
 	}
 	if !info.Mode().IsRegular() {
-		return nil, application.FilesystemError(fmt.Sprintf("state.json is not a regular file: %s", filepath.Join(s.path, "state.json")))
+		return nil, internalerrors.Filesystem(fmt.Sprintf("state.json is not a regular file: %s", filepath.Join(s.path, "state.json")))
 	}
 	data, err := s.root.ReadFile("state.json")
 	if err != nil {
@@ -316,7 +316,7 @@ func (s *Store) documentPath(ref domain.DocumentRef) (string, error) {
 	case domain.DocumentKindSummary:
 		return filepath.Join("summaries", ref.Name), nil
 	default:
-		return "", fmt.Errorf("unsupported document kind")
+		return "", internalerrors.Validation("unsupported document kind")
 	}
 }
 
@@ -347,21 +347,43 @@ func validMarkdownName(name string) error {
 	return domain.ValidateDocumentName(name)
 }
 
-func filesystem(path string, err error) *application.Error {
-	return &application.Error{Category: application.CategoryFilesystem, Detail: fmt.Sprintf("%s failed: %v", path, err), Cause: err}
+func filesystem(path string, err error) error {
+	kind := internalerrors.KindFilesystem
+	if errors.Is(err, os.ErrNotExist) {
+		kind = internalerrors.KindMissingResource
+	}
+	return internalerrors.Wrap(kind, fmt.Sprintf("%s failed", path), err)
+}
+
+func normalizeStorageError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var categorized *internalerrors.Error
+	if errors.As(err, &categorized) {
+		return err
+	}
+	return internalerrors.Wrap(internalerrors.KindFilesystem, operation+" failed", err)
+}
+
+func syncFilesystem(path string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return filesystem(path, err)
 }
 
 func contextErr(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return internalerrors.Context(ctx.Err())
 	default:
 		return nil
 	}
 }
 
 func syncRoot(root *os.Root) error {
-	return syncDirectory(root, ".")
+	return syncFilesystem("workspace root", syncDirectory(root, "."))
 }
 
 func syncDirectory(root *os.Root, path string) error {

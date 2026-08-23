@@ -3,6 +3,8 @@ package application
 import (
 	"strings"
 	"unicode"
+
+	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
 func KebabCase(value string) (string, error) {
@@ -19,7 +21,7 @@ func KebabCase(value string) (string, error) {
 	}
 	result := strings.TrimRight(builder.String(), "-")
 	if result == "" {
-		return "", ContentError("title cannot produce a filename")
+		return "", internalerrors.Validation("title cannot produce a filename")
 	}
 	return result, nil
 }

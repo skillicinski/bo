@@ -2,7 +2,6 @@ package url
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -21,18 +20,28 @@ type Transport struct{}
 
 func NewTransport() *Transport { return &Transport{} }
 
-func (t *Transport) Route(_ context.Context, input string) (source.Origin, error) {
+func sourceFailure(detail string, err error) error {
+	if contextErr := internalerrors.Context(err); contextErr != nil {
+		return contextErr
+	}
+	return internalerrors.Wrap(internalerrors.KindSource, detail, err)
+}
+
+func (t *Transport) Route(ctx context.Context, input string) (source.Origin, error) {
+	if err := ctx.Err(); err != nil {
+		return source.Origin{}, internalerrors.Context(err)
+	}
 	match := ClassifyYouTubeURL(input)
 	if match.Kind == YouTubeSupported {
 		return source.NewOrigin(source.OriginYouTube, input, input), nil
 	}
 	if match.Kind == YouTubeUnsupported {
-		return source.Origin{}, internalerrors.Unsupported("YouTube URL: " + match.Reason)
+		return source.Origin{}, internalerrors.Source("YouTube URL: " + match.Reason)
 	}
 	parsed, err := url.Parse(input)
 	if err != nil {
 		if strings.Contains(input, "://") || strings.HasPrefix(input, "http:") || strings.HasPrefix(input, "https:") {
-			return source.Origin{}, internalerrors.Input(fmt.Sprintf("invalid URL: %v", err))
+			return source.Origin{}, internalerrors.Wrap(internalerrors.KindValidation, "invalid URL", err)
 		}
 		return source.Origin{}, source.ErrNotHandled
 	}
@@ -40,10 +49,10 @@ func (t *Transport) Route(_ context.Context, input string) (source.Origin, error
 		return source.Origin{}, source.ErrNotHandled
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return source.Origin{}, internalerrors.Input("URL scheme must be http or https")
+		return source.Origin{}, internalerrors.Validation("URL scheme must be http or https")
 	}
 	if parsed.Host == "" {
-		return source.Origin{}, internalerrors.Input("URL must include a host")
+		return source.Origin{}, internalerrors.Validation("URL must include a host")
 	}
 	return source.NewOrigin(source.OriginHTML, input, parsed.String()), nil
 }

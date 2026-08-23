@@ -34,24 +34,24 @@ func (p *HTMLPlugin) Handle(ctx context.Context, origin source.Origin) (domain.R
 	client := p.client()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, origin.Value, nil)
 	if err != nil {
-		return domain.RawSnapshot{}, internalerrors.Input(fmt.Sprintf("invalid URL: %v", err))
+		return domain.RawSnapshot{}, internalerrors.Wrap(internalerrors.KindValidation, "invalid URL", err)
 	}
 	request.Header.Set("User-Agent", p.userAgent())
 	response, err := client.Do(request)
 	if err != nil {
-		return domain.RawSnapshot{}, internalerrors.Request(fmt.Sprintf("request failed: %v", err))
+		return domain.RawSnapshot{}, sourceFailure("request failed", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return domain.RawSnapshot{}, internalerrors.HTTP(response.StatusCode, response.Header.Get("X-Request-Id"))
+		return domain.RawSnapshot{}, internalerrors.Source(fmt.Sprintf("source returned HTTP %d", response.StatusCode))
 	}
 	contentType := response.Header.Get("Content-Type")
 	if !isHTMLContentType(contentType) {
-		return domain.RawSnapshot{}, internalerrors.Content(fmt.Sprintf("not HTML (Content-Type: %s)", contentType))
+		return domain.RawSnapshot{}, internalerrors.Source(fmt.Sprintf("not HTML (Content-Type: %s)", contentType))
 	}
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
-		return domain.RawSnapshot{}, internalerrors.Content(fmt.Sprintf("reading response failed: %v", err))
+		return domain.RawSnapshot{}, sourceFailure("reading response failed", err)
 	}
 	snapshot, err := ExtractHTML(string(body))
 	if err != nil {
@@ -88,11 +88,11 @@ var skippedTags = map[string]bool{
 func ExtractHTML(input string) (domain.RawSnapshot, error) {
 	document, err := html.Parse(strings.NewReader(input))
 	if err != nil {
-		return domain.RawSnapshot{}, internalerrors.Content(fmt.Sprintf("HTML parsing failed: %v", err))
+		return domain.RawSnapshot{}, internalerrors.Wrap(internalerrors.KindSource, "HTML parsing failed", err)
 	}
 	title := strings.Join(strings.Fields(textContent(findElement(document, "title"))), " ")
 	if title == "" {
-		return domain.RawSnapshot{}, internalerrors.Content("page has no title")
+		return domain.RawSnapshot{}, internalerrors.Source("page has no title")
 	}
 	removeSkipped(document)
 	for _, tag := range []string{"article", "main", "body"} {
@@ -102,18 +102,18 @@ func ExtractHTML(input string) (domain.RawSnapshot, error) {
 		}
 		var rendered bytes.Buffer
 		if err := html.Render(&rendered, element); err != nil {
-			return domain.RawSnapshot{}, internalerrors.Content(fmt.Sprintf("HTML rendering failed: %v", err))
+			return domain.RawSnapshot{}, internalerrors.Wrap(internalerrors.KindSource, "HTML rendering failed", err)
 		}
 		markdown, err := htmltomarkdown.ConvertString(rendered.String())
 		if err != nil {
-			return domain.RawSnapshot{}, internalerrors.Content(fmt.Sprintf("HTML conversion failed: %v", err))
+			return domain.RawSnapshot{}, internalerrors.Wrap(internalerrors.KindSource, "HTML conversion failed", err)
 		}
 		markdown = removeMatchingTitleHeading(markdown, title)
 		if hasAlphaNumeric(markdown) {
 			return domain.NewRawSnapshot("", title, []byte(fmt.Sprintf("# %s\n\n%s\n", title, strings.TrimSpace(markdown)))), nil
 		}
 	}
-	return domain.RawSnapshot{}, internalerrors.Content("page has no readable content")
+	return domain.RawSnapshot{}, internalerrors.Source("page has no readable content")
 }
 
 func findElement(node *html.Node, wanted string) *html.Node {

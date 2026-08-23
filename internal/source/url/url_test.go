@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	internalerrors "github.com/skillicinski/bo/internal/errors"
 	"github.com/skillicinski/bo/internal/source"
 )
 
@@ -61,7 +62,7 @@ func TestURLWorkflowFetchesHTMLAndClassifiesResponses(t *testing.T) {
 		t.Fatalf("page = %#v, err = %v", page, err)
 	}
 	_, err = workflow.Fetch(context.Background(), "https://example.test/missing")
-	if err == nil || err.Error() != "http: HTTP 404 (request_id: request-123)" {
+	if err == nil || !internalerrors.IsKind(err, internalerrors.KindSource) {
 		t.Fatalf("HTTP error = %v", err)
 	}
 }

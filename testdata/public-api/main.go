@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/skillicinski/bo"
 )
@@ -24,7 +23,7 @@ func (s *storage) CreateRaw(_ context.Context, name string, contents []byte) (bo
 func (s *storage) ReadDocument(_ context.Context, ref bo.DocumentRef) ([]byte, error) {
 	contents, ok := s.documents[ref.Name]
 	if !ok {
-		return nil, fmt.Errorf("document not found: %s", ref.Name)
+		return nil, bo.NewError(bo.ErrorKindMissingResource, "document not found: "+ref.Name)
 	}
 	return append([]byte(nil), contents...), nil
 }
@@ -48,7 +47,7 @@ func (s *storage) ReadState(context.Context) (bo.State, bo.Generation, error) {
 
 func (s *storage) PublishState(_ context.Context, state bo.State, expected bo.Generation) (bo.Generation, error) {
 	if !expected.Equal(s.generation) {
-		return bo.Generation{}, bo.ConflictError("state generation changed")
+		return bo.Generation{}, bo.NewError(bo.ErrorKindConflict, "state generation changed")
 	}
 	s.state = state
 	s.generation = bo.NewGeneration([]byte{byte(len(state.Sources))})

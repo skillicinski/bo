@@ -37,7 +37,7 @@ func TestMarkdownPluginUsesFilenameAndRejectsEmptyOrUnsupportedFiles(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := file.NewMarkdownPlugin().Handle(context.Background(), origin); !internalerrors.IsCategory(err, internalerrors.CategoryContent) {
+	if _, err := file.NewMarkdownPlugin().Handle(context.Background(), origin); !internalerrors.IsKind(err, internalerrors.KindSource) {
 		t.Fatalf("empty file error = %v", err)
 	}
 
@@ -53,7 +53,7 @@ func TestMarkdownPluginUsesFilenameAndRejectsEmptyOrUnsupportedFiles(t *testing.
 	if err != nil || snapshot.Title != "fallback" {
 		t.Fatalf("fallback snapshot = %#v, err = %v", snapshot, err)
 	}
-	if _, err := file.NewTransport().Route(context.Background(), filepath.Join(directory, "note.txt")); !internalerrors.IsCategory(err, internalerrors.CategoryUnsupported) {
+	if _, err := file.NewTransport().Route(context.Background(), filepath.Join(directory, "note.txt")); !internalerrors.IsKind(err, internalerrors.KindSource) {
 		t.Fatalf("unsupported extension error = %v", err)
 	}
 }

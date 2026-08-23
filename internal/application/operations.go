@@ -2,12 +2,15 @@ package application
 
 import (
 	"context"
+	"errors"
 	"time"
+
+	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
 func normalizeOperationOptions(options OperationOptions) (OperationOptions, error) {
 	if options.Log == nil {
-		return OperationOptions{}, RequestError("operation log is not configured")
+		return OperationOptions{}, internalerrors.Request("operation log is not configured")
 	}
 	if options.Actor == "" {
 		options.Actor = "system"
@@ -33,5 +36,11 @@ func operationErrorDetails(err error) map[string]any {
 	if err == nil {
 		return map[string]any{}
 	}
-	return map[string]any{"error": err.Error()}
+	details := map[string]any{"error": err.Error()}
+	var categorized *internalerrors.Error
+	if errors.As(err, &categorized) {
+		details["error"] = categorized.Detail
+		details["error_kind"] = string(categorized.Kind)
+	}
+	return details
 }

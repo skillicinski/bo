@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"errors"
+	"testing"
+
+	"github.com/skillicinski/bo"
+)
 
 func TestParseSynthOptions(t *testing.T) {
 	config, err := parseSynthOptions([]string{"--max-turns", "2", "--max-tool-calls", "3", "--max-tool-output-bytes", "4", "--max-response-tokens", "5", "--timeout-seconds", "6"})
@@ -18,5 +23,20 @@ func TestParseSynthOptions(t *testing.T) {
 	}
 	if _, err := parseSynthOptions([]string{"--max-turns", "zero"}); err == nil {
 		t.Fatal("zero succeeded")
+	}
+}
+
+func TestAddSeedHintUsesErrorKind(t *testing.T) {
+	err := bo.NewError(bo.ErrorKindMissingResource, "target is missing")
+	hinted := addSeedHint(err, "notes")
+	if !errors.Is(hinted, err) {
+		t.Fatalf("hinted error = %v", hinted)
+	}
+	if got := hinted.Error(); got == err.Error() {
+		t.Fatal("missing-resource hint was not added")
+	}
+	other := bo.NewError(bo.ErrorKindFilesystem, "permission denied")
+	if addSeedHint(other, "notes") != other {
+		t.Fatal("filesystem error received a seed hint")
 	}
 }

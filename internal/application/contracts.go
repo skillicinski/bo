@@ -4,9 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 
 	"github.com/skillicinski/bo/internal/domain"
+	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
 // Generation is an opaque storage version. Callers can only compare it or
@@ -18,7 +18,7 @@ func NewGeneration(data []byte) Generation { return Generation{digest: sha256.Su
 func GenerationFromString(value string) (Generation, error) {
 	data, err := hex.DecodeString(value)
 	if err != nil || len(data) != sha256.Size {
-		return Generation{}, fmt.Errorf("invalid generation")
+		return Generation{}, internalerrors.Validation("invalid generation")
 	}
 	var digest [sha256.Size]byte
 	copy(digest[:], data)

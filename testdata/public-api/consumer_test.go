@@ -21,7 +21,7 @@ func TestPublicWorkflows(t *testing.T) {
 	ws := workspace{name: "consumer", store: store}
 	options := bo.OperationOptions{Log: operationLog{}, Actor: "consumer"}
 
-	if _, err := bo.Seed(ctx, bo.SeedRequest{Creator: creator{}, Name: "consumer"}); !bo.IsCategory(err, bo.CategoryRequest) {
+	if _, err := bo.Seed(ctx, bo.SeedRequest{Creator: creator{}, Name: "consumer"}); !bo.IsKind(err, bo.ErrorKindRequest) {
 		t.Fatalf("missing operation log error = %v", err)
 	}
 	if _, err := bo.Seed(ctx, bo.SeedRequest{Creator: creator{}, Name: "consumer", Operations: options}); err != nil {

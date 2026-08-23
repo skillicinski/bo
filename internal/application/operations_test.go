@@ -12,6 +12,7 @@ import (
 	"github.com/skillicinski/bo/internal/agent"
 	"github.com/skillicinski/bo/internal/application"
 	"github.com/skillicinski/bo/internal/domain"
+	internalerrors "github.com/skillicinski/bo/internal/errors"
 	"github.com/skillicinski/bo/internal/storage/local"
 )
 
@@ -67,16 +68,16 @@ func (failingCompletionProvider) Complete(context.Context, agent.CompletionReque
 
 func TestWorkflowsRejectMissingOperationLog(t *testing.T) {
 	store, _ := seededStore(t)
-	if _, err := application.SnapWithWorkflow(context.Background(), store, rawSource{}, "notes", []string{"url"}, application.OperationOptions{}); !application.IsCategory(err, application.CategoryRequest) {
+	if _, err := application.SnapWithWorkflow(context.Background(), store, rawSource{}, "notes", []string{"url"}, application.OperationOptions{}); !internalerrors.IsKind(err, internalerrors.KindRequest) {
 		t.Fatalf("Snap error = %v", err)
 	}
-	if _, err := application.ReadState(context.Background(), store, "notes", application.OperationOptions{}); !application.IsCategory(err, application.CategoryRequest) {
+	if _, err := application.ReadState(context.Background(), store, "notes", application.OperationOptions{}); !internalerrors.IsKind(err, internalerrors.KindRequest) {
 		t.Fatalf("ReadState error = %v", err)
 	}
-	if _, err := application.Seed(context.Background(), failingCreator{}, "notes", application.OperationOptions{}); !application.IsCategory(err, application.CategoryRequest) {
+	if _, err := application.Seed(context.Background(), failingCreator{}, "notes", application.OperationOptions{}); !internalerrors.IsKind(err, internalerrors.KindRequest) {
 		t.Fatalf("Seed error = %v", err)
 	}
-	if _, err := application.SynthesizeWithTools(context.Background(), nil, "notes", nil, application.DefaultSynthesisOptions(), []string{"read_logs"}, application.OperationOptions{}); !application.IsCategory(err, application.CategoryRequest) {
+	if _, err := application.SynthesizeWithTools(context.Background(), nil, "notes", nil, application.DefaultSynthesisOptions(), []string{"read_logs"}, application.OperationOptions{}); !internalerrors.IsKind(err, internalerrors.KindRequest) {
 		t.Fatalf("Synthesize error = %v", err)
 	}
 }

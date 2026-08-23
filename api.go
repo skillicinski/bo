@@ -17,69 +17,74 @@ import (
 	loc "github.com/skillicinski/bo/internal/storage/local"
 )
 
-type ErrorCategory string
+// ErrorKind is the stable failure classification returned by bo workflows.
+type ErrorKind string
 
 const (
-	CategoryInput       ErrorCategory = "input"
-	CategoryRequest     ErrorCategory = "request"
-	CategoryHTTP        ErrorCategory = "http"
-	CategoryContent     ErrorCategory = "content"
-	CategoryFilesystem  ErrorCategory = "filesystem"
-	CategoryUnsupported ErrorCategory = "unsupported"
-	CategoryConflict    ErrorCategory = "conflict"
+	ErrorKindRequest           ErrorKind = "request"
+	ErrorKindValidation        ErrorKind = "validation"
+	ErrorKindSource            ErrorKind = "source"
+	ErrorKindFilesystem        ErrorKind = "filesystem"
+	ErrorKindMissingResource   ErrorKind = "missing_resource"
+	ErrorKindConflict          ErrorKind = "conflict"
+	ErrorKindAlreadyExists     ErrorKind = "already_exists"
+	ErrorKindProviderTransport ErrorKind = "provider_transport"
+	ErrorKindProviderRejected  ErrorKind = "provider_rejected"
+	ErrorKindProviderMalformed ErrorKind = "provider_malformed"
+	ErrorKindCanceled          ErrorKind = "canceled"
+	ErrorKindDeadline          ErrorKind = "deadline"
 )
 
-// Error is a user-facing error with a stable category.
+// Error is the stable public failure contract for all bo workflows.
 type Error struct {
-	Category  ErrorCategory
-	Detail    string
-	Status    int
-	RequestID string
-	Cause     error
+	Kind      ErrorKind `json:"kind"`
+	Detail    string    `json:"detail,omitempty"`
+	Retryable bool      `json:"retryable"`
+	Cause     error     `json:"-"`
 }
 
 func (e *Error) Error() string {
-	if e.Category == CategoryHTTP && e.Status != 0 {
-		if e.RequestID != "" {
-			return fmt.Sprintf("http: HTTP %d (request_id: %s)", e.Status, e.RequestID)
-		}
-		return fmt.Sprintf("http: HTTP %d", e.Status)
+	if e == nil {
+		return "<nil>"
 	}
-	return fmt.Sprintf("%s: %s", e.Category, e.Detail)
+	if e.Detail == "" {
+		return string(e.Kind)
+	}
+	return fmt.Sprintf("%s: %s", e.Kind, e.Detail)
 }
 
-func (e *Error) Unwrap() error { return e.Cause }
-
-func NewError(category ErrorCategory, detail string) *Error {
-	return &Error{Category: category, Detail: detail}
+func (e *Error) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
 }
 
-func InputError(detail string) *Error       { return NewError(CategoryInput, detail) }
-func RequestError(detail string) *Error     { return NewError(CategoryRequest, detail) }
-func ContentError(detail string) *Error     { return NewError(CategoryContent, detail) }
-func FilesystemError(detail string) *Error  { return NewError(CategoryFilesystem, detail) }
-func UnsupportedError(detail string) *Error { return NewError(CategoryUnsupported, detail) }
-func ConflictError(detail string) *Error    { return NewError(CategoryConflict, detail) }
+func (e *Error) Is(target error) bool {
+	return target == ErrAlreadyExists && e != nil && e.Kind == ErrorKindAlreadyExists
+}
 
-func HTTPError(status int, requestID string) *Error {
-	return &Error{Category: CategoryHTTP, Status: status, RequestID: requestID}
+func NewError(kind ErrorKind, detail string) *Error {
+	return &Error{Kind: kind, Detail: detail}
+}
+
+func WrapError(kind ErrorKind, detail string, cause error) *Error {
+	return &Error{Kind: kind, Detail: detail, Cause: cause}
 }
 
 var ErrAlreadyExists = stderrors.New("document already exists")
 
-func IsCategory(err error, category ErrorCategory) bool {
+func IsKind(err error, kind ErrorKind) bool {
 	var categorized *Error
 	if stderrors.As(err, &categorized) {
-		return categorized.Category == category
+		return categorized.Kind == kind
 	}
 	var internalCategorized *internalerrors.Error
-	return stderrors.As(err, &internalCategorized) && ErrorCategory(internalCategorized.Category) == category
+	return stderrors.As(err, &internalCategorized) && ErrorKind(internalCategorized.Kind) == kind
 }
 
-func IsConflict(err error) bool   { return IsCategory(err, CategoryConflict) }
-func IsFilesystem(err error) bool { return IsCategory(err, CategoryFilesystem) }
 func IsAlreadyExists(err error) bool {
-	return stderrors.Is(err, ErrAlreadyExists) || stderrors.Is(err, internalerrors.ErrAlreadyExists)
+	return IsKind(err, ErrorKindAlreadyExists) || stderrors.Is(err, ErrAlreadyExists)
 }
 
 type DocumentKind string
@@ -318,22 +323,22 @@ func NewLocalManager(home string) *LocalManager {
 
 func (m *LocalManager) Create(ctx context.Context, name string) (string, error) {
 	if m == nil || m.manager == nil {
-		return "", RequestError("local workspace manager is not configured")
+		return "", NewError(ErrorKindRequest, "local workspace manager is not configured")
 	}
 	created, err := m.manager.Create(ctx, name)
-	return created, publicError(err)
+	return created, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "creating workspace"))
 }
 
 func (m *LocalManager) Open(ctx context.Context, name string) (Workspace, error) {
 	if m == nil || m.manager == nil {
-		return nil, RequestError("local workspace manager is not configured")
+		return nil, NewError(ErrorKindRequest, "local workspace manager is not configured")
 	}
 	workspace, err := m.manager.Open(ctx, name)
 	if err != nil {
-		return nil, publicError(err)
+		return nil, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "opening workspace"))
 	}
 	if workspace == nil {
-		return nil, RequestError("local workspace manager returned no workspace")
+		return nil, NewError(ErrorKindRequest, "local workspace manager returned no workspace")
 	}
 	return &localWorkspace{workspace: workspace, storage: &localStorage{storage: workspace.Storage()}}, nil
 }
@@ -343,18 +348,32 @@ func NewOperationLog(home string) OperationLog {
 }
 
 func Seed(ctx context.Context, request SeedRequest) (SeedResult, error) {
-	created, err := app.Seed(ctx, request.Creator, request.Name, internalOperationOptions(request.Operations))
+	created, err := app.Seed(ctx, internalWorkspaceCreator(request.Creator), request.Name, internalOperationOptions(request.Operations))
 	return SeedResult{Name: created}, publicError(err)
+}
+
+type workspaceCreatorBridge struct{ creator WorkspaceCreator }
+
+func (b workspaceCreatorBridge) Create(ctx context.Context, name string) (string, error) {
+	created, err := b.creator.Create(ctx, name)
+	return created, internalError(err)
+}
+
+func internalWorkspaceCreator(creator WorkspaceCreator) app.WorkspaceCreator {
+	if creator == nil {
+		return nil
+	}
+	return workspaceCreatorBridge{creator: creator}
 }
 
 func Snap(ctx context.Context, request SnapRequest) (SnapResult, error) {
 	result := SnapResult{}
 	if request.Workspace == nil {
-		return result, RequestError("workspace is not configured")
+		return result, NewError(ErrorKindRequest, "workspace is not configured")
 	}
 	storage := request.Workspace.Storage()
 	if storage == nil {
-		return result, RequestError("workspace storage is not configured")
+		return result, NewError(ErrorKindRequest, "workspace storage is not configured")
 	}
 	outcomes, err := app.Snap(ctx, &publicStorage{storage: storage}, request.Workspace.Name(), request.Sources, internalOperationOptions(request.Operations))
 	result.Outcomes = publicSnapOutcomes(outcomes)
@@ -370,11 +389,11 @@ func Snap(ctx context.Context, request SnapRequest) (SnapResult, error) {
 
 func ReadState(ctx context.Context, request StateRequest) (StateResult, error) {
 	if request.Workspace == nil {
-		return StateResult{}, RequestError("workspace is not configured")
+		return StateResult{}, NewError(ErrorKindRequest, "workspace is not configured")
 	}
 	storage := request.Workspace.Storage()
 	if storage == nil {
-		return StateResult{}, RequestError("workspace storage is not configured")
+		return StateResult{}, NewError(ErrorKindRequest, "workspace storage is not configured")
 	}
 	state, err := app.ReadState(ctx, &publicStorage{storage: storage}, request.Workspace.Name(), internalOperationOptions(request.Operations))
 	if err != nil {
@@ -389,10 +408,10 @@ func ReadState(ctx context.Context, request StateRequest) (StateResult, error) {
 
 func Synth(ctx context.Context, request SynthRequest) (SynthResult, error) {
 	if request.Workspace == nil {
-		return SynthResult{}, RequestError("workspace is not configured")
+		return SynthResult{}, NewError(ErrorKindRequest, "workspace is not configured")
 	}
 	if request.Workspace.Storage() == nil {
-		return SynthResult{}, RequestError("workspace storage is not configured")
+		return SynthResult{}, NewError(ErrorKindRequest, "workspace storage is not configured")
 	}
 	workspace := &scopedWorkspace{workspace: request.Workspace, storage: &publicStorage{storage: request.Workspace.Storage()}}
 	result, err := app.Synthesize(ctx, fixedWorkspaceOpener{workspace: workspace}, request.Workspace.Name(), request.Provider.completion, app.SynthesisOptions{
@@ -407,12 +426,12 @@ type publicStorage struct{ storage Storage }
 
 func (s *publicStorage) CreateRaw(ctx context.Context, name string, contents []byte) (internaldomain.DocumentRef, error) {
 	ref, err := s.storage.CreateRaw(ctx, name, contents)
-	return internalDocumentRef(ref), internalError(err)
+	return internalDocumentRef(ref), internalErrorAs(err, internalerrors.KindFilesystem, "creating raw document")
 }
 
 func (s *publicStorage) ReadDocument(ctx context.Context, ref internaldomain.DocumentRef) ([]byte, error) {
 	data, err := s.storage.ReadDocument(ctx, publicDocumentRef(ref))
-	return data, internalError(err)
+	return data, internalErrorAs(err, internalerrors.KindFilesystem, "reading document")
 }
 
 func (s *publicStorage) ListMarkdownDocuments(ctx context.Context, kind internaldomain.DocumentKind) ([]internaldomain.DocumentRef, error) {
@@ -424,7 +443,7 @@ func (s *publicStorage) ListMarkdownDocuments(ctx context.Context, kind internal
 	}
 	refs, err := lister.ListMarkdownDocuments(ctx, DocumentKind(kind))
 	if err != nil {
-		return nil, internalError(err)
+		return nil, internalErrorAs(err, internalerrors.KindFilesystem, "listing documents")
 	}
 	result := make([]internaldomain.DocumentRef, len(refs))
 	for index, ref := range refs {
@@ -434,17 +453,17 @@ func (s *publicStorage) ListMarkdownDocuments(ctx context.Context, kind internal
 }
 
 func (s *publicStorage) ReplaceSummary(ctx context.Context, ref internaldomain.DocumentRef, contents []byte) error {
-	return internalError(s.storage.ReplaceSummary(ctx, publicDocumentRef(ref), contents))
+	return internalErrorAs(s.storage.ReplaceSummary(ctx, publicDocumentRef(ref), contents), internalerrors.KindFilesystem, "writing summary")
 }
 
 func (s *publicStorage) DeleteDocument(ctx context.Context, ref internaldomain.DocumentRef) error {
-	return internalError(s.storage.DeleteDocument(ctx, publicDocumentRef(ref)))
+	return internalErrorAs(s.storage.DeleteDocument(ctx, publicDocumentRef(ref)), internalerrors.KindFilesystem, "deleting document")
 }
 
 func (s *publicStorage) ReadState(ctx context.Context) (internaldomain.State, app.Generation, error) {
 	state, generation, err := s.storage.ReadState(ctx)
 	if err != nil {
-		return internaldomain.State{}, app.Generation{}, internalError(err)
+		return internaldomain.State{}, app.Generation{}, internalErrorAs(err, internalerrors.KindFilesystem, "reading workspace state")
 	}
 	converted, err := internalState(state)
 	if err != nil {
@@ -468,7 +487,7 @@ func (s *publicStorage) PublishState(ctx context.Context, state internaldomain.S
 	}
 	newGeneration, err := s.storage.PublishState(ctx, converted, publicGeneration(expectedGeneration))
 	if err != nil {
-		return app.Generation{}, internalError(err)
+		return app.Generation{}, internalErrorAs(err, internalerrors.KindFilesystem, "publishing workspace state")
 	}
 	result, err := app.GenerationFromString(newGeneration.String())
 	if err != nil {
@@ -481,18 +500,18 @@ type localStorage struct{ storage app.Storage }
 
 func (s *localStorage) CreateRaw(ctx context.Context, name string, contents []byte) (DocumentRef, error) {
 	ref, err := s.storage.CreateRaw(ctx, name, contents)
-	return publicDocumentRef(ref), publicError(err)
+	return publicDocumentRef(ref), publicError(internalErrorAs(err, internalerrors.KindFilesystem, "creating raw document"))
 }
 
 func (s *localStorage) ReadDocument(ctx context.Context, ref DocumentRef) ([]byte, error) {
 	data, err := s.storage.ReadDocument(ctx, internalDocumentRef(ref))
-	return data, publicError(err)
+	return data, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "reading document"))
 }
 
 func (s *localStorage) ListMarkdownDocuments(ctx context.Context, kind DocumentKind) ([]DocumentRef, error) {
 	refs, err := s.storage.ListMarkdownDocuments(ctx, internaldomain.DocumentKind(kind))
 	if err != nil {
-		return nil, publicError(err)
+		return nil, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "listing documents"))
 	}
 	result := make([]DocumentRef, len(refs))
 	for index, ref := range refs {
@@ -502,17 +521,17 @@ func (s *localStorage) ListMarkdownDocuments(ctx context.Context, kind DocumentK
 }
 
 func (s *localStorage) ReplaceSummary(ctx context.Context, ref DocumentRef, contents []byte) error {
-	return publicError(s.storage.ReplaceSummary(ctx, internalDocumentRef(ref), contents))
+	return publicError(internalErrorAs(s.storage.ReplaceSummary(ctx, internalDocumentRef(ref), contents), internalerrors.KindFilesystem, "writing summary"))
 }
 
 func (s *localStorage) DeleteDocument(ctx context.Context, ref DocumentRef) error {
-	return publicError(s.storage.DeleteDocument(ctx, internalDocumentRef(ref)))
+	return publicError(internalErrorAs(s.storage.DeleteDocument(ctx, internalDocumentRef(ref)), internalerrors.KindFilesystem, "deleting document"))
 }
 
 func (s *localStorage) ReadState(ctx context.Context) (State, Generation, error) {
 	state, generation, err := s.storage.ReadState(ctx)
 	if err != nil {
-		return State{}, Generation{}, publicError(err)
+		return State{}, Generation{}, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "reading workspace state"))
 	}
 	converted, err := publicState(state)
 	if err != nil {
@@ -524,10 +543,10 @@ func (s *localStorage) ReadState(ctx context.Context) (State, Generation, error)
 func (s *localStorage) PublishState(ctx context.Context, state State, expected Generation) (Generation, error) {
 	converted, err := internalState(state)
 	if err != nil {
-		return Generation{}, publicError(err)
+		return Generation{}, publicError(internalErrorAs(err, internalerrors.KindValidation, "validating workspace state"))
 	}
 	result, err := s.storage.PublishState(ctx, converted, internalGeneration(expected))
-	return publicGeneration(result), publicError(err)
+	return publicGeneration(result), publicError(internalErrorAs(err, internalerrors.KindFilesystem, "publishing workspace state"))
 }
 
 type localWorkspace struct {
@@ -539,7 +558,9 @@ func (w *localWorkspace) Name() string       { return w.workspace.Name() }
 func (w *localWorkspace) RootPath() string   { return w.workspace.RootPath() }
 func (w *localWorkspace) TargetPath() string { return w.workspace.TargetPath() }
 func (w *localWorkspace) Storage() Storage   { return w.storage }
-func (w *localWorkspace) Close() error       { return publicError(w.workspace.Close()) }
+func (w *localWorkspace) Close() error {
+	return publicError(internalErrorAs(w.workspace.Close(), internalerrors.KindFilesystem, "closing workspace"))
+}
 
 type scopedWorkspace struct {
 	workspace Workspace
@@ -556,7 +577,7 @@ type fixedWorkspaceOpener struct{ workspace app.Workspace }
 
 func (o fixedWorkspaceOpener) Open(context.Context, string) (app.Workspace, error) {
 	if o.workspace == nil {
-		return nil, app.RequestError("workspace is not configured")
+		return nil, internalerrors.Request("workspace is not configured")
 	}
 	return o.workspace, nil
 }
@@ -564,13 +585,13 @@ func (o fixedWorkspaceOpener) Open(context.Context, string) (app.Workspace, erro
 type operationLogBridge struct{ log OperationLog }
 
 func (l operationLogBridge) Append(ctx context.Context, operation internaldomain.Operation) error {
-	return internalError(l.log.Append(ctx, publicOperation(operation)))
+	return internalErrorAs(l.log.Append(ctx, publicOperation(operation)), internalerrors.KindFilesystem, "appending operation")
 }
 
 func (l operationLogBridge) Read(ctx context.Context, directory string, offset, limit int) (app.OperationPage, error) {
 	page, err := l.log.Read(ctx, directory, offset, limit)
 	if err != nil {
-		return app.OperationPage{}, internalError(err)
+		return app.OperationPage{}, internalErrorAs(err, internalerrors.KindFilesystem, "reading operations")
 	}
 	entries := make([]internaldomain.Operation, len(page.Entries))
 	for index, operation := range page.Entries {
@@ -582,13 +603,13 @@ func (l operationLogBridge) Read(ctx context.Context, directory string, offset, 
 type localOperationLog struct{ log *loc.OperationLog }
 
 func (l *localOperationLog) Append(ctx context.Context, operation Operation) error {
-	return publicError(l.log.Append(ctx, internalOperation(operation)))
+	return publicError(internalErrorAs(l.log.Append(ctx, internalOperation(operation)), internalerrors.KindFilesystem, "appending operation"))
 }
 
 func (l *localOperationLog) Read(ctx context.Context, directory string, offset, limit int) (OperationPage, error) {
 	page, err := l.log.Read(ctx, directory, offset, limit)
 	if err != nil {
-		return OperationPage{}, publicError(err)
+		return OperationPage{}, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "reading operations"))
 	}
 	entries := make([]Operation, len(page.Entries))
 	for index, operation := range page.Entries {
@@ -685,34 +706,62 @@ func publicError(err error) error {
 		return nil
 	}
 	var categorized *internalerrors.Error
-	if !stderrors.As(err, &categorized) {
-		return err
+	if stderrors.As(err, &categorized) {
+		return &Error{
+			Kind:      ErrorKind(categorized.Kind),
+			Detail:    categorized.Detail,
+			Retryable: categorized.Retryable,
+			Cause:     err,
+		}
 	}
-	cause := categorized.Cause
-	if stderrors.Is(cause, internalerrors.ErrAlreadyExists) {
-		cause = ErrAlreadyExists
+	if contextErr := internalerrors.Context(err); contextErr != nil {
+		return &Error{
+			Kind:      ErrorKind(contextErr.Kind),
+			Detail:    contextErr.Detail,
+			Retryable: contextErr.Retryable,
+			Cause:     err,
+		}
 	}
-	return &Error{Category: ErrorCategory(categorized.Category), Detail: categorized.Detail, Status: categorized.Status, RequestID: categorized.RequestID, Cause: cause}
+	if stderrors.Is(err, internalerrors.ErrAlreadyExists) {
+		return &Error{
+			Kind:   ErrorKindAlreadyExists,
+			Detail: "document already exists",
+			Cause:  err,
+		}
+	}
+	return err
 }
 
 func internalError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if stderrors.Is(err, ErrAlreadyExists) {
-		return app.ErrAlreadyExists
-	}
 	var categorized *Error
-	if !stderrors.As(err, &categorized) {
-		return err
+	if stderrors.As(err, &categorized) {
+		return &internalerrors.Error{
+			Kind:      internalerrors.Kind(categorized.Kind),
+			Detail:    categorized.Detail,
+			Retryable: categorized.Retryable,
+			Cause:     err,
+		}
 	}
-	cause := categorized.Cause
-	if stderrors.Is(cause, ErrAlreadyExists) {
-		cause = app.ErrAlreadyExists
+	if stderrors.Is(err, ErrAlreadyExists) {
+		return internalerrors.Wrap(internalerrors.KindAlreadyExists, "document already exists", err)
 	}
-	converted := app.NewError(app.ErrorCategory(categorized.Category), categorized.Detail)
-	converted.Status = categorized.Status
-	converted.RequestID = categorized.RequestID
-	converted.Cause = cause
-	return converted
+	return err
+}
+
+func internalErrorAs(err error, kind internalerrors.Kind, detail string) error {
+	converted := internalError(err)
+	if converted == nil {
+		return nil
+	}
+	var categorized *internalerrors.Error
+	if stderrors.As(converted, &categorized) {
+		return converted
+	}
+	if contextErr := internalerrors.Context(converted); contextErr != nil {
+		return contextErr
+	}
+	return internalerrors.Wrap(kind, detail, converted)
 }

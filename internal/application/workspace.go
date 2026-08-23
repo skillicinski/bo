@@ -2,6 +2,8 @@ package application
 
 import (
 	"context"
+
+	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
 func Seed(ctx context.Context, creator WorkspaceCreator, name string, options OperationOptions) (created string, returnErr error) {
@@ -22,7 +24,8 @@ func Seed(ctx context.Context, creator WorkspaceCreator, name string, options Op
 		recordOperation(options, directory, CommandSeed, returnErr == nil, details)
 	}()
 	if creator == nil {
-		return "", RequestError("workspace creator is not configured")
+		return "", internalerrors.Request("workspace creator is not configured")
 	}
-	return creator.Create(ctx, name)
+	created, returnErr = creator.Create(ctx, name)
+	return created, normalizeError(returnErr, internalerrors.KindFilesystem, "creating workspace")
 }

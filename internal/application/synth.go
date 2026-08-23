@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/skillicinski/bo/internal/agent"
+	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
 func Synthesize(ctx context.Context, opener WorkspaceOpener, workspaceName string, provider agent.CompletionProvider, config SynthesisOptions, options OperationOptions) (SynthesisResult, error) {
@@ -41,17 +43,17 @@ func SynthesizeWithTools(ctx context.Context, opener WorkspaceOpener, workspaceN
 	}()
 	toolNames, err = normalizeSynthesisTools(toolNames)
 	if err != nil {
-		return SynthesisResult{}, InputError(err.Error())
+		return SynthesisResult{}, internalerrors.Validation(err.Error())
 	}
 	if opener == nil {
-		return SynthesisResult{}, RequestError("workspace opener is not configured")
+		return SynthesisResult{}, internalerrors.Request("workspace opener is not configured")
 	}
 	workspace, err := opener.Open(ctx, workspaceName)
 	if err != nil {
-		return SynthesisResult{}, err
+		return SynthesisResult{}, normalizeError(err, internalerrors.KindMissingResource, "opening workspace")
 	}
 	if workspace == nil {
-		return SynthesisResult{}, RequestError("workspace opener returned no workspace")
+		return SynthesisResult{}, internalerrors.Request("workspace opener returned no workspace")
 	}
 	defer workspace.Close()
 	if name := workspace.Name(); name != "" {
@@ -62,40 +64,43 @@ func SynthesizeWithTools(ctx context.Context, opener WorkspaceOpener, workspaceN
 }
 
 func runSynthesis(ctx context.Context, directory, rootPath, targetPath string, storage Storage, provider agent.CompletionProvider, config SynthesisOptions, toolNames []string, options OperationOptions) (SynthesisResult, error) {
+	if storage == nil {
+		return SynthesisResult{}, internalerrors.Request("workspace storage is not configured")
+	}
 	if provider == nil {
-		return SynthesisResult{}, RequestError("synthesis provider is not configured")
+		return SynthesisResult{}, internalerrors.Request("synthesis provider is not configured")
 	}
 	config = normalizedSynthesisOptions(config)
 	runContext, cancel := context.WithTimeout(ctx, time.Duration(config.TimeoutSeconds)*time.Second)
 	defer cancel()
 	root, err := filepath.EvalSymlinks(rootPath)
 	if err != nil {
-		return SynthesisResult{}, fmt.Errorf("canonicalizing %s failed: %w", rootPath, err)
+		return SynthesisResult{}, pathError("canonicalizing "+rootPath, err)
 	}
 	target, err := filepath.EvalSymlinks(targetPath)
 	if err != nil {
-		return SynthesisResult{}, fmt.Errorf("canonicalizing %s failed: %w", targetPath, err)
+		return SynthesisResult{}, pathError("canonicalizing "+targetPath, err)
 	}
 	if err := ensureInside(target, root); err != nil {
 		return SynthesisResult{}, err
 	}
 	info, err := os.Stat(target)
 	if err != nil {
-		return SynthesisResult{}, fmt.Errorf("reading %s failed: %w", target, err)
+		return SynthesisResult{}, pathError("reading "+target, err)
 	}
 	if !info.IsDir() {
-		return SynthesisResult{}, fmt.Errorf("target is not a directory: %s", target)
+		return SynthesisResult{}, internalerrors.Validation(fmt.Sprintf("target is not a directory: %s", target))
 	}
 	documents, err := DiscoverDocuments(root, target)
 	if err != nil {
 		return SynthesisResult{}, err
 	}
 	if len(documents) == 0 {
-		return SynthesisResult{}, fmt.Errorf("no raw Markdown documents in %s", target)
+		return SynthesisResult{}, internalerrors.MissingResource(fmt.Sprintf("no raw Markdown documents in %s", target))
 	}
 	state, generation, err := storage.ReadState(runContext)
 	if err != nil {
-		return SynthesisResult{}, err
+		return SynthesisResult{}, normalizeError(err, internalerrors.KindFilesystem, "reading workspace state")
 	}
 	sources := sourceGroups(documents, state)
 	completed := map[string]bool{}
@@ -136,9 +141,17 @@ func runSynthesis(ctx context.Context, directory, rootPath, targetPath string, s
 		return result, err
 	}
 	if len(completed) != len(sources) {
-		return result, fmt.Errorf("model stopped with missing summaries: %s", strings.Join(missingSources(sources, completed), ", "))
+		return result, internalerrors.ProviderMalformed(fmt.Sprintf("model stopped with missing summaries: %s", strings.Join(missingSources(sources, completed), ", ")), nil)
 	}
 	return result, nil
+}
+
+func pathError(operation string, err error) error {
+	kind := internalerrors.KindFilesystem
+	if errors.Is(err, os.ErrNotExist) {
+		kind = internalerrors.KindMissingResource
+	}
+	return internalerrors.Wrap(kind, operation+" failed", err)
 }
 
 func missingSources(sources map[string]agentSource, summarized map[string]bool) []string {

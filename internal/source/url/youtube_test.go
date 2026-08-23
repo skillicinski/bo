@@ -2,11 +2,13 @@ package url
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 
+	internalerrors "github.com/skillicinski/bo/internal/errors"
 	"github.com/skillicinski/bo/internal/source"
 )
 
@@ -117,5 +119,28 @@ func TestYouTubePluginRetriesPlayerWithWatchPageAPIKey(t *testing.T) {
 	}
 	if len(playerKeys) != 2 || playerKeys[0] != "" || playerKeys[1] != "current-key" {
 		t.Fatalf("player keys = %#v", playerKeys)
+	}
+}
+
+func TestYouTubePluginPreservesFallbackContextError(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/player" {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"playabilityStatus":{"status":"LOGIN_REQUIRED","reason":"sign in"}}`)),
+				Header:     http.Header{},
+			}, nil
+		}
+		return nil, context.Canceled
+	})}
+	plugin := NewYouTube(client)
+	plugin.PlayerEndpoint = "https://example.test/player"
+	workflow := source.NewWorkflow(
+		[]source.Transport{NewTransport()},
+		map[source.OriginType]source.Plugin{source.OriginYouTube: plugin},
+	)
+	_, err := workflow.Fetch(context.Background(), "https://www.youtube.com/watch?v=a1mhk7mAetk")
+	if !errors.Is(err, context.Canceled) || !internalerrors.IsKind(err, internalerrors.KindCanceled) {
+		t.Fatalf("fallback error = %v", err)
 	}
 }

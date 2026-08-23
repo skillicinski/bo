@@ -13,6 +13,7 @@ import (
 
 	"github.com/skillicinski/bo/internal/agent"
 	"github.com/skillicinski/bo/internal/domain"
+	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
 const (
@@ -105,7 +106,7 @@ func systemPrompt(context *agentContext, documentNames []string) string {
 func DiscoverDocuments(root, target string) (map[string]string, error) {
 	entries, err := os.ReadDir(target)
 	if err != nil {
-		return nil, fmt.Errorf("reading %s failed: %w", target, err)
+		return nil, pathError("reading "+target, err)
 	}
 	documents := map[string]string{}
 	for _, entry := range entries {
@@ -116,7 +117,7 @@ func DiscoverDocuments(root, target string) (map[string]string, error) {
 		path := filepath.Join(target, name)
 		resolved, err := filepath.EvalSymlinks(path)
 		if err != nil {
-			return nil, fmt.Errorf("resolving %s failed: %w", path, err)
+			return nil, pathError("resolving "+path, err)
 		}
 		if err := ensureInside(resolved, root); err != nil {
 			return nil, err
@@ -126,7 +127,7 @@ func DiscoverDocuments(root, target string) (map[string]string, error) {
 		}
 		info, err := os.Stat(resolved)
 		if err != nil {
-			return nil, fmt.Errorf("reading %s failed: %w", resolved, err)
+			return nil, pathError("reading "+resolved, err)
 		}
 		if info.Mode().IsRegular() {
 			documents[name] = resolved
@@ -283,7 +284,7 @@ func intArgument(arguments map[string]json.RawMessage, name string, defaultValue
 func readLogs(context *agentContext, offset, limit int) (string, error) {
 	page, err := context.operationLog.Read(context.ctx, context.directory, offset, limit)
 	if err != nil {
-		return "", err
+		return "", normalizeError(err, internalerrors.KindFilesystem, "reading operation log")
 	}
 	page.Directory = context.directory
 	page.Offset = offset
@@ -359,12 +360,12 @@ func readDocument(context *agentContext, filename string) (string, error) {
 func readBounded(path string, limit int) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return "", fmt.Errorf("reading %s failed: %v", path, err)
+		return "", pathError("reading "+path, err)
 	}
 	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, int64(limit)+4))
 	if err != nil {
-		return "", fmt.Errorf("reading %s failed: %v", path, err)
+		return "", pathError("reading "+path, err)
 	}
 	return agent.BoundedOutput(string(data), limit), nil
 }
@@ -379,7 +380,7 @@ func readSummary(context *agentContext, sourceKey string) (string, error) {
 	}
 	data, err := context.storage.ReadDocument(context.ctx, domain.SummaryRef(record.Filename))
 	if err != nil {
-		return "", err
+		return "", normalizeError(err, internalerrors.KindFilesystem, "reading summary")
 	}
 	return agent.BoundedOutput(string(data), context.maxOutputBytes), nil
 }
@@ -411,7 +412,7 @@ func writeSummary(context *agentContext, sourceKey, markdown string, existing *d
 		createdAt = existing.CreatedAt
 	}
 	if err := context.storage.ReplaceSummary(context.ctx, domain.SummaryRef(filename), []byte(markdown)); err != nil {
-		return err
+		return normalizeError(err, internalerrors.KindFilesystem, "writing summary")
 	}
 	now := time.Now().UTC()
 	writtenAt := source.LatestWrittenAt
@@ -448,7 +449,7 @@ func writeSummary(context *agentContext, sourceKey, markdown string, existing *d
 	}
 	generation, err := context.storage.PublishState(context.ctx, next, context.generation)
 	if err != nil {
-		return err
+		return normalizeError(err, internalerrors.KindFilesystem, "publishing workspace state")
 	}
 	context.state, context.generation = next, generation
 	return nil
@@ -457,7 +458,7 @@ func writeSummary(context *agentContext, sourceKey, markdown string, existing *d
 func ensureInside(path, root string) error {
 	relative, err := filepath.Rel(root, path)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
-		return fmt.Errorf("path escapes %s: %s", root, path)
+		return internalerrors.Validation(fmt.Sprintf("path escapes %s: %s", root, path))
 	}
 	return nil
 }

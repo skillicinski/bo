@@ -189,7 +189,7 @@ func (p *YouTubePlugin) client() Requester {
 func (p *YouTubePlugin) Handle(ctx context.Context, origin source.Origin) (domain.RawSnapshot, error) {
 	match := ClassifyYouTubeURL(origin.Value)
 	if match.Kind != YouTubeSupported {
-		return domain.RawSnapshot{}, internalerrors.Unsupported("YouTube URL: " + match.Reason)
+		return domain.RawSnapshot{}, internalerrors.Source("YouTube URL: " + match.Reason)
 	}
 	snapshot, err := p.fetchYouTube(ctx, match)
 	if err != nil {
@@ -241,15 +241,18 @@ func isEnglish(language string) bool { return language == "en" || strings.HasPre
 
 func (p *YouTubePlugin) fetchYouTube(ctx context.Context, match YouTubeURLMatch) (domain.RawSnapshot, error) {
 	player, err := p.fetchYouTubePlayer(ctx, match.VideoID, "")
-	if err != nil && !internalerrors.IsCategory(err, internalerrors.CategoryHTTP) && !internalerrors.IsCategory(err, internalerrors.CategoryContent) {
+	if err != nil && !internalerrors.IsKind(err, internalerrors.KindSource) {
 		return domain.RawSnapshot{}, err
 	}
 	if err == nil && SelectEnglishCaptionTrack(player.CaptionTracks()) == nil {
-		err = internalerrors.Content("YouTube transcript unavailable: no English captions found")
+		err = internalerrors.Source("YouTube transcript unavailable: no English captions found")
 	}
 	if err != nil {
 		key, keyErr := p.fetchYouTubeAPIKey(ctx, match.VideoID)
 		if keyErr != nil {
+			if contextErr := internalerrors.Context(keyErr); contextErr != nil {
+				return domain.RawSnapshot{}, contextErr
+			}
 			return domain.RawSnapshot{}, err
 		}
 		player, err = p.fetchYouTubePlayer(ctx, match.VideoID, key)
@@ -264,28 +267,28 @@ func (p *YouTubePlugin) fetchYouTube(ctx context.Context, match YouTubeURLMatch)
 	}
 	track := SelectEnglishCaptionTrack(player.CaptionTracks())
 	if track == nil {
-		return domain.RawSnapshot{}, internalerrors.Content("YouTube transcript unavailable: no English captions found")
+		return domain.RawSnapshot{}, internalerrors.Source("YouTube transcript unavailable: no English captions found")
 	}
 	captionRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, track.BaseURL, nil)
 	if err != nil {
-		return domain.RawSnapshot{}, internalerrors.Request(fmt.Sprintf("creating caption request failed: %v", err))
+		return domain.RawSnapshot{}, internalerrors.Wrap(internalerrors.KindSource, "creating caption request failed", err)
 	}
 	captionRequest.Header.Set("User-Agent", androidUserAgent)
 	captionResponse, err := p.client().Do(captionRequest)
 	if err != nil {
-		return domain.RawSnapshot{}, internalerrors.Request(fmt.Sprintf("YouTube network error: %v", err))
+		return domain.RawSnapshot{}, sourceFailure("YouTube network error", err)
 	}
 	defer captionResponse.Body.Close()
 	if captionResponse.StatusCode < 200 || captionResponse.StatusCode >= 300 {
-		return domain.RawSnapshot{}, internalerrors.HTTP(captionResponse.StatusCode, captionResponse.Header.Get("X-Request-Id"))
+		return domain.RawSnapshot{}, internalerrors.Source(fmt.Sprintf("YouTube transcript request returned HTTP %d", captionResponse.StatusCode))
 	}
 	xmlBody, err := io.ReadAll(captionResponse.Body)
 	if err != nil {
-		return domain.RawSnapshot{}, internalerrors.Request(fmt.Sprintf("reading caption response failed: %v", err))
+		return domain.RawSnapshot{}, sourceFailure("reading caption response failed", err)
 	}
 	body, err := ParseTranscriptMarkdown(string(xmlBody))
 	if err != nil {
-		return domain.RawSnapshot{}, internalerrors.Content("YouTube transcript parse error: " + err.Error())
+		return domain.RawSnapshot{}, internalerrors.Wrap(internalerrors.KindSource, "YouTube transcript parse error", err)
 	}
 	return domain.NewRawSnapshot(match.URL, title, []byte(fmt.Sprintf("# %s\n\n%s\n", title, body))), nil
 }
@@ -298,7 +301,7 @@ func (p *YouTubePlugin) fetchYouTubePlayer(ctx context.Context, videoID, apiKey 
 		}},
 	})
 	if err != nil {
-		return nil, internalerrors.Request(fmt.Sprintf("encoding YouTube request failed: %v", err))
+		return nil, internalerrors.Wrap(internalerrors.KindSource, "encoding YouTube request failed", err)
 	}
 	endpoint := playerEndpoint
 	if p != nil && p.PlayerEndpoint != "" {
@@ -307,29 +310,29 @@ func (p *YouTubePlugin) fetchYouTubePlayer(ctx context.Context, videoID, apiKey 
 	if apiKey != "" {
 		endpoint, err = addYouTubeAPIKey(endpoint, apiKey)
 		if err != nil {
-			return nil, internalerrors.Request(fmt.Sprintf("creating YouTube request failed: %v", err))
+			return nil, internalerrors.Wrap(internalerrors.KindSource, "creating YouTube request failed", err)
 		}
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(requestBody))
 	if err != nil {
-		return nil, internalerrors.Request(fmt.Sprintf("creating YouTube request failed: %v", err))
+		return nil, internalerrors.Wrap(internalerrors.KindSource, "creating YouTube request failed", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("User-Agent", androidUserAgent)
 	response, err := p.client().Do(request)
 	if err != nil {
-		return nil, internalerrors.Request(fmt.Sprintf("YouTube network error: %v", err))
+		return nil, sourceFailure("YouTube network error", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, internalerrors.HTTP(response.StatusCode, response.Header.Get("X-Request-Id"))
+		return nil, internalerrors.Source(fmt.Sprintf("YouTube player request returned HTTP %d", response.StatusCode))
 	}
 	var player PlayerResponse
 	if err := json.NewDecoder(response.Body).Decode(&player); err != nil {
-		return nil, internalerrors.Content(fmt.Sprintf("invalid InnerTube response: %v", err))
+		return nil, internalerrors.Wrap(internalerrors.KindSource, "invalid InnerTube response", err)
 	}
 	if err := EnsurePlayable(&player); err != nil {
-		return nil, internalerrors.Content("YouTube player error: " + err.Error())
+		return nil, internalerrors.Wrap(internalerrors.KindSource, "YouTube player error", err)
 	}
 	return &player, nil
 }
@@ -338,24 +341,24 @@ func (p *YouTubePlugin) fetchYouTubeAPIKey(ctx context.Context, videoID string) 
 	watchURL := "https://www.youtube.com/watch?v=" + url.QueryEscape(videoID)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, watchURL, nil)
 	if err != nil {
-		return "", internalerrors.Request(fmt.Sprintf("creating YouTube watch request failed: %v", err))
+		return "", internalerrors.Wrap(internalerrors.KindSource, "creating YouTube watch request failed", err)
 	}
 	request.Header.Set("User-Agent", youtubeWatchUserAgent)
 	response, err := p.client().Do(request)
 	if err != nil {
-		return "", internalerrors.Request(fmt.Sprintf("YouTube network error: %v", err))
+		return "", sourceFailure("YouTube network error", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return "", internalerrors.HTTP(response.StatusCode, response.Header.Get("X-Request-Id"))
+		return "", internalerrors.Source(fmt.Sprintf("YouTube watch request returned HTTP %d", response.StatusCode))
 	}
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
-		return "", internalerrors.Request(fmt.Sprintf("reading YouTube watch response failed: %v", err))
+		return "", sourceFailure("reading YouTube watch response failed", err)
 	}
 	key := extractYouTubeAPIKey(string(body))
 	if key == "" {
-		return "", internalerrors.Content("YouTube watch page has no InnerTube API key")
+		return "", internalerrors.Source("YouTube watch page has no InnerTube API key")
 	}
 	return key, nil
 }

@@ -2,9 +2,12 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 	"unicode/utf8"
+
+	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
 const (
@@ -126,9 +129,19 @@ func (runtime Runtime) Run(ctx context.Context, messages []ChatMessage, options 
 		return Result{Messages: messages, Message: message, Metrics: metrics}, err
 	}
 	if runtime.Provider == nil {
-		return finish(ChatMessage{}, fmt.Errorf("agent provider is not configured"))
+		return finish(ChatMessage{}, internalerrors.Request("agent provider is not configured"))
 	}
 	options = normalizedOptions(options)
+	var lastToolError error
+	terminalError := func(fallback, batchError error) error {
+		if batchError != nil {
+			return batchError
+		}
+		if lastToolError != nil {
+			return lastToolError
+		}
+		return fallback
+	}
 	definitions := make([]ToolDefinition, 0, len(runtime.Tools))
 	executors := make(map[string]func(context.Context, ToolCall) (string, error), len(runtime.Tools))
 	for _, tool := range runtime.Tools {
@@ -138,10 +151,10 @@ func (runtime Runtime) Run(ctx context.Context, messages []ChatMessage, options 
 	}
 	for {
 		if err := ctx.Err(); err != nil {
-			return finish(ChatMessage{}, err)
+			return finish(ChatMessage{}, internalerrors.Context(err))
 		}
 		if turns >= options.MaxTurns {
-			return finish(ChatMessage{}, fmt.Errorf("max turns reached (%d)", options.MaxTurns))
+			return finish(ChatMessage{}, terminalError(internalerrors.ProviderMalformed(fmt.Sprintf("max turns reached (%d)", options.MaxTurns), nil), nil))
 		}
 		turns++
 		response, err := runtime.Provider.Complete(ctx, CompletionRequest{
@@ -149,7 +162,7 @@ func (runtime Runtime) Run(ctx context.Context, messages []ChatMessage, options 
 			MaxTokens: options.MaxResponseTokens, Thinking: map[string]string{"type": "disabled"},
 		})
 		if err != nil {
-			return finish(ChatMessage{}, err)
+			return finish(ChatMessage{}, providerError(err))
 		}
 		if response.Usage != nil && usageKnown {
 			usage.PromptTokens += response.Usage.PromptTokens
@@ -164,13 +177,14 @@ func (runtime Runtime) Run(ctx context.Context, messages []ChatMessage, options 
 		}
 		if len(message.ToolCalls) > 0 {
 			messages = append(messages, message)
+			batchToolError := error(nil)
 			for _, call := range message.ToolCalls {
 				if toolCalls >= options.MaxToolCalls {
-					return finish(message, fmt.Errorf("max tool calls reached (%d)", options.MaxToolCalls))
+					return finish(message, terminalError(internalerrors.ProviderMalformed(fmt.Sprintf("max tool calls reached (%d)", options.MaxToolCalls), nil), batchToolError))
 				}
 				toolCalls++
 				if call.ID == "" {
-					return finish(message, fmt.Errorf("assistant tool call has no id"))
+					return finish(message, internalerrors.ProviderMalformed("assistant tool call has no id", nil))
 				}
 				execute, ok := executors[call.Function.Name]
 				var output string
@@ -183,18 +197,34 @@ func (runtime Runtime) Run(ctx context.Context, messages []ChatMessage, options 
 					output, toolErr = execute(ctx, call)
 				}
 				if toolErr != nil {
+					var categorized *internalerrors.Error
+					if errors.As(toolErr, &categorized) {
+						batchToolError = toolErr
+					}
 					output = "ERROR: " + toolErr.Error()
 				}
 				messages = append(messages, ChatMessage{Role: "tool", ToolCallID: call.ID, Content: BoundedOutput(output, options.MaxToolOutputBytes)})
 			}
+			lastToolError = batchToolError
 			if runtime.Done != nil && runtime.Done() {
-				return finish(message, nil)
+				return finish(message, lastToolError)
 			}
 			continue
 		}
 		messages = append(messages, message)
-		return finish(message, nil)
+		return finish(message, lastToolError)
 	}
+}
+
+func providerError(err error) error {
+	var categorized *internalerrors.Error
+	if errors.As(err, &categorized) {
+		return err
+	}
+	if contextErr := internalerrors.Context(err); contextErr != nil {
+		return contextErr
+	}
+	return internalerrors.ProviderTransport(err.Error(), err)
 }
 
 func normalizedOptions(options Options) Options {

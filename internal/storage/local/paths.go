@@ -2,6 +2,7 @@ package local
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/skillicinski/bo/internal/domain"
+	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
 const stateFile = "state.json"
@@ -30,26 +32,26 @@ func HomeDir() (string, error) {
 			return value, nil
 		}
 	}
-	return "", fmt.Errorf("HOME or USERPROFILE is not set")
+	return "", internalerrors.Validation("HOME or USERPROFILE is not set")
 }
 
 func ValidateName(name string) error {
 	if name == "" {
-		return fmt.Errorf("name must not be empty")
+		return internalerrors.Validation("name must not be empty")
 	}
 	if name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
-		return fmt.Errorf("name must be a single directory component")
+		return internalerrors.Validation("name must be a single directory component")
 	}
 	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
-		return fmt.Errorf("name must not end with a dot or space")
+		return internalerrors.Validation("name must not end with a dot or space")
 	}
 	for _, r := range name {
 		if unicode.IsControl(r) || strings.ContainsRune(`<>:"|?*`, r) {
-			return fmt.Errorf("name contains an invalid character")
+			return internalerrors.Validation("name contains an invalid character")
 		}
 	}
 	if reservedDeviceName(name) {
-		return fmt.Errorf("name is reserved on Windows")
+		return internalerrors.Validation("name is reserved on Windows")
 	}
 	return nil
 }
@@ -81,7 +83,7 @@ func Seed(home string, requestedName *string) (string, error) {
 		var err error
 		name, err = RandomName()
 		if err != nil {
-			return "", err
+			return "", internalerrors.Wrap(internalerrors.KindFilesystem, "generating workspace name failed", err)
 		}
 	} else {
 		name = *requestedName
@@ -92,11 +94,14 @@ func Seed(home string, requestedName *string) (string, error) {
 
 	rootPath := filepath.Join(home, ".bo")
 	if err := os.MkdirAll(rootPath, 0o755); err != nil {
-		return "", err
+		return "", filesystem(rootPath, err)
 	}
 	target := filepath.Join(rootPath, name)
 	if err := os.Mkdir(target, 0o755); err != nil {
-		return "", err
+		if errors.Is(err, os.ErrExist) {
+			return "", internalerrors.Wrap(internalerrors.KindAlreadyExists, "workspace already exists", internalerrors.ErrAlreadyExists)
+		}
+		return "", filesystem(target, err)
 	}
 	if err := initializeState(target, domain.State{Sources: []domain.SourceRecord{}}); err != nil {
 		return "", err
@@ -107,13 +112,13 @@ func Seed(home string, requestedName *string) (string, error) {
 func initializeState(target string, state domain.State) error {
 	root, err := os.OpenRoot(target)
 	if err != nil {
-		return err
+		return filesystem(target, err)
 	}
 	defer root.Close()
 	if _, err := root.Lstat(stateFile); err == nil {
-		return fmt.Errorf("state file already exists")
+		return internalerrors.AlreadyExists("state file already exists")
 	} else if !os.IsNotExist(err) {
-		return err
+		return filesystem(filepath.Join(target, stateFile), err)
 	}
 	data, err := domain.MarshalState(state)
 	if err != nil {
@@ -121,7 +126,7 @@ func initializeState(target string, state domain.State) error {
 	}
 	temporary, err := root.OpenFile("."+stateFile+".tmp", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return err
+		return filesystem(filepath.Join(target, "."+stateFile+".tmp"), err)
 	}
 	if _, err = temporary.Write(data); err == nil {
 		err = temporary.Sync()
@@ -135,7 +140,7 @@ func initializeState(target string, state domain.State) error {
 	}
 	if err != nil {
 		_ = root.Remove("." + stateFile + ".tmp")
-		return err
+		return filesystem(filepath.Join(target, stateFile), err)
 	}
 	return syncRoot(root)
 }
@@ -148,18 +153,21 @@ func ResolveTarget(home, name string) (string, error) {
 	target := filepath.Join(root, name)
 	info, err := os.Stat(target)
 	if err != nil {
-		return "", fmt.Errorf("target directory does not exist: %s", target)
+		if errors.Is(err, os.ErrNotExist) {
+			return "", internalerrors.Wrap(internalerrors.KindMissingResource, fmt.Sprintf("target directory does not exist: %s", target), err)
+		}
+		return "", filesystem(target, err)
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("target is not a directory: %s", target)
+		return "", internalerrors.Validation(fmt.Sprintf("target is not a directory: %s", target))
 	}
 	canonicalRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
-		return "", fmt.Errorf("canonicalizing %s failed: %w", root, err)
+		return "", filesystem(root, err)
 	}
 	canonicalTarget, err := filepath.EvalSymlinks(target)
 	if err != nil {
-		return "", fmt.Errorf("canonicalizing %s failed: %w", target, err)
+		return "", filesystem(target, err)
 	}
 	if err := ensureInside(canonicalTarget, canonicalRoot); err != nil {
 		return "", err
@@ -170,7 +178,7 @@ func ResolveTarget(home, name string) (string, error) {
 func ensureInside(path, root string) error {
 	relative, err := filepath.Rel(root, path)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
-		return fmt.Errorf("path escapes %s: %s", root, path)
+		return internalerrors.Validation(fmt.Sprintf("path escapes %s: %s", root, path))
 	}
 	return nil
 }
