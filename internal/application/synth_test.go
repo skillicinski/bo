@@ -11,6 +11,7 @@ import (
 	"github.com/skillicinski/bo/internal/agent"
 	"github.com/skillicinski/bo/internal/application"
 	"github.com/skillicinski/bo/internal/domain"
+	internalerrors "github.com/skillicinski/bo/internal/errors"
 	"github.com/skillicinski/bo/internal/storage/local"
 )
 
@@ -236,6 +237,31 @@ func TestSynthesizeRegistersUntrackedRawDocument(t *testing.T) {
 	}
 	if len(state.Sources) != 1 || len(state.Sources[0].Snapshots) != 1 || state.Sources[0].Summary == nil {
 		t.Fatalf("state = %#v", state)
+	}
+}
+
+func TestSynthesizeRejectsMissingSummaryBeforeOldLogCompletion(t *testing.T) {
+	store, target := seededStore(t)
+	commitRaw(t, store, "https://example.test/article", "article.md", time.Unix(1, 0).UTC(), []byte("fact\n"))
+	commitSummary(t, store, application.SummaryCommit{
+		SourceKey: "https://example.test/article", Filename: "article.md", DerivedFrom: "article.md",
+		RawWrittenAt: time.Unix(1, 0).UTC(), CreatedAt: time.Unix(2, 0).UTC(), UpdatedAt: time.Unix(2, 0).UTC(), Contents: []byte("old summary\n"),
+	})
+	if err := os.Remove(filepath.Join(target, "summaries", "article.md")); err != nil {
+		t.Fatal(err)
+	}
+	provider := &fakeProvider{responses: []agent.CompletionResponse{
+		toolResponse("old-log", "read_logs", "{}"),
+	}}
+	result, err := application.SynthesizeWithTools(context.Background(), store, provider, application.DefaultSynthesisOptions(), []string{"read_logs", "write_summary"}, operationOptionsFor(target))
+	if !internalerrors.IsKind(err, internalerrors.KindMissingResource) {
+		t.Fatalf("expected missing summary resource, got result %#v, error %v", result, err)
+	}
+	if len(provider.requests) != 0 {
+		t.Fatalf("provider was called with invalid state: %#v", provider.requests)
+	}
+	if result.SummariesWritten != 0 {
+		t.Fatalf("summaries written from old log = %d", result.SummariesWritten)
 	}
 }
 

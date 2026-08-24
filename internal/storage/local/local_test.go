@@ -30,6 +30,32 @@ func seededStore(t *testing.T) (*local.Store, string) {
 	return store, target
 }
 
+func commitRawNote(t *testing.T, store *local.Store) application.Revision {
+	t.Helper()
+	_, revision, err := store.ReadState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, revision, err = store.CommitSnapshot(context.Background(), application.SnapshotCommit{
+		SourceKey: "raw:note.md", Filename: "note.md", WrittenAt: time.Unix(1, 0).UTC(), Contents: []byte("note\n"), Event: snapshotEvent("raw:note.md", "note.md", time.Unix(1, 0).UTC()),
+	}, revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return revision
+}
+
+func commitSummaryNote(t *testing.T, store *local.Store, revision application.Revision) application.Revision {
+	t.Helper()
+	_, revision, err := store.CommitSummary(context.Background(), application.SummaryCommit{
+		SourceKey: "raw:note.md", Filename: "note.md", DerivedFrom: "note.md", RawWrittenAt: time.Unix(1, 0).UTC(), CreatedAt: time.Unix(2, 0).UTC(), UpdatedAt: time.Unix(2, 0).UTC(), Contents: []byte("old\n"), Event: summaryEvent("raw:note.md", "note.md", "note.md", time.Unix(1, 0).UTC(), time.Unix(2, 0).UTC()),
+	}, revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return revision
+}
+
 func TestValidateNameUsesPortableRules(t *testing.T) {
 	for _, name := range []string{"", ".", "..", "../escape", "sub/name", "sub\\name", "CON", "CON.txt", "COM1", "LPT9", "a:b", "a*b", "a?b", "a\"b", "a<b", "a>b", "a|b", "name.", "name ", "line\nbreak"} {
 		if err := local.ValidateName(name); err == nil {
@@ -95,6 +121,9 @@ func TestLocalRevisionConflict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(target, "changed.md"), []byte("changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(target, "state.json"), changed, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -103,6 +132,143 @@ func TestLocalRevisionConflict(t *testing.T) {
 	}, revision)
 	if !bo.IsKind(err, bo.ErrorKindConflict) {
 		t.Fatalf("expected conflict, got %v", err)
+	}
+}
+
+func TestLocalDeletedReferencedRawFailsBeforeMutation(t *testing.T) {
+	store, target := seededStore(t)
+	revision := commitRawNote(t, store)
+	stateBefore, err := os.ReadFile(filepath.Join(target, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventsBefore, err := os.ReadFile(filepath.Join(target, "log.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(target, "note.md")); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = store.CommitSnapshot(context.Background(), application.SnapshotCommit{
+		SourceKey: "raw:new.md", Filename: "new.md", WrittenAt: time.Unix(2, 0).UTC(), Contents: []byte("new\n"), Event: snapshotEvent("raw:new.md", "new.md", time.Unix(2, 0).UTC()),
+	}, revision)
+	if !bo.IsKind(err, bo.ErrorKindMissingResource) {
+		t.Fatalf("expected missing raw resource, got %v", err)
+	}
+	stateAfter, err := os.ReadFile(filepath.Join(target, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventsAfter, err := os.ReadFile(filepath.Join(target, "log.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stateAfter) != string(stateBefore) || string(eventsAfter) != string(eventsBefore) {
+		t.Fatal("deleted raw changed workspace state")
+	}
+	if _, err := os.Stat(filepath.Join(target, "new.md")); !os.IsNotExist(err) {
+		t.Fatalf("new raw document status = %v", err)
+	}
+}
+
+func TestLocalDeletedReferencedSummaryFailsBeforeMutation(t *testing.T) {
+	store, target := seededStore(t)
+	revision := commitSummaryNote(t, store, commitRawNote(t, store))
+	stateBefore, err := os.ReadFile(filepath.Join(target, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventsBefore, err := os.ReadFile(filepath.Join(target, "log.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(target, "summaries", "note.md")); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = store.CommitSummary(context.Background(), application.SummaryCommit{
+		SourceKey: "raw:note.md", Filename: "note.md", DerivedFrom: "note.md", RawWrittenAt: time.Unix(1, 0).UTC(), CreatedAt: time.Unix(2, 0).UTC(), UpdatedAt: time.Unix(3, 0).UTC(), Contents: []byte("new\n"), Event: summaryEvent("raw:note.md", "note.md", "note.md", time.Unix(1, 0).UTC(), time.Unix(3, 0).UTC()),
+	}, revision)
+	if !bo.IsKind(err, bo.ErrorKindMissingResource) {
+		t.Fatalf("expected missing summary resource, got %v", err)
+	}
+	stateAfter, err := os.ReadFile(filepath.Join(target, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventsAfter, err := os.ReadFile(filepath.Join(target, "log.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stateAfter) != string(stateBefore) || string(eventsAfter) != string(eventsBefore) {
+		t.Fatal("deleted summary changed workspace state")
+	}
+	if _, err := os.Stat(filepath.Join(target, "summaries", "note.md")); !os.IsNotExist(err) {
+		t.Fatalf("summary status after rejected commit = %v", err)
+	}
+}
+
+func TestLocalEmptyReferencedSummaryFailsBeforeMutation(t *testing.T) {
+	store, target := seededStore(t)
+	revision := commitSummaryNote(t, store, commitRawNote(t, store))
+	stateBefore, err := os.ReadFile(filepath.Join(target, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventsBefore, err := os.ReadFile(filepath.Join(target, "log.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "summaries", "note.md"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = store.CommitSummary(context.Background(), application.SummaryCommit{
+		SourceKey: "raw:note.md", Filename: "note.md", DerivedFrom: "note.md", RawWrittenAt: time.Unix(1, 0).UTC(), CreatedAt: time.Unix(2, 0).UTC(), UpdatedAt: time.Unix(3, 0).UTC(), Contents: []byte("new\n"), Event: summaryEvent("raw:note.md", "note.md", "note.md", time.Unix(1, 0).UTC(), time.Unix(3, 0).UTC()),
+	}, revision)
+	if !bo.IsKind(err, bo.ErrorKindMissingResource) {
+		t.Fatalf("expected empty summary resource, got %v", err)
+	}
+	stateAfter, err := os.ReadFile(filepath.Join(target, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventsAfter, err := os.ReadFile(filepath.Join(target, "log.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stateAfter) != string(stateBefore) || string(eventsAfter) != string(eventsBefore) {
+		t.Fatal("empty summary changed workspace state")
+	}
+	contents, err := os.ReadFile(filepath.Join(target, "summaries", "note.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(contents) != 0 {
+		t.Fatalf("summary after rejected commit = %q", contents)
+	}
+}
+
+func TestLocalExistingSummaryEditUsesCurrentRevision(t *testing.T) {
+	store, target := seededStore(t)
+	revision := commitSummaryNote(t, store, commitRawNote(t, store))
+	if err := os.WriteFile(filepath.Join(target, "summaries", "note.md"), []byte("manual\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, revision, err := store.ReadState(context.Background())
+	if err != nil {
+		t.Fatalf("manual summary edit invalid: %v", err)
+	}
+	if loaded.Sources[0].Summary == nil {
+		t.Fatal("summary disappeared after manual edit")
+	}
+	_, _, err = store.CommitSummary(context.Background(), application.SummaryCommit{
+		SourceKey: "raw:note.md", Filename: "note.md", DerivedFrom: "note.md", RawWrittenAt: time.Unix(1, 0).UTC(), CreatedAt: loaded.Sources[0].Summary.CreatedAt, UpdatedAt: time.Unix(3, 0).UTC(), Contents: []byte("updated\n"), Event: summaryEvent("raw:note.md", "note.md", "note.md", time.Unix(1, 0).UTC(), time.Unix(3, 0).UTC()),
+	}, revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(target, "summaries", "note.md"))
+	if err != nil || string(contents) != "updated\n" {
+		t.Fatalf("summary after edit = %q, %v", contents, err)
 	}
 }
 

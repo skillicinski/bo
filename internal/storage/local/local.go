@@ -188,16 +188,9 @@ func (s *Store) ReadDocument(ctx context.Context, ref domain.DocumentRef) ([]byt
 }
 
 func (s *Store) readDocument(ref domain.DocumentRef) ([]byte, error) {
-	path, err := s.documentPath(ref)
+	path, _, err := s.documentInfo(ref)
 	if err != nil {
 		return nil, err
-	}
-	info, err := s.root.Stat(path)
-	if err != nil {
-		return nil, filesystem(filepath.Join(s.path, path), err)
-	}
-	if !info.Mode().IsRegular() {
-		return nil, internalerrors.Filesystem(fmt.Sprintf("document is not a regular file: %s", filepath.Join(s.path, path)))
 	}
 	data, err := s.root.ReadFile(path)
 	if err != nil {
@@ -765,6 +758,23 @@ func (s *Store) readState() (domain.State, []byte, application.Revision, error) 
 	if err != nil {
 		return domain.State{}, nil, application.Revision{}, normalizeStorageError("parsing "+filepath.Join(s.path, "state.json"), err)
 	}
+	for _, source := range state.Sources {
+		for _, snapshot := range source.Snapshots {
+			if _, _, err := s.documentInfo(domain.RawRef(snapshot.Filename)); err != nil {
+				return domain.State{}, nil, application.Revision{}, err
+			}
+		}
+		if source.Summary == nil {
+			continue
+		}
+		_, info, err := s.documentInfo(domain.SummaryRef(source.Summary.Filename))
+		if err != nil {
+			return domain.State{}, nil, application.Revision{}, err
+		}
+		if info.Size() == 0 {
+			return domain.State{}, nil, application.Revision{}, internalerrors.MissingResource(fmt.Sprintf("referenced summary is empty: %s", source.Summary.Filename))
+		}
+	}
 	revision, err := s.workspaceRevision(data)
 	if err != nil {
 		return domain.State{}, nil, application.Revision{}, err
@@ -1305,6 +1315,21 @@ func (s *Store) documentPath(ref domain.DocumentRef) (string, error) {
 	default:
 		return "", internalerrors.Validation("unsupported document kind")
 	}
+}
+
+func (s *Store) documentInfo(ref domain.DocumentRef) (string, os.FileInfo, error) {
+	path, err := s.documentPath(ref)
+	if err != nil {
+		return "", nil, err
+	}
+	info, err := s.root.Stat(path)
+	if err != nil {
+		return "", nil, filesystem(filepath.Join(s.path, path), err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", nil, internalerrors.Filesystem(fmt.Sprintf("document is not a regular file: %s", filepath.Join(s.path, path)))
+	}
+	return path, info, nil
 }
 
 func (s *Store) writeAtomic(destination, temporary string, data []byte) error {
