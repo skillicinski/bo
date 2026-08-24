@@ -98,9 +98,10 @@ func toolResponse(id, name, arguments string) agent.CompletionResponse {
 
 func TestSynthesizeReplaysToolMessagesAndUpsertsSummary(t *testing.T) {
 	store, target := seededStore(t)
-	raw := commitRaw(t, store, "https://example.test/article", "article.md", time.Unix(1, 0).UTC(), []byte("# Article\n\nfact\n"))
+	oldRaw := commitRaw(t, store, "https://example.test/article", "old.md", time.Unix(1, 0).UTC(), []byte("# Old Article\n\nold fact\n"))
+	commitRaw(t, store, "https://example.test/article", "article.md", time.Unix(2, 0).UTC(), []byte("# Article\n\nfact\n"))
 	commitSummary(t, store, application.SummaryCommit{
-		SourceKey: "https://example.test/article", Filename: "article.md", DerivedFrom: raw.Name,
+		SourceKey: "https://example.test/article", Filename: "article.md", DerivedFrom: oldRaw.Name,
 		RawWrittenAt: time.Unix(1, 0).UTC(), CreatedAt: time.Unix(2, 0).UTC(), UpdatedAt: time.Unix(3, 0).UTC(), Contents: []byte("old summary"),
 	})
 	provider := &fakeProvider{responses: []agent.CompletionResponse{

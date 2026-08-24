@@ -91,6 +91,7 @@ type agentContext struct {
 	completed      map[string]bool
 	written        map[string]bool
 	mutationOps    map[string]Operation
+	logEvents      []Operation
 	eventFailure   error
 }
 
@@ -171,10 +172,13 @@ func executeToolCall(context *agentContext, call agent.ToolCall) (output string,
 			if returnErr == nil {
 				return
 			}
-			eventErr := recordFailedOperation(context.ctx, context.workspace, *mutation, returnErr)
+			failed := failedOperation(*mutation, returnErr)
+			eventErr := commitOperationEvent(context.ctx, context.workspace, failed)
 			if eventErr != nil {
 				context.eventFailure = errors.Join(context.eventFailure, eventErr)
+				return
 			}
+			context.logEvents = append(context.logEvents, failed)
 		}()
 	}
 	var arguments map[string]json.RawMessage
@@ -189,7 +193,7 @@ func executeToolCall(context *agentContext, call agent.ToolCall) (output string,
 		if len(arguments) != 0 {
 			return "", fmt.Errorf("read_corpus arguments must be empty")
 		}
-		data, err := json.MarshalIndent(context.state, "", "  ")
+		data, err := json.MarshalIndent(synthesisState(context.state, context.sources), "", "  ")
 		if err != nil {
 			return "", fmt.Errorf("serializing state failed: %v", err)
 		}
@@ -269,7 +273,9 @@ func executeToolCall(context *agentContext, call agent.ToolCall) (output string,
 		if err := writeSummary(context, sourceKey, markdown, existing, *mutation); err != nil {
 			return "", err
 		}
-		markCompletedFromOperation(context, committedOperation(*mutation))
+		committed := committedOperation(*mutation)
+		markCompletedFromOperation(context, committed)
+		context.logEvents = append(context.logEvents, committed)
 		context.written[sourceKey] = true
 		return name + " succeeded: " + sourceKey, nil
 	default:
@@ -290,24 +296,59 @@ func intArgument(arguments map[string]json.RawMessage, name string, defaultValue
 }
 
 func readLogs(context *agentContext, offset, limit int) (string, error) {
-	if context.events == nil {
-		return "", internalerrors.Request("workspace event contract is not configured")
+	if context.logEvents == nil {
+		if context.events == nil {
+			return "", internalerrors.Request("workspace event contract is not configured")
+		}
+		page, err := context.events.ReadEvents(context.ctx, offset, limit)
+		if err != nil {
+			return "", normalizeError(err, internalerrors.KindFilesystem, "reading operation log")
+		}
+		if err := ValidateOperationPage(page, offset, limit); err != nil {
+			return "", err
+		}
+		page.Directory = context.directory
+		for _, operation := range page.Entries {
+			markCompletedFromOperation(context, operation)
+		}
+		return boundedOperationPage(page, context.maxOutputBytes)
 	}
-	page, err := context.events.ReadEvents(context.ctx, offset, limit)
-	if err != nil {
-		return "", normalizeError(err, internalerrors.KindFilesystem, "reading operation log")
+	if err := ValidateOperationPageRequest(offset, limit); err != nil {
+		return "", err
+	}
+	start := offset
+	if start > len(context.logEvents) {
+		start = len(context.logEvents)
+	}
+	end := start + limit
+	if end > len(context.logEvents) {
+		end = len(context.logEvents)
+	}
+	page := OperationPage{
+		Directory: context.directory, Entries: append([]Operation{}, context.logEvents[start:end]...),
+		Offset: offset, Limit: limit, NextOffset: offset + end - start, HasMore: end < len(context.logEvents),
 	}
 	if err := ValidateOperationPage(page, offset, limit); err != nil {
 		return "", err
 	}
-	page.Directory = context.directory
-	entries := make([]Operation, 0, len(page.Entries))
 	for _, operation := range page.Entries {
-		entries = append(entries, operation)
 		markCompletedFromOperation(context, operation)
 	}
-	page.Entries = entries
 	return boundedOperationPage(page, context.maxOutputBytes)
+}
+
+func scopedSynthesisEvents(events []Operation, sources map[string]agentSource) []Operation {
+	result := make([]Operation, 0, len(events))
+	for _, operation := range events {
+		if operation.Source == nil {
+			result = append(result, operation)
+			continue
+		}
+		if _, ok := sources[operation.Source.SourceKey]; ok {
+			result = append(result, operation)
+		}
+	}
+	return result
 }
 
 func boundedOperationPage(page OperationPage, maxBytes int) (string, error) {
@@ -331,6 +372,10 @@ func boundedOperationPage(page OperationPage, maxBytes int) (string, error) {
 		candidate.Entries = page.Entries[:count]
 		candidate.NextOffset = page.Offset + count
 		candidate.HasMore = page.HasMore || count < len(page.Entries)
+		if count == len(page.Entries) {
+			candidate.NextOffset = page.NextOffset
+			candidate.HasMore = page.HasMore
+		}
 		data, err := json.Marshal(candidate)
 		if err != nil {
 			return "", fmt.Errorf("serializing operation log failed: %v", err)
@@ -427,6 +472,16 @@ func summaryRecord(state domain.State, sourceKey string) *domain.SummaryRecord {
 		}
 	}
 	return nil
+}
+
+func synthesisState(state domain.State, sources map[string]agentSource) domain.State {
+	result := domain.State{Sources: make([]domain.SourceRecord, 0, len(sources))}
+	for _, source := range state.Sources {
+		if _, ok := sources[source.SourceKey]; ok {
+			result.Sources = append(result.Sources, source)
+		}
+	}
+	return result
 }
 
 func writeSummary(context *agentContext, sourceKey, markdown string, existing *domain.SummaryRecord, operation Operation) error {

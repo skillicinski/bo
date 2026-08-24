@@ -77,56 +77,171 @@ func runSynthesis(ctx context.Context, workspace Workspace, provider agent.Compl
 	if len(documents) == 0 {
 		return SynthesisResult{}, internalerrors.MissingResource("no raw Markdown documents in workspace")
 	}
+	written := map[string]bool{}
+	skipped := map[string]bool{}
+	result := SynthesisResult{}
+	batchLimit := synthesisBatchLimit(config)
+	usageKnown, usageReceived := true, false
+	var usage agent.TokenUsage
 	state, revision, err := workspace.ReadState(runContext)
 	if err != nil {
-		return SynthesisResult{}, normalizeError(err, internalerrors.KindFilesystem, "reading workspace state")
+		return result, normalizeError(err, internalerrors.KindFilesystem, "reading workspace state")
 	}
-	sources := sourceGroups(documents, state)
-	completed := map[string]bool{}
-	written := map[string]bool{}
-	contextState := &agentContext{
-		ctx: runContext, workspace: workspace, documents: documents, sources: sources,
-		state: state, revision: revision, maxOutputBytes: config.MaxToolOutputBytes,
-		directory: workspace.Name(), options: options,
-		completed: completed, written: written, mutationOps: map[string]Operation{},
-	}
-	contextState.events = workspace
-	names := make([]string, 0, len(sources))
-	for _, source := range sources {
-		names = append(names, source.LatestFilename)
-	}
-	sort.Strings(names)
-	sourceKeys := make([]string, 0, len(sources))
-	for sourceKey := range sources {
-		sourceKeys = append(sourceKeys, sourceKey)
-	}
-	sort.Strings(sourceKeys)
-	messages := []agent.ChatMessage{
-		{Role: "system", Content: systemPrompt(contextState, names)},
-		{Role: "user", Content: fmt.Sprintf("Produce one concise Markdown summary for every source identity. Use the newest raw snapshot as evidence and preserve each source's epistemic status. Source identities: %s", strings.Join(sourceKeys, ", "))},
-	}
-	runtime := agent.Runtime{
-		Provider: provider,
-		Tools:    synthTools(contextState, toolNames),
-		Done: func() bool {
-			return len(completed) == len(sources)
-		},
-	}
-	runtimeResult, err := runtime.Run(runContext, messages, agent.Options{
-		MaxTurns: config.MaxTurns, MaxToolCalls: config.MaxToolCalls,
-		MaxToolOutputBytes: config.MaxToolOutputBytes, MaxResponseTokens: config.MaxResponseTokens,
-	})
-	result := SynthesisResult{SummariesWritten: len(written), SummariesSkipped: len(completed) - len(written), Metrics: runtimeResult.Metrics}
-	if contextState.eventFailure != nil {
-		return result, contextState.eventFailure
-	}
+	events, err := readSynthesisEvents(runContext, workspace)
 	if err != nil {
 		return result, err
 	}
-	if len(completed) != len(sources) {
-		return result, internalerrors.ProviderMalformed(fmt.Sprintf("model stopped with missing summaries: %s", strings.Join(missingSources(sources, completed), ", ")), nil)
+	for {
+		sources := sourceGroups(documents, state)
+		completed := completedSynthesisSources(state, sources, events)
+		for sourceKey := range skipped {
+			if !completed[sourceKey] {
+				delete(skipped, sourceKey)
+			}
+		}
+		for sourceKey := range completed {
+			if !written[sourceKey] {
+				skipped[sourceKey] = true
+			}
+		}
+		pending := missingSources(sources, completed)
+		if len(pending) == 0 {
+			break
+		}
+		batchCount := batchLimit
+		if batchCount > len(pending) {
+			batchCount = len(pending)
+		}
+		batchKeys := pending[:batchCount]
+		batchSources := make(map[string]agentSource, batchCount)
+		for _, sourceKey := range batchKeys {
+			batchSources[sourceKey] = sources[sourceKey]
+		}
+		contextState := &agentContext{
+			ctx: runContext, workspace: workspace, documents: documents, sources: batchSources,
+			state: state, revision: revision, maxOutputBytes: config.MaxToolOutputBytes,
+			directory: workspace.Name(), options: options,
+			completed: map[string]bool{}, written: map[string]bool{}, mutationOps: map[string]Operation{},
+			logEvents: scopedSynthesisEvents(events, batchSources),
+		}
+		contextState.events = workspace
+		initialLogEvents := len(contextState.logEvents)
+		names := make([]string, 0, len(batchSources))
+		for _, source := range batchSources {
+			names = append(names, source.LatestFilename)
+		}
+		sort.Strings(names)
+		sourceKeys := append([]string{}, batchKeys...)
+		messages := []agent.ChatMessage{
+			{Role: "system", Content: systemPrompt(contextState, names)},
+			{Role: "user", Content: fmt.Sprintf("Produce one concise Markdown summary for every source identity. Use the newest raw snapshot as evidence and preserve each source's epistemic status. Source identities: %s", strings.Join(sourceKeys, ", "))},
+		}
+		runtime := agent.Runtime{
+			Provider: provider,
+			Tools:    synthTools(contextState, toolNames),
+			Done: func() bool {
+				return len(contextState.completed) == len(batchSources)
+			},
+		}
+		runtimeResult, runtimeErr := runtime.Run(runContext, messages, agent.Options{
+			MaxTurns: config.MaxTurns, MaxToolCalls: config.MaxToolCalls,
+			MaxToolOutputBytes: config.MaxToolOutputBytes, MaxResponseTokens: config.MaxResponseTokens,
+		})
+		events = append(events, contextState.logEvents[initialLogEvents:]...)
+		result.Metrics.Turns += runtimeResult.Metrics.Turns
+		result.Metrics.ToolCalls += runtimeResult.Metrics.ToolCalls
+		result.Metrics.Duration += runtimeResult.Metrics.Duration
+		if runtimeResult.Metrics.Usage == nil {
+			usageKnown = false
+		} else if usageKnown {
+			usage.PromptTokens += runtimeResult.Metrics.Usage.PromptTokens
+			usage.CompletionTokens += runtimeResult.Metrics.Usage.CompletionTokens
+			usage.TotalTokens += runtimeResult.Metrics.Usage.TotalTokens
+			usageReceived = true
+		}
+		for sourceKey := range contextState.written {
+			written[sourceKey] = true
+			delete(skipped, sourceKey)
+		}
+		for sourceKey := range contextState.completed {
+			if !contextState.written[sourceKey] && !written[sourceKey] {
+				skipped[sourceKey] = true
+			}
+		}
+		result.Metrics.Usage = aggregateUsage(usage, usageKnown, usageReceived)
+		result.SummariesWritten, result.SummariesSkipped = len(written), len(skipped)
+		if contextState.eventFailure != nil {
+			if runtimeErr != nil {
+				return result, errors.Join(contextState.eventFailure, runtimeErr)
+			}
+			return result, contextState.eventFailure
+		}
+		if runtimeErr != nil {
+			return result, runtimeErr
+		}
+		if len(contextState.completed) != len(batchSources) {
+			return result, internalerrors.ProviderMalformed(fmt.Sprintf("model stopped with missing summaries: %s", strings.Join(missingSources(batchSources, contextState.completed), ", ")), nil)
+		}
+		if batchCount == len(pending) {
+			break
+		}
+		state, revision, err = workspace.ReadState(runContext)
+		if err != nil {
+			result.Metrics.Usage = aggregateUsage(usage, usageKnown, usageReceived)
+			result.SummariesWritten, result.SummariesSkipped = len(written), len(skipped)
+			return result, normalizeError(err, internalerrors.KindFilesystem, "reading workspace state")
+		}
 	}
+	result.Metrics.Usage = aggregateUsage(usage, usageKnown, usageReceived)
+	result.SummariesWritten, result.SummariesSkipped = len(written), len(skipped)
 	return result, nil
+}
+
+func synthesisBatchLimit(config SynthesisOptions) int {
+	// ponytail: reserve one setup turn/call and two calls per source; add per-tool cost accounting if setup grows.
+	limit := config.MaxToolCalls - 1
+	if config.MaxTurns-1 < limit {
+		limit = config.MaxTurns - 1
+	}
+	limit /= 2
+	if limit < 1 {
+		return 1
+	}
+	return limit
+}
+
+func aggregateUsage(usage agent.TokenUsage, known, received bool) *agent.TokenUsage {
+	if !known || !received {
+		return nil
+	}
+	return &agent.TokenUsage{PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens, TotalTokens: usage.TotalTokens}
+}
+
+func readSynthesisEvents(ctx context.Context, workspace Workspace) ([]Operation, error) {
+	offset := 0
+	events := []Operation{}
+	for {
+		page, err := workspace.ReadEvents(ctx, offset, MaxOperationPageLimit)
+		if err != nil {
+			return nil, normalizeError(err, internalerrors.KindFilesystem, "reading operation log")
+		}
+		if err := ValidateOperationPage(page, offset, MaxOperationPageLimit); err != nil {
+			return nil, err
+		}
+		events = append(events, page.Entries...)
+		if !page.HasMore {
+			return events, nil
+		}
+		offset = page.NextOffset
+	}
+}
+
+func completedSynthesisSources(state domain.State, sources map[string]agentSource, events []Operation) map[string]bool {
+	contextState := &agentContext{state: state, sources: sources, completed: map[string]bool{}}
+	for _, event := range events {
+		markCompletedFromOperation(contextState, event)
+	}
+	return contextState.completed
 }
 
 func missingSources(sources map[string]agentSource, summarized map[string]bool) []string {

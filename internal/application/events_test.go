@@ -140,3 +140,21 @@ func TestOnlyCommittedWriteSummaryEventsCompleteSynthesis(t *testing.T) {
 		t.Fatal("committed write_summary event did not mark synthesis complete")
 	}
 }
+
+func TestScopedSynthesisEventsKeepsWorkspaceRecords(t *testing.T) {
+	workspaceFailure := operationEvent("workspace-failure", domain.OutcomeFailed)
+	workspaceFailure.Command = domain.CommandSynth
+	otherSource := operationEvent("other-source", domain.OutcomeCommitted)
+	otherSource.Command = domain.CommandWriteSummary
+	otherSource.Source = &domain.SourceIdentity{SourceKey: "https://example.test/other"}
+	currentSource := operationEvent("current-source", domain.OutcomeCommitted)
+	currentSource.Command = domain.CommandWriteSummary
+	currentSource.Source = &domain.SourceIdentity{SourceKey: "https://example.test/current"}
+
+	got := scopedSynthesisEvents([]Operation{workspaceFailure, otherSource, currentSource}, map[string]agentSource{
+		"https://example.test/current": {LatestFilename: "current.md"},
+	})
+	if len(got) != 2 || got[0].OperationID != workspaceFailure.OperationID || got[1].OperationID != currentSource.OperationID {
+		t.Fatalf("scoped events = %#v", got)
+	}
+}
