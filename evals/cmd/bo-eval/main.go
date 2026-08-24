@@ -29,7 +29,7 @@ func run(args []string) error {
 	if apiKey == "" {
 		return fmt.Errorf("DEEPSEEK_API_KEY is not set")
 	}
-	home, err := local.HomeDir()
+	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}

@@ -93,8 +93,6 @@ func New(apiKey, endpoint string) *Client {
 	return &Client{APIKey: apiKey, Endpoint: endpoint, HTTPClient: &http.Client{}}
 }
 
-func NewClient(apiKey, endpoint string) *Client { return New(apiKey, endpoint) }
-
 func (c *Client) Complete(ctx context.Context, request agent.CompletionRequest) (agent.CompletionResponse, error) {
 	model := c.Model
 	if model == "" {

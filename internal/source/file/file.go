@@ -32,9 +32,6 @@ func (t *Transport) Route(_ context.Context, input string) (source.Origin, error
 type MarkdownPlugin struct{}
 
 func NewMarkdownPlugin() *MarkdownPlugin { return &MarkdownPlugin{} }
-func NewMarkdown() *MarkdownPlugin       { return NewMarkdownPlugin() }
-
-func (p *MarkdownPlugin) Type() source.OriginType { return source.OriginMarkdown }
 
 func (p *MarkdownPlugin) Handle(ctx context.Context, origin source.Origin) (domain.RawSnapshot, error) {
 	if err := ctx.Err(); err != nil {

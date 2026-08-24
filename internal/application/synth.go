@@ -19,17 +19,15 @@ func Synthesize(ctx context.Context, workspace Workspace, provider agent.Complet
 
 func SynthesizeWithTools(ctx context.Context, workspace Workspace, provider agent.CompletionProvider, config SynthesisOptions, toolNames []string, options OperationOptions) (result SynthesisResult, returnErr error) {
 	options = normalizeOperationOptions(options)
-	directory := ""
 	var err error
 	toolNames, err = normalizeSynthesisTools(toolNames)
 	if err != nil {
-		return SynthesisResult{}, synthFailure(ctx, workspace, options.Actor, directory, internalerrors.Validation(err.Error()))
+		return SynthesisResult{}, synthFailure(ctx, workspace, options.Actor, internalerrors.Validation(err.Error()))
 	}
 	if workspace == nil {
 		return SynthesisResult{}, internalerrors.Request("workspace is not configured")
 	}
-	directory = workspace.Name()
-	result, returnErr = runSynthesis(ctx, directory, workspace, provider, config, toolNames, options)
+	result, returnErr = runSynthesis(ctx, workspace, provider, config, toolNames, options)
 	operation := newOperation(CommandSynth, options.Actor)
 	operation.Metrics = &domain.OperationMetrics{
 		Turns: result.Metrics.Turns, ToolCalls: result.Metrics.ToolCalls, Duration: result.Metrics.Duration,
@@ -51,7 +49,7 @@ func SynthesizeWithTools(ctx context.Context, workspace Workspace, provider agen
 	return result, returnErr
 }
 
-func synthFailure(ctx context.Context, workspace Workspace, actor, directory string, cause error) error {
+func synthFailure(ctx context.Context, workspace Workspace, actor string, cause error) error {
 	operation := failedOperation(newOperation(CommandSynth, actor), cause)
 	if workspace != nil {
 		if err := commitOperationEvent(ctx, workspace, operation); err != nil {
@@ -62,7 +60,7 @@ func synthFailure(ctx context.Context, workspace Workspace, actor, directory str
 	return cause
 }
 
-func runSynthesis(ctx context.Context, directory string, workspace Workspace, provider agent.CompletionProvider, config SynthesisOptions, toolNames []string, options OperationOptions) (SynthesisResult, error) {
+func runSynthesis(ctx context.Context, workspace Workspace, provider agent.CompletionProvider, config SynthesisOptions, toolNames []string, options OperationOptions) (SynthesisResult, error) {
 	if workspace == nil {
 		return SynthesisResult{}, internalerrors.Request("workspace is not configured")
 	}
@@ -89,7 +87,7 @@ func runSynthesis(ctx context.Context, directory string, workspace Workspace, pr
 	contextState := &agentContext{
 		ctx: runContext, workspace: workspace, documents: documents, sources: sources,
 		state: state, revision: revision, maxOutputBytes: config.MaxToolOutputBytes,
-		directory: directory, options: options,
+		directory: workspace.Name(), options: options,
 		completed: completed, written: written, mutationOps: map[string]Operation{},
 	}
 	contextState.events = workspace

@@ -122,29 +122,9 @@ func Open(path string) (*Store, error) {
 	return store, nil
 }
 
-func New(path string) (*Store, error) { return Open(path) }
-
 func (s *Store) Close() error { return s.root.Close() }
 
 func (s *Store) Name() string { return filepath.Base(s.path) }
-
-func (s *Store) InitializeState(ctx context.Context, state domain.State) error {
-	if err := contextErr(ctx); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, err := s.root.Lstat("state.json"); err == nil {
-		return internalerrors.AlreadyExists("state file already exists")
-	} else if !os.IsNotExist(err) {
-		return filesystem("reading state.json", err)
-	}
-	data, err := domain.MarshalState(state)
-	if err != nil {
-		return normalizeStorageError("serializing state.json", err)
-	}
-	return s.writeAtomic("state.json", ".state.json.tmp", data)
-}
 
 func (s *Store) ListDocuments(ctx context.Context, kind domain.DocumentKind) ([]domain.DocumentRef, error) {
 	if err := contextErr(ctx); err != nil {

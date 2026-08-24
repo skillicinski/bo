@@ -76,13 +76,9 @@ type TokenUsage struct {
 	TotalTokens      int
 }
 
-type Usage = TokenUsage
-
 type CompletionProvider interface {
 	Complete(context.Context, CompletionRequest) (CompletionResponse, error)
 }
-
-type Provider = CompletionProvider
 
 type Tool struct {
 	Definition ToolDefinition

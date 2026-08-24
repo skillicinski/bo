@@ -45,7 +45,7 @@ func runSeed(args []string) {
 		name = args[index+1]
 		index++
 	}
-	home, err := homeDir()
+	home, err := os.UserHomeDir()
 	if err != nil {
 		fail("seeding", err.Error())
 	}
@@ -64,7 +64,7 @@ func runSnap(args []string) {
 	if len(args) < 2 || strings.HasPrefix(args[0], "-") {
 		fail("snap", "usage: bo snap <dir> <source>...")
 	}
-	home, err := homeDir()
+	home, err := os.UserHomeDir()
 	if err != nil {
 		fail("snap", err.Error())
 	}
@@ -92,7 +92,7 @@ func runState(args []string) {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") || len(args) > 2 || len(args) == 2 && args[1] != "--full" {
 		fail("state", "usage: bo state <name> [--full]")
 	}
-	home, err := homeDir()
+	home, err := os.UserHomeDir()
 	if err != nil {
 		fail("state", err.Error())
 	}
@@ -132,7 +132,7 @@ func runSynth(args []string) {
 	if apiKey == "" {
 		fail("synth", "DEEPSEEK_API_KEY is not set")
 	}
-	home, err := homeDir()
+	home, err := os.UserHomeDir()
 	if err != nil {
 		fail("synth", err.Error())
 	}
@@ -191,15 +191,6 @@ func printSnapReport(result bo.SnapResult, fatal error) bool {
 		fmt.Fprintf(os.Stderr, "%d succeeded / %d failed\n", total-failed, totalFailed)
 	}
 	return aborted || failed > 0
-}
-
-func homeDir() (string, error) {
-	for _, name := range []string{"HOME", "USERPROFILE"} {
-		if value := os.Getenv(name); value != "" {
-			return value, nil
-		}
-	}
-	return "", fmt.Errorf("HOME or USERPROFILE is not set")
 }
 
 func fail(operation, detail string) {

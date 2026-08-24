@@ -29,7 +29,7 @@ func TestSnapPublishesStateSequentially(t *testing.T) {
 		"https://example.test/one": {Title: "First Page", Markdown: []byte("# First Page\n\ncontent\n")},
 		"https://example.test/two": {Title: "Second Page", Markdown: []byte("# Second Page\n\ncontent\n")},
 	}
-	outcomes, err := application.SnapWithWorkflow(context.Background(), store, source, "notes", []string{"https://example.test/one", "https://example.test/two"}, operationOptionsFor(target))
+	outcomes, err := application.SnapWithWorkflow(context.Background(), store, source, []string{"https://example.test/one", "https://example.test/two"}, operationOptionsFor(target))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestSnapStoresRepeatedSourceSnapshotsInOneAggregate(t *testing.T) {
 	key := "https://example.test/article"
 	outcomes, err := application.SnapWithWorkflow(context.Background(), store, rawSource{
 		key: {Title: "Article", Markdown: []byte("latest\n")},
-	}, "notes", []string{key, key}, operationOptionsFor(target))
+	}, []string{key, key}, operationOptionsFor(target))
 	if err != nil || len(outcomes) != 2 {
 		t.Fatalf("outcomes = %#v, err = %v", outcomes, err)
 	}
@@ -75,7 +75,7 @@ func TestSnapDoesNotPublishWhenTransactionMarkerCannotBeWritten(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(transactionMarker, "blocked"), []byte("blocked\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := application.SnapWithWorkflow(context.Background(), store, rawSource{"https://example.test/url": {Title: "Page", Markdown: []byte("content\n")}}, "notes", []string{"https://example.test/url"}, operationOptionsFor(target))
+	_, err := application.SnapWithWorkflow(context.Background(), store, rawSource{"https://example.test/url": {Title: "Page", Markdown: []byte("content\n")}}, []string{"https://example.test/url"}, operationOptionsFor(target))
 	if err == nil {
 		t.Fatal("Snap succeeded")
 	}
@@ -105,7 +105,7 @@ func TestSnapRecordsCorrelatedFailedAndCommittedAttempts(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := "https://example.test/article"
-	outcomes, err := application.SnapWithWorkflow(context.Background(), store, rawSource{key: {Title: "Article", Markdown: []byte("latest\n")}}, "notes", []string{key}, operationOptionsFor(target))
+	outcomes, err := application.SnapWithWorkflow(context.Background(), store, rawSource{key: {Title: "Article", Markdown: []byte("latest\n")}}, []string{key}, operationOptionsFor(target))
 	if err != nil || len(outcomes) != 1 || outcomes[0].Err != nil || outcomes[0].Filename == "article.md" {
 		t.Fatalf("outcomes = %#v, err = %v", outcomes, err)
 	}
@@ -127,7 +127,7 @@ func (failingRawSource) Fetch(context.Context, string) (domain.RawSnapshot, erro
 
 func TestSnapDoesNotStoreFailedFetch(t *testing.T) {
 	store, target := seededStore(t)
-	outcomes, err := application.SnapWithWorkflow(context.Background(), store, failingRawSource{}, "notes", []string{"https://www.youtube.com/watch?v=a1mhk7mAetk"}, operationOptionsFor(target))
+	outcomes, err := application.SnapWithWorkflow(context.Background(), store, failingRawSource{}, []string{"https://www.youtube.com/watch?v=a1mhk7mAetk"}, operationOptionsFor(target))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestSnapAcceptsMixedURLAndMarkdownInputs(t *testing.T) {
 		},
 	)
 	remote := "https://example.test/remote"
-	outcomes, err := application.SnapWithWorkflow(context.Background(), store, workflow, "notes", []string{remote, path}, operationOptionsFor(target))
+	outcomes, err := application.SnapWithWorkflow(context.Background(), store, workflow, []string{remote, path}, operationOptionsFor(target))
 	if err != nil || len(outcomes) != 2 {
 		t.Fatalf("outcomes = %#v, err = %v", outcomes, err)
 	}
@@ -190,7 +190,7 @@ func TestSnapDefaultWorkflowAcceptsMarkdown(t *testing.T) {
 	if err := os.WriteFile(path, []byte("# Default\n\ncontent\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	outcomes, err := application.Snap(context.Background(), store, "notes", []string{path}, operationOptionsFor(target))
+	outcomes, err := application.Snap(context.Background(), store, []string{path}, operationOptionsFor(target))
 	if err != nil || len(outcomes) != 1 || outcomes[0].SourceKey != "raw:default.md" {
 		t.Fatalf("outcomes = %#v, err = %v", outcomes, err)
 	}

@@ -29,15 +29,6 @@ var nouns = []string{
 	"sunset", "thicket", "willow", "wren", "zephyr",
 }
 
-func HomeDir() (string, error) {
-	for _, name := range []string{"HOME", "USERPROFILE"} {
-		if value := os.Getenv(name); value != "" {
-			return value, nil
-		}
-	}
-	return "", internalerrors.Validation("HOME or USERPROFILE is not set")
-}
-
 func ValidateName(name string) error {
 	if name == "" {
 		return internalerrors.Validation("name must not be empty")

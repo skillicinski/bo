@@ -26,10 +26,6 @@ func NewHTML(client Requester) *HTMLPlugin {
 	return &HTMLPlugin{Client: client, UserAgent: DefaultUserAgent}
 }
 
-func NewHTMLPlugin(client Requester) *HTMLPlugin { return NewHTML(client) }
-
-func (p *HTMLPlugin) Type() source.OriginType { return source.OriginHTML }
-
 func (p *HTMLPlugin) Handle(ctx context.Context, origin source.Origin) (domain.RawSnapshot, error) {
 	client := p.client()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, origin.Value, nil)

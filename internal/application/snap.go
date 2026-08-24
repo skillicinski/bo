@@ -20,8 +20,6 @@ type SnapOutcome struct {
 	Err       error
 }
 
-func (o SnapOutcome) Failed() bool { return o.Err != nil }
-
 type SnapCommandError struct {
 	Completed []SnapOutcome
 	SourceKey string
@@ -44,20 +42,20 @@ func NewSnapInputError(detail string) *SnapCommandError {
 	return &SnapCommandError{Err: internalerrors.Validation(detail)}
 }
 
-func Snap(ctx context.Context, workspace Workspace, directory string, inputs []string, options OperationOptions) ([]SnapOutcome, error) {
-	return SnapWithWorkflow(ctx, workspace, defaultSourceWorkflow(), directory, inputs, options)
+func Snap(ctx context.Context, workspace Workspace, inputs []string, options OperationOptions) ([]SnapOutcome, error) {
+	return SnapWithWorkflow(ctx, workspace, defaultSourceWorkflow(), inputs, options)
 }
 
-func SnapWithWorkflow(ctx context.Context, workspace Workspace, workflow source.Fetcher, directory string, inputs []string, options OperationOptions) ([]SnapOutcome, error) {
+func SnapWithWorkflow(ctx context.Context, workspace Workspace, workflow source.Fetcher, inputs []string, options OperationOptions) ([]SnapOutcome, error) {
 	options = normalizeOperationOptions(options)
 	if workspace == nil {
-		return nil, snapWorkflowFailure(ctx, nil, directory, options, internalerrors.Request("workspace is not configured"))
+		return nil, snapWorkflowFailure(ctx, nil, options, internalerrors.Request("workspace is not configured"))
 	}
 	if len(inputs) == 0 {
-		return nil, snapWorkflowFailure(ctx, workspace, directory, options, NewSnapInputError("usage: bo snap <dir> <source>..."))
+		return nil, snapWorkflowFailure(ctx, workspace, options, NewSnapInputError("at least one source is required"))
 	}
 	if workflow == nil {
-		return nil, snapWorkflowFailure(ctx, workspace, directory, options, NewSnapInputError("source workflow is not configured"))
+		return nil, snapWorkflowFailure(ctx, workspace, options, NewSnapInputError("source workflow is not configured"))
 	}
 	_, revision, err := workspace.ReadState(ctx)
 	if err != nil {
@@ -170,7 +168,7 @@ func snapFailureEvent(ctx context.Context, workspace Workspace, operation Operat
 	return recordFailedOperation(ctx, workspace, operation, cause)
 }
 
-func snapWorkflowFailure(ctx context.Context, workspace Workspace, directory string, options OperationOptions, cause error) error {
+func snapWorkflowFailure(ctx context.Context, workspace Workspace, options OperationOptions, cause error) error {
 	if workspace != nil {
 		if err := recordFailedOperation(ctx, workspace, newOperation(CommandSnap, options.Actor), cause); err != nil {
 			return errors.Join(cause, err)

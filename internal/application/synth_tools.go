@@ -71,6 +71,7 @@ func synthTools(contextState *agentContext, names []string) []agent.Tool {
 }
 
 type agentSource struct {
+	SourceKey        string
 	LatestFilename   string
 	LatestWrittenAt  time.Time
 	LatestStateIndex int
@@ -133,6 +134,14 @@ func DiscoverDocuments(ctx context.Context, workspace Workspace) (map[string]dom
 }
 
 func sourceGroups(documents map[string]domain.DocumentRef, state domain.State) map[string]agentSource {
+	stateSnapshots := make(map[string]agentSource)
+	stateIndex := 0
+	for _, source := range state.Sources {
+		for _, snapshot := range source.Snapshots {
+			stateSnapshots[snapshot.Filename] = agentSource{SourceKey: source.SourceKey, LatestWrittenAt: snapshot.WrittenAt, LatestStateIndex: stateIndex}
+			stateIndex++
+		}
+	}
 	names := make([]string, 0, len(documents))
 	for name := range documents {
 		names = append(names, name)
@@ -141,17 +150,8 @@ func sourceGroups(documents map[string]domain.DocumentRef, state domain.State) m
 	sources := map[string]agentSource{}
 	for _, filename := range names {
 		sourceKey, writtenAt, stateIndex := "raw:"+filename, time.Time{}, 0
-		found := false
-		recordIndex := 0
-		for _, source := range state.Sources {
-			for _, snapshot := range source.Snapshots {
-				index := recordIndex
-				recordIndex++
-				if snapshot.Filename == filename && (!found || snapshot.WrittenAt.After(writtenAt) || snapshot.WrittenAt.Equal(writtenAt) && index > stateIndex) {
-					sourceKey, writtenAt, stateIndex = source.SourceKey, snapshot.WrittenAt, index
-					found = true
-				}
-			}
+		if snapshot, ok := stateSnapshots[filename]; ok {
+			sourceKey, writtenAt, stateIndex = snapshot.SourceKey, snapshot.LatestWrittenAt, snapshot.LatestStateIndex
 		}
 		current, ok := sources[sourceKey]
 		if !ok || writtenAt.After(current.LatestWrittenAt) || writtenAt.Equal(current.LatestWrittenAt) && stateIndex > current.LatestStateIndex {

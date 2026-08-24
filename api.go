@@ -298,8 +298,6 @@ type SnapOutcome struct {
 	Err       error
 }
 
-func (o SnapOutcome) Failed() bool { return o.Err != nil }
-
 type SnapResult struct {
 	Outcomes     []SnapOutcome `json:"outcomes"`
 	Aborted      bool          `json:"aborted"`
@@ -316,14 +314,6 @@ type StateResult struct {
 	Revision Revision `json:"revision"`
 }
 
-const (
-	DefaultMaxTurns                = app.DefaultMaxTurns
-	DefaultMaxToolCalls            = app.DefaultMaxToolCalls
-	DefaultMaxToolOutputBytes      = app.DefaultMaxToolOutputBytes
-	DefaultMaxResponseTokens       = app.DefaultMaxResponseTokens
-	DefaultSynthesisTimeoutSeconds = app.DefaultSynthesisTimeoutSeconds
-)
-
 type SynthesisOptions struct {
 	MaxTurns           int
 	MaxToolCalls       int
@@ -333,10 +323,11 @@ type SynthesisOptions struct {
 }
 
 func DefaultSynthesisOptions() SynthesisOptions {
+	defaults := app.DefaultSynthesisOptions()
 	return SynthesisOptions{
-		MaxTurns: DefaultMaxTurns, MaxToolCalls: DefaultMaxToolCalls,
-		MaxToolOutputBytes: DefaultMaxToolOutputBytes, MaxResponseTokens: DefaultMaxResponseTokens,
-		TimeoutSeconds: DefaultSynthesisTimeoutSeconds,
+		MaxTurns: defaults.MaxTurns, MaxToolCalls: defaults.MaxToolCalls,
+		MaxToolOutputBytes: defaults.MaxToolOutputBytes, MaxResponseTokens: defaults.MaxResponseTokens,
+		TimeoutSeconds: defaults.TimeoutSeconds,
 	}
 }
 
@@ -362,16 +353,10 @@ func NewDeepSeekProvider(config DeepSeekConfig) Provider {
 	return Provider{completion: client}
 }
 
-type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-}
-
 type Metrics struct {
 	Turns     int           `json:"turns"`
 	ToolCalls int           `json:"tool_calls"`
-	Usage     *Usage        `json:"usage,omitempty"`
+	Usage     *TokenUsage   `json:"usage,omitempty"`
 	Duration  time.Duration `json:"duration"`
 }
 
@@ -442,7 +427,7 @@ func Snap(ctx context.Context, request SnapRequest) (SnapResult, error) {
 	if request.Workspace == nil {
 		return result, NewError(ErrorKindRequest, "workspace is not configured")
 	}
-	outcomes, err := app.Snap(ctx, &publicWorkspace{workspace: request.Workspace}, request.Workspace.Name(), request.Sources, internalOperationOptions(request.Operations))
+	outcomes, err := app.Snap(ctx, &publicWorkspace{workspace: request.Workspace}, request.Sources, internalOperationOptions(request.Operations))
 	result.Outcomes = publicSnapOutcomes(outcomes)
 	var commandErr *app.SnapCommandError
 	if stderrors.As(err, &commandErr) {
@@ -812,7 +797,7 @@ func publicSnapOutcomes(outcomes []app.SnapOutcome) []SnapOutcome {
 func publicSynthResult(result app.SynthesisResult) SynthResult {
 	converted := SynthResult{SummariesWritten: result.SummariesWritten, SummariesSkipped: result.SummariesSkipped, Metrics: Metrics{Turns: result.Metrics.Turns, ToolCalls: result.Metrics.ToolCalls, Duration: result.Metrics.Duration}}
 	if result.Metrics.Usage != nil {
-		converted.Metrics.Usage = &Usage{PromptTokens: result.Metrics.Usage.PromptTokens, CompletionTokens: result.Metrics.Usage.CompletionTokens, TotalTokens: result.Metrics.Usage.TotalTokens}
+		converted.Metrics.Usage = &TokenUsage{PromptTokens: result.Metrics.Usage.PromptTokens, CompletionTokens: result.Metrics.Usage.CompletionTokens, TotalTokens: result.Metrics.Usage.TotalTokens}
 	}
 	return converted
 }

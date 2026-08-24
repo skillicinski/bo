@@ -175,10 +175,6 @@ func NewYouTube(client Requester) *YouTubePlugin {
 	return &YouTubePlugin{Client: client, UserAgent: androidUserAgent, PlayerEndpoint: playerEndpoint}
 }
 
-func NewYouTubePlugin(client Requester) *YouTubePlugin { return NewYouTube(client) }
-
-func (p *YouTubePlugin) Type() source.OriginType { return source.OriginYouTube }
-
 func (p *YouTubePlugin) client() Requester {
 	if p == nil || p.Client == nil {
 		return http.DefaultClient
@@ -457,8 +453,6 @@ func parseJSON3Transcript(input string) (string, error) {
 	}
 	return strings.Join(segments, "\n\n"), nil
 }
-
-func ParseJSON3Transcript(input string) (string, error) { return parseJSON3Transcript(input) }
 
 func cleanTranscriptText(value string) string {
 	return strings.Join(strings.Fields(xhtml.UnescapeString(xhtml.UnescapeString(value))), " ")

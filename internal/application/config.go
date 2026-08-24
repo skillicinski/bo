@@ -2,14 +2,6 @@ package application
 
 import "github.com/skillicinski/bo/internal/agent"
 
-const (
-	DefaultMaxTurns                = agent.DefaultMaxTurns
-	DefaultMaxToolCalls            = agent.DefaultMaxToolCalls
-	DefaultMaxToolOutputBytes      = agent.DefaultMaxToolOutputBytes
-	DefaultMaxResponseTokens       = agent.DefaultMaxResponseTokens
-	DefaultSynthesisTimeoutSeconds = 120
-)
-
 type SynthesisOptions struct {
 	// SynthesisOptions contains bounded synthesis runtime limits. Provider credentials and
 	// model selection belong to the composition root and provider adapter.
@@ -27,9 +19,10 @@ type SynthesisResult struct {
 }
 
 func DefaultSynthesisOptions() SynthesisOptions {
+	defaults := agent.DefaultOptions()
 	return SynthesisOptions{
-		MaxTurns: DefaultMaxTurns, MaxToolCalls: DefaultMaxToolCalls,
-		MaxToolOutputBytes: DefaultMaxToolOutputBytes, MaxResponseTokens: DefaultMaxResponseTokens,
-		TimeoutSeconds: DefaultSynthesisTimeoutSeconds,
+		MaxTurns: defaults.MaxTurns, MaxToolCalls: defaults.MaxToolCalls,
+		MaxToolOutputBytes: defaults.MaxToolOutputBytes, MaxResponseTokens: defaults.MaxResponseTokens,
+		TimeoutSeconds: 120,
 	}
 }
