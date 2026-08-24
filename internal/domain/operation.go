@@ -169,6 +169,9 @@ func (o Operation) Validate() error {
 		}
 	}
 	if o.Metrics != nil {
+		if o.Metrics.Duration < 0 {
+			return fmt.Errorf("metrics duration must not be negative")
+		}
 		if o.Metrics.Turns < 0 || o.Metrics.ToolCalls < 0 || o.Metrics.SummariesWritten < 0 || o.Metrics.SummariesSkipped < 0 {
 			return fmt.Errorf("metrics counts must not be negative")
 		}

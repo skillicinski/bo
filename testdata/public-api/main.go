@@ -49,20 +49,21 @@ func (s *storage) ReadState(context.Context) (bo.State, bo.Revision, error) {
 
 func (s *storage) ReadEvents(_ context.Context, offset, limit int) (bo.OperationPage, error) {
 	if offset < 0 {
-		offset = 0
+		return bo.OperationPage{}, bo.NewError(bo.ErrorKindValidation, "operation event offset must not be negative")
 	}
-	if limit <= 0 || limit > 100 {
-		limit = 20
+	if limit < 1 || limit > 100 {
+		return bo.OperationPage{}, bo.NewError(bo.ErrorKindValidation, "operation event limit must be between 1 and 100")
 	}
-	if offset > len(s.events) {
-		offset = len(s.events)
+	start := offset
+	if start > len(s.events) {
+		start = len(s.events)
 	}
-	end := offset + limit
+	end := start + limit
 	if end > len(s.events) {
 		end = len(s.events)
 	}
-	entries := append([]bo.Operation{}, s.events[offset:end]...)
-	return bo.OperationPage{Entries: entries, Offset: offset, Limit: limit, NextOffset: end, HasMore: end < len(s.events)}, nil
+	entries := append([]bo.Operation{}, s.events[start:end]...)
+	return bo.OperationPage{Entries: entries, Offset: offset, Limit: limit, NextOffset: offset + len(entries), HasMore: end < len(s.events)}, nil
 }
 
 func (s *storage) CommitEvent(_ context.Context, event bo.Operation) error {

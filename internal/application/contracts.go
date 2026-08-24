@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"time"
 
 	"github.com/skillicinski/bo/internal/domain"
@@ -89,6 +90,49 @@ type OperationPage struct {
 	Limit      int         `json:"limit"`
 	NextOffset int         `json:"next_offset"`
 	HasMore    bool        `json:"has_more"`
+}
+
+const MaxOperationPageLimit = 100
+
+func ValidateOperationPageRequest(offset, limit int) error {
+	if offset < 0 {
+		return internalerrors.Validation("operation event offset must not be negative")
+	}
+	if limit < 1 || limit > MaxOperationPageLimit {
+		return internalerrors.Validation(fmt.Sprintf("operation event limit must be between 1 and %d", MaxOperationPageLimit))
+	}
+	return nil
+}
+
+func ValidateOperationPage(page OperationPage, offset, limit int) error {
+	if err := ValidateOperationPageRequest(offset, limit); err != nil {
+		return err
+	}
+	if page.Offset < 0 || page.Offset != offset {
+		return internalerrors.Validation("operation event page offset does not match request")
+	}
+	if page.Limit < 1 || page.Limit > MaxOperationPageLimit || page.Limit != limit {
+		return internalerrors.Validation("operation event page limit does not match request")
+	}
+	if len(page.Entries) > page.Limit {
+		return internalerrors.Validation("operation event page contains more entries than its limit")
+	}
+	maxInt := int(^uint(0) >> 1)
+	if page.Offset > maxInt-len(page.Entries) {
+		return internalerrors.Validation("operation event page cursor overflows")
+	}
+	if page.NextOffset != page.Offset+len(page.Entries) {
+		return internalerrors.Validation("operation event page cursor does not match entries")
+	}
+	if page.HasMore && len(page.Entries) == 0 {
+		return internalerrors.Validation("operation event page cursor does not make progress")
+	}
+	for index, event := range page.Entries {
+		if err := event.Validate(); err != nil {
+			return internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("operation event page entry %d is invalid", index), err)
+		}
+	}
+	return nil
 }
 
 type OperationOptions struct {

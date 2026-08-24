@@ -112,7 +112,7 @@ func systemPrompt(context *agentContext, documentNames []string) string {
 		identities = append(identities, sourceKey+" ("+source.LatestFilename+")")
 	}
 	sort.Strings(identities)
-	return fmt.Sprintf("You are bo's document-summary agent for %s. Purpose: turn each source into a concise Markdown summary that retains its key claims. Ontology: raw documents are immutable snapshots; a source identity is an exact URL or raw:filename; a summary is one mutable document derived from the newest raw snapshot; state is the authoritative record of these links. Rules: use only evidence from the source, preserve qualifications and uncertainty, attribute experience, measurements, recommendations, opinions, and forecasts to their author, and never modify raw documents or invent facts. The host owns document access, newest-snapshot selection, provenance, state publication, and completion. Before reading raw documents, inspect recent scoped committed operation entries with read_logs and follow next_offset while has_more is true. A successful write_summary entry for the current raw filename with an existing current summary means that source is complete; do not rewrite it. Use the available bounded tools. Source identities: %s. Latest raw documents: %s.", context.directory, strings.Join(identities, ", "), strings.Join(documentNames, ", "))
+	return fmt.Sprintf("You are bo's document-summary agent for %s. Purpose: turn each source into a concise Markdown summary that retains its key claims. Ontology: raw documents are immutable snapshots; a source identity is an exact URL or raw:filename; a summary is one mutable document derived from the newest raw snapshot; state is the authoritative record of these links. Rules: use only evidence from the source, preserve qualifications and uncertainty, attribute experience, measurements, recommendations, opinions, and forecasts to their author, and never modify raw documents or invent facts. The host owns document access, newest-snapshot selection, provenance, state publication, and completion. Before reading raw documents, inspect recent scoped operation entries, including failed attempts, with read_logs and follow next_offset while has_more is true. A successful write_summary entry for the current raw filename with an existing current summary means that source is complete; do not rewrite it. Use the available bounded tools. Source identities: %s. Latest raw documents: %s.", context.directory, strings.Join(identities, ", "), strings.Join(documentNames, ", "))
 }
 
 func DiscoverDocuments(ctx context.Context, workspace Workspace) (map[string]domain.DocumentRef, error) {
@@ -208,8 +208,8 @@ func executeToolCall(context *agentContext, call agent.ToolCall) (output string,
 			return "", fmt.Errorf("read_logs.offset must be a non-negative integer")
 		}
 		limit, err := intArgument(arguments, "limit", 20)
-		if err != nil || limit < 1 || limit > 100 {
-			return "", fmt.Errorf("read_logs.limit must be an integer from 1 to 100")
+		if err != nil || limit < 1 || limit > MaxOperationPageLimit {
+			return "", fmt.Errorf("read_logs.limit must be an integer from 1 to %d", MaxOperationPageLimit)
 		}
 		return readLogs(context, offset, limit)
 	case toolReadDocument:
@@ -269,7 +269,7 @@ func executeToolCall(context *agentContext, call agent.ToolCall) (output string,
 		if err := writeSummary(context, sourceKey, markdown, existing, *mutation); err != nil {
 			return "", err
 		}
-		context.completed[sourceKey] = true
+		markCompletedFromOperation(context, committedOperation(*mutation))
 		context.written[sourceKey] = true
 		return name + " succeeded: " + sourceKey, nil
 	default:
@@ -297,33 +297,57 @@ func readLogs(context *agentContext, offset, limit int) (string, error) {
 	if err != nil {
 		return "", normalizeError(err, internalerrors.KindFilesystem, "reading operation log")
 	}
+	if err := ValidateOperationPage(page, offset, limit); err != nil {
+		return "", err
+	}
 	page.Directory = context.directory
-	page.Offset = offset
-	page.Limit = limit
+	entries := make([]Operation, 0, len(page.Entries))
+	for _, operation := range page.Entries {
+		entries = append(entries, operation)
+		markCompletedFromOperation(context, operation)
+	}
+	page.Entries = entries
+	return boundedOperationPage(page, context.maxOutputBytes)
+}
+
+func boundedOperationPage(page OperationPage, maxBytes int) (string, error) {
 	if page.Entries == nil {
 		page.Entries = []Operation{}
 	}
-	if page.NextOffset < offset || page.NextOffset == 0 && len(page.Entries) > 0 {
-		page.NextOffset = offset + len(page.Entries)
-	}
-	committed := make([]Operation, 0, len(page.Entries))
-	for _, operation := range page.Entries {
-		if operation.Outcome != domain.OutcomeCommitted {
-			continue
+	if len(page.Entries) == 0 {
+		data, err := json.Marshal(page)
+		if err == nil && len(data) <= maxBytes {
+			return string(data), nil
 		}
-		committed = append(committed, operation)
-		markCompletedFromOperation(context, operation)
+		if err != nil {
+			return "", fmt.Errorf("serializing operation log failed: %v", err)
+		}
+		return "", internalerrors.Validation(fmt.Sprintf("read_logs page cannot fit within max tool output bytes (%d)", maxBytes))
 	}
-	page.Entries = committed
-	data, err := json.Marshal(page)
-	if err != nil {
-		return "", fmt.Errorf("serializing operation log failed: %v", err)
+	// ponytail: at most 100 prefix encodes; stop at the first oversized prefix.
+	var previous []byte
+	for count := 1; count <= len(page.Entries); count++ {
+		candidate := page
+		candidate.Entries = page.Entries[:count]
+		candidate.NextOffset = page.Offset + count
+		candidate.HasMore = page.HasMore || count < len(page.Entries)
+		data, err := json.Marshal(candidate)
+		if err != nil {
+			return "", fmt.Errorf("serializing operation log failed: %v", err)
+		}
+		if len(data) > maxBytes {
+			if previous != nil {
+				return string(previous), nil
+			}
+			return "", internalerrors.Validation(fmt.Sprintf("read_logs page cannot fit within max tool output bytes (%d)", maxBytes))
+		}
+		previous = data
 	}
-	return agent.BoundedOutput(string(data), context.maxOutputBytes), nil
+	return string(previous), nil
 }
 
 func markCompletedFromOperation(context *agentContext, operation Operation) {
-	if operation.Outcome != domain.OutcomeCommitted || operation.Command != CommandWriteSummary {
+	if operation.Outcome != domain.OutcomeCommitted || operation.Command != CommandWriteSummary || operation.Error != nil {
 		return
 	}
 	if operation.Source == nil {

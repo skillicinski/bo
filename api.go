@@ -619,6 +619,9 @@ func (w *publicWorkspace) ReadState(ctx context.Context) (internaldomain.State, 
 }
 
 func (w *publicWorkspace) ReadEvents(ctx context.Context, offset, limit int) (app.OperationPage, error) {
+	if err := app.ValidateOperationPageRequest(offset, limit); err != nil {
+		return app.OperationPage{}, err
+	}
 	page, err := w.workspace.ReadEvents(ctx, offset, limit)
 	if err != nil {
 		return app.OperationPage{}, internalErrorAs(err, internalerrors.KindFilesystem, "reading operation events")
@@ -627,7 +630,11 @@ func (w *publicWorkspace) ReadEvents(ctx context.Context, offset, limit int) (ap
 	for index, event := range page.Entries {
 		entries[index] = internalOperation(event)
 	}
-	return app.OperationPage{Directory: page.Directory, Entries: entries, Offset: page.Offset, Limit: page.Limit, NextOffset: page.NextOffset, HasMore: page.HasMore}, nil
+	converted := app.OperationPage{Directory: page.Directory, Entries: entries, Offset: page.Offset, Limit: page.Limit, NextOffset: page.NextOffset, HasMore: page.HasMore}
+	if err := app.ValidateOperationPage(converted, offset, limit); err != nil {
+		return app.OperationPage{}, err
+	}
+	return converted, nil
 }
 
 func (w *publicWorkspace) CommitEvent(ctx context.Context, event app.Operation) error {

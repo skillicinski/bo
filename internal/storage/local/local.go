@@ -38,7 +38,6 @@ const (
 	workspaceTransactionFile         = ".bo-transaction.json"
 	workspaceEventFile               = "log.jsonl"
 	defaultOperationPageLimit        = 20
-	maxOperationPageLimit            = 100
 	maxOperationEventBytes           = 1 << 20
 	workspaceTransactionVersion      = 1
 	workspaceTransactionPhaseReady   = "prepared"
@@ -227,8 +226,8 @@ func (s *Store) ReadEvents(ctx context.Context, offset, limit int) (application.
 	if limit <= 0 {
 		limit = defaultOperationPageLimit
 	}
-	if limit > maxOperationPageLimit {
-		limit = maxOperationPageLimit
+	if limit > application.MaxOperationPageLimit {
+		limit = application.MaxOperationPageLimit
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -236,7 +235,6 @@ func (s *Store) ReadEvents(ctx context.Context, offset, limit int) (application.
 		return application.OperationPage{}, err
 	}
 	entries := make([]domain.Operation, 0, limit)
-	count := 0
 	hasMore := false
 	err := s.scanWorkspaceEvents(ctx, func(index int, event domain.Operation) error {
 		if index >= offset {
@@ -244,18 +242,13 @@ func (s *Store) ReadEvents(ctx context.Context, offset, limit int) (application.
 				entries = append(entries, event)
 			} else {
 				hasMore = true
-				count = index + 1
 				return stopLedgerScan
 			}
 		}
-		count = index + 1
 		return nil
 	})
 	if err != nil {
 		return application.OperationPage{}, err
-	}
-	if offset > count {
-		offset = count
 	}
 	return application.OperationPage{
 		Directory:  s.Name(),
