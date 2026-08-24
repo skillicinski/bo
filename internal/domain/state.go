@@ -163,12 +163,44 @@ func ValidateSourceKey(sourceKey string) error {
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return internalerrors.Validation("source key must be an http or https URL or raw:<filename>")
 	}
+	if parsed.User != nil {
+		return internalerrors.Validation("source key URL must not contain user information")
+	}
+	if credentialQueryParameter(parsed.RawQuery) {
+		return internalerrors.Validation("source key URL must not contain credential query parameters")
+	}
 	for _, r := range sourceKey {
 		if unicode.IsControl(r) || unicode.IsSpace(r) {
 			return internalerrors.Validation("source key must not contain whitespace or control characters")
 		}
 	}
 	return nil
+}
+
+func credentialQueryParameter(rawQuery string) bool {
+	if rawQuery == "" {
+		return false
+	}
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return true
+	}
+	for key := range values {
+		normalized := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
+		if strings.HasPrefix(normalized, "x_amz_") || strings.HasPrefix(normalized, "x_goog_") {
+			return true
+		}
+		switch normalized {
+		case "api_key", "apikey", "auth", "authorization", "key", "jwt", "oauth", "password", "passwd", "secret", "sig", "signature", "token":
+			return true
+		}
+		for _, marker := range []string{"access_token", "credential", "password", "secret", "signature", "token"} {
+			if strings.Contains(normalized, marker) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func ValidateDocumentName(name string) error {

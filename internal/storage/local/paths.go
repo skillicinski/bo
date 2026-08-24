@@ -14,7 +14,10 @@ import (
 	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
-const stateFile = "state.json"
+const (
+	stateFile = "state.json"
+	eventFile = "log.jsonl"
+)
 
 var adjectives = []string{
 	"amber", "brisk", "calm", "clever", "crisp", "eager", "gentle", "hidden", "mellow", "quiet",
@@ -78,6 +81,14 @@ func RandomName() (string, error) {
 }
 
 func Seed(home string, requestedName *string) (string, error) {
+	return seed(home, requestedName, nil)
+}
+
+func SeedWithEvent(home string, requestedName *string, event domain.Operation) (string, error) {
+	return seed(home, requestedName, &event)
+}
+
+func seed(home string, requestedName *string, event *domain.Operation) (string, error) {
 	name := ""
 	if requestedName == nil {
 		var err error
@@ -93,20 +104,113 @@ func Seed(home string, requestedName *string) (string, error) {
 	}
 
 	rootPath := filepath.Join(home, ".bo")
-	if err := os.MkdirAll(rootPath, 0o755); err != nil {
+	if err := os.MkdirAll(rootPath, 0o700); err != nil {
 		return "", filesystem(rootPath, err)
 	}
 	target := filepath.Join(rootPath, name)
-	if err := os.Mkdir(target, 0o755); err != nil {
+	if _, err := os.Lstat(target); err == nil {
+		return "", internalerrors.Wrap(internalerrors.KindAlreadyExists, "workspace already exists", internalerrors.ErrAlreadyExists)
+	} else if !os.IsNotExist(err) {
+		return "", filesystem(target, err)
+	}
+	temporary, err := os.MkdirTemp(rootPath, ".bo-workspace-")
+	if err != nil {
+		return "", filesystem(rootPath, err)
+	}
+	renamed := false
+	defer func() {
+		if !renamed {
+			_ = os.RemoveAll(temporary)
+		}
+	}()
+	state := domain.State{Sources: []domain.SourceRecord{}}
+	if event != nil {
+		event.Normalize()
+		if err := validateSeedEvent(*event); err != nil {
+			return "", err
+		}
+	}
+	if err := initializeState(temporary, state); err != nil {
+		return "", err
+	}
+	if err := initializeEvents(temporary, event); err != nil {
+		return "", err
+	}
+	if err := syncDirectory(temporary); err != nil {
+		return "", err
+	}
+	if err := os.Rename(temporary, target); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return "", internalerrors.Wrap(internalerrors.KindAlreadyExists, "workspace already exists", internalerrors.ErrAlreadyExists)
 		}
 		return "", filesystem(target, err)
 	}
-	if err := initializeState(target, domain.State{Sources: []domain.SourceRecord{}}); err != nil {
+	renamed = true
+	if err := syncDirectory(rootPath); err != nil {
 		return "", err
 	}
 	return target, nil
+}
+
+func initializeEvents(target string, event *domain.Operation) error {
+	var data []byte
+	if event != nil {
+		var err error
+		data, err = marshalEventLine(*event)
+		if err != nil {
+			return err
+		}
+	}
+	root, err := os.OpenRoot(target)
+	if err != nil {
+		return filesystem(target, err)
+	}
+	defer root.Close()
+	file, err := root.OpenFile(eventFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return filesystem(filepath.Join(target, eventFile), err)
+	}
+	var written int
+	if written, err = file.Write(data); err == nil && written != len(data) {
+		err = io.ErrShortWrite
+	}
+	if err == nil {
+		err = file.Sync()
+	}
+	closeErr := file.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = root.Remove(eventFile)
+		return filesystem(filepath.Join(target, eventFile), err)
+	}
+	return syncRoot(root)
+}
+
+func validateSeedEvent(event domain.Operation) error {
+	if err := event.Validate(); err != nil {
+		return internalerrors.Wrap(internalerrors.KindValidation, "invalid seed event", err)
+	}
+	if event.Command != domain.CommandSeed || event.Outcome != domain.OutcomeCommitted || event.Error != nil {
+		return internalerrors.Validation("seed event must be a committed seed without an error")
+	}
+	if event.Source != nil || event.Document != nil || event.Provenance != nil {
+		return internalerrors.Validation("seed event must not contain source, document, or provenance")
+	}
+	return nil
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return filesystem(path, err)
+	}
+	defer directory.Close()
+	if err := directory.Sync(); err != nil {
+		return filesystem(path, err)
+	}
+	return nil
 }
 
 func initializeState(target string, state domain.State) error {

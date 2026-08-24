@@ -2,12 +2,14 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/skillicinski/bo/internal/agent"
+	"github.com/skillicinski/bo/internal/domain"
 	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
@@ -16,38 +18,48 @@ func Synthesize(ctx context.Context, workspace Workspace, provider agent.Complet
 }
 
 func SynthesizeWithTools(ctx context.Context, workspace Workspace, provider agent.CompletionProvider, config SynthesisOptions, toolNames []string, options OperationOptions) (result SynthesisResult, returnErr error) {
-	var err error
-	options, err = normalizeOperationOptions(options)
-	if err != nil {
-		return SynthesisResult{}, err
-	}
+	options = normalizeOperationOptions(options)
 	directory := ""
-	defer func() {
-		details := map[string]any{
-			"turns":             result.Metrics.Turns,
-			"tool_calls":        result.Metrics.ToolCalls,
-			"duration":          result.Metrics.Duration,
-			"summaries_written": result.SummariesWritten,
-			"summaries_skipped": result.SummariesSkipped,
-		}
-		if result.Metrics.Usage != nil {
-			details["usage"] = result.Metrics.Usage
-		}
-		for key, value := range operationErrorDetails(returnErr) {
-			details[key] = value
-		}
-		recordOperation(options, directory, CommandSynth, returnErr == nil, details)
-	}()
+	var err error
 	toolNames, err = normalizeSynthesisTools(toolNames)
 	if err != nil {
-		return SynthesisResult{}, internalerrors.Validation(err.Error())
+		return SynthesisResult{}, synthFailure(ctx, workspace, options.Actor, directory, internalerrors.Validation(err.Error()))
 	}
 	if workspace == nil {
 		return SynthesisResult{}, internalerrors.Request("workspace is not configured")
 	}
 	directory = workspace.Name()
 	result, returnErr = runSynthesis(ctx, directory, workspace, provider, config, toolNames, options)
+	operation := newOperation(CommandSynth, options.Actor)
+	operation.Metrics = &domain.OperationMetrics{
+		Turns: result.Metrics.Turns, ToolCalls: result.Metrics.ToolCalls, Duration: result.Metrics.Duration,
+		SummariesWritten: result.SummariesWritten, SummariesSkipped: result.SummariesSkipped,
+	}
+	if result.Metrics.Usage != nil {
+		operation.Metrics.Usage = &domain.TokenUsage{
+			PromptTokens: result.Metrics.Usage.PromptTokens, CompletionTokens: result.Metrics.Usage.CompletionTokens, TotalTokens: result.Metrics.Usage.TotalTokens,
+		}
+	}
+	if returnErr == nil {
+		operation = committedOperation(operation)
+	} else {
+		operation = failedOperation(operation, returnErr)
+	}
+	if eventErr := commitOperationEvent(ctx, workspace, operation); eventErr != nil {
+		returnErr = errors.Join(returnErr, eventErr)
+	}
 	return result, returnErr
+}
+
+func synthFailure(ctx context.Context, workspace Workspace, actor, directory string, cause error) error {
+	operation := failedOperation(newOperation(CommandSynth, actor), cause)
+	if workspace != nil {
+		if err := commitOperationEvent(ctx, workspace, operation); err != nil {
+			return errors.Join(cause, err)
+		}
+		return cause
+	}
+	return cause
 }
 
 func runSynthesis(ctx context.Context, directory string, workspace Workspace, provider agent.CompletionProvider, config SynthesisOptions, toolNames []string, options OperationOptions) (SynthesisResult, error) {
@@ -77,9 +89,10 @@ func runSynthesis(ctx context.Context, directory string, workspace Workspace, pr
 	contextState := &agentContext{
 		ctx: runContext, workspace: workspace, documents: documents, sources: sources,
 		state: state, revision: revision, maxOutputBytes: config.MaxToolOutputBytes,
-		directory: directory, actor: options.Actor, operationLog: options.Log,
-		completed: completed, written: written,
+		directory: directory, options: options,
+		completed: completed, written: written, mutationOps: map[string]Operation{},
 	}
+	contextState.events = workspace
 	names := make([]string, 0, len(sources))
 	for _, source := range sources {
 		names = append(names, source.LatestFilename)
@@ -106,6 +119,9 @@ func runSynthesis(ctx context.Context, directory string, workspace Workspace, pr
 		MaxToolOutputBytes: config.MaxToolOutputBytes, MaxResponseTokens: config.MaxResponseTokens,
 	})
 	result := SynthesisResult{SummariesWritten: len(written), SummariesSkipped: len(completed) - len(written), Metrics: runtimeResult.Metrics}
+	if contextState.eventFailure != nil {
+		return result, contextState.eventFailure
+	}
 	if err != nil {
 		return result, err
 	}

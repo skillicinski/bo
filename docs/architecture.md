@@ -47,7 +47,10 @@ The source package owns the adapter contracts:
 The default workflow routes HTTP URLs to HTML or YouTube plugins and local
 `.md` paths to the Markdown plugin. The URL and file adapters do not import
 `application`. HTTP request policy remains inside the source plugins; storage
-construction remains outside the use case.
+construction remains outside the use case. Exact HTTP and HTTPS URLs with
+non-credential query parameters are valid source identities; URL user
+information and credential-bearing query parameters, including signed AWS and
+GCS URLs, are rejected.
 
 ### SourceRecord
 
@@ -82,6 +85,13 @@ semantic snapshot or summary commit only with that revision. The local
 revision covers serialized state and the contents of all raw and summary
 documents, so external edits produce a typed conflict and bo does not
 reconcile them.
+
+The workspace has separate durable artifacts: `state.json` is the document
+inventory, and `log.jsonl` is the append-only event ledger. Event appends and
+bounded event reads belong to the workspace port. The ledger is outside the
+content revision, so recording a read does not invalidate an unrelated content
+mutation. Local mutation journals include the document, inventory, and event
+append in one recovery boundary.
 
 Adapters own publication, cleanup, rollback, and atomicity. The local adapter
 stages document and state writes, syncs each destination parent directory, and

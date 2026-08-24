@@ -82,6 +82,41 @@ func TestSnapDoesNotPublishWhenTransactionMarkerCannotBeWritten(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(target, "page.md")); !os.IsNotExist(statErr) {
 		t.Fatalf("raw document remains: %v", statErr)
 	}
+	if err := os.Remove(filepath.Join(transactionMarker, "blocked")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(transactionMarker); err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.ReadEvents(context.Background(), 0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range page.Entries {
+		if event.Command == domain.CommandSnap && event.Outcome == domain.OutcomeCommitted {
+			t.Fatalf("successful event recorded for failed mutation: %#v", event)
+		}
+	}
+}
+
+func TestSnapRecordsCorrelatedFailedAndCommittedAttempts(t *testing.T) {
+	store, target := seededStore(t)
+	if err := os.WriteFile(filepath.Join(target, "article.md"), []byte("external\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	key := "https://example.test/article"
+	outcomes, err := application.SnapWithWorkflow(context.Background(), store, rawSource{key: {Title: "Article", Markdown: []byte("latest\n")}}, "notes", []string{key}, operationOptionsFor(target))
+	if err != nil || len(outcomes) != 1 || outcomes[0].Err != nil || outcomes[0].Filename == "article.md" {
+		t.Fatalf("outcomes = %#v, err = %v", outcomes, err)
+	}
+	page, err := store.ReadEvents(context.Background(), 0, 20)
+	if err != nil || len(page.Entries) != 2 {
+		t.Fatalf("events = %#v, err = %v", page, err)
+	}
+	first, second := page.Entries[0], page.Entries[1]
+	if first.OperationID == "" || first.OperationID != second.OperationID || first.Attempt != 1 || second.Attempt != 2 || first.Outcome != domain.OutcomeFailed || second.Outcome != domain.OutcomeCommitted || first.Error == nil || first.Error.Retryable {
+		t.Fatalf("attempt events = %#v", page.Entries)
+	}
 }
 
 type failingRawSource struct{}

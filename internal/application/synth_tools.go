@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -78,9 +79,9 @@ type agentSource struct {
 type agentContext struct {
 	ctx            context.Context
 	directory      string
-	actor          string
 	workspace      Workspace
-	operationLog   OperationLog
+	options        OperationOptions
+	events         WorkspaceEvents
 	documents      map[string]domain.DocumentRef
 	sources        map[string]agentSource
 	state          domain.State
@@ -88,6 +89,20 @@ type agentContext struct {
 	maxOutputBytes int
 	completed      map[string]bool
 	written        map[string]bool
+	mutationOps    map[string]Operation
+	eventFailure   error
+}
+
+func (context *agentContext) nextMutationOperation(key string) Operation {
+	operation, ok := context.mutationOps[key]
+	if !ok {
+		operation = newOperation(CommandWriteSummary, context.options.Actor)
+	} else {
+		operation.Attempt++
+		operation.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	context.mutationOps[key] = operation
+	return operation
 }
 
 func systemPrompt(context *agentContext, documentNames []string) string {
@@ -96,7 +111,7 @@ func systemPrompt(context *agentContext, documentNames []string) string {
 		identities = append(identities, sourceKey+" ("+source.LatestFilename+")")
 	}
 	sort.Strings(identities)
-	return fmt.Sprintf("You are bo's document-summary agent for %s. Purpose: turn each source into a concise Markdown summary that retains its key claims. Ontology: raw documents are immutable snapshots; a source identity is an exact URL or raw:filename; a summary is one mutable document derived from the newest raw snapshot; state is the authoritative record of these links. Rules: use only evidence from the source, preserve qualifications and uncertainty, attribute experience, measurements, recommendations, opinions, and forecasts to their author, and never modify raw documents or invent facts. The host owns document access, newest-snapshot selection, provenance, state publication, and completion. Before reading raw documents, inspect recent scoped operation entries with read_logs and follow next_offset while has_more is true. A successful write_summary entry for the current raw filename with an existing current summary means that source is complete; do not rewrite it. Use the available bounded tools. Source identities: %s. Latest raw documents: %s.", context.directory, strings.Join(identities, ", "), strings.Join(documentNames, ", "))
+	return fmt.Sprintf("You are bo's document-summary agent for %s. Purpose: turn each source into a concise Markdown summary that retains its key claims. Ontology: raw documents are immutable snapshots; a source identity is an exact URL or raw:filename; a summary is one mutable document derived from the newest raw snapshot; state is the authoritative record of these links. Rules: use only evidence from the source, preserve qualifications and uncertainty, attribute experience, measurements, recommendations, opinions, and forecasts to their author, and never modify raw documents or invent facts. The host owns document access, newest-snapshot selection, provenance, state publication, and completion. Before reading raw documents, inspect recent scoped committed operation entries with read_logs and follow next_offset while has_more is true. A successful write_summary entry for the current raw filename with an existing current summary means that source is complete; do not rewrite it. Use the available bounded tools. Source identities: %s. Latest raw documents: %s.", context.directory, strings.Join(identities, ", "), strings.Join(documentNames, ", "))
 }
 
 func DiscoverDocuments(ctx context.Context, workspace Workspace) (map[string]domain.DocumentRef, error) {
@@ -148,13 +163,18 @@ func sourceGroups(documents map[string]domain.DocumentRef, state domain.State) m
 
 func executeToolCall(context *agentContext, call agent.ToolCall) (output string, returnErr error) {
 	name := call.Function.Name
-	writeDetails := map[string]any{}
-	if name == toolWriteSummary {
+	var mutation *Operation
+	if name == toolWriteSummary || name == toolEditSummary {
+		event := newOperation(CommandWriteSummary, context.options.Actor)
+		mutation = &event
 		defer func() {
-			for key, value := range operationErrorDetails(returnErr) {
-				writeDetails[key] = value
+			if returnErr == nil {
+				return
 			}
-			recordOperation(OperationOptions{Log: context.operationLog, Actor: context.actor}, context.directory, CommandWriteSummary, returnErr == nil, writeDetails)
+			eventErr := recordFailedOperation(context.ctx, context.workspace, *mutation, returnErr)
+			if eventErr != nil {
+				context.eventFailure = errors.Join(context.eventFailure, eventErr)
+			}
 		}()
 	}
 	var arguments map[string]json.RawMessage
@@ -218,8 +238,11 @@ func executeToolCall(context *agentContext, call agent.ToolCall) (output string,
 		if err != nil {
 			return "", fmt.Errorf("%s.source_key must be a string", name)
 		}
-		if name == toolWriteSummary {
-			writeDetails["source_key"] = sourceKey
+		if mutation != nil {
+			*mutation = context.nextMutationOperation(sourceKey)
+			if domain.ValidateSourceKey(sourceKey) == nil {
+				mutation.Source = &domain.SourceIdentity{SourceKey: sourceKey}
+			}
 		}
 		markdown, err := stringArgument(arguments, "markdown")
 		if err != nil {
@@ -228,9 +251,13 @@ func executeToolCall(context *agentContext, call agent.ToolCall) (output string,
 		if _, ok := context.sources[sourceKey]; !ok {
 			return "", fmt.Errorf("unknown source: %s", sourceKey)
 		}
-		if name == toolWriteSummary {
-			writeDetails["derived_from"] = context.sources[sourceKey].LatestFilename
-			writeDetails["filename"] = context.sources[sourceKey].LatestFilename
+		if mutation != nil {
+			mutation.Document = &domain.DocumentIdentity{Kind: domain.DocumentKindSummary, Filename: context.sources[sourceKey].LatestFilename}
+			writtenAt := context.sources[sourceKey].LatestWrittenAt
+			mutation.Provenance = &domain.OperationProvenance{DerivedFrom: &domain.DocumentIdentity{Kind: domain.DocumentKindRaw, Filename: context.sources[sourceKey].LatestFilename}}
+			if !writtenAt.IsZero() {
+				mutation.Provenance.RawWrittenAt = &writtenAt
+			}
 		}
 		existing := summaryRecord(context.state, sourceKey)
 		if name == toolWriteSummary && existing != nil {
@@ -239,7 +266,7 @@ func executeToolCall(context *agentContext, call agent.ToolCall) (output string,
 		if name == toolEditSummary && existing == nil {
 			return "", fmt.Errorf("no summary exists for source: %s", sourceKey)
 		}
-		if err := writeSummary(context, sourceKey, markdown, existing); err != nil {
+		if err := writeSummary(context, sourceKey, markdown, existing, *mutation); err != nil {
 			return "", err
 		}
 		context.completed[sourceKey] = true
@@ -263,7 +290,10 @@ func intArgument(arguments map[string]json.RawMessage, name string, defaultValue
 }
 
 func readLogs(context *agentContext, offset, limit int) (string, error) {
-	page, err := context.operationLog.Read(context.ctx, context.directory, offset, limit)
+	if context.events == nil {
+		return "", internalerrors.Request("workspace event contract is not configured")
+	}
+	page, err := context.events.ReadEvents(context.ctx, offset, limit)
 	if err != nil {
 		return "", normalizeError(err, internalerrors.KindFilesystem, "reading operation log")
 	}
@@ -276,9 +306,15 @@ func readLogs(context *agentContext, offset, limit int) (string, error) {
 	if page.NextOffset < offset || page.NextOffset == 0 && len(page.Entries) > 0 {
 		page.NextOffset = offset + len(page.Entries)
 	}
+	committed := make([]Operation, 0, len(page.Entries))
 	for _, operation := range page.Entries {
+		if operation.Outcome != domain.OutcomeCommitted {
+			continue
+		}
+		committed = append(committed, operation)
 		markCompletedFromOperation(context, operation)
 	}
+	page.Entries = committed
 	data, err := json.Marshal(page)
 	if err != nil {
 		return "", fmt.Errorf("serializing operation log failed: %v", err)
@@ -287,16 +323,19 @@ func readLogs(context *agentContext, offset, limit int) (string, error) {
 }
 
 func markCompletedFromOperation(context *agentContext, operation Operation) {
-	if !operation.Success || operation.Command != CommandWriteSummary {
+	if operation.Outcome != domain.OutcomeCommitted || operation.Command != CommandWriteSummary {
 		return
 	}
-	sourceKey, _ := operation.Details["source_key"].(string)
-	filename, _ := operation.Details["derived_from"].(string)
-	if filename == "" {
-		filename, _ = operation.Details["filename"].(string)
+	if operation.Source == nil {
+		return
 	}
-	if filename == "" {
-		filename, _ = operation.Details["raw_filename"].(string)
+	sourceKey := operation.Source.SourceKey
+	filename := ""
+	if operation.Provenance != nil && operation.Provenance.DerivedFrom != nil {
+		filename = operation.Provenance.DerivedFrom.Filename
+	}
+	if filename == "" && operation.Document != nil {
+		filename = operation.Document.Filename
 	}
 	source, ok := context.sources[sourceKey]
 	if !ok || filename != source.LatestFilename {
@@ -366,7 +405,7 @@ func summaryRecord(state domain.State, sourceKey string) *domain.SummaryRecord {
 	return nil
 }
 
-func writeSummary(context *agentContext, sourceKey, markdown string, existing *domain.SummaryRecord) error {
+func writeSummary(context *agentContext, sourceKey, markdown string, existing *domain.SummaryRecord, operation Operation) error {
 	source, ok := context.sources[sourceKey]
 	if !ok {
 		return fmt.Errorf("unknown source: %s", sourceKey)
@@ -396,10 +435,16 @@ func writeSummary(context *agentContext, sourceKey, markdown string, existing *d
 	if existing == nil {
 		record.CreatedAt = now
 	}
+	operation.Document = &domain.DocumentIdentity{Kind: domain.DocumentKindSummary, Filename: filename}
+	operation.Provenance = &domain.OperationProvenance{DerivedFrom: &domain.DocumentIdentity{Kind: domain.DocumentKindRaw, Filename: source.LatestFilename}}
+	if !writtenAt.IsZero() {
+		operation.Provenance.RawWrittenAt = &writtenAt
+	}
+	committed := committedOperation(operation)
 	state, revision, err := context.workspace.CommitSummary(context.ctx, SummaryCommit{
 		SourceKey: sourceKey, Filename: filename, DerivedFrom: source.LatestFilename,
 		RawWrittenAt: writtenAt, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt,
-		Contents: []byte(markdown),
+		Contents: []byte(markdown), Event: committed,
 	}, context.revision)
 	if err != nil {
 		return normalizeError(err, internalerrors.KindFilesystem, "writing summary")

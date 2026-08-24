@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +43,46 @@ func TestValidateNameUsesPortableRules(t *testing.T) {
 	}
 }
 
+func TestSeedFailureLeavesWorkspaceNameAvailable(t *testing.T) {
+	home := t.TempDir()
+	name := "retry"
+	if _, err := local.SeedWithEvent(home, &name, domain.Operation{Command: domain.CommandSnap}); err == nil {
+		t.Fatal("invalid seed event succeeded")
+	}
+	if _, err := local.Seed(home, &name); err != nil {
+		t.Fatalf("retry seed: %v", err)
+	}
+	oversized := domain.Operation{
+		OperationID: strings.Repeat("x", 1<<20), Attempt: 1, Timestamp: "1970-01-01T00:00:00Z", Actor: "test",
+		Command: domain.CommandSeed, Outcome: domain.OutcomeCommitted,
+	}
+	oversizedName := "oversized"
+	if _, err := local.SeedWithEvent(home, &oversizedName, oversized); err == nil {
+		t.Fatal("oversized seed event succeeded")
+	}
+	if _, err := local.Seed(home, &oversizedName); err != nil {
+		t.Fatalf("retry oversized seed: %v", err)
+	}
+}
+
+func TestCommitEventRejectsOversizedLine(t *testing.T) {
+	store, target := seededStore(t)
+	event := domain.Operation{
+		OperationID: strings.Repeat("x", 1<<20), Attempt: 1, Timestamp: "1970-01-01T00:00:00Z", Actor: "test",
+		Command: domain.CommandState, Outcome: domain.OutcomeCommitted,
+	}
+	if err := store.CommitEvent(context.Background(), event); err == nil {
+		t.Fatal("oversized event succeeded")
+	}
+	data, err := os.ReadFile(filepath.Join(target, "log.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) != 0 {
+		t.Fatalf("oversized event changed ledger: %d bytes", len(data))
+	}
+}
+
 func TestLocalRevisionConflict(t *testing.T) {
 	store, target := seededStore(t)
 	_, revision, err := store.ReadState(context.Background())
@@ -58,7 +99,7 @@ func TestLocalRevisionConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _, err = store.CommitSnapshot(context.Background(), application.SnapshotCommit{
-		SourceKey: "raw:new.md", Filename: "new.md", WrittenAt: time.Unix(2, 0).UTC(), Contents: []byte("new\n"),
+		SourceKey: "raw:new.md", Filename: "new.md", WrittenAt: time.Unix(2, 0).UTC(), Contents: []byte("new\n"), Event: snapshotEvent("raw:new.md", "new.md", time.Unix(2, 0).UTC()),
 	}, revision)
 	if !bo.IsKind(err, bo.ErrorKindConflict) {
 		t.Fatalf("expected conflict, got %v", err)
@@ -94,14 +135,14 @@ func TestLocalExternalSummaryEditConflictsWithoutOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	state, revision, err := store.CommitSnapshot(context.Background(), application.SnapshotCommit{
-		SourceKey: "raw:note.md", Filename: "note.md", WrittenAt: time.Unix(1, 0).UTC(), Contents: []byte("note\n"),
+		SourceKey: "raw:note.md", Filename: "note.md", WrittenAt: time.Unix(1, 0).UTC(), Contents: []byte("note\n"), Event: snapshotEvent("raw:note.md", "note.md", time.Unix(1, 0).UTC()),
 	}, revision)
 	if err != nil {
 		t.Fatal(err)
 	}
 	state, revision, err = store.CommitSummary(context.Background(), application.SummaryCommit{
 		SourceKey: "raw:note.md", Filename: "note.md", DerivedFrom: "note.md",
-		RawWrittenAt: time.Unix(1, 0).UTC(), CreatedAt: time.Unix(2, 0).UTC(), UpdatedAt: time.Unix(2, 0).UTC(), Contents: []byte("old\n"),
+		RawWrittenAt: time.Unix(1, 0).UTC(), CreatedAt: time.Unix(2, 0).UTC(), UpdatedAt: time.Unix(2, 0).UTC(), Contents: []byte("old\n"), Event: summaryEvent("raw:note.md", "note.md", "note.md", time.Unix(1, 0).UTC(), time.Unix(2, 0).UTC()),
 	}, revision)
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +152,7 @@ func TestLocalExternalSummaryEditConflictsWithoutOverwrite(t *testing.T) {
 	}
 	_, _, err = store.CommitSummary(context.Background(), application.SummaryCommit{
 		SourceKey: "raw:note.md", Filename: "note.md", DerivedFrom: "note.md",
-		RawWrittenAt: time.Unix(1, 0).UTC(), CreatedAt: state.Sources[0].Summary.CreatedAt, UpdatedAt: time.Unix(3, 0).UTC(), Contents: []byte("bo overwrite\n"),
+		RawWrittenAt: time.Unix(1, 0).UTC(), CreatedAt: state.Sources[0].Summary.CreatedAt, UpdatedAt: time.Unix(3, 0).UTC(), Contents: []byte("bo overwrite\n"), Event: summaryEvent("raw:note.md", "note.md", "note.md", time.Unix(1, 0).UTC(), time.Unix(3, 0).UTC()),
 	}, revision)
 	if !bo.IsKind(err, bo.ErrorKindConflict) {
 		t.Fatalf("expected external edit conflict, got %v", err)
@@ -133,14 +174,14 @@ func TestLocalSummaryCommitDoesNotUseFixedTemporary(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, revision, err = store.CommitSnapshot(context.Background(), application.SnapshotCommit{
-		SourceKey: "raw:note.md", Filename: "note.md", WrittenAt: time.Unix(1, 0).UTC(), Contents: []byte("note\n"),
+		SourceKey: "raw:note.md", Filename: "note.md", WrittenAt: time.Unix(1, 0).UTC(), Contents: []byte("note\n"), Event: snapshotEvent("raw:note.md", "note.md", time.Unix(1, 0).UTC()),
 	}, revision)
 	if err != nil {
 		t.Fatal(err)
 	}
 	state, revision, err := store.CommitSummary(context.Background(), application.SummaryCommit{
 		SourceKey: "raw:note.md", Filename: "note.md", DerivedFrom: "note.md",
-		RawWrittenAt: time.Unix(1, 0).UTC(), CreatedAt: time.Unix(2, 0).UTC(), UpdatedAt: time.Unix(2, 0).UTC(), Contents: []byte("old\n"),
+		RawWrittenAt: time.Unix(1, 0).UTC(), CreatedAt: time.Unix(2, 0).UTC(), UpdatedAt: time.Unix(2, 0).UTC(), Contents: []byte("old\n"), Event: summaryEvent("raw:note.md", "note.md", "note.md", time.Unix(1, 0).UTC(), time.Unix(2, 0).UTC()),
 	}, revision)
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +191,7 @@ func TestLocalSummaryCommitDoesNotUseFixedTemporary(t *testing.T) {
 	}
 	_, _, err = store.CommitSummary(context.Background(), application.SummaryCommit{
 		SourceKey: "raw:note.md", Filename: "note.md", DerivedFrom: "note.md",
-		RawWrittenAt: time.Unix(1, 0).UTC(), CreatedAt: state.Sources[0].Summary.CreatedAt, UpdatedAt: time.Unix(3, 0).UTC(), Contents: []byte("new\n"),
+		RawWrittenAt: time.Unix(1, 0).UTC(), CreatedAt: state.Sources[0].Summary.CreatedAt, UpdatedAt: time.Unix(3, 0).UTC(), Contents: []byte("new\n"), Event: summaryEvent("raw:note.md", "note.md", "note.md", time.Unix(1, 0).UTC(), time.Unix(3, 0).UTC()),
 	}, revision)
 	if err != nil {
 		t.Fatal(err)

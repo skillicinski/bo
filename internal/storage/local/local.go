@@ -2,12 +2,14 @@
 package local
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -34,6 +36,10 @@ var (
 
 const (
 	workspaceTransactionFile         = ".bo-transaction.json"
+	workspaceEventFile               = "log.jsonl"
+	defaultOperationPageLimit        = 20
+	maxOperationPageLimit            = 100
+	maxOperationEventBytes           = 1 << 20
 	workspaceTransactionVersion      = 1
 	workspaceTransactionPhaseReady   = "prepared"
 	workspaceTransactionPhaseCommit  = "commit"
@@ -54,7 +60,24 @@ type workspaceTransaction struct {
 	NewDocument          []byte `json:"new_document"`
 	OldState             []byte `json:"old_state"`
 	NewState             []byte `json:"new_state"`
+	EventsTracked        bool   `json:"events_tracked,omitempty"`
+	EventLine            []byte `json:"event_line,omitempty"`
+	OldEventsPresent     bool   `json:"old_events_present,omitempty"`
+	NewEventsPresent     bool   `json:"new_events_present,omitempty"`
+	OldEventsSize        int64  `json:"old_events_size,omitempty"`
+	NewEventsSize        int64  `json:"new_events_size,omitempty"`
 }
+
+type ledgerSnapshot struct {
+	present bool
+	size    int64
+}
+
+var (
+	stopLedgerScan                  = errors.New("stop workspace event scan")
+	errWorkspaceEventLineTooLarge   = errors.New("workspace event line is too large")
+	errWorkspaceEventLineIncomplete = errors.New("workspace event ledger has an incomplete line")
+)
 
 // ponytail: one process-wide lock per workspace; use an inter-process lock if local storage becomes multi-process.
 func lockForWorkspace(path string) *sync.Mutex {
@@ -214,6 +237,83 @@ func (s *Store) ReadState(ctx context.Context) (domain.State, application.Revisi
 	return state, revision, err
 }
 
+func (s *Store) ReadEvents(ctx context.Context, offset, limit int) (application.OperationPage, error) {
+	if err := contextErr(ctx); err != nil {
+		return application.OperationPage{}, err
+	}
+	if offset < 0 {
+		return application.OperationPage{}, internalerrors.Validation("operation event offset must not be negative")
+	}
+	if limit <= 0 {
+		limit = defaultOperationPageLimit
+	}
+	if limit > maxOperationPageLimit {
+		limit = maxOperationPageLimit
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.recoverWorkspaceTransaction(); err != nil {
+		return application.OperationPage{}, err
+	}
+	entries := make([]domain.Operation, 0, limit)
+	count := 0
+	hasMore := false
+	err := s.scanWorkspaceEvents(ctx, func(index int, event domain.Operation) error {
+		if index >= offset {
+			if len(entries) < limit {
+				entries = append(entries, event)
+			} else {
+				hasMore = true
+				count = index + 1
+				return stopLedgerScan
+			}
+		}
+		count = index + 1
+		return nil
+	})
+	if err != nil {
+		return application.OperationPage{}, err
+	}
+	if offset > count {
+		offset = count
+	}
+	return application.OperationPage{
+		Directory:  s.Name(),
+		Entries:    entries,
+		Offset:     offset,
+		Limit:      limit,
+		NextOffset: offset + len(entries),
+		HasMore:    hasMore,
+	}, nil
+}
+
+func (s *Store) CommitEvent(ctx context.Context, event application.Operation) error {
+	if err := contextErr(ctx); err != nil {
+		return err
+	}
+	event.Normalize()
+	if err := event.Validate(); err != nil {
+		return internalerrors.Wrap(internalerrors.KindValidation, "invalid operation event", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.recoverWorkspaceTransaction(); err != nil {
+		return err
+	}
+	line, err := marshalEventLine(event)
+	if err != nil {
+		return err
+	}
+	before, err := s.ledgerMetadata()
+	if err != nil {
+		return err
+	}
+	if err := s.appendLedgerLine(line); err != nil {
+		return errors.Join(err, s.restoreLedger(before))
+	}
+	return nil
+}
+
 func (s *Store) CommitSnapshot(ctx context.Context, commit application.SnapshotCommit, expected application.Revision) (domain.State, application.Revision, error) {
 	if err := contextErr(ctx); err != nil {
 		return domain.State{}, application.Revision{}, err
@@ -244,6 +344,9 @@ func (s *Store) CommitSnapshot(ctx context.Context, commit application.SnapshotC
 		return domain.State{}, application.Revision{}, normalizeStorageError("serializing state.json", err)
 	}
 	transaction := newWorkspaceTransaction(workspaceTransactionKindSnapshot, commit.Filename, nil, false, commit.Contents, oldState, data)
+	if err := s.trackTransactionEvent(&transaction, commit.Event); err != nil {
+		return domain.State{}, application.Revision{}, err
+	}
 	if err := s.beginWorkspaceTransaction(transaction); err != nil {
 		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
 	}
@@ -251,6 +354,9 @@ func (s *Store) CommitSnapshot(ctx context.Context, commit application.SnapshotC
 		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
 	}
 	if err := s.writeAtomic("state.json", transaction.StateTemporary, data); err != nil {
+		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
+	}
+	if err := s.publishTransactionEvent(transaction); err != nil {
 		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
 	}
 	revision, err := s.workspaceRevision(data)
@@ -313,6 +419,9 @@ func (s *Store) CommitSummary(ctx context.Context, commit application.SummaryCom
 		return domain.State{}, application.Revision{}, normalizeStorageError("serializing state.json", err)
 	}
 	transaction := newWorkspaceTransaction(workspaceTransactionKindSummary, commit.Filename, oldContents, hadOldContents, commit.Contents, oldState, data)
+	if err := s.trackTransactionEvent(&transaction, commit.Event); err != nil {
+		return domain.State{}, application.Revision{}, err
+	}
 	if err := s.beginWorkspaceTransaction(transaction); err != nil {
 		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
 	}
@@ -320,6 +429,9 @@ func (s *Store) CommitSummary(ctx context.Context, commit application.SummaryCom
 		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
 	}
 	if err := s.writeAtomic("state.json", transaction.StateTemporary, data); err != nil {
+		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
+	}
+	if err := s.publishTransactionEvent(transaction); err != nil {
 		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
 	}
 	revision, err := s.workspaceRevision(data)
@@ -333,6 +445,339 @@ func (s *Store) CommitSummary(ctx context.Context, commit application.SummaryCom
 		return domain.State{}, application.Revision{}, err
 	}
 	return next, revision, nil
+}
+
+func (s *Store) scanWorkspaceEvents(ctx context.Context, visit func(int, domain.Operation) error) error {
+	info, err := s.root.Lstat(workspaceEventFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return filesystem(filepath.Join(s.path, workspaceEventFile), err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return internalerrors.Filesystem(fmt.Sprintf("%s must be a regular file: %s", workspaceEventFile, filepath.Join(s.path, workspaceEventFile)))
+	}
+	file, err := s.root.Open(workspaceEventFile)
+	if err != nil {
+		return filesystem(filepath.Join(s.path, workspaceEventFile), err)
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), maxOperationEventBytes+1)
+	scanner.Split(splitWorkspaceEventLine)
+	index := 0
+	for scanner.Scan() {
+		if err := contextErr(ctx); err != nil {
+			return err
+		}
+		line := scanner.Bytes()
+		event, err := decodeEventLine(line)
+		if err != nil {
+			return normalizeStorageError("parsing workspace event ledger", err)
+		}
+		if visit != nil {
+			if err := visit(index, event); err != nil {
+				if errors.Is(err, stopLedgerScan) {
+					return nil
+				}
+				return err
+			}
+		}
+		index++
+	}
+	if err := scanner.Err(); err != nil {
+		if errors.Is(err, errWorkspaceEventLineTooLarge) {
+			return internalerrors.Validation(err.Error())
+		}
+		if errors.Is(err, errWorkspaceEventLineIncomplete) {
+			return internalerrors.Validation(err.Error())
+		}
+		return filesystem(filepath.Join(s.path, workspaceEventFile), err)
+	}
+	return nil
+}
+
+func splitWorkspaceEventLine(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if index := bytes.IndexByte(data, '\n'); index >= 0 {
+		if index+1 > maxOperationEventBytes {
+			return 0, nil, errWorkspaceEventLineTooLarge
+		}
+		return index + 1, data[:index], nil
+	}
+	if atEOF {
+		if len(data) == 0 {
+			return 0, nil, nil
+		}
+		return 0, nil, errWorkspaceEventLineIncomplete
+	}
+	if len(data) > maxOperationEventBytes {
+		return 0, nil, errWorkspaceEventLineTooLarge
+	}
+	return 0, nil, nil
+}
+
+func (s *Store) ledgerMetadata() (ledgerSnapshot, error) {
+	info, err := s.root.Lstat(workspaceEventFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ledgerSnapshot{}, nil
+		}
+		return ledgerSnapshot{}, filesystem(filepath.Join(s.path, workspaceEventFile), err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return ledgerSnapshot{}, internalerrors.Filesystem(fmt.Sprintf("%s must be a regular file: %s", workspaceEventFile, filepath.Join(s.path, workspaceEventFile)))
+	}
+	return ledgerSnapshot{present: true, size: info.Size()}, nil
+}
+
+func decodeEventLine(line []byte) (domain.Operation, error) {
+	line = bytes.TrimSuffix(line, []byte{'\n'})
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.DisallowUnknownFields()
+	var event domain.Operation
+	if err := decoder.Decode(&event); err != nil {
+		return domain.Operation{}, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return domain.Operation{}, errors.New("workspace event line contains multiple JSON values")
+		}
+		return domain.Operation{}, err
+	}
+	if err := event.Validate(); err != nil {
+		return domain.Operation{}, err
+	}
+	return event, nil
+}
+
+func marshalEventLine(event domain.Operation) ([]byte, error) {
+	if err := event.Validate(); err != nil {
+		return nil, internalerrors.Wrap(internalerrors.KindValidation, "invalid operation event", err)
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		return nil, normalizeStorageError("serializing workspace event", err)
+	}
+	line := append(data, '\n')
+	if len(line) > maxOperationEventBytes {
+		return nil, internalerrors.Validation("workspace event line is too large")
+	}
+	return line, nil
+}
+
+func (s *Store) appendLedgerLine(line []byte) error {
+	if len(line) > maxOperationEventBytes {
+		return internalerrors.Validation("workspace event line is too large")
+	}
+	file, err := s.root.OpenFile(workspaceEventFile, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err != nil {
+		return filesystem(filepath.Join(s.path, workspaceEventFile), err)
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return filesystem(filepath.Join(s.path, workspaceEventFile), err)
+	}
+	written, writeErr := file.Write(line)
+	if writeErr == nil && written != len(line) {
+		writeErr = io.ErrShortWrite
+	}
+	if writeErr == nil {
+		writeErr = file.Sync()
+	}
+	closeErr := file.Close()
+	if writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr != nil {
+		return filesystem(filepath.Join(s.path, workspaceEventFile), writeErr)
+	}
+	if err := syncRoot(s.root); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) trackTransactionEvent(transaction *workspaceTransaction, event domain.Operation) error {
+	if err := event.Validate(); err != nil {
+		return internalerrors.Wrap(internalerrors.KindValidation, "invalid mutation event", err)
+	}
+	old, err := s.ledgerMetadata()
+	if err != nil {
+		return err
+	}
+	line, err := marshalEventLine(event)
+	if err != nil {
+		return err
+	}
+	newState := ledgerSnapshot{present: true, size: old.size + int64(len(line))}
+	transaction.EventsTracked = true
+	transaction.EventLine = append([]byte(nil), line...)
+	transaction.OldEventsPresent = old.present
+	transaction.NewEventsPresent = newState.present
+	transaction.OldEventsSize = old.size
+	transaction.NewEventsSize = newState.size
+	return nil
+}
+
+func transactionLedgerState(transaction workspaceTransaction, old bool) ledgerSnapshot {
+	if old {
+		return ledgerSnapshot{present: transaction.OldEventsPresent, size: transaction.OldEventsSize}
+	}
+	return ledgerSnapshot{present: transaction.NewEventsPresent, size: transaction.NewEventsSize}
+}
+
+func equalLedgerSnapshot(left, right ledgerSnapshot) bool {
+	return left.present == right.present && left.size == right.size
+}
+
+func (s *Store) restoreLedger(snapshot ledgerSnapshot) error {
+	if !snapshot.present {
+		if err := s.root.Remove(workspaceEventFile); err != nil && !os.IsNotExist(err) {
+			return filesystem(filepath.Join(s.path, workspaceEventFile), err)
+		}
+		if err := syncRoot(s.root); err != nil {
+			return err
+		}
+		return nil
+	}
+	file, err := s.root.OpenFile(workspaceEventFile, os.O_WRONLY, 0o600)
+	if err != nil {
+		return filesystem(filepath.Join(s.path, workspaceEventFile), err)
+	}
+	err = file.Truncate(snapshot.size)
+	if err == nil {
+		err = file.Sync()
+	}
+	closeErr := file.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return filesystem(filepath.Join(s.path, workspaceEventFile), err)
+	}
+	if err := syncRoot(s.root); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) publishTransactionEvent(transaction workspaceTransaction) error {
+	if !transaction.EventsTracked {
+		return nil
+	}
+	old := transactionLedgerState(transaction, true)
+	newState := transactionLedgerState(transaction, false)
+	current, err := s.ledgerMetadata()
+	if err != nil {
+		return err
+	}
+	if current.present && current.size >= newState.size {
+		if err := s.verifyTransactionEvent(transaction); err == nil {
+			return nil
+		}
+	}
+	if !equalLedgerSnapshot(current, old) {
+		return internalerrors.Conflict("workspace event ledger changed during transaction")
+	}
+	if len(transaction.EventLine) != 0 {
+		if err := s.appendLedgerLine(transaction.EventLine); err != nil {
+			return err
+		}
+	}
+	current, err = s.ledgerMetadata()
+	if err != nil {
+		return err
+	}
+	if !equalLedgerSnapshot(current, newState) {
+		return internalerrors.Conflict("workspace event ledger publication did not match transaction")
+	}
+	return s.verifyTransactionEvent(transaction)
+}
+
+func (s *Store) rollbackTransactionEvent(transaction workspaceTransaction) error {
+	if !transaction.EventsTracked {
+		return nil
+	}
+	old := transactionLedgerState(transaction, true)
+	newState := transactionLedgerState(transaction, false)
+	current, err := s.ledgerMetadata()
+	if err != nil {
+		return err
+	}
+	if equalLedgerSnapshot(current, old) {
+		return nil
+	}
+	if !equalLedgerSnapshot(current, newState) {
+		if current.present && current.size >= old.size && current.size < newState.size {
+			prefixLength := current.size - old.size
+			matches, err := s.ledgerBytesMatchAt(old.size, transaction.EventLine[:prefixLength])
+			if err != nil {
+				return err
+			}
+			if matches {
+				return s.restoreLedger(old)
+			}
+		}
+		return internalerrors.Conflict("workspace event ledger changed during rollback")
+	}
+	if err := s.verifyTransactionEvent(transaction); err != nil {
+		return err
+	}
+	return s.restoreLedger(old)
+}
+
+func (s *Store) verifyTransactionEvent(transaction workspaceTransaction) error {
+	if len(transaction.EventLine) == 0 {
+		return nil
+	}
+	if _, err := decodeEventLine(transaction.EventLine); err != nil {
+		return internalerrors.Validation("workspace transaction has invalid event line")
+	}
+	return s.verifyLedgerEventAt(transaction.OldEventsSize, transaction.EventLine)
+}
+
+func (s *Store) verifyLedgerEventAt(offset int64, expected []byte) error {
+	if offset < 0 || len(expected) == 0 {
+		return internalerrors.Validation("workspace transaction has invalid event offset")
+	}
+	matches, err := s.ledgerBytesMatchAt(offset, expected)
+	if err != nil {
+		return err
+	}
+	if !matches {
+		return internalerrors.Conflict("workspace event ledger is missing transaction event")
+	}
+	return nil
+}
+
+func (s *Store) ledgerBytesMatchAt(offset int64, expected []byte) (bool, error) {
+	if offset < 0 {
+		return false, internalerrors.Validation("workspace transaction has invalid event offset")
+	}
+	if len(expected) == 0 {
+		return true, nil
+	}
+	file, err := s.root.Open(workspaceEventFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, filesystem(filepath.Join(s.path, workspaceEventFile), err)
+	}
+	defer file.Close()
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
+		return false, filesystem(filepath.Join(s.path, workspaceEventFile), err)
+	}
+	actual := make([]byte, len(expected))
+	if _, err := io.ReadFull(file, actual); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return false, nil
+		}
+		return false, filesystem(filepath.Join(s.path, workspaceEventFile), err)
+	}
+	return bytes.Equal(actual, expected), nil
 }
 
 func (s *Store) readState() (domain.State, []byte, application.Revision, error) {
@@ -411,6 +856,23 @@ func (transaction workspaceTransaction) validate() error {
 	if len(transaction.OldState) == 0 || len(transaction.NewState) == 0 {
 		return internalerrors.Validation("workspace transaction has incomplete state")
 	}
+	if transaction.EventsTracked {
+		old := transactionLedgerState(transaction, true)
+		newState := transactionLedgerState(transaction, false)
+		if old.size < 0 || newState.size < old.size {
+			return internalerrors.Validation("workspace transaction has incomplete event ledger state")
+		}
+		if len(transaction.EventLine) != 0 {
+			if !newState.present || len(transaction.EventLine) > maxOperationEventBytes || transaction.EventLine[len(transaction.EventLine)-1] != '\n' || int64(len(transaction.EventLine))+old.size != newState.size {
+				return internalerrors.Validation("workspace transaction has invalid event line")
+			}
+			if _, err := decodeEventLine(transaction.EventLine); err != nil {
+				return internalerrors.Validation("workspace transaction has invalid event line")
+			}
+		} else if !equalLedgerSnapshot(old, newState) {
+			return internalerrors.Validation("workspace transaction has incomplete event line")
+		}
+	}
 	return nil
 }
 
@@ -464,6 +926,9 @@ func (s *Store) publishWorkspaceCommit(transaction workspaceTransaction) error {
 }
 
 func (s *Store) finishWorkspaceTransaction(transaction workspaceTransaction) error {
+	if err := s.publishTransactionEvent(transaction); err != nil {
+		return err
+	}
 	state, err := s.stateBytes()
 	if err != nil {
 		return err
@@ -506,6 +971,9 @@ func (s *Store) abortWorkspaceTransaction(transaction workspaceTransaction, caus
 }
 
 func (s *Store) rollbackWorkspaceTransaction(transaction workspaceTransaction) error {
+	if err := s.rollbackTransactionEvent(transaction); err != nil {
+		return err
+	}
 	state, err := s.stateBytes()
 	if err != nil {
 		return err
@@ -627,7 +1095,10 @@ func validateSnapshotCommit(commit application.SnapshotCommit) error {
 	if err := domain.ValidateDocumentName(commit.Filename); err != nil {
 		return err
 	}
-	return domain.ValidateTimestamp(commit.WrittenAt)
+	if err := domain.ValidateTimestamp(commit.WrittenAt); err != nil {
+		return err
+	}
+	return validateMutationEvent(commit.Event, domain.CommandSnap, commit.SourceKey, domain.DocumentKindRaw, commit.Filename, nil)
 }
 
 func validateSummaryCommit(commit application.SummaryCommit) error {
@@ -646,7 +1117,49 @@ func validateSummaryCommit(commit application.SummaryCommit) error {
 	if err := domain.ValidateTimestamp(commit.CreatedAt); err != nil {
 		return err
 	}
-	return domain.ValidateTimestamp(commit.UpdatedAt)
+	if err := domain.ValidateTimestamp(commit.UpdatedAt); err != nil {
+		return err
+	}
+	return validateMutationEvent(commit.Event, domain.CommandWriteSummary, commit.SourceKey, domain.DocumentKindSummary, commit.Filename, &summaryEventProvenance{
+		derivedFrom:  commit.DerivedFrom,
+		rawWrittenAt: commit.RawWrittenAt,
+	})
+}
+
+type summaryEventProvenance struct {
+	derivedFrom  string
+	rawWrittenAt time.Time
+}
+
+func validateMutationEvent(event domain.Operation, command domain.OperationCommand, sourceKey string, kind domain.DocumentKind, filename string, provenance *summaryEventProvenance) error {
+	if err := event.Validate(); err != nil {
+		return internalerrors.Wrap(internalerrors.KindValidation, "invalid mutation event", err)
+	}
+	if event.Command != command {
+		return internalerrors.Validation("mutation event command does not match commit")
+	}
+	if event.Outcome != domain.OutcomeCommitted || event.Error != nil {
+		return internalerrors.Validation("mutation event must be committed without an error")
+	}
+	if event.Source == nil || event.Source.SourceKey != sourceKey {
+		return internalerrors.Validation("mutation event source does not match commit")
+	}
+	if event.Document == nil || event.Document.Kind != kind || event.Document.Filename != filename {
+		return internalerrors.Validation("mutation event document does not match commit")
+	}
+	if provenance == nil {
+		if event.Provenance != nil {
+			return internalerrors.Validation("mutation event provenance is not allowed")
+		}
+		return nil
+	}
+	if event.Provenance == nil || event.Provenance.DerivedFrom == nil ||
+		event.Provenance.DerivedFrom.Kind != domain.DocumentKindRaw ||
+		event.Provenance.DerivedFrom.Filename != provenance.derivedFrom ||
+		event.Provenance.RawWrittenAt == nil || !event.Provenance.RawWrittenAt.Equal(provenance.rawWrittenAt) {
+		return internalerrors.Validation("mutation event provenance does not match commit")
+	}
+	return nil
 }
 
 func appendSnapshot(state domain.State, commit application.SnapshotCommit) (domain.State, error) {

@@ -54,7 +54,7 @@ func TestLocalMissingWorkspaceUsesStableKind(t *testing.T) {
 
 func TestSeedBridgesPublicCreatorErrors(t *testing.T) {
 	manager := bo.NewLocalManager(t.TempDir())
-	options := bo.OperationOptions{Log: errorLog{}}
+	options := bo.OperationOptions{}
 
 	if _, err := bo.Seed(context.Background(), bo.SeedRequest{
 		Creator: manager, Name: "bad/name", Operations: options,
@@ -81,7 +81,7 @@ func TestPublicErrorPreservesJoinedCauses(t *testing.T) {
 			return "", bo.WrapError(bo.ErrorKindConflict, "workspace update failed", errors.Join(first, second))
 		}),
 		Name:       "notes",
-		Operations: bo.OperationOptions{Log: errorLog{}},
+		Operations: bo.OperationOptions{},
 	})
 	if !bo.IsKind(err, bo.ErrorKindConflict) || !errors.Is(err, first) || !errors.Is(err, second) {
 		t.Fatalf("error tree = %v", err)
@@ -102,7 +102,7 @@ func TestWorkflowPreservesContextErrorIdentity(t *testing.T) {
 			_, err := bo.Snap(context.Background(), bo.SnapRequest{
 				Workspace:  workspace,
 				Sources:    []string{"https://example.test/source"},
-				Operations: bo.OperationOptions{Log: errorLog{}},
+				Operations: bo.OperationOptions{},
 			})
 			if !errors.Is(err, test.cause) {
 				t.Fatalf("error = %v", err)
@@ -119,7 +119,7 @@ type errorWorkspace struct{ err error }
 
 type workspaceCreatorFunc func(context.Context, string) (string, error)
 
-func (f workspaceCreatorFunc) Create(ctx context.Context, name string) (string, error) {
+func (f workspaceCreatorFunc) Create(ctx context.Context, name string, _ bo.Operation) (string, error) {
 	return f(ctx, name)
 }
 
@@ -137,6 +137,14 @@ func (w errorWorkspace) ReadState(context.Context) (bo.State, bo.Revision, error
 	return bo.State{}, bo.NewRevision(nil), w.err
 }
 
+func (w errorWorkspace) ReadEvents(context.Context, int, int) (bo.OperationPage, error) {
+	return bo.OperationPage{}, w.err
+}
+
+func (w errorWorkspace) CommitEvent(context.Context, bo.Operation) error {
+	return w.err
+}
+
 func (w errorWorkspace) CommitSnapshot(context.Context, bo.SnapshotCommit, bo.Revision) (bo.State, bo.Revision, error) {
 	return bo.State{}, bo.Revision{}, w.err
 }
@@ -146,11 +154,3 @@ func (w errorWorkspace) CommitSummary(context.Context, bo.SummaryCommit, bo.Revi
 }
 
 func (w errorWorkspace) Close() error { return nil }
-
-type errorLog struct{}
-
-func (errorLog) Append(context.Context, bo.Operation) error { return nil }
-
-func (errorLog) Read(context.Context, string, int, int) (bo.OperationPage, error) {
-	return bo.OperationPage{}, nil
-}

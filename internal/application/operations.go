@@ -5,42 +5,81 @@ import (
 	"errors"
 	"time"
 
+	"github.com/skillicinski/bo/internal/domain"
 	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
-func normalizeOperationOptions(options OperationOptions) (OperationOptions, error) {
-	if options.Log == nil {
-		return OperationOptions{}, internalerrors.Request("operation log is not configured")
-	}
+const operationEventWriteTimeout = 5 * time.Second
+
+func normalizeOperationOptions(options OperationOptions) OperationOptions {
 	if options.Actor == "" {
 		options.Actor = "system"
 	}
-	return options, nil
+	return options
 }
 
-func recordOperation(options OperationOptions, directory string, command OperationCommand, success bool, details map[string]any) {
-	if details == nil {
-		details = map[string]any{}
+func newOperation(command OperationCommand, actor string) Operation {
+	return Operation{
+		OperationID: domain.NewOperationID(),
+		Attempt:     1,
+		Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
+		Actor:       actor,
+		Command:     command,
 	}
-	_ = options.Log.Append(context.Background(), Operation{
-		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
-		Actor:     options.Actor,
-		Directory: directory,
-		Command:   command,
-		Success:   success,
-		Details:   details,
-	})
 }
 
-func operationErrorDetails(err error) map[string]any {
+func committedOperation(operation Operation) Operation {
+	operation.Outcome = domain.OutcomeCommitted
+	operation.Error = nil
+	return operation
+}
+
+func failedOperation(operation Operation, cause error) Operation {
+	operation.Outcome = domain.OutcomeFailed
+	operation.Error = operationError(cause)
+	return operation
+}
+
+func operationError(err error) *domain.OperationError {
 	if err == nil {
-		return map[string]any{}
+		return nil
 	}
-	details := map[string]any{"error": err.Error()}
+	result := &domain.OperationError{Kind: "unknown"}
 	var categorized *internalerrors.Error
 	if errors.As(err, &categorized) {
-		details["error"] = categorized.Detail
-		details["error_kind"] = string(categorized.Kind)
+		result.Kind = operationErrorKind(categorized.Kind)
+		result.Retryable = categorized.Retryable
 	}
-	return details
+	if contextErr := internalerrors.Context(err); contextErr != nil {
+		result.Kind = operationErrorKind(contextErr.Kind)
+		result.Retryable = contextErr.Retryable
+	}
+	return result
+}
+
+func operationErrorKind(kind internalerrors.Kind) string {
+	switch kind {
+	case internalerrors.KindRequest, internalerrors.KindValidation, internalerrors.KindSource,
+		internalerrors.KindFilesystem, internalerrors.KindMissingResource, internalerrors.KindConflict,
+		internalerrors.KindAlreadyExists, internalerrors.KindProviderTransport, internalerrors.KindProviderRejected,
+		internalerrors.KindProviderMalformed, internalerrors.KindCanceled, internalerrors.KindDeadline:
+		return string(kind)
+	default:
+		return "unknown"
+	}
+}
+
+func commitOperationEvent(ctx context.Context, workspace Workspace, operation Operation) error {
+	operation.Normalize()
+	eventContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), operationEventWriteTimeout)
+	defer cancel()
+	if err := workspace.CommitEvent(eventContext, operation); err != nil {
+		return normalizeError(err, internalerrors.KindFilesystem, "committing operation event")
+	}
+	return nil
+}
+
+func recordFailedOperation(ctx context.Context, workspace Workspace, operation Operation, cause error) error {
+	failed := failedOperation(operation, cause)
+	return commitOperationEvent(ctx, workspace, failed)
 }

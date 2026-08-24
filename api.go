@@ -163,9 +163,16 @@ type Workspace interface {
 	ListDocuments(context.Context, DocumentKind) ([]DocumentRef, error)
 	ReadDocument(context.Context, DocumentRef) ([]byte, error)
 	ReadState(context.Context) (State, Revision, error)
+	WorkspaceEvents
 	CommitSnapshot(context.Context, SnapshotCommit, Revision) (State, Revision, error)
 	CommitSummary(context.Context, SummaryCommit, Revision) (State, Revision, error)
 	Close() error
+}
+
+// WorkspaceEvents is the durable event contract for one workspace.
+type WorkspaceEvents interface {
+	ReadEvents(context.Context, int, int) (OperationPage, error)
+	CommitEvent(context.Context, Operation) error
 }
 
 type SnapshotCommit struct {
@@ -173,6 +180,7 @@ type SnapshotCommit struct {
 	Filename  string
 	WrittenAt time.Time
 	Contents  []byte
+	Event     Operation
 }
 
 type SummaryCommit struct {
@@ -183,10 +191,11 @@ type SummaryCommit struct {
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	Contents     []byte
+	Event        Operation
 }
 
 type WorkspaceCreator interface {
-	Create(context.Context, string) (string, error)
+	Create(context.Context, string, Operation) (string, error)
 }
 
 type OperationCommand string
@@ -199,13 +208,59 @@ const (
 	CommandWriteSummary OperationCommand = "write_summary"
 )
 
+type OperationOutcome string
+
+const (
+	OutcomeCommitted OperationOutcome = "committed"
+	OutcomeFailed    OperationOutcome = "failed"
+)
+
+type SourceIdentity struct {
+	SourceKey string `json:"source_key"`
+}
+
+type DocumentIdentity struct {
+	Kind     DocumentKind `json:"kind"`
+	Filename string       `json:"filename"`
+}
+
+type OperationProvenance struct {
+	DerivedFrom  *DocumentIdentity `json:"derived_from,omitempty"`
+	RawWrittenAt *time.Time        `json:"raw_written_at,omitempty"`
+}
+
+type OperationError struct {
+	Kind      string `json:"kind"`
+	Retryable bool   `json:"retryable"`
+}
+
+type TokenUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+type OperationMetrics struct {
+	Turns            int           `json:"turns"`
+	ToolCalls        int           `json:"tool_calls"`
+	Duration         time.Duration `json:"duration"`
+	SummariesWritten int           `json:"summaries_written"`
+	SummariesSkipped int           `json:"summaries_skipped"`
+	Usage            *TokenUsage   `json:"usage,omitempty"`
+}
+
 type Operation struct {
-	Timestamp string           `json:"timestamp"`
-	Actor     string           `json:"actor"`
-	Directory string           `json:"directory"`
-	Command   OperationCommand `json:"command"`
-	Success   bool             `json:"success"`
-	Details   map[string]any   `json:"details"`
+	OperationID string               `json:"operation_id"`
+	Attempt     int                  `json:"attempt"`
+	Timestamp   string               `json:"timestamp"`
+	Actor       string               `json:"actor"`
+	Command     OperationCommand     `json:"command"`
+	Outcome     OperationOutcome     `json:"outcome"`
+	Source      *SourceIdentity      `json:"source,omitempty"`
+	Document    *DocumentIdentity    `json:"document,omitempty"`
+	Provenance  *OperationProvenance `json:"provenance,omitempty"`
+	Error       *OperationError      `json:"error,omitempty"`
+	Metrics     *OperationMetrics    `json:"metrics,omitempty"`
 }
 
 type OperationPage struct {
@@ -217,14 +272,7 @@ type OperationPage struct {
 	HasMore    bool        `json:"has_more"`
 }
 
-type OperationLog interface {
-	Append(context.Context, Operation) error
-	Read(context.Context, string, int, int) (OperationPage, error)
-}
-
 type OperationOptions struct {
-	// Log is required. Workflows reject requests without durable operation logging.
-	Log   OperationLog
 	Actor string
 }
 
@@ -348,11 +396,11 @@ func NewLocalManager(home string) *LocalManager {
 	return &LocalManager{manager: loc.NewManager(home)}
 }
 
-func (m *LocalManager) Create(ctx context.Context, name string) (string, error) {
+func (m *LocalManager) Create(ctx context.Context, name string, event Operation) (string, error) {
 	if m == nil || m.manager == nil {
 		return "", NewError(ErrorKindRequest, "local workspace manager is not configured")
 	}
-	created, err := m.manager.Create(ctx, name)
+	created, err := m.manager.Create(ctx, name, internalOperation(event))
 	return created, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "creating workspace"))
 }
 
@@ -370,10 +418,6 @@ func (m *LocalManager) Open(ctx context.Context, name string) (Workspace, error)
 	return &localWorkspace{workspace: workspace}, nil
 }
 
-func NewOperationLog(home string) OperationLog {
-	return &localOperationLog{log: loc.NewOperationLog(home)}
-}
-
 func Seed(ctx context.Context, request SeedRequest) (SeedResult, error) {
 	created, err := app.Seed(ctx, internalWorkspaceCreator(request.Creator), request.Name, internalOperationOptions(request.Operations))
 	return SeedResult{Name: created}, publicError(err)
@@ -381,8 +425,8 @@ func Seed(ctx context.Context, request SeedRequest) (SeedResult, error) {
 
 type workspaceCreatorBridge struct{ creator WorkspaceCreator }
 
-func (b workspaceCreatorBridge) Create(ctx context.Context, name string) (string, error) {
-	created, err := b.creator.Create(ctx, name)
+func (b workspaceCreatorBridge) Create(ctx context.Context, name string, event app.Operation) (string, error) {
+	created, err := b.creator.Create(ctx, name, publicOperation(event))
 	return created, internalError(err)
 }
 
@@ -414,7 +458,7 @@ func ReadState(ctx context.Context, request StateRequest) (StateResult, error) {
 	if request.Workspace == nil {
 		return StateResult{}, NewError(ErrorKindRequest, "workspace is not configured")
 	}
-	state, revision, err := app.ReadState(ctx, &publicWorkspace{workspace: request.Workspace}, request.Workspace.Name(), internalOperationOptions(request.Operations))
+	state, revision, err := app.ReadState(ctx, &publicWorkspace{workspace: request.Workspace}, internalOperationOptions(request.Operations))
 	if err != nil {
 		return StateResult{}, publicError(err)
 	}
@@ -467,6 +511,22 @@ func (w *localWorkspace) ReadState(ctx context.Context) (State, Revision, error)
 		return State{}, Revision{}, publicError(err)
 	}
 	return converted, publicRevision(revision), nil
+}
+
+func (w *localWorkspace) ReadEvents(ctx context.Context, offset, limit int) (OperationPage, error) {
+	page, err := w.workspace.ReadEvents(ctx, offset, limit)
+	if err != nil {
+		return OperationPage{}, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "reading operation events"))
+	}
+	return publicOperationPage(page), nil
+}
+
+func (w *localWorkspace) CommitEvent(ctx context.Context, event Operation) error {
+	err := w.workspace.CommitEvent(ctx, internalOperation(event))
+	if err != nil {
+		return publicError(internalErrorAs(err, internalerrors.KindFilesystem, "committing operation event"))
+	}
+	return nil
 }
 
 func (w *localWorkspace) CommitSnapshot(ctx context.Context, commit SnapshotCommit, expected Revision) (State, Revision, error) {
@@ -536,6 +596,26 @@ func (w *publicWorkspace) ReadState(ctx context.Context) (internaldomain.State, 
 	return converted, internalRevision, nil
 }
 
+func (w *publicWorkspace) ReadEvents(ctx context.Context, offset, limit int) (app.OperationPage, error) {
+	page, err := w.workspace.ReadEvents(ctx, offset, limit)
+	if err != nil {
+		return app.OperationPage{}, internalErrorAs(err, internalerrors.KindFilesystem, "reading operation events")
+	}
+	entries := make([]internaldomain.Operation, len(page.Entries))
+	for index, event := range page.Entries {
+		entries[index] = internalOperation(event)
+	}
+	return app.OperationPage{Directory: page.Directory, Entries: entries, Offset: page.Offset, Limit: page.Limit, NextOffset: page.NextOffset, HasMore: page.HasMore}, nil
+}
+
+func (w *publicWorkspace) CommitEvent(ctx context.Context, event app.Operation) error {
+	err := w.workspace.CommitEvent(ctx, publicOperation(event))
+	if err != nil {
+		return internalErrorAs(err, internalerrors.KindFilesystem, "committing operation event")
+	}
+	return nil
+}
+
 func (w *publicWorkspace) CommitSnapshot(ctx context.Context, commit app.SnapshotCommit, expected app.Revision) (internaldomain.State, app.Revision, error) {
 	state, revision, err := w.workspace.CommitSnapshot(ctx, publicSnapshotCommit(commit), publicRevision(expected))
 	if err != nil {
@@ -568,48 +648,8 @@ func (w *publicWorkspace) CommitSummary(ctx context.Context, commit app.SummaryC
 	return converted, internalRevision, nil
 }
 
-type operationLogBridge struct{ log OperationLog }
-
-func (l operationLogBridge) Append(ctx context.Context, operation internaldomain.Operation) error {
-	return internalErrorAs(l.log.Append(ctx, publicOperation(operation)), internalerrors.KindFilesystem, "appending operation")
-}
-
-func (l operationLogBridge) Read(ctx context.Context, directory string, offset, limit int) (app.OperationPage, error) {
-	page, err := l.log.Read(ctx, directory, offset, limit)
-	if err != nil {
-		return app.OperationPage{}, internalErrorAs(err, internalerrors.KindFilesystem, "reading operations")
-	}
-	entries := make([]internaldomain.Operation, len(page.Entries))
-	for index, operation := range page.Entries {
-		entries[index] = internalOperation(operation)
-	}
-	return app.OperationPage{Directory: page.Directory, Entries: entries, Offset: page.Offset, Limit: page.Limit, NextOffset: page.NextOffset, HasMore: page.HasMore}, nil
-}
-
-type localOperationLog struct{ log *loc.OperationLog }
-
-func (l *localOperationLog) Append(ctx context.Context, operation Operation) error {
-	return publicError(internalErrorAs(l.log.Append(ctx, internalOperation(operation)), internalerrors.KindFilesystem, "appending operation"))
-}
-
-func (l *localOperationLog) Read(ctx context.Context, directory string, offset, limit int) (OperationPage, error) {
-	page, err := l.log.Read(ctx, directory, offset, limit)
-	if err != nil {
-		return OperationPage{}, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "reading operations"))
-	}
-	entries := make([]Operation, len(page.Entries))
-	for index, operation := range page.Entries {
-		entries[index] = publicOperation(operation)
-	}
-	return OperationPage{Directory: page.Directory, Entries: entries, Offset: page.Offset, Limit: page.Limit, NextOffset: page.NextOffset, HasMore: page.HasMore}, nil
-}
-
 func internalOperationOptions(options OperationOptions) app.OperationOptions {
-	var log app.OperationLog
-	if options.Log != nil {
-		log = operationLogBridge{log: options.Log}
-	}
-	return app.OperationOptions{Log: log, Actor: options.Actor}
+	return app.OperationOptions{Actor: options.Actor}
 }
 
 func internalRevision(revision Revision) app.Revision {
@@ -641,19 +681,19 @@ func publicDocumentRefs(refs []internaldomain.DocumentRef) []DocumentRef {
 }
 
 func internalSnapshotCommit(commit SnapshotCommit) app.SnapshotCommit {
-	return app.SnapshotCommit{SourceKey: commit.SourceKey, Filename: commit.Filename, WrittenAt: commit.WrittenAt, Contents: commit.Contents}
+	return app.SnapshotCommit{SourceKey: commit.SourceKey, Filename: commit.Filename, WrittenAt: commit.WrittenAt, Contents: commit.Contents, Event: internalOperation(commit.Event)}
 }
 
 func publicSnapshotCommit(commit app.SnapshotCommit) SnapshotCommit {
-	return SnapshotCommit{SourceKey: commit.SourceKey, Filename: commit.Filename, WrittenAt: commit.WrittenAt, Contents: commit.Contents}
+	return SnapshotCommit{SourceKey: commit.SourceKey, Filename: commit.Filename, WrittenAt: commit.WrittenAt, Contents: commit.Contents, Event: publicOperation(commit.Event)}
 }
 
 func internalSummaryCommit(commit SummaryCommit) app.SummaryCommit {
-	return app.SummaryCommit{SourceKey: commit.SourceKey, Filename: commit.Filename, DerivedFrom: commit.DerivedFrom, RawWrittenAt: commit.RawWrittenAt, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt, Contents: commit.Contents}
+	return app.SummaryCommit{SourceKey: commit.SourceKey, Filename: commit.Filename, DerivedFrom: commit.DerivedFrom, RawWrittenAt: commit.RawWrittenAt, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt, Contents: commit.Contents, Event: internalOperation(commit.Event)}
 }
 
 func publicSummaryCommit(commit app.SummaryCommit) SummaryCommit {
-	return SummaryCommit{SourceKey: commit.SourceKey, Filename: commit.Filename, DerivedFrom: commit.DerivedFrom, RawWrittenAt: commit.RawWrittenAt, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt, Contents: commit.Contents}
+	return SummaryCommit{SourceKey: commit.SourceKey, Filename: commit.Filename, DerivedFrom: commit.DerivedFrom, RawWrittenAt: commit.RawWrittenAt, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt, Contents: commit.Contents, Event: publicOperation(commit.Event)}
 }
 
 func internalState(state State) (internaldomain.State, error) {
@@ -688,11 +728,77 @@ func publicState(state internaldomain.State) (State, error) {
 }
 
 func internalOperation(operation Operation) internaldomain.Operation {
-	return internaldomain.Operation{Timestamp: operation.Timestamp, Actor: operation.Actor, Directory: operation.Directory, Command: internaldomain.OperationCommand(operation.Command), Success: operation.Success, Details: operation.Details}
+	result := internaldomain.Operation{
+		OperationID: operation.OperationID, Attempt: operation.Attempt, Timestamp: operation.Timestamp,
+		Actor: operation.Actor, Command: internaldomain.OperationCommand(operation.Command),
+		Outcome: internaldomain.OperationOutcome(operation.Outcome),
+	}
+	if operation.Source != nil {
+		result.Source = &internaldomain.SourceIdentity{SourceKey: operation.Source.SourceKey}
+	}
+	if operation.Document != nil {
+		result.Document = &internaldomain.DocumentIdentity{Kind: internaldomain.DocumentKind(operation.Document.Kind), Filename: operation.Document.Filename}
+	}
+	if operation.Provenance != nil {
+		result.Provenance = &internaldomain.OperationProvenance{RawWrittenAt: operation.Provenance.RawWrittenAt}
+		if operation.Provenance.DerivedFrom != nil {
+			result.Provenance.DerivedFrom = &internaldomain.DocumentIdentity{Kind: internaldomain.DocumentKind(operation.Provenance.DerivedFrom.Kind), Filename: operation.Provenance.DerivedFrom.Filename}
+		}
+	}
+	if operation.Error != nil {
+		result.Error = &internaldomain.OperationError{Kind: operation.Error.Kind, Retryable: operation.Error.Retryable}
+	}
+	if operation.Metrics != nil {
+		result.Metrics = &internaldomain.OperationMetrics{
+			Turns: operation.Metrics.Turns, ToolCalls: operation.Metrics.ToolCalls, Duration: operation.Metrics.Duration,
+			SummariesWritten: operation.Metrics.SummariesWritten, SummariesSkipped: operation.Metrics.SummariesSkipped,
+		}
+		if operation.Metrics.Usage != nil {
+			result.Metrics.Usage = &internaldomain.TokenUsage{PromptTokens: operation.Metrics.Usage.PromptTokens, CompletionTokens: operation.Metrics.Usage.CompletionTokens, TotalTokens: operation.Metrics.Usage.TotalTokens}
+		}
+	}
+	return result
 }
 
 func publicOperation(operation internaldomain.Operation) Operation {
-	return Operation{Timestamp: operation.Timestamp, Actor: operation.Actor, Directory: operation.Directory, Command: OperationCommand(operation.Command), Success: operation.Success, Details: operation.Details}
+	result := Operation{
+		OperationID: operation.OperationID, Attempt: operation.Attempt, Timestamp: operation.Timestamp,
+		Actor: operation.Actor, Command: OperationCommand(operation.Command),
+		Outcome: OperationOutcome(operation.Outcome),
+	}
+	if operation.Source != nil {
+		result.Source = &SourceIdentity{SourceKey: operation.Source.SourceKey}
+	}
+	if operation.Document != nil {
+		result.Document = &DocumentIdentity{Kind: DocumentKind(operation.Document.Kind), Filename: operation.Document.Filename}
+	}
+	if operation.Provenance != nil {
+		result.Provenance = &OperationProvenance{RawWrittenAt: operation.Provenance.RawWrittenAt}
+		if operation.Provenance.DerivedFrom != nil {
+			result.Provenance.DerivedFrom = &DocumentIdentity{Kind: DocumentKind(operation.Provenance.DerivedFrom.Kind), Filename: operation.Provenance.DerivedFrom.Filename}
+		}
+	}
+	if operation.Error != nil {
+		result.Error = &OperationError{Kind: operation.Error.Kind, Retryable: operation.Error.Retryable}
+	}
+	if operation.Metrics != nil {
+		result.Metrics = &OperationMetrics{
+			Turns: operation.Metrics.Turns, ToolCalls: operation.Metrics.ToolCalls, Duration: operation.Metrics.Duration,
+			SummariesWritten: operation.Metrics.SummariesWritten, SummariesSkipped: operation.Metrics.SummariesSkipped,
+		}
+		if operation.Metrics.Usage != nil {
+			result.Metrics.Usage = &TokenUsage{PromptTokens: operation.Metrics.Usage.PromptTokens, CompletionTokens: operation.Metrics.Usage.CompletionTokens, TotalTokens: operation.Metrics.Usage.TotalTokens}
+		}
+	}
+	return result
+}
+
+func publicOperationPage(page app.OperationPage) OperationPage {
+	entries := make([]Operation, len(page.Entries))
+	for index, event := range page.Entries {
+		entries[index] = publicOperation(event)
+	}
+	return OperationPage{Directory: page.Directory, Entries: entries, Offset: page.Offset, Limit: page.Limit, NextOffset: page.NextOffset, HasMore: page.HasMore}
 }
 
 func publicSnapOutcomes(outcomes []app.SnapOutcome) []SnapOutcome {

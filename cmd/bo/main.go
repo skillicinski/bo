@@ -52,7 +52,7 @@ func runSeed(args []string) {
 	result, err := bo.Seed(context.Background(), bo.SeedRequest{
 		Creator:    bo.NewLocalManager(home),
 		Name:       name,
-		Operations: bo.OperationOptions{Log: bo.NewOperationLog(home), Actor: "cli"},
+		Operations: bo.OperationOptions{Actor: "cli"},
 	})
 	if err != nil {
 		fail("seeding", err.Error())
@@ -77,7 +77,7 @@ func runSnap(args []string) {
 	result, err := bo.Snap(context.Background(), bo.SnapRequest{
 		Workspace:  workspace,
 		Sources:    args[1:],
-		Operations: bo.OperationOptions{Log: bo.NewOperationLog(home), Actor: "cli"},
+		Operations: bo.OperationOptions{Actor: "cli"},
 	})
 	if err != nil {
 		printSnapReport(result, err)
@@ -103,7 +103,7 @@ func runState(args []string) {
 	defer workspace.Close()
 	result, err := bo.ReadState(context.Background(), bo.StateRequest{
 		Workspace:  workspace,
-		Operations: bo.OperationOptions{Log: bo.NewOperationLog(home), Actor: "cli"},
+		Operations: bo.OperationOptions{Actor: "cli"},
 	})
 	if err != nil {
 		fail("state", err.Error())
@@ -147,7 +147,7 @@ func runSynth(args []string) {
 		Workspace:  workspace,
 		Provider:   provider,
 		Options:    config,
-		Operations: bo.OperationOptions{Log: bo.NewOperationLog(home), Actor: "cli"},
+		Operations: bo.OperationOptions{Actor: "cli"},
 	})
 	if err != nil {
 		fail("synth", err.Error())

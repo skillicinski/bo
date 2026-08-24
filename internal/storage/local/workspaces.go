@@ -15,7 +15,7 @@ type Manager struct {
 
 func NewManager(home string) *Manager { return &Manager{home: home} }
 
-func (m *Manager) Create(ctx context.Context, name string) (string, error) {
+func (m *Manager) Create(ctx context.Context, name string, event application.Operation) (string, error) {
 	if err := contextErr(ctx); err != nil {
 		return "", err
 	}
@@ -23,7 +23,7 @@ func (m *Manager) Create(ctx context.Context, name string) (string, error) {
 	if name != "" {
 		requested = &name
 	}
-	path, err := Seed(m.home, requested)
+	path, err := SeedWithEvent(m.home, requested, event)
 	if err != nil {
 		return "", err
 	}
@@ -62,6 +62,14 @@ func (w *Workspace) ReadDocument(ctx context.Context, ref domain.DocumentRef) ([
 
 func (w *Workspace) ReadState(ctx context.Context) (domain.State, application.Revision, error) {
 	return w.store.ReadState(ctx)
+}
+
+func (w *Workspace) ReadEvents(ctx context.Context, offset, limit int) (application.OperationPage, error) {
+	return w.store.ReadEvents(ctx, offset, limit)
+}
+
+func (w *Workspace) CommitEvent(ctx context.Context, event application.Operation) error {
+	return w.store.CommitEvent(ctx, event)
 }
 
 func (w *Workspace) CommitSnapshot(ctx context.Context, commit application.SnapshotCommit, expected application.Revision) (domain.State, application.Revision, error) {

@@ -44,7 +44,7 @@ func run(args []string) error {
 		deepseek.New(apiKey, os.Getenv("DEEPSEEK_API_URL")),
 		application.DefaultSynthesisOptions(),
 		toolNames,
-		application.OperationOptions{Log: local.NewOperationLog(home), Actor: "eval"},
+		application.OperationOptions{Actor: "eval"},
 	)
 	if err != nil {
 		return err

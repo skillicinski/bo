@@ -7,25 +7,15 @@ import (
 )
 
 func Seed(ctx context.Context, creator WorkspaceCreator, name string, options OperationOptions) (created string, returnErr error) {
-	var err error
-	options, err = normalizeOperationOptions(options)
-	if err != nil {
-		return "", err
-	}
-	defer func() {
-		directory := name
-		if created != "" {
-			directory = created
-		}
-		details := map[string]any{"name": directory}
-		for key, value := range operationErrorDetails(returnErr) {
-			details[key] = value
-		}
-		recordOperation(options, directory, CommandSeed, returnErr == nil, details)
-	}()
+	options = normalizeOperationOptions(options)
+	operation := newOperation(CommandSeed, options.Actor)
 	if creator == nil {
 		return "", internalerrors.Request("workspace creator is not configured")
 	}
-	created, returnErr = creator.Create(ctx, name)
-	return created, normalizeError(returnErr, internalerrors.KindFilesystem, "creating workspace")
+	created, returnErr = creator.Create(ctx, name, committedOperation(operation))
+	returnErr = normalizeError(returnErr, internalerrors.KindFilesystem, "creating workspace")
+	if returnErr != nil {
+		return created, returnErr
+	}
+	return created, nil
 }

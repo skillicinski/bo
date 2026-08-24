@@ -35,6 +35,7 @@ type SnapshotCommit struct {
 	Filename  string
 	WrittenAt time.Time
 	Contents  []byte
+	Event     Operation
 }
 
 type SummaryCommit struct {
@@ -45,6 +46,7 @@ type SummaryCommit struct {
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	Contents     []byte
+	Event        Operation
 }
 
 // Workspace is the persistence boundary for one workspace.
@@ -53,12 +55,22 @@ type Workspace interface {
 	ListDocuments(context.Context, domain.DocumentKind) ([]domain.DocumentRef, error)
 	ReadDocument(context.Context, domain.DocumentRef) ([]byte, error)
 	ReadState(context.Context) (domain.State, Revision, error)
+	WorkspaceEvents
 	CommitSnapshot(context.Context, SnapshotCommit, Revision) (domain.State, Revision, error)
 	CommitSummary(context.Context, SummaryCommit, Revision) (domain.State, Revision, error)
 }
 
+// WorkspaceEvents is the durable event portion of the workspace contract.
+// Mutating commits carry their committed event through SnapshotCommit or
+// SummaryCommit; CommitEvent is used for read-only and failed attempts.
+type WorkspaceEvents interface {
+	ReadEvents(context.Context, int, int) (OperationPage, error)
+	CommitEvent(context.Context, Operation) error
+}
+
 type Operation = domain.Operation
 type OperationCommand = domain.OperationCommand
+type OperationOutcome = domain.OperationOutcome
 
 const (
 	CommandSeed         = domain.CommandSeed
@@ -66,6 +78,8 @@ const (
 	CommandState        = domain.CommandState
 	CommandSynth        = domain.CommandSynth
 	CommandWriteSummary = domain.CommandWriteSummary
+	OutcomeCommitted    = domain.OutcomeCommitted
+	OutcomeFailed       = domain.OutcomeFailed
 )
 
 type OperationPage struct {
@@ -77,16 +91,10 @@ type OperationPage struct {
 	HasMore    bool        `json:"has_more"`
 }
 
-type OperationLog interface {
-	Append(context.Context, Operation) error
-	Read(context.Context, string, int, int) (OperationPage, error)
-}
-
 type OperationOptions struct {
-	Log   OperationLog
 	Actor string
 }
 
 type WorkspaceCreator interface {
-	Create(context.Context, string) (string, error)
+	Create(context.Context, string, Operation) (string, error)
 }

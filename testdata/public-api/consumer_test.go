@@ -18,11 +18,8 @@ func TestPublicWorkflows(t *testing.T) {
 	path := writeSource(t)
 	store := &storage{revision: bo.NewRevision(nil)}
 	ws := workspace{name: "consumer", store: store}
-	options := bo.OperationOptions{Log: operationLog{}, Actor: "consumer"}
+	options := bo.OperationOptions{Actor: "consumer"}
 
-	if _, err := bo.Seed(ctx, bo.SeedRequest{Creator: creator{}, Name: "consumer"}); !bo.IsKind(err, bo.ErrorKindRequest) {
-		t.Fatalf("missing operation log error = %v", err)
-	}
 	if _, err := bo.Seed(ctx, bo.SeedRequest{Creator: creator{}, Name: "consumer", Operations: options}); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +94,7 @@ func TestScopedWorkspacesDoNotShareState(t *testing.T) {
 	path := writeSource(t)
 	first := &storage{revision: bo.NewRevision(nil)}
 	second := &storage{revision: bo.NewRevision(nil)}
-	options := bo.OperationOptions{Log: operationLog{}, Actor: "consumer"}
+	options := bo.OperationOptions{Actor: "consumer"}
 	for _, store := range []*storage{first, second} {
 		result, err := bo.Snap(ctx, bo.SnapRequest{
 			Workspace: workspace{name: "scoped", store: store}, Sources: []string{path}, Operations: options,

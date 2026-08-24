@@ -10,6 +10,7 @@ import (
 type storage struct {
 	state     bo.State
 	revision  bo.Revision
+	events    []bo.Operation
 	mutations uint64
 	documents map[string][]byte
 }
@@ -46,6 +47,34 @@ func (s *storage) ReadState(context.Context) (bo.State, bo.Revision, error) {
 	return s.state, s.revision, nil
 }
 
+func (s *storage) ReadEvents(_ context.Context, offset, limit int) (bo.OperationPage, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	if offset > len(s.events) {
+		offset = len(s.events)
+	}
+	end := offset + limit
+	if end > len(s.events) {
+		end = len(s.events)
+	}
+	entries := append([]bo.Operation{}, s.events[offset:end]...)
+	return bo.OperationPage{Entries: entries, Offset: offset, Limit: limit, NextOffset: end, HasMore: end < len(s.events)}, nil
+}
+
+func (s *storage) CommitEvent(_ context.Context, event bo.Operation) error {
+	for _, existing := range s.events {
+		if existing.OperationID == event.OperationID && existing.Attempt == event.Attempt {
+			return nil
+		}
+	}
+	s.events = append(s.events, event)
+	return nil
+}
+
 func (s *storage) CommitSnapshot(_ context.Context, commit bo.SnapshotCommit, expected bo.Revision) (bo.State, bo.Revision, error) {
 	if !expected.Equal(s.revision) {
 		return bo.State{}, bo.Revision{}, bo.NewError(bo.ErrorKindConflict, "workspace revision changed")
@@ -57,6 +86,7 @@ func (s *storage) CommitSnapshot(_ context.Context, commit bo.SnapshotCommit, ex
 		return bo.State{}, bo.Revision{}, bo.NewError(bo.ErrorKindAlreadyExists, "document already exists")
 	}
 	s.documents[commit.Filename] = append([]byte(nil), commit.Contents...)
+	s.events = append(s.events, commit.Event)
 	for index := range s.state.Sources {
 		if s.state.Sources[index].SourceKey == commit.SourceKey {
 			s.state.Sources[index].Snapshots = append(s.state.Sources[index].Snapshots, bo.RawRecord{Filename: commit.Filename, WrittenAt: commit.WrittenAt})
@@ -77,6 +107,7 @@ func (s *storage) CommitSummary(_ context.Context, commit bo.SummaryCommit, expe
 		s.documents = map[string][]byte{}
 	}
 	s.documents[commit.Filename] = append([]byte(nil), commit.Contents...)
+	s.events = append(s.events, commit.Event)
 	for index := range s.state.Sources {
 		if s.state.Sources[index].SourceKey == commit.SourceKey {
 			if len(s.state.Sources[index].Snapshots) == 0 {
@@ -107,6 +138,12 @@ func (w workspace) ReadDocument(ctx context.Context, ref bo.DocumentRef) ([]byte
 func (w workspace) ReadState(ctx context.Context) (bo.State, bo.Revision, error) {
 	return w.store.ReadState(ctx)
 }
+func (w workspace) ReadEvents(ctx context.Context, offset, limit int) (bo.OperationPage, error) {
+	return w.store.ReadEvents(ctx, offset, limit)
+}
+func (w workspace) CommitEvent(ctx context.Context, event bo.Operation) error {
+	return w.store.CommitEvent(ctx, event)
+}
 func (w workspace) CommitSnapshot(ctx context.Context, commit bo.SnapshotCommit, expected bo.Revision) (bo.State, bo.Revision, error) {
 	return w.store.CommitSnapshot(ctx, commit, expected)
 }
@@ -117,12 +154,6 @@ func (w workspace) Close() error { return nil }
 
 type creator struct{}
 
-func (creator) Create(context.Context, string) (string, error) { return "consumer", nil }
-
-type operationLog struct{}
-
-func (operationLog) Append(context.Context, bo.Operation) error { return nil }
-
-func (operationLog) Read(_ context.Context, directory string, offset, limit int) (bo.OperationPage, error) {
-	return bo.OperationPage{Directory: directory, Offset: offset, Limit: limit, NextOffset: offset}, nil
+func (creator) Create(context.Context, string, bo.Operation) (string, error) {
+	return "consumer", nil
 }
