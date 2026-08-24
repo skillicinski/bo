@@ -23,6 +23,9 @@ type SnapCommandError struct {
 	Err       error
 }
 
+// ponytail: cap collisions at 8; use workspace-side filename reservation if collisions become common.
+const maxRawCommitAttempts = 8
+
 func (e *SnapCommandError) Error() string {
 	if e.SourceKey != "" && e.Err != nil {
 		return fmt.Sprintf("%s (%s)", e.SourceKey, e.Err)
@@ -70,6 +73,9 @@ func Snap(ctx context.Context, workspace Workspace, workflow source.Fetcher, inp
 			if failureErr != nil {
 				return outcomes, &SnapCommandError{Completed: outcomes, SourceKey: input, Err: errors.Join(fetchErr, failureErr)}
 			}
+			if isTerminalContextError(fetchErr) {
+				return outcomes, &SnapCommandError{Completed: outcomes, SourceKey: input, Err: fetchErr}
+			}
 			outcomes = append(outcomes, SnapOutcome{SourceKey: input, Err: fetchErr})
 			continue
 		}
@@ -101,14 +107,16 @@ func Snap(ctx context.Context, workspace Workspace, workflow source.Fetcher, inp
 		filename, newRevision, writeErr := createRaw(ctx, workspace, revision, sourceKey, slug, writtenAt, snapshot.Markdown, operation)
 		if writeErr != nil {
 			batchErr := writeErr
-			for _, skipped := range inputs[index+1:] {
-				skippedOperation := newOperation(CommandSnap, options.Actor)
-				if domain.ValidateSourceKey(skipped) == nil {
-					skippedOperation.Source = &domain.SourceIdentity{SourceKey: skipped}
-				}
-				if failureErr := snapFailureEvent(ctx, workspace, skippedOperation, fmt.Errorf("snap batch aborted after %s", input)); failureErr != nil {
-					batchErr = errors.Join(batchErr, failureErr)
-					break
+			if !isTerminalContextError(writeErr) {
+				for _, skipped := range inputs[index+1:] {
+					skippedOperation := newOperation(CommandSnap, options.Actor)
+					if domain.ValidateSourceKey(skipped) == nil {
+						skippedOperation.Source = &domain.SourceIdentity{SourceKey: skipped}
+					}
+					if failureErr := snapFailureEvent(ctx, workspace, skippedOperation, fmt.Errorf("snap batch aborted after %s", input)); failureErr != nil {
+						batchErr = errors.Join(batchErr, failureErr)
+						break
+					}
 				}
 			}
 			return outcomes, &SnapCommandError{Completed: outcomes, SourceKey: input, Err: batchErr}
@@ -130,6 +138,13 @@ func createRaw(ctx context.Context, workspace Workspace, revision Revision, sour
 		attemptOperation := operation
 		attemptOperation.Attempt = attempt
 		attemptOperation.Document = &domain.DocumentIdentity{Kind: domain.DocumentKindRaw, Filename: filename}
+		if err := ctx.Err(); err != nil {
+			contextErr := internalerrors.Context(err)
+			if eventErr := recordFailedOperation(ctx, workspace, attemptOperation, contextErr); eventErr != nil {
+				return "", revision, errors.Join(contextErr, eventErr)
+			}
+			return "", revision, contextErr
+		}
 		committed := committedOperation(attemptOperation)
 		commit := SnapshotCommit{SourceKey: sourceKey, Filename: filename, WrittenAt: writtenAt, Contents: contents, Event: committed}
 		_, newRevision, err := workspace.CommitSnapshot(ctx, commit, revision)
@@ -139,10 +154,20 @@ func createRaw(ctx context.Context, workspace Workspace, revision Revision, sour
 		if eventErr := recordFailedOperation(ctx, workspace, attemptOperation, err); eventErr != nil {
 			return "", revision, errors.Join(err, eventErr)
 		}
+		if isTerminalContextError(err) {
+			return "", Revision{}, err
+		}
 		if !internalerrors.IsAlreadyExists(err) {
 			return "", Revision{}, err
 		}
+		if attempt == maxRawCommitAttempts {
+			return "", Revision{}, internalerrors.Wrap(internalerrors.KindAlreadyExists, "raw document filename attempts exhausted", err)
+		}
 	}
+}
+
+func isTerminalContextError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func snapFailureEvent(ctx context.Context, workspace Workspace, operation Operation, cause error) error {

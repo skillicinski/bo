@@ -9,6 +9,7 @@ import (
 
 	"github.com/skillicinski/bo/internal/application"
 	"github.com/skillicinski/bo/internal/domain"
+	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
 type rawSource map[string]domain.RawSnapshot
@@ -164,4 +165,147 @@ func TestSnapAcceptsMixedURLAndMarkdownInputs(t *testing.T) {
 	if err != nil || len(state.Sources) != 2 || state.Sources[1].SourceKey != "raw:local.md" {
 		t.Fatalf("state = %#v, err = %v", state, err)
 	}
+}
+
+func TestSnapStopsOnContextFailureWithoutUnstartedEvents(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		cause error
+		kind  internalerrors.Kind
+	}{
+		{name: "canceled", cause: context.Canceled, kind: internalerrors.KindCanceled},
+		{name: "deadline", cause: context.DeadlineExceeded, kind: internalerrors.KindDeadline},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, target := seededStore(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			source := &terminalRawSource{failure: test.cause, cancel: cancel}
+			inputs := []string{
+				"https://example.test/first",
+				"https://example.test/second",
+				"https://example.test/third",
+			}
+			outcomes, err := application.Snap(ctx, store, source, inputs, operationOptionsFor(target))
+			if err == nil || !errors.Is(err, test.cause) || len(outcomes) != 1 {
+				t.Fatalf("outcomes = %#v, err = %v", outcomes, err)
+			}
+			var commandErr *application.SnapCommandError
+			if !errors.As(err, &commandErr) || commandErr.SourceKey != inputs[1] || len(commandErr.Completed) != 1 {
+				t.Fatalf("command error = %#v", commandErr)
+			}
+			if !internalerrors.IsKind(err, test.kind) || len(source.calls) != 2 || source.calls[1] != inputs[1] {
+				t.Fatalf("calls = %#v, err = %v", source.calls, err)
+			}
+			page, pageErr := store.ReadEvents(context.Background(), 0, 20)
+			if pageErr != nil || len(page.Entries) != 2 || page.Entries[1].Error == nil || page.Entries[1].Error.Kind != string(test.kind) {
+				t.Fatalf("events = %#v, err = %v", page, pageErr)
+			}
+		})
+	}
+}
+
+func TestSnapBoundsFilenameCollisions(t *testing.T) {
+	store, target := seededStore(t)
+	workspace := &alwaysExistingWorkspace{Workspace: store}
+	outcomes, err := application.Snap(context.Background(), workspace, rawSource{
+		"https://example.test/article": {Title: "Article", Markdown: []byte("content\n")},
+	}, []string{"https://example.test/article"}, operationOptionsFor(target))
+	if err == nil || !internalerrors.IsKind(err, internalerrors.KindAlreadyExists) || !errors.Is(err, internalerrors.ErrAlreadyExists) || len(outcomes) != 0 {
+		t.Fatalf("outcomes = %#v, err = %v", outcomes, err)
+	}
+	var categorized *internalerrors.Error
+	if !errors.As(err, &categorized) || categorized.Kind != internalerrors.KindAlreadyExists {
+		t.Fatalf("collision error = %v", err)
+	}
+	if workspace.attempts != 8 {
+		t.Fatalf("collision attempts = %d", workspace.attempts)
+	}
+	page, pageErr := store.ReadEvents(context.Background(), 0, 20)
+	if pageErr != nil || len(page.Entries) != workspace.attempts {
+		t.Fatalf("events = %#v, err = %v", page, pageErr)
+	}
+	filenames := make(map[string]bool, len(page.Entries))
+	for _, event := range page.Entries {
+		if event.Outcome != domain.OutcomeFailed || event.Document == nil || filenames[event.Document.Filename] {
+			t.Fatalf("collision event = %#v", event)
+		}
+		filenames[event.Document.Filename] = true
+	}
+}
+
+func TestSnapChecksContextBetweenFilenameCollisions(t *testing.T) {
+	store, target := seededStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	workspace := &cancelOnCollisionWorkspace{Workspace: store, cancel: cancel}
+	outcomes, err := application.Snap(ctx, workspace, rawSource{
+		"https://example.test/article": {Title: "Article", Markdown: []byte("content\n")},
+	}, []string{"https://example.test/article"}, operationOptionsFor(target))
+	if err == nil || !errors.Is(err, context.Canceled) || len(outcomes) != 0 || workspace.attempts != 1 {
+		t.Fatalf("outcomes = %#v, attempts = %d, err = %v", outcomes, workspace.attempts, err)
+	}
+	page, pageErr := store.ReadEvents(context.Background(), 0, 20)
+	if pageErr != nil || len(page.Entries) != 2 || page.Entries[1].Attempt != 2 || page.Entries[1].Error == nil || page.Entries[1].Error.Kind != string(internalerrors.KindCanceled) {
+		t.Fatalf("events = %#v, err = %v", page, pageErr)
+	}
+}
+
+func TestSnapRecordsContextBeforeFirstCommit(t *testing.T) {
+	store, target := seededStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	source := cancelBeforeCommitSource{cancel: cancel}
+	outcomes, err := application.Snap(ctx, store, source, []string{"https://example.test/article"}, operationOptionsFor(target))
+	if err == nil || !errors.Is(err, context.Canceled) || len(outcomes) != 0 {
+		t.Fatalf("outcomes = %#v, err = %v", outcomes, err)
+	}
+	page, pageErr := store.ReadEvents(context.Background(), 0, 20)
+	if pageErr != nil || len(page.Entries) != 1 || page.Entries[0].Attempt != 1 || page.Entries[0].Error == nil || page.Entries[0].Error.Kind != string(internalerrors.KindCanceled) {
+		t.Fatalf("events = %#v, err = %v", page, pageErr)
+	}
+}
+
+type terminalRawSource struct {
+	failure error
+	cancel  context.CancelFunc
+	calls   []string
+}
+
+func (s *terminalRawSource) Fetch(_ context.Context, input string) (domain.RawSnapshot, error) {
+	s.calls = append(s.calls, input)
+	if len(s.calls) == 2 {
+		s.cancel()
+		return domain.RawSnapshot{}, s.failure
+	}
+	return domain.RawSnapshot{Title: "First", Markdown: []byte("content\n")}, nil
+}
+
+type cancelBeforeCommitSource struct {
+	cancel context.CancelFunc
+}
+
+func (s cancelBeforeCommitSource) Fetch(context.Context, string) (domain.RawSnapshot, error) {
+	s.cancel()
+	return domain.RawSnapshot{Title: "Article", Markdown: []byte("content\n")}, nil
+}
+
+type alwaysExistingWorkspace struct {
+	application.Workspace
+	attempts int
+}
+
+func (w *alwaysExistingWorkspace) CommitSnapshot(context.Context, application.SnapshotCommit, application.Revision) (domain.State, application.Revision, error) {
+	w.attempts++
+	return domain.State{}, application.Revision{}, internalerrors.ErrAlreadyExists
+}
+
+type cancelOnCollisionWorkspace struct {
+	application.Workspace
+	cancel   context.CancelFunc
+	attempts int
+}
+
+func (w *cancelOnCollisionWorkspace) CommitSnapshot(context.Context, application.SnapshotCommit, application.Revision) (domain.State, application.Revision, error) {
+	w.attempts++
+	w.cancel()
+	return domain.State{}, application.Revision{}, internalerrors.AlreadyExists("document already exists")
 }

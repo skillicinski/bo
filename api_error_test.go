@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/skillicinski/bo"
@@ -115,7 +117,50 @@ func TestWorkflowPreservesContextErrorIdentity(t *testing.T) {
 	}
 }
 
+func TestSnapPublicResultPreservesCanceledSource(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "source.md")
+	if err := os.WriteFile(path, []byte("# Article\n\ncontent\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspace := &canceledCommitWorkspace{}
+	result, err := bo.Snap(context.Background(), bo.SnapRequest{
+		Workspace: workspace,
+		Sources:   []string{path},
+		SourceConfig: &bo.SnapSourceConfig{
+			AllowLocalFiles: true,
+		},
+	})
+	if err == nil || !errors.Is(err, context.Canceled) || !result.Aborted || result.FailedSource != path || len(result.Outcomes) != 0 {
+		t.Fatalf("result = %#v, err = %v", result, err)
+	}
+	var typed *bo.Error
+	if !errors.As(err, &typed) || typed.Kind != bo.ErrorKindCanceled {
+		t.Fatalf("error kind = %v", err)
+	}
+	if len(workspace.events) != 1 || workspace.events[0].Outcome != bo.OutcomeFailed || workspace.events[0].Error == nil || workspace.events[0].Error.Kind != string(bo.ErrorKindCanceled) {
+		t.Fatalf("events = %#v", workspace.events)
+	}
+}
+
 type errorWorkspace struct{ err error }
+
+type canceledCommitWorkspace struct {
+	errorWorkspace
+	events []bo.Operation
+}
+
+func (w *canceledCommitWorkspace) ReadState(context.Context) (bo.State, bo.Revision, error) {
+	return bo.State{}, bo.NewRevision(nil), nil
+}
+
+func (w *canceledCommitWorkspace) CommitEvent(_ context.Context, event bo.Operation) error {
+	w.events = append(w.events, event)
+	return nil
+}
+
+func (w *canceledCommitWorkspace) CommitSnapshot(context.Context, bo.SnapshotCommit, bo.Revision) (bo.State, bo.Revision, error) {
+	return bo.State{}, bo.Revision{}, context.Canceled
+}
 
 type workspaceCreatorFunc func(context.Context, string) (string, error)
 
