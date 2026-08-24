@@ -8,13 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `bo seed` creates a local directory under `~/.bo` with an optional name.
+- Go workflows for seeding, snapping, reading state, and synthesizing a local workspace.
+- Public workspace contracts for external Go backends.
 
 ### Changed
 
-- **Breaking:** rewrote the local CLI and adapters in Go; install from source with `go install github.com/skillicinski/bo/cmd/bo@latest`.
+- **Breaking:** replaced the previous CLI with the Go CLI; install from source
+  with `go install github.com/skillicinski/bo/cmd/bo@latest`.
 - Local DeepSeek agent credentials now use `DEEPSEEK_API_KEY` and `DEEPSEEK_API_URL`.
-- Local filesystem bootstrap and agent tools are separated from the reusable core package.
+
+The versioned entries below describe the pre-greenfield product and remain for
+historical reference.
 
 ## [0.1.0] - 2026-07-19
 

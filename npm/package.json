@@ -1,7 +1,7 @@
 {
   "name": "@skillicinski/bo",
   "version": "0.1.0",
-  "description": "Collect web pages into a local markdown knowledge tree",
+  "description": "Local-first Markdown knowledge workspaces with Go workflows",
   "bin": {
     "bo": "run.js"
   },

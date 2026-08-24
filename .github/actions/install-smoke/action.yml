@@ -1,5 +1,5 @@
 name: Install smoke test
-description: Install bo outside the repository and exercise bo seed
+description: Install bo and exercise the current local CLI contract outside the repository
 
 runs:
   using: composite
@@ -21,7 +21,7 @@ runs:
         cd "$WORK_DIR"
 
         output=$(HOME="$FAKE_HOME" "$BO" seed --name test)
-        [[ "$output" == "seeded at $FAKE_HOME/.bo/test" ]]
+        [[ "$output" == "seeded: test" ]]
         [[ -d "$FAKE_HOME/.bo/test" ]]
 
         if HOME="$FAKE_HOME" "$BO" seed --name test >/dev/null 2>&1; then
@@ -30,4 +30,12 @@ runs:
         fi
 
         default_output=$(HOME="$FAKE_HOME" "$BO" seed)
-        [[ "$default_output" == seeded\ at\ "$FAKE_HOME"/.bo/*-* ]]
+        [[ "$default_output" == seeded:\ * ]]
+        default_name="${default_output#seeded: }"
+        [[ "$default_name" == *-* ]]
+        [[ -d "$FAKE_HOME/.bo/$default_name" ]]
+
+        snap_output=$(HOME="$FAKE_HOME" "$BO" snap test "$GITHUB_WORKSPACE/README.md")
+        [[ "$snap_output" == "snapped: raw:README.md -> bo.md" ]]
+        state_output=$(HOME="$FAKE_HOME" "$BO" state test)
+        [[ "$state_output" == "1 documents snapped" ]]

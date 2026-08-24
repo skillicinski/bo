@@ -3,101 +3,180 @@
 ## Dependency graph
 
 ```text
-cmd/bo                    -> bo API -> application -> domain
-                                              |     -> source
-                                              |     -> public domain and workspace contracts
-                                              -> agent / provider contracts
-evals/cmd/bo-eval         -> application -> agent / provider adapters
-supported adapters        -> bo contracts and internal adapters
-source adapters           -> source contracts, domain, and shared errors
+external Go consumer       -> bo
+cmd/bo                     -> bo
+evals/cmd/bo-eval          -> application, provider/deepseek, storage/local
+bo                         -> application, agent, domain, errors, provider/deepseek, storage/local
+application                -> agent, domain, errors, source, source/file, source/url
+source                     -> domain, errors
+source/file                -> source, domain, errors
+source/url                 -> source, domain, errors
+storage/local              -> application, domain, errors
+provider/deepseek          -> agent, errors
+agent                      -> errors
+domain                     -> errors
 ```
 
-The root `bo` package owns the workflow requests, results, domain contracts,
-and supported local and DeepSeek constructors. It does not expose source
-routing or the generic agent protocol.
+Go's `internal/` rule prevents an external module from importing implementation
+packages. The root `bo` package is the supported external Go surface. The
+separate consumer module in `testdata/public-api` compiles that boundary in CI.
 
-`cmd/bo` is the production presentation layer and uses only the public `bo`
-API. `evals/cmd/bo-eval` is an evaluation-only composition root for explicit
-tool-set selection. `application.Snap` owns the product-specific default source
-assembly, so the production CLI only opens a scoped workspace and passes source
-inputs.
+## Terms
 
-## Internals
+- **Port:** a Go interface at a boundary. `bo.Workspace` is a port for storage;
+  a workflow can use a local, memory, or remote implementation.
+- **Composition root:** the package that selects concrete implementations and
+  connects them. `cmd/bo` selects the local workspace and calls `bo`.
+- **Aggregate:** one state object that keeps related records and their rules
+  together. A `SourceRecord` groups one source, its snapshots, and its summary.
+- **Opaque revision:** a value that callers may compare and pass back, but not
+  inspect. It lets a workspace reject an update based on stale state.
 
-`internal/domain` owns stable product entities and the source-aggregate state format.
-`internal/application` owns use-case orchestration and composes the default
-source workflow. `internal/agent` owns the provider-neutral completion and tool
-runtime. `internal/storage` owns workspace adapters; application workflows use
-the workspace persistence port and do not receive filesystem paths.
+## Layer contracts
 
-Stable error kinds live in the dependency-neutral shared error package so
-source, storage, and application code can use the same error vocabulary without
-an adapter importing a use case. The root package translates those kinds into
-one public error contract and keeps HTTP protocol status selection outside bo.
+### `bo` public package
 
-## Source workflow
+The public package exposes workflows and stable data types.
 
-The source package owns the adapter contracts:
+- Owns: requests, results, public errors, state types, workspace ports, and
+  supported constructors.
+- Does not own: CLI parsing, source routing, storage format, or provider HTTP.
+- Calls: application workflows and supported internal adapters.
 
-1. ordered transports classify an input into a typed `Origin`;
-2. the workflow looks up the plugin for that origin type;
-3. the plugin returns a domain `RawSnapshot` with a transport-neutral
-   `SourceKey`, title, and Markdown bytes.
+### `cmd/bo`
 
-The default workflow routes HTTP URLs to HTML or YouTube plugins and local
-`.md` paths to the Markdown plugin. The URL and file adapters do not import
-`application`. HTTP request policy remains inside the source plugins; storage
-construction remains outside the use case. Exact HTTP and HTTPS URLs with
-non-credential query parameters are valid source identities; URL user
-information and credential-bearing query parameters, including signed AWS and
-GCS URLs, are rejected.
+The CLI converts arguments and results into a process interface.
 
-### SourceRecord
+- Owns: argument parsing, stdout and stderr, exit codes, and local dependency
+  selection.
+- Does not own: workflow rules, source fetching, or workspace persistence.
+- Calls: only the public `bo` package.
 
-The `SourceRecord` object contains related parts, snapshots and one summary, so it has that whole/part shape. Atomic Object
-describes this containment relationship (https://atomicobject.com/oo-programming/object-oriented-aggregation).
+### `internal/application`
 
-Our generalized term for this type of records is "aggregate", which takes it's meaning from Domain-Driven Development (DDD):
+The application layer runs the four workflows and records operation events.
 
-```
-  State
-  └── SourceRecord             aggregate root: SourceKey
-      ├── Snapshots[]          immutable child records
-      └── Summary              optional current child record
-```
+- Owns: workflow orchestration, validation order, default source assembly, and
+  operation outcomes.
+- Does not own: CLI output, workspace selection, or local file operations.
+- Calls: domain types, the workspace port, the agent runtime, and
+  `source`, `source/file`, and `source/url`.
 
-SourceRecord groups data that must remain consistent:
+### `internal/domain`
 
-- one exact `SourceKey`;
-- many snapshots;
-- at most one summary;
-- the summary must reference one snapshot in the same source.
+The domain layer defines the state and operation rules.
 
-That matches DDD’s aggregate concept: a cluster with a root that protects its invariants.
-Fowler’s definition (https://martinfowler.com/bliki/DDD_Aggregate.html) also treats
-aggregates as consistency and persistence boundaries.
+- Owns: source records, snapshots, summaries, operations, and validation.
+- Does not own: filesystem, network, process, or provider behavior.
+- Calls: shared error definitions for validation failures.
 
-## Workspace abstraction
+### `internal/source`
 
-A workspace is the persistence boundary for one scoped workspace. The port
-lists and reads documents, loads state with an opaque revision, and accepts a
-semantic snapshot or summary commit only with that revision. The local
-revision covers serialized state and the contents of all raw and summary
-documents, so external edits produce a typed conflict and bo does not
-reconcile them.
+The source layer routes an input to a source adapter.
 
-The workspace has separate durable artifacts: `state.json` is the document
-inventory, and `log.jsonl` is the append-only event ledger. Event appends and
-bounded event reads belong to the workspace port. The ledger is outside the
-content revision, so recording a read does not invalidate an unrelated content
-mutation. Local mutation journals include the document, inventory, and event
-append in one recovery boundary.
+- Owns: transport and plugin interfaces, input classification, and source
+  identity rules.
+- Does not own: application workflows, workspace writes, or CLI output.
+- Calls: domain types and shared errors.
 
-Adapters own publication, cleanup, rollback, and atomicity. The local adapter
-stages document and state writes, syncs each destination parent directory, and
-restores the previous state and document content when a commit fails. A durable
-transaction marker records a rollback-safe prepared phase, records commit only
-after both new artifacts are durable, and recovers a process crash before reads
-resume. Every adapter must advance its revision for each successful mutation.
-Workspace selection and lifetime ownership remain at the API boundary;
-application workflows use an already-open workspace and do not close it.
+`source/file` reads local Markdown. `source/url` fetches HTML and YouTube
+transcripts. These adapters return the same domain snapshot shape.
+
+### `internal/source/file` and `internal/source/url`
+
+The source adapters translate external or local input into domain snapshots.
+
+- Owns: file reads, HTTP requests, HTML conversion, and YouTube transcript
+  handling.
+- Does not own: source routing, workflow orchestration, or workspace writes.
+- Calls: `source`, domain types, shared errors, and their transport libraries.
+
+### `internal/agent`
+
+The agent layer runs bounded provider-neutral completion loops.
+
+- Owns: turns, tool calls, limits, and provider-neutral messages.
+- Does not own: provider-specific HTTP, workspace selection, or CLI rendering.
+- Calls: the shared error package and the provider completion contract.
+
+### `internal/provider/deepseek`
+
+The DeepSeek adapter translates the provider HTTP protocol.
+
+- Owns: DeepSeek requests, responses, and transport errors.
+- Does not own: the agent loop, workspace selection, or CLI rendering.
+- Calls: the agent contract and shared errors.
+
+### `internal/storage/local`
+
+The local adapter stores one named workspace on disk.
+
+- Owns: workspace selection, Markdown files, `state.json`, `log.jsonl`, and
+  recovery-safe writes.
+- Does not own: workflow orchestration, source fetching, or CLI output.
+- Calls: application contracts, domain types, and shared errors.
+
+### `internal/errors`
+
+The shared error package gives internal layers one failure vocabulary.
+
+- Owns: error kinds, retryability, and context classification.
+- Does not own: workflow policy, output formatting, or HTTP status selection.
+- Calls: standard-library error behavior only.
+
+### `evals/cmd/bo-eval`
+
+The evaluation command is a separate composition root for controlled tests.
+
+- Owns: evaluation setup and explicit tool selection.
+- Does not own: production CLI behavior or the public API contract.
+- Calls: selected internal application, provider, and storage packages.
+
+## Workspace contract
+
+A workspace stores the documents, inventory, and event log for one named
+collection.
+
+It provides:
+
+- document reads;
+- inventory reads;
+- event reads and writes;
+- conditional snapshot and summary updates.
+
+Each update includes a revision. The revision lets bo detect whether another
+process or a manual edit changed the workspace. A local workspace advances the
+revision after each successful content update and rejects stale updates.
+
+Workflows receive an already-open workspace. They do not select its location or
+close it. The caller owns workspace lifetime.
+
+## Snap flow
+
+For `bo snap notes ./note.md`, the flow is:
+
+1. `cmd/bo` opens `notes` with the local manager.
+2. `cmd/bo` calls `bo.Snap` with the workspace and source input.
+3. The public package converts the request to the application contract.
+4. The application reads the current state and revision.
+5. The source workflow tries URL routing, then local Markdown routing.
+6. The selected adapter returns a title, source key, and Markdown bytes.
+7. The application validates the result and chooses a document filename.
+8. The workspace commits the document, state, and operation event with the
+   expected revision.
+9. The application returns a `SnapResult`; the CLI renders the outcome.
+
+An external Go caller starts at step 2 and can provide any `bo.Workspace`
+implementation.
+
+## State model
+
+`State` contains one `SourceRecord` for each source. A source record contains
+the source key, immutable raw snapshots, and at most one current summary. The
+summary must refer to a snapshot in the same record. This is the aggregate rule
+that keeps related state consistent.
+
+## Optional reading
+
+- [Aggregation and composition](https://atomicobject.com/oo-programming/object-oriented-aggregation)
+- [DDD aggregates](https://martinfowler.com/bliki/DDD_Aggregate.html)

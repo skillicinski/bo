@@ -24,9 +24,13 @@ jobs:
       - name: Test
         run: go test ./...
 
-      - name: Public API consumer test
+      - name: Public API and README examples
         working-directory: testdata/public-api
-        run: go test -mod=readonly ./...
+        run: |
+          awk '/^```go$/{capture=1; next} capture && /^```$/{exit} capture{print}' ../../README.md > readme_example.go
+          test -s readme_example.go
+          test -z "$(gofmt -l readme_example.go)"
+          go test -mod=readonly ./...
 
       - name: Module verification
         run: go mod verify
