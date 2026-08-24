@@ -24,7 +24,7 @@ func (p *fakeProvider) Complete(_ context.Context, request agent.CompletionReque
 func TestRuntimeUsesConfiguredToolSet(t *testing.T) {
 	provider := &fakeProvider{responses: []agent.CompletionResponse{
 		{Message: agent.ChatMessage{Role: "assistant", ToolCalls: []agent.ToolCall{{
-			ID: "call-1", Type: "function", Function: agent.ToolFunction{Name: "echo"},
+			ID: "call-1", Function: agent.ToolFunction{Name: "echo"},
 		}}}},
 		{Message: agent.ChatMessage{Role: "assistant", Content: "done"}},
 	}}
@@ -32,7 +32,7 @@ func TestRuntimeUsesConfiguredToolSet(t *testing.T) {
 	runtime := agent.Runtime{
 		Provider: provider,
 		Tools: []agent.Tool{{
-			Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: "echo"}},
+			Definition: agent.ToolDefinition{Function: agent.ToolDeclaration{Name: "echo"}},
 			Execute: func(context.Context, agent.ToolCall) (string, error) {
 				called = true
 				return "ok", nil
@@ -58,14 +58,14 @@ func TestRuntimeUsesConfiguredToolSet(t *testing.T) {
 
 func TestRuntimeStopsAfterCompletedToolBatch(t *testing.T) {
 	provider := &fakeProvider{responses: []agent.CompletionResponse{{Message: agent.ChatMessage{Role: "assistant", ToolCalls: []agent.ToolCall{{
-		ID: "write-1", Type: "function", Function: agent.ToolFunction{Name: "write"},
+		ID: "write-1", Function: agent.ToolFunction{Name: "write"},
 	}}}, Usage: &agent.TokenUsage{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5}}}}
 	done := false
 	runtime := agent.Runtime{
 		Provider: provider,
 		Done:     func() bool { return done },
 		Tools: []agent.Tool{{
-			Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: "write"}},
+			Definition: agent.ToolDefinition{Function: agent.ToolDeclaration{Name: "write"}},
 			Execute: func(context.Context, agent.ToolCall) (string, error) {
 				done = true
 				return "ok", nil
@@ -98,15 +98,51 @@ func (p *failingProvider) Complete(_ context.Context, _ agent.CompletionRequest)
 	return p.response, nil
 }
 
+type responseErrorProvider struct {
+	response agent.CompletionResponse
+	err      error
+}
+
+func (p responseErrorProvider) Complete(context.Context, agent.CompletionRequest) (agent.CompletionResponse, error) {
+	return p.response, p.err
+}
+
+func TestRuntimeAggregatesUsageFromProviderError(t *testing.T) {
+	providerErr := internalerrors.ProviderRejected("completion was incomplete", false)
+	runtime := agent.Runtime{Provider: responseErrorProvider{
+		response: agent.CompletionResponse{Usage: &agent.TokenUsage{PromptTokens: 5, CompletionTokens: 7, TotalTokens: 12}},
+		err:      providerErr,
+	}}
+	result, err := runtime.Run(context.Background(), nil, agent.Options{MaxTurns: 1})
+	if err != providerErr {
+		t.Fatalf("error = %v", err)
+	}
+	if result.Usage == nil || result.Usage.PromptTokens != 5 || result.Usage.CompletionTokens != 7 || result.Usage.TotalTokens != 12 {
+		t.Fatalf("usage = %#v", result.Usage)
+	}
+}
+
+func TestRuntimeLeavesUsageUnknownWithoutProviderUsage(t *testing.T) {
+	providerErr := internalerrors.ProviderRejected("completion failed", false)
+	runtime := agent.Runtime{Provider: responseErrorProvider{err: providerErr}}
+	result, err := runtime.Run(context.Background(), nil, agent.Options{MaxTurns: 1})
+	if err != providerErr {
+		t.Fatalf("error = %v", err)
+	}
+	if result.Usage != nil {
+		t.Fatalf("usage = %#v, want nil", result.Usage)
+	}
+}
+
 func TestRuntimeReturnsPartialMetricsOnFailure(t *testing.T) {
 	provider := &failingProvider{
 		response: agent.CompletionResponse{Message: agent.ChatMessage{Role: "assistant", ToolCalls: []agent.ToolCall{{
-			ID: "read-1", Type: "function", Function: agent.ToolFunction{Name: "read"},
+			ID: "read-1", Function: agent.ToolFunction{Name: "read"},
 		}}}, Usage: &agent.TokenUsage{PromptTokens: 7, CompletionTokens: 4, TotalTokens: 11}},
 		err: errors.New("provider stopped"),
 	}
 	runtime := agent.Runtime{Provider: provider, Tools: []agent.Tool{{
-		Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: "read"}},
+		Definition: agent.ToolDefinition{Function: agent.ToolDeclaration{Name: "read"}},
 		Execute:    func(context.Context, agent.ToolCall) (string, error) { return "ok", nil },
 	}}}
 	result, err := runtime.Run(context.Background(), nil, agent.Options{MaxTurns: 3, MaxToolCalls: 3})
@@ -122,12 +158,12 @@ func TestRuntimeReturnsLastTypedToolFailureWhenModelStops(t *testing.T) {
 	cause := errors.New("generation changed")
 	provider := &fakeProvider{responses: []agent.CompletionResponse{
 		{Message: agent.ChatMessage{Role: "assistant", ToolCalls: []agent.ToolCall{{
-			ID: "write-1", Type: "function", Function: agent.ToolFunction{Name: "write"},
+			ID: "write-1", Function: agent.ToolFunction{Name: "write"},
 		}}}},
 		{Message: agent.ChatMessage{Role: "assistant", Content: "stopped"}},
 	}}
 	runtime := agent.Runtime{Provider: provider, Tools: []agent.Tool{{
-		Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: "write"}},
+		Definition: agent.ToolDefinition{Function: agent.ToolDeclaration{Name: "write"}},
 		Execute: func(context.Context, agent.ToolCall) (string, error) {
 			return "", internalerrors.Wrap(internalerrors.KindConflict, "publishing state failed", cause)
 		},
@@ -142,15 +178,15 @@ func TestRuntimeClearsToolFailureAfterSuccessfulBatch(t *testing.T) {
 	cause := errors.New("generation changed")
 	provider := &fakeProvider{responses: []agent.CompletionResponse{
 		{Message: agent.ChatMessage{Role: "assistant", ToolCalls: []agent.ToolCall{{
-			ID: "fail-1", Type: "function", Function: agent.ToolFunction{Name: "write"},
+			ID: "fail-1", Function: agent.ToolFunction{Name: "write"},
 		}}}},
 		{Message: agent.ChatMessage{Role: "assistant", ToolCalls: []agent.ToolCall{{
-			ID: "ok-1", Type: "function", Function: agent.ToolFunction{Name: "write"},
+			ID: "ok-1", Function: agent.ToolFunction{Name: "write"},
 		}}}},
 		{Message: agent.ChatMessage{Role: "assistant", Content: "done"}},
 	}}
 	runtime := agent.Runtime{Provider: provider, Tools: []agent.Tool{{
-		Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: "write"}},
+		Definition: agent.ToolDefinition{Function: agent.ToolDeclaration{Name: "write"}},
 		Execute: func(_ context.Context, call agent.ToolCall) (string, error) {
 			if call.ID == "fail-1" {
 				return "", internalerrors.Wrap(internalerrors.KindConflict, "publishing state failed", cause)
@@ -173,15 +209,15 @@ func TestRuntimeUsesToolFailureAtTerminalLimits(t *testing.T) {
 		{
 			name: "turn limit",
 			message: agent.ChatMessage{Role: "assistant", ToolCalls: []agent.ToolCall{{
-				ID: "write-1", Type: "function", Function: agent.ToolFunction{Name: "write"},
+				ID: "write-1", Function: agent.ToolFunction{Name: "write"},
 			}}},
 			options: agent.Options{MaxTurns: 1, MaxToolCalls: 2},
 		},
 		{
 			name: "tool call limit",
 			message: agent.ChatMessage{Role: "assistant", ToolCalls: []agent.ToolCall{
-				{ID: "write-1", Type: "function", Function: agent.ToolFunction{Name: "write"}},
-				{ID: "write-2", Type: "function", Function: agent.ToolFunction{Name: "write"}},
+				{ID: "write-1", Function: agent.ToolFunction{Name: "write"}},
+				{ID: "write-2", Function: agent.ToolFunction{Name: "write"}},
 			}},
 			options: agent.Options{MaxTurns: 2, MaxToolCalls: 1},
 		},
@@ -191,7 +227,7 @@ func TestRuntimeUsesToolFailureAtTerminalLimits(t *testing.T) {
 			cause := errors.New("generation changed")
 			provider := &fakeProvider{responses: []agent.CompletionResponse{{Message: test.message}}}
 			runtime := agent.Runtime{Provider: provider, Tools: []agent.Tool{{
-				Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: "write"}},
+				Definition: agent.ToolDefinition{Function: agent.ToolDeclaration{Name: "write"}},
 				Execute: func(context.Context, agent.ToolCall) (string, error) {
 					return "", internalerrors.Wrap(internalerrors.KindConflict, "publishing state failed", cause)
 				},
@@ -208,10 +244,10 @@ func TestRuntimePrefersCurrentContextError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	provider := &fakeProvider{responses: []agent.CompletionResponse{{Message: agent.ChatMessage{Role: "assistant", ToolCalls: []agent.ToolCall{{
-		ID: "write-1", Type: "function", Function: agent.ToolFunction{Name: "write"},
+		ID: "write-1", Function: agent.ToolFunction{Name: "write"},
 	}}}}}}
 	runtime := agent.Runtime{Provider: provider, Tools: []agent.Tool{{
-		Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: "write"}},
+		Definition: agent.ToolDefinition{Function: agent.ToolDeclaration{Name: "write"}},
 		Execute: func(context.Context, agent.ToolCall) (string, error) {
 			cancel()
 			return "", internalerrors.Conflict("publishing state failed")
@@ -227,12 +263,12 @@ func TestRuntimePrefersCurrentProviderError(t *testing.T) {
 	providerErr := internalerrors.ProviderRejected("provider is busy", true)
 	provider := &failingProvider{
 		response: agent.CompletionResponse{Message: agent.ChatMessage{Role: "assistant", ToolCalls: []agent.ToolCall{{
-			ID: "write-1", Type: "function", Function: agent.ToolFunction{Name: "write"},
+			ID: "write-1", Function: agent.ToolFunction{Name: "write"},
 		}}}},
 		err: providerErr,
 	}
 	runtime := agent.Runtime{Provider: provider, Tools: []agent.Tool{{
-		Definition: agent.ToolDefinition{Type: "function", Function: agent.ToolDeclaration{Name: "write"}},
+		Definition: agent.ToolDefinition{Function: agent.ToolDeclaration{Name: "write"}},
 		Execute: func(context.Context, agent.ToolCall) (string, error) {
 			return "", internalerrors.Conflict("publishing state failed")
 		},

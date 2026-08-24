@@ -91,7 +91,7 @@ func toolResponse(id, name, arguments string) agent.CompletionResponse {
 	return agent.CompletionResponse{Message: agent.ChatMessage{
 		Role:      "assistant",
 		Content:   nil,
-		ToolCalls: []agent.ToolCall{{ID: id, Type: "function", Function: agent.ToolFunction{Name: name, Arguments: arguments}}},
+		ToolCalls: []agent.ToolCall{{ID: id, Function: agent.ToolFunction{Name: name, Arguments: arguments}}},
 	}}
 }
 

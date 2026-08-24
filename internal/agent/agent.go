@@ -32,56 +32,48 @@ func DefaultOptions() Options {
 }
 
 type ChatMessage struct {
-	Role             string     `json:"role"`
-	Content          any        `json:"content"`
-	Name             string     `json:"name,omitempty"`
-	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID       string     `json:"tool_call_id,omitempty"`
-	ReasoningContent any        `json:"reasoning_content,omitempty"`
+	Role       string
+	Content    any
+	Name       string
+	ToolCalls  []ToolCall
+	ToolCallID string
 }
 
 type ToolCall struct {
-	ID       string       `json:"id"`
-	Type     string       `json:"type"`
-	Function ToolFunction `json:"function"`
+	ID       string
+	Function ToolFunction
 }
 
 type ToolFunction struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
+	Name      string
+	Arguments string
 }
 
 type ToolDefinition struct {
-	Type     string          `json:"type"`
-	Function ToolDeclaration `json:"function"`
+	Function ToolDeclaration
 }
 
 type ToolDeclaration struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Parameters  map[string]any `json:"parameters"`
+	Name        string
+	Description string
+	Parameters  map[string]any
 }
 
 type CompletionRequest struct {
-	Model      string            `json:"model"`
-	Messages   []ChatMessage     `json:"messages"`
-	Tools      []ToolDefinition  `json:"tools"`
-	ToolChoice string            `json:"tool_choice"`
-	Stream     bool              `json:"stream"`
-	MaxTokens  int               `json:"max_tokens"`
-	Thinking   map[string]string `json:"thinking"`
+	Messages  []ChatMessage
+	Tools     []ToolDefinition
+	MaxTokens int
 }
 
 type CompletionResponse struct {
-	Message      ChatMessage
-	FinishReason string
-	Usage        *TokenUsage
+	Message ChatMessage
+	Usage   *TokenUsage
 }
 
 type TokenUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
 }
 
 type Usage = TokenUsage
@@ -121,9 +113,10 @@ func (runtime Runtime) Run(ctx context.Context, messages []ChatMessage, options 
 	turns, toolCalls := 0, 0
 	var usage TokenUsage
 	usageKnown := true
+	usageReceived := false
 	finish := func(message ChatMessage, err error) (Result, error) {
 		metrics := Metrics{Turns: turns, ToolCalls: toolCalls, Duration: time.Since(started)}
-		if usageKnown && turns > 0 {
+		if usageKnown && usageReceived && turns > 0 {
 			metrics.Usage = &usage
 		}
 		return Result{Messages: messages, Message: message, Metrics: metrics}, err
@@ -158,18 +151,18 @@ func (runtime Runtime) Run(ctx context.Context, messages []ChatMessage, options 
 		}
 		turns++
 		response, err := runtime.Provider.Complete(ctx, CompletionRequest{
-			Messages: messages, Tools: definitions, ToolChoice: "auto", Stream: false,
-			MaxTokens: options.MaxResponseTokens, Thinking: map[string]string{"type": "disabled"},
+			Messages: messages, Tools: definitions, MaxTokens: options.MaxResponseTokens,
 		})
-		if err != nil {
-			return finish(ChatMessage{}, providerError(err))
-		}
 		if response.Usage != nil && usageKnown {
 			usage.PromptTokens += response.Usage.PromptTokens
 			usage.CompletionTokens += response.Usage.CompletionTokens
 			usage.TotalTokens += response.Usage.TotalTokens
-		} else {
+			usageReceived = true
+		} else if err == nil {
 			usageKnown = false
+		}
+		if err != nil {
+			return finish(ChatMessage{}, providerError(err))
 		}
 		message := response.Message
 		if message.Role == "" {
