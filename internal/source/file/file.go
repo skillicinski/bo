@@ -37,13 +37,21 @@ func (p *MarkdownPlugin) Handle(ctx context.Context, origin source.Origin) (doma
 	if err := ctx.Err(); err != nil {
 		return domain.RawSnapshot{}, internalerrors.Context(err)
 	}
-	data, err := os.ReadFile(origin.Value)
+	file, err := os.Open(origin.Value)
 	if err != nil {
 		kind := internalerrors.KindFilesystem
 		if errors.Is(err, os.ErrNotExist) {
 			kind = internalerrors.KindMissingResource
 		}
 		return domain.RawSnapshot{}, internalerrors.Wrap(kind, fmt.Sprintf("reading %s failed", origin.Value), err)
+	}
+	defer file.Close()
+	data, err := source.ReadAll(file)
+	if err != nil {
+		if internalerrors.IsKind(err, internalerrors.KindSource) {
+			return domain.RawSnapshot{}, err
+		}
+		return domain.RawSnapshot{}, internalerrors.Wrap(internalerrors.KindFilesystem, fmt.Sprintf("reading %s failed", origin.Value), err)
 	}
 	if len(strings.TrimSpace(string(data))) == 0 {
 		return domain.RawSnapshot{}, internalerrors.Source("Markdown file is empty")

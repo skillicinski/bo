@@ -4,14 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/skillicinski/bo/internal/domain"
 	internalerrors "github.com/skillicinski/bo/internal/errors"
 	"github.com/skillicinski/bo/internal/source"
-	filesource "github.com/skillicinski/bo/internal/source/file"
-	urlsource "github.com/skillicinski/bo/internal/source/url"
 )
 
 type SnapOutcome struct {
@@ -42,11 +39,7 @@ func NewSnapInputError(detail string) *SnapCommandError {
 	return &SnapCommandError{Err: internalerrors.Validation(detail)}
 }
 
-func Snap(ctx context.Context, workspace Workspace, inputs []string, options OperationOptions) ([]SnapOutcome, error) {
-	return SnapWithWorkflow(ctx, workspace, defaultSourceWorkflow(), inputs, options)
-}
-
-func SnapWithWorkflow(ctx context.Context, workspace Workspace, workflow source.Fetcher, inputs []string, options OperationOptions) ([]SnapOutcome, error) {
+func Snap(ctx context.Context, workspace Workspace, workflow source.Fetcher, inputs []string, options OperationOptions) ([]SnapOutcome, error) {
 	options = normalizeOperationOptions(options)
 	if workspace == nil {
 		return nil, snapWorkflowFailure(ctx, nil, options, internalerrors.Request("workspace is not configured"))
@@ -124,18 +117,6 @@ func SnapWithWorkflow(ctx context.Context, workspace Workspace, workflow source.
 		outcomes = append(outcomes, SnapOutcome{SourceKey: sourceKey, Filename: filename})
 	}
 	return outcomes, nil
-}
-
-func defaultSourceWorkflow() *source.Workflow {
-	client := &http.Client{Timeout: 30 * time.Second}
-	return source.NewWorkflow(
-		[]source.Transport{urlsource.NewTransport(), filesource.NewTransport()},
-		map[source.OriginType]source.Plugin{
-			source.OriginHTML:     urlsource.NewHTML(client),
-			source.OriginYouTube:  urlsource.NewYouTube(client),
-			source.OriginMarkdown: filesource.NewMarkdownPlugin(),
-		},
-	)
 }
 
 func createRaw(ctx context.Context, workspace Workspace, revision Revision, sourceKey, slug string, writtenAt time.Time, contents []byte, operation Operation) (string, Revision, error) {

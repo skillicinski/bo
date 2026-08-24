@@ -67,6 +67,21 @@ func TestURLWorkflowFetchesHTMLAndClassifiesResponses(t *testing.T) {
 	}
 }
 
+func TestHTMLPluginRejectsOversizedResponses(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		header := make(http.Header)
+		header.Set("Content-Type", "text/html")
+		return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(strings.Repeat("x", source.MaxSourceBytes+1)))}, nil
+	})}
+	workflow := source.NewWorkflow(
+		[]source.Transport{NewTransport()},
+		map[source.OriginType]source.Plugin{source.OriginHTML: NewHTML(client)},
+	)
+	if _, err := workflow.Fetch(context.Background(), "https://example.test/large"); !internalerrors.IsKind(err, internalerrors.KindSource) {
+		t.Fatalf("oversized HTML error = %v", err)
+	}
+}
+
 func TestTransportRoutesURLsAndRejectsUnsupportedYouTubeURLs(t *testing.T) {
 	transport := NewTransport()
 	origin, err := transport.Route(context.Background(), "https://example.test/article")
@@ -79,6 +94,9 @@ func TestTransportRoutesURLsAndRejectsUnsupportedYouTubeURLs(t *testing.T) {
 	}
 	if _, err := transport.Route(context.Background(), "https://www.youtube.com/playlist?list=x"); err == nil || !strings.Contains(err.Error(), "out of scope") {
 		t.Fatalf("unsupported YouTube error = %v", err)
+	}
+	if _, err := transport.Route(context.Background(), "https://example.test/article#credential"); !internalerrors.IsKind(err, internalerrors.KindValidation) {
+		t.Fatalf("fragment URL error = %v", err)
 	}
 }
 

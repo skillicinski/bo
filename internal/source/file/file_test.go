@@ -4,9 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	internalerrors "github.com/skillicinski/bo/internal/errors"
+	"github.com/skillicinski/bo/internal/source"
 	"github.com/skillicinski/bo/internal/source/file"
 )
 
@@ -55,5 +57,19 @@ func TestMarkdownPluginUsesFilenameAndRejectsEmptyOrUnsupportedFiles(t *testing.
 	}
 	if _, err := file.NewTransport().Route(context.Background(), filepath.Join(directory, "note.txt")); !internalerrors.IsKind(err, internalerrors.KindSource) {
 		t.Fatalf("unsupported extension error = %v", err)
+	}
+}
+
+func TestMarkdownPluginRejectsOversizedFiles(t *testing.T) {
+	filename := filepath.Join(t.TempDir(), "large.md")
+	if err := os.WriteFile(filename, []byte(strings.Repeat("x", source.MaxSourceBytes+1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	origin, err := file.NewTransport().Route(context.Background(), filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.NewMarkdownPlugin().Handle(context.Background(), origin); !internalerrors.IsKind(err, internalerrors.KindSource) {
+		t.Fatalf("oversized file error = %v", err)
 	}
 }

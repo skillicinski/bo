@@ -4,12 +4,26 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/skillicinski/bo/internal/domain"
 	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
+const MaxSourceBytes = 10 << 20
+
 var ErrNotHandled = errors.New("source not handled")
+
+func ReadAll(reader io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, MaxSourceBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > MaxSourceBytes {
+		return nil, internalerrors.Source(fmt.Sprintf("source exceeds %d-byte limit", MaxSourceBytes))
+	}
+	return data, nil
+}
 
 type OriginType string
 

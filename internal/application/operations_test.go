@@ -48,7 +48,7 @@ func TestSnapStoresEventsInWorkspaceLedger(t *testing.T) {
 		"https://example.test/one": {Title: "One", Markdown: []byte("one\n")},
 		"https://example.test/two": {Title: "Two", Markdown: []byte("two\n")},
 	}
-	if _, err := application.SnapWithWorkflow(context.Background(), store, source, []string{
+	if _, err := application.Snap(context.Background(), store, source, []string{
 		"https://example.test/one", "https://example.test/missing", "https://example.test/two",
 	}, application.OperationOptions{Actor: "test"}); err != nil {
 		t.Fatal(err)

@@ -83,6 +83,65 @@ func TestPublicWorkflows(t *testing.T) {
 	}
 }
 
+func TestConfiguredSnapSources(t *testing.T) {
+	ctx := context.Background()
+	path := writeSource(t)
+	store := &storage{revision: bo.NewRevision(nil)}
+	var requests int
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		if request.URL.String() != "https://example.test/remote" {
+			t.Fatalf("request URL = %s", request.URL)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/html"}},
+			Body:       io.NopCloser(bytes.NewReader([]byte("<html><head><title>Remote</title></head><body><article>remote</article></body></html>"))),
+		}, nil
+	})}
+	result, err := bo.Snap(ctx, bo.SnapRequest{
+		Workspace: workspace{name: "consumer", store: store},
+		Sources:   []string{"https://example.test/remote", path},
+		SourceConfig: &bo.SnapSourceConfig{
+			AllowLocalFiles: false,
+			HTTPClient:      client,
+		},
+	})
+	if err != nil || len(result.Outcomes) != 2 || result.Outcomes[0].Err != nil || result.Outcomes[1].Err == nil {
+		t.Fatalf("configured snap = %#v, error = %v", result, err)
+	}
+	if requests != 1 || store.state.SnapshotCount() != 1 || store.state.Sources[0].SourceKey != "https://example.test/remote" {
+		t.Fatalf("configured snap state = %#v, requests = %d", store.state, requests)
+	}
+}
+
+func TestSnapRejectsFragmentsBeforePersistence(t *testing.T) {
+	ctx := context.Background()
+	store := &storage{revision: bo.NewRevision(nil)}
+	requests := 0
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/html"}}, Body: io.NopCloser(bytes.NewReader(nil))}, nil
+	})}
+	result, err := bo.Snap(ctx, bo.SnapRequest{
+		Workspace: workspace{name: "consumer", store: store},
+		Sources:   []string{"https://example.test/remote#credential"},
+		SourceConfig: &bo.SnapSourceConfig{
+			HTTPClient: client,
+		},
+	})
+	if err != nil || len(result.Outcomes) != 1 || result.Outcomes[0].Err == nil {
+		t.Fatalf("fragment snap = %#v, error = %v", result, err)
+	}
+	if requests != 0 || store.state.SnapshotCount() != 0 || len(store.events) != 1 || store.events[0].Source != nil {
+		t.Fatalf("fragment persisted: state = %#v, events = %#v, requests = %d", store.state, store.events, requests)
+	}
+	data, err := json.Marshal(store.events)
+	if err != nil || bytes.Contains(data, []byte("credential")) {
+		t.Fatalf("fragment event = %s, error = %v", data, err)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {

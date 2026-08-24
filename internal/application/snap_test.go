@@ -3,18 +3,12 @@ package application_test
 import (
 	"context"
 	"errors"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/skillicinski/bo/internal/application"
 	"github.com/skillicinski/bo/internal/domain"
-	"github.com/skillicinski/bo/internal/source"
-	filesource "github.com/skillicinski/bo/internal/source/file"
-	urlsource "github.com/skillicinski/bo/internal/source/url"
 )
 
 type rawSource map[string]domain.RawSnapshot
@@ -29,7 +23,7 @@ func TestSnapPublishesStateSequentially(t *testing.T) {
 		"https://example.test/one": {Title: "First Page", Markdown: []byte("# First Page\n\ncontent\n")},
 		"https://example.test/two": {Title: "Second Page", Markdown: []byte("# Second Page\n\ncontent\n")},
 	}
-	outcomes, err := application.SnapWithWorkflow(context.Background(), store, source, []string{"https://example.test/one", "https://example.test/two"}, operationOptionsFor(target))
+	outcomes, err := application.Snap(context.Background(), store, source, []string{"https://example.test/one", "https://example.test/two"}, operationOptionsFor(target))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +45,7 @@ func TestSnapPublishesStateSequentially(t *testing.T) {
 func TestSnapStoresRepeatedSourceSnapshotsInOneAggregate(t *testing.T) {
 	store, target := seededStore(t)
 	key := "https://example.test/article"
-	outcomes, err := application.SnapWithWorkflow(context.Background(), store, rawSource{
+	outcomes, err := application.Snap(context.Background(), store, rawSource{
 		key: {Title: "Article", Markdown: []byte("latest\n")},
 	}, []string{key, key}, operationOptionsFor(target))
 	if err != nil || len(outcomes) != 2 {
@@ -75,7 +69,7 @@ func TestSnapDoesNotPublishWhenTransactionMarkerCannotBeWritten(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(transactionMarker, "blocked"), []byte("blocked\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := application.SnapWithWorkflow(context.Background(), store, rawSource{"https://example.test/url": {Title: "Page", Markdown: []byte("content\n")}}, []string{"https://example.test/url"}, operationOptionsFor(target))
+	_, err := application.Snap(context.Background(), store, rawSource{"https://example.test/url": {Title: "Page", Markdown: []byte("content\n")}}, []string{"https://example.test/url"}, operationOptionsFor(target))
 	if err == nil {
 		t.Fatal("Snap succeeded")
 	}
@@ -105,7 +99,7 @@ func TestSnapRecordsCorrelatedFailedAndCommittedAttempts(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := "https://example.test/article"
-	outcomes, err := application.SnapWithWorkflow(context.Background(), store, rawSource{key: {Title: "Article", Markdown: []byte("latest\n")}}, []string{key}, operationOptionsFor(target))
+	outcomes, err := application.Snap(context.Background(), store, rawSource{key: {Title: "Article", Markdown: []byte("latest\n")}}, []string{key}, operationOptionsFor(target))
 	if err != nil || len(outcomes) != 1 || outcomes[0].Err != nil || outcomes[0].Filename == "article.md" {
 		t.Fatalf("outcomes = %#v, err = %v", outcomes, err)
 	}
@@ -127,7 +121,7 @@ func (failingRawSource) Fetch(context.Context, string) (domain.RawSnapshot, erro
 
 func TestSnapDoesNotStoreFailedFetch(t *testing.T) {
 	store, target := seededStore(t)
-	outcomes, err := application.SnapWithWorkflow(context.Background(), store, failingRawSource{}, []string{"https://www.youtube.com/watch?v=a1mhk7mAetk"}, operationOptionsFor(target))
+	outcomes, err := application.Snap(context.Background(), store, failingRawSource{}, []string{"https://www.youtube.com/watch?v=a1mhk7mAetk"}, operationOptionsFor(target))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,24 +148,12 @@ func TestSnapDoesNotStoreFailedFetch(t *testing.T) {
 
 func TestSnapAcceptsMixedURLAndMarkdownInputs(t *testing.T) {
 	store, target := seededStore(t)
-	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		header := make(http.Header)
-		header.Set("Content-Type", "text/html")
-		return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader("<html><head><title>Remote</title></head><body><article>remote content</article></body></html>"))}, nil
-	})}
 	path := filepath.Join(t.TempDir(), "local.md")
-	if err := os.WriteFile(path, []byte("# Local\n\nlocal content\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	workflow := source.NewWorkflow(
-		[]source.Transport{urlsource.NewTransport(), filesource.NewTransport()},
-		map[source.OriginType]source.Plugin{
-			source.OriginHTML:     urlsource.NewHTML(client),
-			source.OriginMarkdown: filesource.NewMarkdownPlugin(),
-		},
-	)
 	remote := "https://example.test/remote"
-	outcomes, err := application.SnapWithWorkflow(context.Background(), store, workflow, []string{remote, path}, operationOptionsFor(target))
+	outcomes, err := application.Snap(context.Background(), store, rawSource{
+		remote: {SourceKey: remote, Title: "Remote", Markdown: []byte("remote content\n")},
+		path:   {SourceKey: "raw:local.md", Title: "Local", Markdown: []byte("local content\n")},
+	}, []string{remote, path}, operationOptionsFor(target))
 	if err != nil || len(outcomes) != 2 {
 		t.Fatalf("outcomes = %#v, err = %v", outcomes, err)
 	}
@@ -183,19 +165,3 @@ func TestSnapAcceptsMixedURLAndMarkdownInputs(t *testing.T) {
 		t.Fatalf("state = %#v, err = %v", state, err)
 	}
 }
-
-func TestSnapDefaultWorkflowAcceptsMarkdown(t *testing.T) {
-	store, target := seededStore(t)
-	path := filepath.Join(t.TempDir(), "default.md")
-	if err := os.WriteFile(path, []byte("# Default\n\ncontent\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	outcomes, err := application.Snap(context.Background(), store, []string{path}, operationOptionsFor(target))
-	if err != nil || len(outcomes) != 1 || outcomes[0].SourceKey != "raw:default.md" {
-		t.Fatalf("outcomes = %#v, err = %v", outcomes, err)
-	}
-}
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }

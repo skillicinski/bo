@@ -6,8 +6,8 @@
 external Go consumer       -> bo
 cmd/bo                     -> bo
 evals/cmd/bo-eval          -> application, provider/deepseek, storage/local
-bo                         -> application, agent, domain, errors, provider/deepseek, storage/local
-application                -> agent, domain, errors, source, source/file, source/url
+bo                         -> application, agent, domain, errors, provider/deepseek, source, source/file, source/url, storage/local
+application                -> agent, domain, errors, source
 source                     -> domain, errors
 source/file                -> source, domain, errors
 source/url                 -> source, domain, errors
@@ -38,8 +38,8 @@ separate consumer module in `testdata/public-api` compiles that boundary in CI.
 
 The public package exposes workflows and stable data types.
 
-- Owns: requests, results, public errors, state types, workspace ports, and
-  supported constructors.
+- Owns: requests, results, public errors, state types, workspace ports, source
+  composition, and supported constructors.
 - Does not own: CLI parsing, source routing, storage format, or provider HTTP.
 - Calls: application workflows and supported internal adapters.
 
@@ -56,11 +56,10 @@ The CLI converts arguments and results into a process interface.
 
 The application layer runs the four workflows and records operation events.
 
-- Owns: workflow orchestration, validation order, default source assembly, and
-  operation outcomes.
+- Owns: workflow orchestration, validation order, and operation outcomes.
 - Does not own: CLI output, workspace selection, or local file operations.
-- Calls: domain types, the workspace port, the agent runtime, and
-  `source`, `source/file`, and `source/url`.
+- Calls: domain types, the workspace port, the agent runtime, and the `source`
+  fetch port.
 
 ### `internal/domain`
 
@@ -157,14 +156,20 @@ For `bo snap notes ./note.md`, the flow is:
 
 1. `cmd/bo` opens `notes` with the local manager.
 2. `cmd/bo` calls `bo.Snap` with the workspace and source input.
-3. The public package converts the request to the application contract.
+3. The public package composes the default URL and local Markdown adapters and
+   converts the request to the application contract.
 4. The application reads the current state and revision.
 5. The source workflow tries URL routing, then local Markdown routing.
-6. The selected adapter returns a title, source key, and Markdown bytes.
+6. The selected adapter returns a title, source key, and bounded Markdown bytes.
 7. The application validates the result and chooses a document filename.
 8. The workspace commits the document, state, and operation event with the
    expected revision.
 9. The application returns a `SnapResult`; the CLI renders the outcome.
+
+Cloud callers may disable local Markdown sources and provide an `http.Client`.
+The caller owns that client's DNS, redirect, and private-network policy. The
+source adapters apply one bounded read limit to local Markdown and all URL
+responses before parsing them.
 
 An external Go caller starts at step 2 and can provide any `bo.Workspace`
 implementation.

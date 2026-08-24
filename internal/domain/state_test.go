@@ -139,6 +139,8 @@ func TestValidateSourceKeyRejectsCredentialBearingURLs(t *testing.T) {
 		"https://example.test/article?X-Amz-Signature=abc123",
 		"https://example.test/article?X-Goog-Credential=abc123",
 		"https://example.test/article?token=abc123",
+		"https://example.test/article#credential",
+		"https://example.test/article#",
 	} {
 		if err := domain.ValidateSourceKey(sourceKey); err == nil {
 			t.Fatalf("credential-bearing URL was accepted: %s", sourceKey)

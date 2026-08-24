@@ -122,6 +122,45 @@ func TestYouTubePluginRetriesPlayerWithWatchPageAPIKey(t *testing.T) {
 	}
 }
 
+func TestYouTubePluginRejectsOversizedResponses(t *testing.T) {
+	tests := []struct {
+		name    string
+		respond func(*http.Request) string
+	}{
+		{name: "player", respond: func(*http.Request) string {
+			return strings.Repeat("x", source.MaxSourceBytes+1)
+		}},
+		{name: "watch page", respond: func(request *http.Request) string {
+			if request.URL.Path == "/player" {
+				return `{"playabilityStatus":{"status":"LOGIN_REQUIRED","reason":"sign in"}}`
+			}
+			return strings.Repeat("x", source.MaxSourceBytes+1)
+		}},
+		{name: "caption", respond: func(request *http.Request) string {
+			if request.URL.Path == "/player" {
+				return `{"playabilityStatus":{"status":"OK"},"videoDetails":{"title":"Video"},"captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[{"baseUrl":"https://example.test/captions","languageCode":"en"}]}}}`
+			}
+			return strings.Repeat("x", source.MaxSourceBytes+1)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(test.respond(request)))}, nil
+			})}
+			plugin := NewYouTube(client)
+			plugin.PlayerEndpoint = "https://example.test/player"
+			workflow := source.NewWorkflow(
+				[]source.Transport{NewTransport()},
+				map[source.OriginType]source.Plugin{source.OriginYouTube: plugin},
+			)
+			if _, err := workflow.Fetch(context.Background(), "https://www.youtube.com/watch?v=a1mhk7mAetk"); !internalerrors.IsKind(err, internalerrors.KindSource) {
+				t.Fatalf("oversized %s error = %v", test.name, err)
+			}
+		})
+	}
+}
+
 func TestYouTubePluginPreservesFallbackContextError(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.Path == "/player" {

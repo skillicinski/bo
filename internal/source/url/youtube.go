@@ -278,7 +278,7 @@ func (p *YouTubePlugin) fetchYouTube(ctx context.Context, match YouTubeURLMatch)
 	if captionResponse.StatusCode < 200 || captionResponse.StatusCode >= 300 {
 		return domain.RawSnapshot{}, internalerrors.Source(fmt.Sprintf("YouTube transcript request returned HTTP %d", captionResponse.StatusCode))
 	}
-	xmlBody, err := io.ReadAll(captionResponse.Body)
+	xmlBody, err := source.ReadAll(captionResponse.Body)
 	if err != nil {
 		return domain.RawSnapshot{}, sourceFailure("reading caption response failed", err)
 	}
@@ -323,8 +323,12 @@ func (p *YouTubePlugin) fetchYouTubePlayer(ctx context.Context, videoID, apiKey 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, internalerrors.Source(fmt.Sprintf("YouTube player request returned HTTP %d", response.StatusCode))
 	}
+	data, err := source.ReadAll(response.Body)
+	if err != nil {
+		return nil, sourceFailure("reading YouTube player response failed", err)
+	}
 	var player PlayerResponse
-	if err := json.NewDecoder(response.Body).Decode(&player); err != nil {
+	if err := json.Unmarshal(data, &player); err != nil {
 		return nil, internalerrors.Wrap(internalerrors.KindSource, "invalid InnerTube response", err)
 	}
 	if err := EnsurePlayable(&player); err != nil {
@@ -348,7 +352,7 @@ func (p *YouTubePlugin) fetchYouTubeAPIKey(ctx context.Context, videoID string) 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return "", internalerrors.Source(fmt.Sprintf("YouTube watch request returned HTTP %d", response.StatusCode))
 	}
-	body, err := io.ReadAll(response.Body)
+	body, err := source.ReadAll(response.Body)
 	if err != nil {
 		return "", sourceFailure("reading YouTube watch response failed", err)
 	}

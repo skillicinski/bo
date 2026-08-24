@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"unicode"
@@ -45,7 +44,7 @@ func (p *HTMLPlugin) Handle(ctx context.Context, origin source.Origin) (domain.R
 	if !isHTMLContentType(contentType) {
 		return domain.RawSnapshot{}, internalerrors.Source(fmt.Sprintf("not HTML (Content-Type: %s)", contentType))
 	}
-	body, err := io.ReadAll(response.Body)
+	body, err := source.ReadAll(response.Body)
 	if err != nil {
 		return domain.RawSnapshot{}, sourceFailure("reading response failed", err)
 	}

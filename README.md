@@ -144,6 +144,10 @@ writes, and conditional document updates. Each update includes the `Revision`
 returned by the last state read. The revision lets bo detect a concurrent or
 manual change; a backend should reject a stale revision.
 
+For a cloud caller, pass `SnapSourceConfig` in `SnapRequest` to disable local
+Markdown reads and provide a controlled `http.Client`. The caller owns DNS,
+redirect, and private-network policy for that client.
+
 Public workflow errors use `bo.Error` and `bo.ErrorKind`. Use `bo.IsKind` or
 `bo.IsAlreadyExists` instead of matching error strings.
 

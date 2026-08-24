@@ -1,6 +1,7 @@
 package source_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -20,6 +21,12 @@ type pluginFunc func(context.Context, source.Origin) (domain.RawSnapshot, error)
 
 func (f pluginFunc) Handle(ctx context.Context, origin source.Origin) (domain.RawSnapshot, error) {
 	return f(ctx, origin)
+}
+
+func TestReadAllRejectsOversizedSource(t *testing.T) {
+	if _, err := source.ReadAll(bytes.NewReader(bytes.Repeat([]byte{'x'}, source.MaxSourceBytes+1))); !internalerrors.IsKind(err, internalerrors.KindSource) {
+		t.Fatalf("oversized source error = %v", err)
+	}
 }
 
 func TestWorkflowRoutesInOrderAndUsesOriginType(t *testing.T) {

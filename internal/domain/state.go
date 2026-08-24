@@ -166,6 +166,9 @@ func ValidateSourceKey(sourceKey string) error {
 	if parsed.User != nil {
 		return internalerrors.Validation("source key URL must not contain user information")
 	}
+	if parsed.Fragment != "" || strings.Contains(sourceKey, "#") {
+		return internalerrors.Validation("source key URL must not contain a fragment")
+	}
 	if credentialQueryParameter(parsed.RawQuery) {
 		return internalerrors.Validation("source key URL must not contain credential query parameters")
 	}

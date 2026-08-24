@@ -15,6 +15,9 @@ import (
 	internaldomain "github.com/skillicinski/bo/internal/domain"
 	internalerrors "github.com/skillicinski/bo/internal/errors"
 	deepseek "github.com/skillicinski/bo/internal/provider/deepseek"
+	"github.com/skillicinski/bo/internal/source"
+	filesource "github.com/skillicinski/bo/internal/source/file"
+	urlsource "github.com/skillicinski/bo/internal/source/url"
 	loc "github.com/skillicinski/bo/internal/storage/local"
 )
 
@@ -287,9 +290,22 @@ type SeedResult struct {
 }
 
 type SnapRequest struct {
-	Workspace  Workspace
-	Sources    []string
-	Operations OperationOptions
+	Workspace    Workspace
+	Sources      []string
+	SourceConfig *SnapSourceConfig
+	Operations   OperationOptions
+}
+
+// SnapSourceConfig controls the source adapters used by Snap. A nil config
+// keeps the CLI defaults: local Markdown files are enabled and bo uses a
+// 30-second HTTP client. When HTTPClient is set, its transport owns DNS,
+// redirect, and private-network policy; bo does not apply another policy.
+type SnapSourceConfig struct {
+	// AllowLocalFiles enables local Markdown reads. It defaults to false when a
+	// config is provided, and nil SnapSourceConfig enables local files.
+	AllowLocalFiles bool
+	// HTTPClient supplies the transport and redirect policy for URL sources.
+	HTTPClient *http.Client
 }
 
 type SnapOutcome struct {
@@ -427,7 +443,7 @@ func Snap(ctx context.Context, request SnapRequest) (SnapResult, error) {
 	if request.Workspace == nil {
 		return result, NewError(ErrorKindRequest, "workspace is not configured")
 	}
-	outcomes, err := app.Snap(ctx, &publicWorkspace{workspace: request.Workspace}, request.Sources, internalOperationOptions(request.Operations))
+	outcomes, err := app.Snap(ctx, &publicWorkspace{workspace: request.Workspace}, sourceWorkflow(request.SourceConfig), request.Sources, internalOperationOptions(request.Operations))
 	result.Outcomes = publicSnapOutcomes(outcomes)
 	var commandErr *app.SnapCommandError
 	if stderrors.As(err, &commandErr) {
@@ -437,6 +453,27 @@ func Snap(ctx context.Context, request SnapRequest) (SnapResult, error) {
 		return result, publicError(commandErr.Err)
 	}
 	return result, publicError(err)
+}
+
+func sourceWorkflow(config *SnapSourceConfig) *source.Workflow {
+	client := &http.Client{Timeout: 30 * time.Second}
+	allowLocalFiles := config == nil
+	if config != nil {
+		allowLocalFiles = config.AllowLocalFiles
+		if config.HTTPClient != nil {
+			client = config.HTTPClient
+		}
+	}
+	transports := []source.Transport{urlsource.NewTransport()}
+	plugins := map[source.OriginType]source.Plugin{
+		source.OriginHTML:    urlsource.NewHTML(client),
+		source.OriginYouTube: urlsource.NewYouTube(client),
+	}
+	if allowLocalFiles {
+		transports = append(transports, filesource.NewTransport())
+		plugins[source.OriginMarkdown] = filesource.NewMarkdownPlugin()
+	}
+	return source.NewWorkflow(transports, plugins)
 }
 
 func ReadState(ctx context.Context, request StateRequest) (StateResult, error) {

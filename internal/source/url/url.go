@@ -31,19 +31,22 @@ func (t *Transport) Route(ctx context.Context, input string) (source.Origin, err
 	if err := ctx.Err(); err != nil {
 		return source.Origin{}, internalerrors.Context(err)
 	}
-	match := ClassifyYouTubeURL(input)
-	if match.Kind == YouTubeSupported {
-		return source.NewOrigin(source.OriginYouTube, input, input), nil
-	}
-	if match.Kind == YouTubeUnsupported {
-		return source.Origin{}, internalerrors.Source("YouTube URL: " + match.Reason)
-	}
 	parsed, err := url.Parse(input)
 	if err != nil {
 		if strings.Contains(input, "://") || strings.HasPrefix(input, "http:") || strings.HasPrefix(input, "https:") {
 			return source.Origin{}, internalerrors.Wrap(internalerrors.KindValidation, "invalid URL", err)
 		}
 		return source.Origin{}, source.ErrNotHandled
+	}
+	if (parsed.Scheme == "http" || parsed.Scheme == "https") && (parsed.Fragment != "" || strings.Contains(input, "#")) {
+		return source.Origin{}, internalerrors.Validation("URL must not contain a fragment")
+	}
+	match := ClassifyYouTubeURL(input)
+	if match.Kind == YouTubeSupported {
+		return source.NewOrigin(source.OriginYouTube, input, input), nil
+	}
+	if match.Kind == YouTubeUnsupported {
+		return source.Origin{}, internalerrors.Source("YouTube URL: " + match.Reason)
 	}
 	if parsed.Scheme == "" {
 		return source.Origin{}, source.ErrNotHandled

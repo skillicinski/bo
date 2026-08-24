@@ -27,8 +27,9 @@ erDiagram
 ## SourceIdentity
 
 A source identity is the exact source key recorded by `bo snap`. HTTP and
-HTTPS URLs are stored as-is. A Markdown file uses `raw:<filename>` as its
-source identity. URL canonicalization is intentionally deferred.
+HTTPS URLs without fragments are stored as-is. A Markdown file uses
+`raw:<filename>` as its source identity. URL canonicalization is intentionally
+deferred.
 
 ## SourceRecord
 
