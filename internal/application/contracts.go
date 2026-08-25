@@ -66,6 +66,9 @@ type Workspace interface {
 // SummaryCommit; CommitEvent is used for read-only and failed attempts.
 type WorkspaceEvents interface {
 	ReadEvents(context.Context, int, int) (OperationPage, error)
+	// ReadRecentEvents returns at most limit of the most recent events
+	// in chronological order, oldest first.
+	ReadRecentEvents(context.Context, int) ([]Operation, error)
 	CommitEvent(context.Context, Operation) error
 }
 

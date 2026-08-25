@@ -2,6 +2,7 @@ package url
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -64,6 +65,30 @@ func TestURLWorkflowFetchesHTMLAndClassifiesResponses(t *testing.T) {
 	_, err = workflow.Fetch(context.Background(), "https://example.test/missing")
 	if err == nil || !internalerrors.IsKind(err, internalerrors.KindSource) {
 		t.Fatalf("HTTP error = %v", err)
+	}
+}
+
+func TestURLWorkflowRejectsCredentialBearingURLsBeforeRequest(t *testing.T) {
+	requests := 0
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return nil, errors.New("unexpected HTTP request")
+	})}
+	workflow := source.NewWorkflow(
+		[]source.Transport{NewTransport()},
+		map[source.OriginType]source.Plugin{source.OriginHTML: NewHTML(client)},
+	)
+	for _, input := range []string{
+		"https://user:secret@example.test/article",
+		"https://example.test/article?token=secret",
+	} {
+		_, err := workflow.Fetch(context.Background(), input)
+		if !internalerrors.IsKind(err, internalerrors.KindValidation) {
+			t.Fatalf("%s error = %v", input, err)
+		}
+		if requests != 0 {
+			t.Fatalf("%s made %d HTTP requests", input, requests)
+		}
 	}
 }
 

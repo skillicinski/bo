@@ -3,13 +3,17 @@ package application_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/skillicinski/bo/internal/application"
 	"github.com/skillicinski/bo/internal/domain"
 	internalerrors "github.com/skillicinski/bo/internal/errors"
+	"github.com/skillicinski/bo/internal/source"
+	urlsource "github.com/skillicinski/bo/internal/source/url"
 )
 
 type rawSource map[string]domain.RawSnapshot
@@ -147,6 +151,44 @@ func TestSnapDoesNotStoreFailedFetch(t *testing.T) {
 	}
 }
 
+func TestSnapRejectsCredentialURLsBeforeRequestOrStateCommit(t *testing.T) {
+	for _, input := range []string{
+		"https://user:secret@example.test/article",
+		"https://example.test/article?token=secret",
+	} {
+		t.Run(input, func(t *testing.T) {
+			store, target := seededStore(t)
+			before, beforeRevision, err := store.ReadState(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			requests := 0
+			client := &http.Client{Transport: snapRoundTripFunc(func(*http.Request) (*http.Response, error) {
+				requests++
+				return nil, errors.New("unexpected HTTP request")
+			})}
+			workflow := source.NewWorkflow(
+				[]source.Transport{urlsource.NewTransport()},
+				map[source.OriginType]source.Plugin{source.OriginHTML: urlsource.NewHTML(client)},
+			)
+			outcomes, err := application.Snap(context.Background(), store, workflow, []string{input}, operationOptionsFor(target))
+			if err != nil || len(outcomes) != 1 || !internalerrors.IsKind(outcomes[0].Err, internalerrors.KindValidation) {
+				t.Fatalf("outcomes = %#v, error = %v", outcomes, err)
+			}
+			if requests != 0 {
+				t.Fatalf("HTTP requests = %d", requests)
+			}
+			after, afterRevision, err := store.ReadState(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(after, before) || !afterRevision.Equal(beforeRevision) {
+				t.Fatalf("workspace state changed: before=%#v/%s after=%#v/%s", before, beforeRevision, after, afterRevision)
+			}
+		})
+	}
+}
+
 func TestSnapAcceptsMixedURLAndMarkdownInputs(t *testing.T) {
 	store, target := seededStore(t)
 	path := filepath.Join(t.TempDir(), "local.md")
@@ -281,6 +323,12 @@ func (s *terminalRawSource) Fetch(_ context.Context, input string) (domain.RawSn
 
 type cancelBeforeCommitSource struct {
 	cancel context.CancelFunc
+}
+
+type snapRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f snapRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
 }
 
 func (s cancelBeforeCommitSource) Fetch(context.Context, string) (domain.RawSnapshot, error) {

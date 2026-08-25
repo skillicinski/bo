@@ -66,3 +66,7 @@ State is validated when it is loaded and before it is published. Raw
 snapshots remain append-only evidence. Rewriting a summary preserves its
 filename and creation time, updates its timestamp, and replaces its
 `derived_from` reference.
+
+Document entries may also contain `content_digest`, `content_size`, and
+`content_modified_at` inventory metadata for conditional writes. These fields
+are not operation events.

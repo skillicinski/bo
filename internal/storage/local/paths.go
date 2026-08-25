@@ -17,6 +17,8 @@ import (
 const (
 	stateFile = "state.json"
 	eventFile = "log.jsonl"
+	// ponytail: cap generated-name retries at 8; use coordinated allocation if collisions become common.
+	maxGeneratedWorkspaceAttempts = 8
 )
 
 var adjectives = []string{
@@ -71,6 +73,8 @@ func RandomName() (string, error) {
 	return adjectives[int(bytes[0])%len(adjectives)] + "-" + nouns[int(bytes[1])%len(nouns)], nil
 }
 
+var randomWorkspaceName = RandomName
+
 func Seed(home string, requestedName *string) (string, error) {
 	return seed(home, requestedName, nil)
 }
@@ -80,33 +84,53 @@ func SeedWithEvent(home string, requestedName *string, event domain.Operation) (
 }
 
 func seed(home string, requestedName *string, event *domain.Operation) (string, error) {
-	name := ""
-	if requestedName == nil {
-		var err error
-		name, err = RandomName()
-		if err != nil {
-			return "", internalerrors.Wrap(internalerrors.KindFilesystem, "generating workspace name failed", err)
-		}
-	} else {
-		name = *requestedName
-	}
-	if err := ValidateName(name); err != nil {
-		return "", err
-	}
-
 	rootPath := filepath.Join(home, ".bo")
-	if err := os.MkdirAll(rootPath, 0o700); err != nil {
-		return "", filesystem(rootPath, err)
+	attempts := 1
+	if requestedName == nil {
+		attempts = maxGeneratedWorkspaceAttempts
 	}
-	target := filepath.Join(rootPath, name)
-	if _, err := os.Lstat(target); err == nil {
-		return "", internalerrors.Wrap(internalerrors.KindAlreadyExists, "workspace already exists", internalerrors.ErrAlreadyExists)
-	} else if !os.IsNotExist(err) {
-		return "", filesystem(target, err)
+	for attempt := 0; attempt < attempts; attempt++ {
+		name := ""
+		if requestedName == nil {
+			var err error
+			name, err = randomWorkspaceName()
+			if err != nil {
+				return "", internalerrors.Wrap(internalerrors.KindFilesystem, "generating workspace name failed", err)
+			}
+		} else {
+			name = *requestedName
+		}
+		if err := ValidateName(name); err != nil {
+			return "", err
+		}
+		if err := os.MkdirAll(rootPath, 0o700); err != nil {
+			return "", filesystem(rootPath, err)
+		}
+		target := filepath.Join(rootPath, name)
+		if _, err := os.Lstat(target); err == nil {
+			if requestedName != nil {
+				return "", internalerrors.Wrap(internalerrors.KindAlreadyExists, "workspace already exists", internalerrors.ErrAlreadyExists)
+			}
+			continue
+		} else if !os.IsNotExist(err) {
+			return "", filesystem(target, err)
+		}
+		collision, err := seedWorkspaceAttempt(rootPath, target, event)
+		if err != nil {
+			return "", err
+		}
+		if collision {
+			continue
+		}
+		return target, nil
 	}
+	return "", internalerrors.Wrap(internalerrors.KindAlreadyExists, "workspace already exists", internalerrors.ErrAlreadyExists)
+}
+
+func seedWorkspaceAttempt(rootPath, target string, event *domain.Operation) (bool, error) {
 	temporary, err := os.MkdirTemp(rootPath, ".bo-workspace-")
 	if err != nil {
-		return "", filesystem(rootPath, err)
+		return false, filesystem(rootPath, err)
 	}
 	renamed := false
 	defer func() {
@@ -118,29 +142,29 @@ func seed(home string, requestedName *string, event *domain.Operation) (string, 
 	if event != nil {
 		event.Normalize()
 		if err := validateSeedEvent(*event); err != nil {
-			return "", err
+			return false, err
 		}
 	}
 	if err := initializeState(temporary, state); err != nil {
-		return "", err
+		return false, err
 	}
 	if err := initializeEvents(temporary, event); err != nil {
-		return "", err
+		return false, err
 	}
 	if err := syncDirectory(temporary); err != nil {
-		return "", err
+		return false, err
 	}
 	if err := os.Rename(temporary, target); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			return "", internalerrors.Wrap(internalerrors.KindAlreadyExists, "workspace already exists", internalerrors.ErrAlreadyExists)
+			return true, nil
 		}
-		return "", filesystem(target, err)
+		return false, filesystem(target, err)
 	}
 	renamed = true
 	if err := syncDirectory(rootPath); err != nil {
-		return "", err
+		return false, err
 	}
-	return target, nil
+	return false, nil
 }
 
 func initializeEvents(target string, event *domain.Operation) error {

@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/skillicinski/bo/internal/domain"
 	internalerrors "github.com/skillicinski/bo/internal/errors"
 	"github.com/skillicinski/bo/internal/source"
 )
@@ -42,6 +43,14 @@ func (t *Transport) Route(ctx context.Context, input string) (source.Origin, err
 		return source.Origin{}, internalerrors.Validation("URL must not contain a fragment")
 	}
 	match := ClassifyYouTubeURL(input)
+	if parsed.Scheme == "http" || parsed.Scheme == "https" {
+		if parsed.Host == "" {
+			return source.Origin{}, internalerrors.Validation("URL must include a host")
+		}
+		if err := domain.ValidateSourceKey(input); err != nil {
+			return source.Origin{}, err
+		}
+	}
 	if match.Kind == YouTubeSupported {
 		return source.NewOrigin(source.OriginYouTube, input, input), nil
 	}

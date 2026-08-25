@@ -36,13 +36,23 @@ type batchingProvider struct {
 
 type countingWorkspace struct {
 	application.Workspace
-	eventReads int
-	stateReads int
+	eventReads   int
+	recentReads  int
+	stateReads   int
+	eventReadErr error
 }
 
 func (w *countingWorkspace) ReadEvents(ctx context.Context, offset, limit int) (application.OperationPage, error) {
 	w.eventReads++
+	if w.eventReadErr != nil {
+		return application.OperationPage{}, w.eventReadErr
+	}
 	return w.Workspace.ReadEvents(ctx, offset, limit)
+}
+
+func (w *countingWorkspace) ReadRecentEvents(ctx context.Context, limit int) ([]application.Operation, error) {
+	w.recentReads++
+	return w.Workspace.ReadRecentEvents(ctx, limit)
 }
 
 func (w *countingWorkspace) ReadState(ctx context.Context) (domain.State, application.Revision, error) {
@@ -185,7 +195,7 @@ func TestSynthesisSmallCorpusUsesOneRuntime(t *testing.T) {
 	}
 }
 
-func TestSynthesisReservesReadLogsCapacityAndScansEventsOnce(t *testing.T) {
+func TestSynthesisBoundsStartupEventReadsAndKeepsReadLogs(t *testing.T) {
 	store, target := seededStore(t)
 	sources := testSources(t, store, 16)
 	workspace := &countingWorkspace{Workspace: store}
@@ -199,8 +209,43 @@ func TestSynthesisReservesReadLogsCapacityAndScansEventsOnce(t *testing.T) {
 	if len(provider.batches) != 2 || len(provider.batches[0]) != 15 || len(provider.batches[1]) != 1 {
 		t.Fatalf("batches = %#v", provider.batches)
 	}
-	if workspace.eventReads != 1 || workspace.stateReads != 2 {
-		t.Fatalf("workspace reads = events %d, state %d", workspace.eventReads, workspace.stateReads)
+	if workspace.eventReads != 0 || workspace.recentReads != 1 || workspace.stateReads != 2 {
+		t.Fatalf("workspace reads = events %d, recent %d, state %d", workspace.eventReads, workspace.recentReads, workspace.stateReads)
+	}
+}
+
+func TestSynthesisUsesDurableSummaryCompletionWithoutStartupEventRead(t *testing.T) {
+	store, target := seededStore(t)
+	commitRaw(t, store, "https://example.test/article", "article.md", time.Unix(1, 0).UTC(), []byte("fact\n"))
+	commitSummary(t, store, application.SummaryCommit{
+		SourceKey: "https://example.test/article", Filename: "article.md", DerivedFrom: "article.md",
+		RawWrittenAt: time.Unix(1, 0).UTC(), CreatedAt: time.Unix(2, 0).UTC(), UpdatedAt: time.Unix(2, 0).UTC(), Contents: []byte("summary\n"),
+	})
+	workspace := &countingWorkspace{Workspace: store, eventReadErr: fmt.Errorf("event read must be on demand")}
+	provider := &batchingProvider{}
+	result, err := application.SynthesizeWithTools(context.Background(), workspace, provider, application.DefaultSynthesisOptions(), []string{"write_summary"}, operationOptionsFor(target))
+	if err != nil || result.SummariesWritten != 0 || result.SummariesSkipped != 1 {
+		t.Fatalf("synthesis = %#v, error = %v", result, err)
+	}
+	if workspace.eventReads != 0 || len(provider.requests) != 0 {
+		t.Fatalf("startup event reads or provider calls = %d, %d", workspace.eventReads, len(provider.requests))
+	}
+}
+
+func TestSynthesisWithoutReadLogsSkipsRecentReadAndPromptInstruction(t *testing.T) {
+	store, target := seededStore(t)
+	sources := testSources(t, store, 1)
+	workspace := &countingWorkspace{Workspace: store}
+	provider := &batchingProvider{sources: sources, includeDoc: true}
+	result, err := application.SynthesizeWithTools(context.Background(), workspace, provider, application.DefaultSynthesisOptions(), []string{"read_document", "write_summary"}, operationOptionsFor(target))
+	if err != nil || result.SummariesWritten != 1 {
+		t.Fatalf("synthesis = %#v, error = %v", result, err)
+	}
+	if workspace.recentReads != 0 {
+		t.Fatalf("recent reads = %d", workspace.recentReads)
+	}
+	if len(provider.requests) == 0 || strings.Contains(fmt.Sprint(provider.requests[0].Messages[0].Content), "read_logs") {
+		t.Fatalf("system prompt = %#v", provider.requests)
 	}
 }
 

@@ -38,7 +38,7 @@ func TestPublicWorkflows(t *testing.T) {
 			Snapshots: []bo.RawRecord{{Filename: "article.md", WrittenAt: time.Unix(1, 0).UTC()}},
 		}}},
 		revision:  bo.NewRevision(nil),
-		documents: map[string][]byte{"article.md": []byte("# Article\n\ncontent\n")},
+		documents: map[bo.DocumentRef][]byte{bo.RawRef("article.md"): []byte("# Article\n\ncontent\n")},
 	}
 	synthWorkspace := workspace{name: "consumer", store: synthStore}
 	response, err := json.Marshal(map[string]any{
@@ -78,7 +78,7 @@ func TestPublicWorkflows(t *testing.T) {
 		},
 		Operations: options,
 	})
-	if err != nil || result.SummariesWritten != 1 || synthStore.state.Sources[0].Summary == nil || string(synthStore.documents["article.md"]) != "# Summary\n\ncontent\n" {
+	if err != nil || result.SummariesWritten != 1 || synthStore.state.Sources[0].Summary == nil || string(synthStore.documents[bo.RawRef("article.md")]) != "# Article\n\ncontent\n" || string(synthStore.documents[bo.SummaryRef("article.md")]) != "# Summary\n\ncontent\n" {
 		t.Fatalf("synth = %#v, error = %v, state = %#v", result, err, synthStore.state)
 	}
 }

@@ -175,6 +175,9 @@ type Workspace interface {
 // WorkspaceEvents is the durable event contract for one workspace.
 type WorkspaceEvents interface {
 	ReadEvents(context.Context, int, int) (OperationPage, error)
+	// ReadRecentEvents returns at most limit of the most recent events
+	// in chronological order, oldest first.
+	ReadRecentEvents(context.Context, int) ([]Operation, error)
 	CommitEvent(context.Context, Operation) error
 }
 
@@ -543,6 +546,18 @@ func (w *localWorkspace) ReadEvents(ctx context.Context, offset, limit int) (Ope
 	return publicOperationPage(page), nil
 }
 
+func (w *localWorkspace) ReadRecentEvents(ctx context.Context, limit int) ([]Operation, error) {
+	events, err := w.workspace.ReadRecentEvents(ctx, limit)
+	if err != nil {
+		return nil, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "reading recent operation events"))
+	}
+	result := make([]Operation, len(events))
+	for index, event := range events {
+		result[index] = publicOperation(event)
+	}
+	return result, nil
+}
+
 func (w *localWorkspace) CommitEvent(ctx context.Context, event Operation) error {
 	err := w.workspace.CommitEvent(ctx, internalOperation(event))
 	if err != nil {
@@ -635,6 +650,18 @@ func (w *publicWorkspace) ReadEvents(ctx context.Context, offset, limit int) (ap
 		return app.OperationPage{}, err
 	}
 	return converted, nil
+}
+
+func (w *publicWorkspace) ReadRecentEvents(ctx context.Context, limit int) ([]app.Operation, error) {
+	events, err := w.workspace.ReadRecentEvents(ctx, limit)
+	if err != nil {
+		return nil, internalErrorAs(err, internalerrors.KindFilesystem, "reading recent operation events")
+	}
+	result := make([]app.Operation, len(events))
+	for index, event := range events {
+		result[index] = internalOperation(event)
+	}
+	return result, nil
 }
 
 func (w *publicWorkspace) CommitEvent(ctx context.Context, event app.Operation) error {

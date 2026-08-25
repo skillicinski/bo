@@ -28,6 +28,10 @@ func (w eventPageWorkspace) ReadEvents(context.Context, int, int) (OperationPage
 	return w.page, nil
 }
 
+func (w eventPageWorkspace) ReadRecentEvents(context.Context, int) ([]Operation, error) {
+	return w.page.Entries, nil
+}
+
 func (w eventPageWorkspace) CommitEvent(context.Context, Operation) error { return nil }
 
 func (w eventPageWorkspace) CommitSnapshot(context.Context, SnapshotCommit, Revision) (State, Revision, error) {

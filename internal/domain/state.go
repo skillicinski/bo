@@ -2,6 +2,8 @@ package domain
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,15 +28,21 @@ type SourceRecord struct {
 }
 
 type RawRecord struct {
-	Filename  string    `json:"filename"`
-	WrittenAt time.Time `json:"written_at"`
+	Filename          string    `json:"filename"`
+	WrittenAt         time.Time `json:"written_at"`
+	ContentDigest     string    `json:"content_digest,omitempty"`
+	ContentSize       *int64    `json:"content_size,omitempty"`
+	ContentModifiedAt string    `json:"content_modified_at,omitempty"`
 }
 
 type SummaryRecord struct {
-	Filename    string    `json:"filename"`
-	DerivedFrom string    `json:"derived_from"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	Filename          string    `json:"filename"`
+	DerivedFrom       string    `json:"derived_from"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+	ContentDigest     string    `json:"content_digest,omitempty"`
+	ContentSize       *int64    `json:"content_size,omitempty"`
+	ContentModifiedAt string    `json:"content_modified_at,omitempty"`
 }
 
 func (s State) MarshalJSON() ([]byte, error) {
@@ -117,6 +125,9 @@ func (s State) Validate() error {
 			if err := ValidateTimestamp(snapshot.WrittenAt); err != nil {
 				return internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("sources[%d].snapshots[%d].written_at", sourceIndex, snapshotIndex), err)
 			}
+			if err := validateDocumentBaseline(snapshot.ContentDigest, snapshot.ContentSize, snapshot.ContentModifiedAt); err != nil {
+				return internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("sources[%d].snapshots[%d].content_baseline", sourceIndex, snapshotIndex), err)
+			}
 		}
 
 		if source.Summary == nil {
@@ -144,6 +155,9 @@ func (s State) Validate() error {
 		}
 		if summary.UpdatedAt.Before(summary.CreatedAt) {
 			return internalerrors.Validation(fmt.Sprintf("sources[%d].summary.updated_at: before created_at", sourceIndex))
+		}
+		if err := validateDocumentBaseline(summary.ContentDigest, summary.ContentSize, summary.ContentModifiedAt); err != nil {
+			return internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("sources[%d].summary.content_baseline", sourceIndex), err)
 		}
 	}
 	return nil
@@ -225,6 +239,32 @@ func ValidateTimestamp(timestamp time.Time) error {
 	}
 	if _, offset := timestamp.Zone(); offset != 0 {
 		return internalerrors.Validation("timestamp must use UTC")
+	}
+	return nil
+}
+
+func validateDocumentBaseline(digest string, size *int64, modifiedAt string) error {
+	if size != nil && *size < 0 {
+		return internalerrors.Validation("document content size must not be negative")
+	}
+	if digest == "" && size == nil && modifiedAt == "" {
+		return nil
+	}
+	if digest == "" || size == nil || modifiedAt == "" {
+		return internalerrors.Validation("document content baseline must include digest, size, and modification time")
+	}
+	if len(digest) != sha256.Size*2 {
+		return internalerrors.Validation("document content digest must be a SHA-256 hex digest")
+	}
+	if _, err := hex.DecodeString(digest); err != nil {
+		return internalerrors.Validation("document content digest must be a SHA-256 hex digest")
+	}
+	timestamp, err := time.Parse(time.RFC3339Nano, modifiedAt)
+	if err != nil {
+		return internalerrors.Validation("document content modification time must be RFC 3339")
+	}
+	if err := ValidateTimestamp(timestamp); err != nil {
+		return internalerrors.Validation("document content modification time must use UTC")
 	}
 	return nil
 }

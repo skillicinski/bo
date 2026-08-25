@@ -83,17 +83,22 @@ func runSynthesis(ctx context.Context, workspace Workspace, provider agent.Compl
 	batchLimit := synthesisBatchLimit(config)
 	usageKnown, usageReceived := true, false
 	var usage agent.TokenUsage
+	var events []Operation
+	readLogsEnabled := false
+	for _, name := range toolNames {
+		if name == toolReadLogs {
+			readLogsEnabled = true
+			break
+		}
+	}
+	eventsLoaded := !readLogsEnabled
 	state, revision, err := workspace.ReadState(runContext)
 	if err != nil {
 		return result, normalizeError(err, internalerrors.KindFilesystem, "reading workspace state")
 	}
-	events, err := readSynthesisEvents(runContext, workspace)
-	if err != nil {
-		return result, err
-	}
 	for {
 		sources := sourceGroups(documents, state)
-		completed := completedSynthesisSources(state, sources, events)
+		completed := completedSynthesisSources(state, sources)
 		for sourceKey := range skipped {
 			if !completed[sourceKey] {
 				delete(skipped, sourceKey)
@@ -107,6 +112,13 @@ func runSynthesis(ctx context.Context, workspace Workspace, provider agent.Compl
 		pending := missingSources(sources, completed)
 		if len(pending) == 0 {
 			break
+		}
+		if readLogsEnabled && !eventsLoaded {
+			events, err = readRecentSynthesisEvents(runContext, workspace)
+			if err != nil {
+				return result, err
+			}
+			eventsLoaded = true
 		}
 		batchCount := batchLimit
 		if batchCount > len(pending) {
@@ -122,10 +134,11 @@ func runSynthesis(ctx context.Context, workspace Workspace, provider agent.Compl
 			state: state, revision: revision, maxOutputBytes: config.MaxToolOutputBytes,
 			directory: workspace.Name(), options: options,
 			completed: map[string]bool{}, written: map[string]bool{}, mutationOps: map[string]Operation{},
-			logEvents: scopedSynthesisEvents(events, batchSources),
 		}
-		contextState.events = workspace
-		initialLogEvents := len(contextState.logEvents)
+		if readLogsEnabled {
+			contextState.logEvents = scopedSynthesisEvents(events, batchSources)
+			contextState.logWindowLoaded = true
+		}
 		names := make([]string, 0, len(batchSources))
 		for _, source := range batchSources {
 			names = append(names, source.LatestFilename)
@@ -133,7 +146,7 @@ func runSynthesis(ctx context.Context, workspace Workspace, provider agent.Compl
 		sort.Strings(names)
 		sourceKeys := append([]string{}, batchKeys...)
 		messages := []agent.ChatMessage{
-			{Role: "system", Content: systemPrompt(contextState, names)},
+			{Role: "system", Content: systemPrompt(contextState, names, readLogsEnabled)},
 			{Role: "user", Content: fmt.Sprintf("Produce one concise Markdown summary for every source identity. Use the newest raw snapshot as evidence and preserve each source's epistemic status. Source identities: %s", strings.Join(sourceKeys, ", "))},
 		}
 		runtime := agent.Runtime{
@@ -147,7 +160,6 @@ func runSynthesis(ctx context.Context, workspace Workspace, provider agent.Compl
 			MaxTurns: config.MaxTurns, MaxToolCalls: config.MaxToolCalls,
 			MaxToolOutputBytes: config.MaxToolOutputBytes, MaxResponseTokens: config.MaxResponseTokens,
 		})
-		events = append(events, contextState.logEvents[initialLogEvents:]...)
 		result.Metrics.Turns += runtimeResult.Metrics.Turns
 		result.Metrics.ToolCalls += runtimeResult.Metrics.ToolCalls
 		result.Metrics.Duration += runtimeResult.Metrics.Duration
@@ -217,31 +229,33 @@ func aggregateUsage(usage agent.TokenUsage, known, received bool) *agent.TokenUs
 	return &agent.TokenUsage{PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens, TotalTokens: usage.TotalTokens}
 }
 
-func readSynthesisEvents(ctx context.Context, workspace Workspace) ([]Operation, error) {
-	offset := 0
-	events := []Operation{}
-	for {
-		page, err := workspace.ReadEvents(ctx, offset, MaxOperationPageLimit)
-		if err != nil {
-			return nil, normalizeError(err, internalerrors.KindFilesystem, "reading operation log")
-		}
-		if err := ValidateOperationPage(page, offset, MaxOperationPageLimit); err != nil {
-			return nil, err
-		}
-		events = append(events, page.Entries...)
-		if !page.HasMore {
-			return events, nil
-		}
-		offset = page.NextOffset
+const synthesisEventWindow = MaxOperationPageLimit
+
+func readRecentSynthesisEvents(ctx context.Context, workspace Workspace) ([]Operation, error) {
+	events, err := workspace.ReadRecentEvents(ctx, synthesisEventWindow)
+	if err != nil {
+		return nil, normalizeError(err, internalerrors.KindFilesystem, "reading recent operation log")
 	}
+	if len(events) > synthesisEventWindow {
+		return nil, internalerrors.Validation("recent operation log exceeds its fixed window")
+	}
+	for index, event := range events {
+		if err := event.Validate(); err != nil {
+			return nil, internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("recent operation log entry %d is invalid", index), err)
+		}
+	}
+	return events, nil
 }
 
-func completedSynthesisSources(state domain.State, sources map[string]agentSource, events []Operation) map[string]bool {
-	contextState := &agentContext{state: state, sources: sources, completed: map[string]bool{}}
-	for _, event := range events {
-		markCompletedFromOperation(contextState, event)
+func completedSynthesisSources(state domain.State, sources map[string]agentSource) map[string]bool {
+	completed := make(map[string]bool, len(sources))
+	for sourceKey, source := range sources {
+		summary := summaryRecord(state, sourceKey)
+		if summary != nil && summary.DerivedFrom == source.LatestFilename {
+			completed[sourceKey] = true
+		}
 	}
-	return contextState.completed
+	return completed
 }
 
 func missingSources(sources map[string]agentSource, summarized map[string]bool) []string {

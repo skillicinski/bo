@@ -12,7 +12,7 @@ type storage struct {
 	revision  bo.Revision
 	events    []bo.Operation
 	mutations uint64
-	documents map[string][]byte
+	documents map[bo.DocumentRef][]byte
 }
 
 func (s *storage) advanceRevision() bo.Revision {
@@ -36,7 +36,7 @@ func (s *storage) ListDocuments(_ context.Context, kind bo.DocumentKind) ([]bo.D
 }
 
 func (s *storage) ReadDocument(_ context.Context, ref bo.DocumentRef) ([]byte, error) {
-	contents, ok := s.documents[ref.Name]
+	contents, ok := s.documents[ref]
 	if !ok {
 		return nil, bo.NewError(bo.ErrorKindMissingResource, "document not found: "+ref.Name)
 	}
@@ -66,6 +66,17 @@ func (s *storage) ReadEvents(_ context.Context, offset, limit int) (bo.Operation
 	return bo.OperationPage{Entries: entries, Offset: offset, Limit: limit, NextOffset: offset + len(entries), HasMore: end < len(s.events)}, nil
 }
 
+func (s *storage) ReadRecentEvents(_ context.Context, limit int) ([]bo.Operation, error) {
+	if limit < 0 {
+		return nil, bo.NewError(bo.ErrorKindValidation, "operation event limit must not be negative")
+	}
+	start := len(s.events) - limit
+	if start < 0 {
+		start = 0
+	}
+	return append([]bo.Operation{}, s.events[start:]...), nil
+}
+
 func (s *storage) CommitEvent(_ context.Context, event bo.Operation) error {
 	for _, existing := range s.events {
 		if existing.OperationID == event.OperationID && existing.Attempt == event.Attempt {
@@ -81,12 +92,13 @@ func (s *storage) CommitSnapshot(_ context.Context, commit bo.SnapshotCommit, ex
 		return bo.State{}, bo.Revision{}, bo.NewError(bo.ErrorKindConflict, "workspace revision changed")
 	}
 	if s.documents == nil {
-		s.documents = map[string][]byte{}
+		s.documents = map[bo.DocumentRef][]byte{}
 	}
-	if _, exists := s.documents[commit.Filename]; exists {
+	ref := bo.RawRef(commit.Filename)
+	if _, exists := s.documents[ref]; exists {
 		return bo.State{}, bo.Revision{}, bo.NewError(bo.ErrorKindAlreadyExists, "document already exists")
 	}
-	s.documents[commit.Filename] = append([]byte(nil), commit.Contents...)
+	s.documents[ref] = append([]byte(nil), commit.Contents...)
 	s.events = append(s.events, commit.Event)
 	for index := range s.state.Sources {
 		if s.state.Sources[index].SourceKey == commit.SourceKey {
@@ -105,9 +117,9 @@ func (s *storage) CommitSummary(_ context.Context, commit bo.SummaryCommit, expe
 		return bo.State{}, bo.Revision{}, bo.NewError(bo.ErrorKindConflict, "workspace revision changed")
 	}
 	if s.documents == nil {
-		s.documents = map[string][]byte{}
+		s.documents = map[bo.DocumentRef][]byte{}
 	}
-	s.documents[commit.Filename] = append([]byte(nil), commit.Contents...)
+	s.documents[bo.SummaryRef(commit.Filename)] = append([]byte(nil), commit.Contents...)
 	s.events = append(s.events, commit.Event)
 	for index := range s.state.Sources {
 		if s.state.Sources[index].SourceKey == commit.SourceKey {
@@ -141,6 +153,9 @@ func (w workspace) ReadState(ctx context.Context) (bo.State, bo.Revision, error)
 }
 func (w workspace) ReadEvents(ctx context.Context, offset, limit int) (bo.OperationPage, error) {
 	return w.store.ReadEvents(ctx, offset, limit)
+}
+func (w workspace) ReadRecentEvents(ctx context.Context, limit int) ([]bo.Operation, error) {
+	return w.store.ReadRecentEvents(ctx, limit)
 }
 func (w workspace) CommitEvent(ctx context.Context, event bo.Operation) error {
 	return w.store.CommitEvent(ctx, event)

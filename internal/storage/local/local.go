@@ -253,6 +253,45 @@ func (s *Store) ReadEvents(ctx context.Context, offset, limit int) (application.
 	}, nil
 }
 
+func (s *Store) ReadRecentEvents(ctx context.Context, limit int) ([]application.Operation, error) {
+	if err := contextErr(ctx); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = defaultOperationPageLimit
+	}
+	if limit > application.MaxOperationPageLimit {
+		limit = application.MaxOperationPageLimit
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.recoverWorkspaceTransaction(); err != nil {
+		return nil, err
+	}
+	ring := make([]application.Operation, limit)
+	count, next := 0, 0
+	err := s.scanWorkspaceEvents(ctx, func(_ int, event domain.Operation) error {
+		ring[next] = event
+		next = (next + 1) % limit
+		if count < limit {
+			count++
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]application.Operation, count)
+	start := 0
+	if count == limit {
+		start = next
+	}
+	for index := range entries {
+		entries[index] = ring[(start+index)%limit]
+	}
+	return entries, nil
+}
+
 func (s *Store) CommitEvent(ctx context.Context, event application.Operation) error {
 	if err := contextErr(ctx); err != nil {
 		return err
@@ -319,6 +358,17 @@ func (s *Store) CommitSnapshot(ctx context.Context, commit application.SnapshotC
 	if err := s.writeNewRaw(commit.Filename, transaction.DocumentTemporary, commit.Contents); err != nil {
 		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
 	}
+	if err := s.ensureDocumentBaseline(&next, domain.RawRef(commit.Filename), commit.Contents); err != nil {
+		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
+	}
+	data, err = domain.MarshalState(next)
+	if err != nil {
+		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, normalizeStorageError("serializing state.json", err))
+	}
+	transaction.NewState = data
+	if err := s.writeWorkspaceTransaction(transaction); err != nil {
+		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
+	}
 	if err := s.writeAtomic("state.json", transaction.StateTemporary, data); err != nil {
 		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
 	}
@@ -354,12 +404,15 @@ func (s *Store) CommitSummary(ctx context.Context, commit application.SummaryCom
 	if !currentRevision.Equal(expected) {
 		return domain.State{}, application.Revision{}, internalerrors.Conflict("workspace revision changed")
 	}
-	next, err := applySummary(current, commit)
+	rawRef := domain.RawRef(commit.DerivedFrom)
+	rawContents, err := s.readDocument(rawRef)
 	if err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
-	if _, err := s.readDocument(domain.RawRef(commit.DerivedFrom)); err != nil {
-		return domain.State{}, application.Revision{}, err
+	if snapshotRecord(current, commit.SourceKey, commit.DerivedFrom) != nil {
+		if err := s.ensureDocumentBaseline(&current, rawRef, rawContents); err != nil {
+			return domain.State{}, application.Revision{}, err
+		}
 	}
 	if err := s.ensureSummaryDirectory(); err != nil {
 		return domain.State{}, application.Revision{}, err
@@ -369,16 +422,27 @@ func (s *Store) CommitSummary(ctx context.Context, commit application.SummaryCom
 	if err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
-	if summary := summaryRecord(current, commit.SourceKey); summary != nil {
+	summary := summaryRecord(current, commit.SourceKey)
+	if summary != nil {
 		if summary.Filename != commit.Filename {
 			return domain.State{}, application.Revision{}, internalerrors.Validation("summary filename cannot change")
 		}
 		if !hadOldContents {
 			return domain.State{}, application.Revision{}, internalerrors.MissingResource("referenced summary is missing")
 		}
+		if err := s.ensureDocumentBaseline(&current, domain.SummaryRef(commit.Filename), oldContents); err != nil {
+			return domain.State{}, application.Revision{}, err
+		}
 	}
-	if summary := summaryRecord(current, commit.SourceKey); summary == nil && hadOldContents {
+	if summary == nil && hadOldContents {
 		return domain.State{}, application.Revision{}, internalerrors.Conflict("summary exists outside workspace state")
+	}
+	next, err := applySummary(current, commit)
+	if err != nil {
+		return domain.State{}, application.Revision{}, err
+	}
+	if err := s.ensureDocumentBaseline(&next, rawRef, rawContents); err != nil {
+		return domain.State{}, application.Revision{}, err
 	}
 	data, err := domain.MarshalState(next)
 	if err != nil {
@@ -392,6 +456,17 @@ func (s *Store) CommitSummary(ctx context.Context, commit application.SummaryCom
 		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
 	}
 	if err := s.writeAtomic(path, transaction.DocumentTemporary, commit.Contents); err != nil {
+		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
+	}
+	if err := s.ensureDocumentBaseline(&next, domain.SummaryRef(commit.Filename), commit.Contents); err != nil {
+		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
+	}
+	data, err = domain.MarshalState(next)
+	if err != nil {
+		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, normalizeStorageError("serializing state.json", err))
+	}
+	transaction.NewState = data
+	if err := s.writeWorkspaceTransaction(transaction); err != nil {
 		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
 	}
 	if err := s.writeAtomic("state.json", transaction.StateTemporary, data); err != nil {
@@ -1054,14 +1129,60 @@ func (s *Store) workspaceRevision(state []byte) (application.Revision, error) {
 		for _, ref := range refs {
 			writeRevisionPart(&data, []byte(kind))
 			writeRevisionPart(&data, []byte(ref.Name))
-			contents, err := s.readDocument(ref)
+			_, info, err := s.documentInfo(ref)
 			if err != nil {
 				return application.Revision{}, err
 			}
-			writeRevisionPart(&data, contents)
+			var fingerprint [16]byte
+			binary.BigEndian.PutUint64(fingerprint[:8], uint64(info.Size()))
+			binary.BigEndian.PutUint64(fingerprint[8:], uint64(info.ModTime().UnixNano()))
+			writeRevisionPart(&data, fingerprint[:])
 		}
 	}
 	return application.NewRevision(data.Bytes()), nil
+}
+
+func (s *Store) ensureDocumentBaseline(state *domain.State, ref domain.DocumentRef, contents []byte) error {
+	_, info, err := s.documentInfo(ref)
+	if err != nil {
+		return err
+	}
+	digest := application.NewRevision(contents).String()
+	modifiedAt := info.ModTime().UTC().Format(time.RFC3339Nano)
+	size := info.Size()
+	setBaseline := func(currentDigest *string, currentSize **int64, currentModifiedAt *string) error {
+		if *currentDigest != "" && *currentDigest == digest && *currentSize != nil && **currentSize == size && *currentModifiedAt == modifiedAt {
+			return nil
+		}
+		if *currentDigest != "" && *currentSize != nil && **currentSize == size && *currentModifiedAt == modifiedAt && *currentDigest != digest {
+			return internalerrors.Conflict("workspace document changed")
+		}
+		*currentDigest = digest
+		*currentSize = &size
+		*currentModifiedAt = modifiedAt
+		return nil
+	}
+	switch ref.Kind {
+	case domain.DocumentKindRaw:
+		for sourceIndex := range state.Sources {
+			for snapshotIndex := range state.Sources[sourceIndex].Snapshots {
+				snapshot := &state.Sources[sourceIndex].Snapshots[snapshotIndex]
+				if snapshot.Filename == ref.Name {
+					return setBaseline(&snapshot.ContentDigest, &snapshot.ContentSize, &snapshot.ContentModifiedAt)
+				}
+			}
+		}
+	case domain.DocumentKindSummary:
+		for sourceIndex := range state.Sources {
+			summary := state.Sources[sourceIndex].Summary
+			if summary != nil && summary.Filename == ref.Name {
+				return setBaseline(&summary.ContentDigest, &summary.ContentSize, &summary.ContentModifiedAt)
+			}
+		}
+	default:
+		return internalerrors.Validation("unsupported document kind")
+	}
+	return internalerrors.MissingResource("document is not in workspace state")
 }
 
 func writeRevisionPart(buffer *bytes.Buffer, value []byte) {
@@ -1209,6 +1330,21 @@ func hasSnapshot(snapshots []domain.RawRecord, filename string) bool {
 		}
 	}
 	return false
+}
+
+func snapshotRecord(state domain.State, sourceKey, filename string) *domain.RawRecord {
+	for sourceIndex := range state.Sources {
+		source := &state.Sources[sourceIndex]
+		if source.SourceKey != sourceKey {
+			continue
+		}
+		for snapshotIndex := range source.Snapshots {
+			if source.Snapshots[snapshotIndex].Filename == filename {
+				return &source.Snapshots[snapshotIndex]
+			}
+		}
+	}
+	return nil
 }
 
 func summaryRecord(state domain.State, sourceKey string) *domain.SummaryRecord {

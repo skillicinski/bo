@@ -186,6 +186,10 @@ func (w errorWorkspace) ReadEvents(context.Context, int, int) (bo.OperationPage,
 	return bo.OperationPage{}, w.err
 }
 
+func (w errorWorkspace) ReadRecentEvents(context.Context, int) ([]bo.Operation, error) {
+	return nil, w.err
+}
+
 func (w errorWorkspace) CommitEvent(context.Context, bo.Operation) error {
 	return w.err
 }

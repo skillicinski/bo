@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -70,6 +71,104 @@ func TestStateJSONIsStable(t *testing.T) {
 	if string(data) != want {
 		t.Fatalf("unexpected state: %q", data)
 	}
+}
+
+func TestStateBaselineMetadataRoundTripsZeroLength(t *testing.T) {
+	writtenAt := time.Date(2026, time.August, 23, 12, 34, 56, 123456789, time.UTC)
+	size := int64(0)
+	state := domain.State{Sources: []domain.SourceRecord{{
+		SourceKey: "https://example.test/article",
+		Snapshots: []domain.RawRecord{{
+			Filename:          "article.md",
+			WrittenAt:         writtenAt,
+			ContentDigest:     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			ContentSize:       &size,
+			ContentModifiedAt: "2026-08-23T12:34:56.123456789Z",
+		}},
+		Summary: &domain.SummaryRecord{
+			Filename:          "article.md",
+			DerivedFrom:       "article.md",
+			CreatedAt:         writtenAt,
+			UpdatedAt:         writtenAt,
+			ContentDigest:     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			ContentSize:       &size,
+			ContentModifiedAt: "2026-08-23T12:34:56.123456789Z",
+		},
+	}}}
+	data, err := domain.MarshalState(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTrip, err := domain.UnmarshalState(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(state, roundTrip) {
+		t.Fatalf("state changed after round trip: %#v != %#v", state, roundTrip)
+	}
+	dataAgain, err := domain.MarshalState(roundTrip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(dataAgain) != string(data) {
+		t.Fatalf("state JSON changed after round trip: %s != %s", dataAgain, data)
+	}
+}
+
+func TestStateValidationRejectsInvalidBaselineMetadata(t *testing.T) {
+	validDigest := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	validModifiedAt := "2026-08-23T12:34:56Z"
+	validState := func() domain.State {
+		return domain.State{Sources: []domain.SourceRecord{{
+			SourceKey: "https://example.test/article",
+			Snapshots: []domain.RawRecord{{
+				Filename: "article.md", WrittenAt: time.Date(2026, time.August, 23, 12, 34, 56, 0, time.UTC),
+				ContentDigest: validDigest, ContentSize: int64Pointer(0), ContentModifiedAt: validModifiedAt,
+			}},
+			Summary: &domain.SummaryRecord{
+				Filename: "article.md", DerivedFrom: "article.md",
+				CreatedAt:     time.Date(2026, time.August, 23, 12, 34, 56, 0, time.UTC),
+				UpdatedAt:     time.Date(2026, time.August, 23, 12, 34, 56, 0, time.UTC),
+				ContentDigest: validDigest, ContentSize: int64Pointer(0), ContentModifiedAt: validModifiedAt,
+			},
+		}}}
+	}
+	cases := []struct {
+		name   string
+		mutate func(*domain.State)
+	}{
+		{name: "raw invalid digest", mutate: func(state *domain.State) { state.Sources[0].Snapshots[0].ContentDigest = "not-a-digest" }},
+		{name: "summary invalid digest", mutate: func(state *domain.State) { state.Sources[0].Summary.ContentDigest = "not-a-digest" }},
+		{name: "raw invalid timestamp", mutate: func(state *domain.State) { state.Sources[0].Snapshots[0].ContentModifiedAt = "not-a-timestamp" }},
+		{name: "summary non-UTC timestamp", mutate: func(state *domain.State) { state.Sources[0].Summary.ContentModifiedAt = "2026-08-23T12:34:56+01:00" }},
+		{name: "raw negative size", mutate: func(state *domain.State) { *state.Sources[0].Snapshots[0].ContentSize = -1 }},
+		{name: "summary negative size", mutate: func(state *domain.State) { *state.Sources[0].Summary.ContentSize = -1 }},
+		{name: "raw partial digest", mutate: func(state *domain.State) { state.Sources[0].Snapshots[0].ContentDigest = "" }},
+		{name: "summary partial timestamp", mutate: func(state *domain.State) { state.Sources[0].Summary.ContentModifiedAt = "" }},
+		{name: "raw partial zero size", mutate: func(state *domain.State) {
+			state.Sources[0].Snapshots[0].ContentDigest = ""
+			state.Sources[0].Snapshots[0].ContentSize = int64Pointer(0)
+			state.Sources[0].Snapshots[0].ContentModifiedAt = ""
+		}},
+		{name: "summary partial zero size", mutate: func(state *domain.State) {
+			state.Sources[0].Summary.ContentDigest = ""
+			state.Sources[0].Summary.ContentSize = int64Pointer(0)
+			state.Sources[0].Summary.ContentModifiedAt = ""
+		}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			state := validState()
+			test.mutate(&state)
+			if _, err := domain.MarshalState(state); err == nil {
+				t.Fatal("invalid baseline metadata was accepted")
+			}
+		})
+	}
+}
+
+func int64Pointer(value int64) *int64 {
+	return &value
 }
 
 func TestStateValidationRejectsBrokenReferences(t *testing.T) {

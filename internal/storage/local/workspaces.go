@@ -68,6 +68,10 @@ func (w *Workspace) ReadEvents(ctx context.Context, offset, limit int) (applicat
 	return w.store.ReadEvents(ctx, offset, limit)
 }
 
+func (w *Workspace) ReadRecentEvents(ctx context.Context, limit int) ([]application.Operation, error) {
+	return w.store.ReadRecentEvents(ctx, limit)
+}
+
 func (w *Workspace) CommitEvent(ctx context.Context, event application.Operation) error {
 	return w.store.CommitEvent(ctx, event)
 }

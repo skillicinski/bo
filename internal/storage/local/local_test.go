@@ -2,6 +2,7 @@ package local_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,6 +110,33 @@ func TestCommitEventRejectsOversizedLine(t *testing.T) {
 	}
 }
 
+func TestReadRecentEventsReturnsBoundedTail(t *testing.T) {
+	store, _ := seededStore(t)
+	for index := 0; index < 128; index++ {
+		event := domain.Operation{
+			OperationID: fmt.Sprintf("event-%03d", index), Attempt: 1,
+			Timestamp: time.Unix(int64(index+1), 0).UTC().Format(time.RFC3339), Actor: "test",
+			Command: domain.CommandState, Outcome: domain.OutcomeCommitted,
+		}
+		if err := store.CommitEvent(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, err := store.ReadRecentEvents(context.Background(), 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("recent events = %d", len(events))
+	}
+	for index, event := range events {
+		want := fmt.Sprintf("event-%03d", 125+index)
+		if event.OperationID != want {
+			t.Fatalf("recent event %d = %q, want %q", index, event.OperationID, want)
+		}
+	}
+}
+
 func TestLocalRevisionConflict(t *testing.T) {
 	store, target := seededStore(t)
 	_, revision, err := store.ReadState(context.Background())
@@ -132,6 +160,25 @@ func TestLocalRevisionConflict(t *testing.T) {
 	}, revision)
 	if !bo.IsKind(err, bo.ErrorKindConflict) {
 		t.Fatalf("expected conflict, got %v", err)
+	}
+}
+
+func TestLocalExternalRawEditChangesRevisionWhenSizeIsUnchanged(t *testing.T) {
+	store, target := seededStore(t)
+	revision := commitRawNote(t, store)
+	path := filepath.Join(target, "note.md")
+	if err := os.WriteFile(path, []byte("edit\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, time.Unix(1, 0), time.Unix(1, 0)); err != nil {
+		t.Fatal(err)
+	}
+	_, current, err := store.ReadState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Equal(revision) {
+		t.Fatal("same-size external edit did not change revision")
 	}
 }
 
@@ -330,6 +377,35 @@ func TestLocalExternalSummaryEditConflictsWithoutOverwrite(t *testing.T) {
 	loaded, _, err := store.ReadState(context.Background())
 	if err != nil || loaded.Sources[0].Summary == nil || loaded.Sources[0].Summary.UpdatedAt != state.Sources[0].Summary.UpdatedAt {
 		t.Fatalf("state after conflict = %#v, %v", loaded, err)
+	}
+}
+
+func TestLocalExternalSummaryEditConflictsWithRestoredMetadata(t *testing.T) {
+	store, target := seededStore(t)
+	revision := commitSummaryNote(t, store, commitRawNote(t, store))
+	path := filepath.Join(target, "summaries", "note.md")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalModTime := info.ModTime()
+	external := []byte("new\n")
+	if err := os.WriteFile(path, external, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, originalModTime, originalModTime); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = store.CommitSummary(context.Background(), application.SummaryCommit{
+		SourceKey: "raw:note.md", Filename: "note.md", DerivedFrom: "note.md",
+		RawWrittenAt: time.Unix(1, 0).UTC(), CreatedAt: time.Unix(2, 0).UTC(), UpdatedAt: time.Unix(3, 0).UTC(), Contents: []byte("bo!\n"), Event: summaryEvent("raw:note.md", "note.md", "note.md", time.Unix(1, 0).UTC(), time.Unix(3, 0).UTC()),
+	}, revision)
+	if !bo.IsKind(err, bo.ErrorKindConflict) {
+		t.Fatalf("expected typed conflict, got %v", err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil || string(contents) != string(external) {
+		t.Fatalf("summary after conflict = %q, %v", contents, err)
 	}
 }
 
