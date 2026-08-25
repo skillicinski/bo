@@ -508,7 +508,7 @@ func Synth(ctx context.Context, request SynthRequest) (SynthResult, error) {
 }
 
 type localWorkspace struct {
-	workspace *loc.Workspace
+	workspace *loc.Store
 }
 
 func (w *localWorkspace) Name() string { return w.workspace.Name() }

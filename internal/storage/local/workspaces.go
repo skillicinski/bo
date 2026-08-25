@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 
 	"github.com/skillicinski/bo/internal/application"
-	"github.com/skillicinski/bo/internal/domain"
 )
 
 // Manager resolves named local workspaces for application use cases.
@@ -30,7 +29,7 @@ func (m *Manager) Create(ctx context.Context, name string, event application.Ope
 	return filepath.Base(path), nil
 }
 
-func (m *Manager) Open(ctx context.Context, name string) (*Workspace, error) {
+func (m *Manager) Open(ctx context.Context, name string) (*Store, error) {
 	if err := contextErr(ctx); err != nil {
 		return nil, err
 	}
@@ -38,50 +37,5 @@ func (m *Manager) Open(ctx context.Context, name string) (*Workspace, error) {
 	if err != nil {
 		return nil, err
 	}
-	store, err := Open(target)
-	if err != nil {
-		return nil, err
-	}
-	return &Workspace{name: filepath.Base(target), store: store}, nil
+	return Open(target)
 }
-
-type Workspace struct {
-	name  string
-	store *Store
-}
-
-func (w *Workspace) Name() string { return w.name }
-
-func (w *Workspace) ListDocuments(ctx context.Context, kind domain.DocumentKind) ([]domain.DocumentRef, error) {
-	return w.store.ListDocuments(ctx, kind)
-}
-
-func (w *Workspace) ReadDocument(ctx context.Context, ref domain.DocumentRef) ([]byte, error) {
-	return w.store.ReadDocument(ctx, ref)
-}
-
-func (w *Workspace) ReadState(ctx context.Context) (domain.State, application.Revision, error) {
-	return w.store.ReadState(ctx)
-}
-
-func (w *Workspace) ReadEvents(ctx context.Context, offset, limit int) (application.OperationPage, error) {
-	return w.store.ReadEvents(ctx, offset, limit)
-}
-
-func (w *Workspace) ReadRecentEvents(ctx context.Context, limit int) ([]application.Operation, error) {
-	return w.store.ReadRecentEvents(ctx, limit)
-}
-
-func (w *Workspace) CommitEvent(ctx context.Context, event application.Operation) error {
-	return w.store.CommitEvent(ctx, event)
-}
-
-func (w *Workspace) CommitSnapshot(ctx context.Context, commit application.SnapshotCommit, expected application.Revision) (domain.State, application.Revision, error) {
-	return w.store.CommitSnapshot(ctx, commit, expected)
-}
-
-func (w *Workspace) CommitSummary(ctx context.Context, commit application.SummaryCommit, expected application.Revision) (domain.State, application.Revision, error) {
-	return w.store.CommitSummary(ctx, commit, expected)
-}
-
-func (w *Workspace) Close() error { return w.store.Close() }

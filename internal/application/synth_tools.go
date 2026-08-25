@@ -360,10 +360,6 @@ func boundedOperationPage(page OperationPage, maxBytes int) (string, error) {
 		candidate.Entries = page.Entries[:count]
 		candidate.NextOffset = page.Offset + count
 		candidate.HasMore = page.HasMore || count < len(page.Entries)
-		if count == len(page.Entries) {
-			candidate.NextOffset = page.NextOffset
-			candidate.HasMore = page.HasMore
-		}
 		data, err := json.Marshal(candidate)
 		if err != nil {
 			return "", fmt.Errorf("serializing operation log failed: %v", err)

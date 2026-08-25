@@ -1440,7 +1440,7 @@ func (s *Store) stateBytes() ([]byte, error) {
 }
 
 func (s *Store) documentPath(ref domain.DocumentRef) (string, error) {
-	if err := validMarkdownName(ref.Name); err != nil {
+	if err := domain.ValidateDocumentName(ref.Name); err != nil {
 		return "", err
 	}
 	switch ref.Kind {
@@ -1488,10 +1488,6 @@ func (s *Store) writeAtomic(destination, temporary string, data []byte) error {
 		return filesystem(filepath.Join(s.path, destination), err)
 	}
 	return syncDirectoryError(s.root, filepath.Dir(destination))
-}
-
-func validMarkdownName(name string) error {
-	return domain.ValidateDocumentName(name)
 }
 
 func filesystem(path string, err error) error {

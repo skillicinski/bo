@@ -47,12 +47,6 @@ type Transport interface {
 	Route(context.Context, string) (Origin, error)
 }
 
-type TransportFunc func(context.Context, string) (Origin, error)
-
-func (f TransportFunc) Route(ctx context.Context, input string) (Origin, error) {
-	return f(ctx, input)
-}
-
 type Plugin interface {
 	Handle(context.Context, Origin) (domain.RawSnapshot, error)
 }
