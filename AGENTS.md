@@ -19,6 +19,24 @@
 - Do not preserve backward compatibility unless the user asks for it.
 - For evaluation work, read `evals/AGENTS.md` before changing or running the corpus workflow.
 
+## Local package development
+
+Build and run the current sources through the same npm wrapper used by the
+released package:
+
+```bash
+mise install
+mise run build
+mise run test
+mise run bo seed --name notes
+mise run clean
+```
+
+`mise run bo` rebuilds `npm/bin/bo` before each invocation, so it always uses
+the current local binary, stores its workspace under `tmp/bo-dev-home`, and
+does not require a release. `mise run clean` removes the local binary and test
+workspace.
+
 ## Git
 
 Multiple agent sessions may be running in this cwd at the same time, each modifying different files. Git operations that touch unstaged, staged, or untracked files outside your own changes will stomp on other sessions' work. Do not use built-in web search to reach the project's Github repository, prefer the `gh` CLI instead.
