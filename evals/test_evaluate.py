@@ -159,14 +159,18 @@ class EvaluateTests(unittest.TestCase):
         self.assertEqual(len(pairs), 1)
         self.assertEqual(pairs[0]["raw_filename"], "article-1.md")
 
-    def test_summary_derived_from_selects_snapshot(self):
+    def test_stale_summary_is_not_scored(self):
         run = self.make_run(count=2, same_source=True)
         state = json.loads((run / "state.json").read_text())
         state["sources"][0]["summary"]["derived_from"] = "article-0.md"
         (run / "state.json").write_text(json.dumps(state))
-        pairs = evaluate.load_pairs(run)
-        self.assertEqual(len(pairs), 1)
-        self.assertEqual(pairs[0]["raw_filename"], "article-0.md")
+        pairs, missing = evaluate.load_pairs_with_missing(run)
+        self.assertEqual(pairs, [])
+        self.assertEqual(missing[0]["reason"], "stale summary record")
+        opener = self.use_valid_opener()
+        aggregate = evaluate.evaluate(run, api_key="evaluation-key", api_url="http://example.test")
+        self.assertEqual(aggregate["status"], "partial")
+        self.assertEqual(opener.requests, [])
 
     def test_rfc3339_timestamps_are_required(self):
         run = self.make_run()
@@ -429,8 +433,8 @@ class EvaluateTests(unittest.TestCase):
         (distillation_dir / "shared.md").write_text(artifact, encoding="utf-8")
         state = {
             "sources": [
-                {"source_key": "https://example.test/one", "snapshots": [{"filename": "one.md"}]},
-                {"source_key": "https://example.test/two", "snapshots": [{"filename": "two.md"}]},
+                {"source_key": "https://example.test/one", "snapshots": [{"filename": "one.md", "written_at": "2026-08-23T00:00:01Z"}]},
+                {"source_key": "https://example.test/two", "snapshots": [{"filename": "two.md", "written_at": "2026-08-23T00:00:02Z"}]},
             ],
             "distillation_documents": [{
                 "filename": "shared.md",
@@ -461,6 +465,42 @@ class EvaluateTests(unittest.TestCase):
         output = json.loads((run / "evaluation" / "distill" / "documents" / "shared.md.json").read_text())
         self.assertEqual(len(output["provenance"]), 2)
 
+    def test_distill_rejects_stale_raw_provenance(self):
+        run = self.root / "distill-stale-raw"
+        raw_dir = run / "raw"
+        distillation_dir = run / "distillations"
+        raw_dir.mkdir(parents=True)
+        distillation_dir.mkdir()
+        old = "old source\n"
+        current = "current source\n"
+        other = "other source\n"
+        (raw_dir / "old.md").write_text(old, encoding="utf-8")
+        (raw_dir / "current.md").write_text(current, encoding="utf-8")
+        (raw_dir / "other.md").write_text(other, encoding="utf-8")
+        (distillation_dir / "shared.md").write_text("# Shared\n", encoding="utf-8")
+        (run / "state.json").write_text(json.dumps({
+            "sources": [
+                {"source_key": "https://example.test/one", "snapshots": [
+                    {"filename": "old.md", "written_at": "2026-08-23T00:00:01Z"},
+                    {"filename": "current.md", "written_at": "2026-08-23T00:00:02Z"},
+                ]},
+                {"source_key": "https://example.test/two", "snapshots": [
+                    {"filename": "other.md", "written_at": "2026-08-23T00:00:03Z"},
+                ]},
+            ],
+            "distillation_documents": [{
+                "filename": "shared.md", "kind": "distillation", "derived_from": [
+                    {"source_key": "https://example.test/one", "kind": "raw", "filename": "old.md", "content_digest": hashlib.sha256(old.encode()).hexdigest()},
+                    {"source_key": "https://example.test/two", "kind": "raw", "filename": "other.md", "content_digest": hashlib.sha256(other.encode()).hexdigest()},
+                ],
+            }],
+        }), encoding="utf-8")
+        (run / "workflow.txt").write_text("distill\n", encoding="utf-8")
+
+        with self.assertRaises(evaluate.EvaluationError):
+            evaluate.evaluate(run, api_key="evaluation-key", api_url="http://example.test")
+        self.assert_failed_without_documents(run)
+
     def test_distill_digest_changes_publish_failed_aggregate(self):
         run = self.root / "distill-digest"
         raw_dir = run / "raw"
@@ -472,8 +512,8 @@ class EvaluateTests(unittest.TestCase):
         (distillation_dir / "shared.md").write_text("# Shared\n", encoding="utf-8")
         (run / "state.json").write_text(json.dumps({
             "sources": [
-                {"source_key": "https://example.test/one", "snapshots": [{"filename": "one.md"}]},
-                {"source_key": "https://example.test/two", "snapshots": [{"filename": "two.md"}]},
+                {"source_key": "https://example.test/one", "snapshots": [{"filename": "one.md", "written_at": "2026-08-23T00:00:01Z"}]},
+                {"source_key": "https://example.test/two", "snapshots": [{"filename": "two.md", "written_at": "2026-08-23T00:00:02Z"}]},
             ],
             "distillation_documents": [{
                 "filename": "shared.md", "kind": "distillation", "derived_from": [

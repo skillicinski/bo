@@ -354,6 +354,14 @@ def load_pairs_with_missing(run_dir: Path) -> tuple[list[dict], list[dict]]:
                 "reason": "missing summary record",
             })
             continue
+        if summary_record["derived_from"] != source["raw_filename"]:
+            missing.append({
+                "source_key": source_key,
+                "raw_filename": source["raw_filename"],
+                "summary_filename": summary_record["filename"],
+                "reason": "stale summary record",
+            })
+            continue
         summary_filename = _safe_summary_filename(summary_record.get("filename"))
         summary_path = summaries_dir / summary_filename
         if not summaries_available or summary_path.is_symlink() or not summary_path.is_file():
@@ -462,20 +470,32 @@ def load_distill_documents(run_dir: Path) -> list[dict]:
 
     raw_owners = {}
     summary_owners = {}
-    for source in sources:
+    current_raw = {}
+    current_summaries = {}
+    for source_index, source in enumerate(sources):
         if not isinstance(source, dict) or not isinstance(source.get("source_key"), str) or not source["source_key"]:
             raise EvaluationError("state source record has an invalid source_key")
         source_key = source["source_key"]
         snapshots = source.get("snapshots")
         if not isinstance(snapshots, list):
             raise EvaluationError(f"state source {source_key} must contain snapshots")
-        for snapshot in snapshots:
+        latest = None
+        for snapshot_index, snapshot in enumerate(snapshots):
             if not isinstance(snapshot, dict):
                 raise EvaluationError("state snapshot records must be objects")
             filename = _safe_snapshot_filename(snapshot.get("filename"))
             if filename in raw_owners:
                 raise EvaluationError(f"state contains duplicate snapshot: {filename}")
             raw_owners[filename] = source_key
+            written_at = _parse_rfc3339(
+                snapshot.get("written_at"),
+                f"state sources[{source_index}].snapshots[{snapshot_index}].written_at",
+            )
+            candidate = (written_at, snapshot_index)
+            if latest is None or candidate > latest[0]:
+                latest = (candidate, filename)
+        if latest is not None:
+            current_raw[source_key] = latest[1]
         summary = source.get("summary")
         if summary is not None:
             if not isinstance(summary, dict):
@@ -484,6 +504,10 @@ def load_distill_documents(run_dir: Path) -> list[dict]:
             if filename in summary_owners:
                 raise EvaluationError(f"state contains duplicate summary: {filename}")
             summary_owners[filename] = source_key
+            derived_from = _safe_snapshot_filename(summary.get("derived_from"))
+            if derived_from != current_raw.get(source_key):
+                continue
+            current_summaries[filename] = source_key
 
     records = state.get("distillation_documents", [])
     if not isinstance(records, list):
@@ -520,6 +544,14 @@ def load_distill_documents(run_dir: Path) -> list[dict]:
             if owners.get(input_filename) != source_key:
                 raise EvaluationError(
                     f"distillation provenance entry {index}:{input_index} does not belong to source {source_key}"
+                )
+            if kind == "raw" and current_raw.get(source_key) != input_filename:
+                raise EvaluationError(
+                    f"distillation provenance entry {index}:{input_index} is not the current raw document"
+                )
+            if kind == "summary" and current_summaries.get(input_filename) != source_key:
+                raise EvaluationError(
+                    f"distillation provenance entry {index}:{input_index} is not the current summary"
                 )
             directory = run_dir / "raw" if kind == "raw" else run_dir / "summaries"
             path = directory / input_filename

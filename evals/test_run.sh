@@ -32,7 +32,7 @@ case "$command" in
         printf '%s\n' 'one source' >"$target/one.md"
         printf '%s\n' 'two source' >"$target/two.md"
         cat >"$target/state.json" <<'JSON'
-{"sources":[{"source_key":"https://example.test/one","snapshots":[{"filename":"one.md"}]},{"source_key":"https://example.test/two","snapshots":[{"filename":"two.md"}]}]}
+{"sources":[{"source_key":"https://example.test/one","snapshots":[{"filename":"one.md","written_at":"2026-08-23T00:00:01Z"}]},{"source_key":"https://example.test/two","snapshots":[{"filename":"two.md","written_at":"2026-08-23T00:00:02Z"}]}]}
 JSON
         ;;
     *)
@@ -58,7 +58,7 @@ case "$command" in
         printf '%s\n' 'one summary' >"$target/summaries/one-summary.md"
         printf '%s\n' 'two summary' >"$target/summaries/two-summary.md"
         cat >"$target/state.json" <<'JSON'
-{"sources":[{"source_key":"https://example.test/one","snapshots":[{"filename":"one.md"}],"summary":{"filename":"one-summary.md","derived_from":"one.md"}},{"source_key":"https://example.test/two","snapshots":[{"filename":"two.md"}],"summary":{"filename":"two-summary.md","derived_from":"two.md"}}]}
+{"sources":[{"source_key":"https://example.test/one","snapshots":[{"filename":"one.md","written_at":"2026-08-23T00:00:01Z"}],"summary":{"filename":"one-summary.md","derived_from":"one.md"}},{"source_key":"https://example.test/two","snapshots":[{"filename":"two.md","written_at":"2026-08-23T00:00:02Z"}],"summary":{"filename":"two-summary.md","derived_from":"two.md"}}]}
 JSON
         ;;
     distill)
@@ -69,7 +69,7 @@ JSON
         two_digest=$(shasum -a 256 "$target/two.md" | awk '{print $1}')
         printf '%s\n' '# Shared' >"$target/distillations/shared.md"
         cat >"$target/state.json" <<JSON
-{"sources":[{"source_key":"https://example.test/one","snapshots":[{"filename":"one.md"}],"summary":{"filename":"one-summary.md","derived_from":"one.md"}},{"source_key":"https://example.test/two","snapshots":[{"filename":"two.md"}],"summary":{"filename":"two-summary.md","derived_from":"two.md"}}],"distillation_documents":[{"filename":"shared.md","kind":"distillation","derived_from":[{"source_key":"https://example.test/one","kind":"raw","filename":"one.md","content_digest":"$one_digest"},{"source_key":"https://example.test/two","kind":"raw","filename":"two.md","content_digest":"$two_digest"}]}]}
+{"sources":[{"source_key":"https://example.test/one","snapshots":[{"filename":"one.md","written_at":"2026-08-23T00:00:01Z"}],"summary":{"filename":"one-summary.md","derived_from":"one.md"}},{"source_key":"https://example.test/two","snapshots":[{"filename":"two.md","written_at":"2026-08-23T00:00:02Z"}],"summary":{"filename":"two-summary.md","derived_from":"two.md"}}],"distillation_documents":[{"filename":"shared.md","kind":"distillation","derived_from":[{"source_key":"https://example.test/one","kind":"raw","filename":"one.md","content_digest":"$one_digest"},{"source_key":"https://example.test/two","kind":"raw","filename":"two.md","content_digest":"$two_digest"}]}]}
 JSON
         ;;
     *)
@@ -168,6 +168,15 @@ case "$run_output" in
 esac
 cleanup_report
 unset FAKE_MUTATE_SUMMARY
+
+FAKE_MUTATE_RAW=1 run_fake --corpus "$corpus"
+[ "$run_status" -ne 0 ] || { printf 'raw mutation was accepted\n' >&2; exit 1; }
+case "$run_output" in
+    *'raw unchanged: 0'*) ;;
+    *) printf 'raw mutation was not reported: %s\n' "$run_output" >&2; exit 1 ;;
+esac
+cleanup_report
+unset FAKE_MUTATE_RAW
 
 FAKE_DISTILL_SKIP=1 run_fake --workflow distill --tools read_document --corpus "$corpus"
 [ "$run_status" -eq 0 ] || { printf '%s\n' "$run_output" >&2; exit 1; }

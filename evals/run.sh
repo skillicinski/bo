@@ -183,6 +183,24 @@ validate_summaries() {
 import json
 import os
 import sys
+from datetime import datetime, timezone
+
+def parse_timestamp(value):
+    if not isinstance(value, str) or not value:
+        raise ValueError("snapshot written_at must be an RFC 3339 timestamp")
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    fraction = normalized.rsplit(".", 1)
+    if len(fraction) == 2 and ("+" in fraction[1] or "-" in fraction[1]):
+        number, offset = fraction[1].split("+", 1) if "+" in fraction[1] else fraction[1].split("-", 1)
+        sign = "+" if "+" in fraction[1] else "-"
+        normalized = f"{fraction[0]}.{number[:6].ljust(6, '0')}{sign}{offset}"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as error:
+        raise ValueError("snapshot written_at must be an RFC 3339 timestamp") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("snapshot written_at must include a timezone")
+    return parsed.astimezone(timezone.utc)
 
 state_path, target = sys.argv[1:]
 with open(state_path, encoding="utf-8") as file:
@@ -198,18 +216,22 @@ for source in sources:
     snapshots = source.get("snapshots")
     if not isinstance(source_key, str) or not isinstance(snapshots, list):
         raise ValueError("state source record is invalid")
-    successful = False
-    for snapshot in snapshots:
+    latest = None
+    for snapshot_index, snapshot in enumerate(snapshots):
         if not isinstance(snapshot, dict):
-            continue
+            raise ValueError("state snapshot record is invalid")
         filename = snapshot.get("filename")
         if not isinstance(filename, str) or os.path.basename(filename) != filename:
-            continue
-        path = os.path.join(target, filename)
-        if os.path.isfile(path) and not os.path.islink(path) and os.path.getsize(path) > 0:
-            successful = True
-            break
-    if not successful:
+            raise ValueError("state snapshot filename is invalid")
+        candidate = (parse_timestamp(snapshot.get("written_at")), snapshot_index)
+        if latest is None or candidate > latest[0]:
+            latest = (candidate, filename)
+    if latest is None:
+        continue
+    latest_filename = latest[1]
+    raw_path = os.path.join(target, latest_filename)
+    if not os.path.isfile(raw_path) or os.path.islink(raw_path) or os.path.getsize(raw_path) == 0:
+        missing.append(f"missing current raw: {source_key}")
         continue
     summary = source.get("summary")
     if not isinstance(summary, dict):
@@ -218,6 +240,9 @@ for source in sources:
     filename = summary.get("filename")
     if not isinstance(filename, str) or os.path.basename(filename) != filename:
         missing.append(f"invalid summary filename: {source_key}")
+        continue
+    if summary.get("derived_from") != latest_filename:
+        missing.append(f"stale summary: {source_key}")
         continue
     path = os.path.join(target, "summaries", filename)
     if not os.path.isfile(path) or os.path.islink(path) or os.path.getsize(path) == 0:
@@ -236,6 +261,24 @@ import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
+
+def parse_timestamp(value):
+    if not isinstance(value, str) or not value:
+        raise ValueError("snapshot written_at must be an RFC 3339 timestamp")
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    fraction = normalized.rsplit(".", 1)
+    if len(fraction) == 2 and ("+" in fraction[1] or "-" in fraction[1]):
+        number, offset = fraction[1].split("+", 1) if "+" in fraction[1] else fraction[1].split("-", 1)
+        sign = "+" if "+" in fraction[1] else "-"
+        normalized = f"{fraction[0]}.{number[:6].ljust(6, '0')}{sign}{offset}"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as error:
+        raise ValueError("snapshot written_at must be an RFC 3339 timestamp") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("snapshot written_at must include a timezone")
+    return parsed.astimezone(timezone.utc)
 
 state_path, target, require_one = sys.argv[1:]
 require_one = require_one == "1"
@@ -261,13 +304,40 @@ if len(records) != len(artifact_names):
 
 raw_owners = {}
 summary_owners = {}
+current_raw = {}
+current_summaries = {}
 for source in sources:
     source_key = source.get("source_key")
-    for snapshot in source.get("snapshots", []):
-        raw_owners[snapshot.get("filename")] = source_key
+    snapshots = source.get("snapshots")
+    if not isinstance(source_key, str) or not isinstance(snapshots, list):
+        raise ValueError("state source record is invalid")
+    latest = None
+    for snapshot_index, snapshot in enumerate(snapshots):
+        if not isinstance(snapshot, dict):
+            raise ValueError("state snapshot record is invalid")
+        filename = snapshot.get("filename")
+        if not isinstance(filename, str) or os.path.basename(filename) != filename:
+            raise ValueError("state snapshot filename is invalid")
+        if filename in raw_owners:
+            raise ValueError(f"duplicate raw filename: {filename}")
+        raw_owners[filename] = source_key
+        candidate = (parse_timestamp(snapshot.get("written_at")), snapshot_index)
+        if latest is None or candidate > latest[0]:
+            latest = (candidate, filename)
+    if latest is not None:
+        current_raw[source_key] = latest[1]
     summary = source.get("summary")
     if summary is not None:
-        summary_owners[summary.get("filename")] = source_key
+        if not isinstance(summary, dict):
+            raise ValueError("state summary record is invalid")
+        filename = summary.get("filename")
+        if not isinstance(filename, str) or os.path.basename(filename) != filename:
+            raise ValueError("state summary filename is invalid")
+        if filename in summary_owners:
+            raise ValueError(f"duplicate summary filename: {filename}")
+        summary_owners[filename] = source_key
+        if summary.get("derived_from") == current_raw.get(source_key):
+            current_summaries[filename] = source_key
 
 for record in records:
     if record.get("kind") != "distillation":
@@ -298,6 +368,10 @@ for record in records:
         owners = raw_owners if kind == "raw" else summary_owners
         if owners.get(input_filename) != source_key:
             raise ValueError(f"distillation input does not belong to source: {input_filename}")
+        if kind == "raw" and current_raw.get(source_key) != input_filename:
+            raise ValueError(f"distillation input is not the current raw document: {input_filename}")
+        if kind == "summary" and current_summaries.get(input_filename) != source_key:
+            raise ValueError(f"distillation input is not the current summary: {input_filename}")
         directory = target if kind == "raw" else os.path.join(target, "summaries")
         path = os.path.join(directory, input_filename)
         if not os.path.isfile(path) or os.path.islink(path):
