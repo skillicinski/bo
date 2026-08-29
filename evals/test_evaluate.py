@@ -75,7 +75,7 @@ class EvaluateTests(unittest.TestCase):
         self.original_urlopen = evaluate.urlopen
         self.addCleanup(setattr, evaluate, "urlopen", self.original_urlopen)
 
-    def make_run(self, count=1, raw_size=None, same_source=False, run_id="run-1"):
+    def make_run(self, count=1, raw_size=None, same_source=False, run_id="run-1", workflow="summarize"):
         run = self.root / run_id
         raw_dir = run / "raw"
         summary_dir = run / "summaries"
@@ -109,6 +109,7 @@ class EvaluateTests(unittest.TestCase):
         (run / "state.json").write_text(
             json.dumps({"sources": list(sources.values())}), encoding="utf-8"
         )
+        (run / "workflow.txt").write_text(workflow + "\n", encoding="utf-8")
         return run
 
     def use_valid_opener(self, tokens=10):
@@ -186,11 +187,15 @@ class EvaluateTests(unittest.TestCase):
         aggregate = evaluate.evaluate(run, api_key="evaluation-key", api_url="http://example.test")
 
         self.assertEqual(aggregate["status"], "partial")
-        self.assertEqual(aggregate["document_count"], 2)
-        self.assertEqual(aggregate["scored_document_count"], 1)
+        summarize = aggregate["stages"]["summarize"]
+        self.assertEqual(summarize["document_count"], 2)
+        self.assertEqual(summarize["scored_document_count"], 1)
         self.assertEqual(len(opener.requests), 1)
-        self.assertEqual(aggregate["missing_summaries"][0]["source_key"], missing_source)
-        self.assertEqual(len(list((run / "evaluation" / "documents").glob("*.json"))), 1)
+        self.assertEqual(summarize["missing_summaries"][0]["source_key"], missing_source)
+        self.assertEqual(
+            len(list((run / "evaluation" / "summarize" / "documents").glob("*.json"))),
+            1,
+        )
 
     def test_request_contract_and_rubric_metadata(self):
         run = self.make_run()
@@ -204,12 +209,15 @@ class EvaluateTests(unittest.TestCase):
         self.assertEqual(body["max_tokens"], 2048)
         self.assertEqual(timeout, 60)
         self.assertEqual(aggregate["status"], "success")
-        self.assertEqual(aggregate["document_count"], 1)
-        self.assertEqual(aggregate["rubric_sha256"], __import__("hashlib").sha256(
-            evaluate.RUBRIC_PATH.read_bytes()
-        ).hexdigest())
+        summarize = aggregate["stages"]["summarize"]
+        self.assertEqual(summarize["document_count"], 1)
+        self.assertEqual(
+            summarize["rubric_sha256"],
+            __import__("hashlib").sha256(evaluate.RUBRIC_PATH.read_bytes()).hexdigest(),
+        )
         self.assertTrue((run / "evaluation" / "aggregate.json").is_file())
-        self.assertEqual(len(list((run / "evaluation" / "documents").glob("*.json"))), 1)
+        self.assertTrue((run / "evaluation" / "summarize" / "aggregate.json").is_file())
+        self.assertEqual(len(list((run / "evaluation" / "summarize" / "documents").glob("*.json"))), 1)
         self.assertFalse(list(run.glob(".evaluation-*")))
 
     def test_realistic_deepseek_response_is_parsed(self):
@@ -312,6 +320,60 @@ class EvaluateTests(unittest.TestCase):
         request, _ = opener.requests[0]
         self.assertEqual(request.headers["Authorization"], "Bearer evaluation-key")
 
+    def test_end_to_end_evaluation_publishes_separate_stage_results(self):
+        run = self.make_run(count=2, run_id="end-to-end", workflow="end-to-end")
+        artifact = "# Shared\n\nSources: [article-0.md](../article-0.md), [article-1.md](../article-1.md)\n"
+        (run / "distillations").mkdir()
+        (run / "distillations" / "shared.md").write_text(artifact, encoding="utf-8")
+        state = json.loads((run / "state.json").read_text())
+        state["distillation_documents"] = [{
+            "filename": "shared.md",
+            "kind": "distillation",
+            "derived_from": [
+                {
+                    "source_key": "https://example.test/0",
+                    "kind": "raw",
+                    "filename": "article-0.md",
+                    "content_digest": hashlib.sha256(b"raw source\n").hexdigest(),
+                },
+                {
+                    "source_key": "https://example.test/1",
+                    "kind": "raw",
+                    "filename": "article-1.md",
+                    "content_digest": hashlib.sha256(b"raw source\n").hexdigest(),
+                },
+            ],
+        }]
+        (run / "state.json").write_text(json.dumps(state), encoding="utf-8")
+
+        class SequenceOpener:
+            def __init__(self):
+                self.requests = []
+                self.responses = [valid_result(), valid_result(), valid_distill_result()]
+
+            def __call__(self, request, timeout):
+                self.requests.append((request, timeout))
+                value = self.responses[len(self.requests) - 1]
+                return FakeResponse({
+                    "choices": [{"message": {"content": json.dumps(value)}}],
+                    "usage": {"completion_tokens": 10},
+                })
+
+        opener = SequenceOpener()
+        evaluate.urlopen = opener
+
+        aggregate = evaluate.evaluate(run, api_key="evaluation-key", api_url="http://example.test")
+
+        self.assertEqual(aggregate["workflow"], "end-to-end")
+        self.assertEqual(aggregate["status"], "success")
+        self.assertEqual(set(aggregate["stages"]), {"summarize", "distill"})
+        self.assertNotIn("scores", aggregate)
+        self.assertEqual(aggregate["stages"]["summarize"]["status"], "success")
+        self.assertEqual(aggregate["stages"]["distill"]["status"], "success")
+        self.assertEqual(len(opener.requests), 3)
+        self.assertTrue((run / "evaluation" / "summarize" / "documents").is_dir())
+        self.assertTrue((run / "evaluation" / "distill" / "documents" / "shared.md.json").is_file())
+
     def test_validation_failure_after_request_has_no_partial_documents(self):
         run = self.make_run(count=2)
         responses = [
@@ -343,13 +405,14 @@ class EvaluateTests(unittest.TestCase):
 
     def test_distill_skip_does_not_require_evaluator_key(self):
         run = self.make_run(run_id="distill-skip")
-        (run / "task.txt").write_text("distill\n", encoding="utf-8")
+        (run / "workflow.txt").write_text("distill\n", encoding="utf-8")
 
         aggregate = evaluate.evaluate(run)
 
         self.assertEqual(aggregate["status"], "skipped")
-        self.assertEqual(aggregate["task"], "distill")
-        self.assertFalse((run / "evaluation" / "documents").exists())
+        self.assertEqual(aggregate["workflow"], "distill")
+        self.assertTrue((run / "evaluation" / "distill" / "documents").is_dir())
+        self.assertFalse(list((run / "evaluation" / "distill" / "documents").glob("*.json")))
 
     def test_distill_evaluates_only_recorded_provenance(self):
         run = self.root / "distill-success"
@@ -379,7 +442,7 @@ class EvaluateTests(unittest.TestCase):
             }],
         }
         (run / "state.json").write_text(json.dumps(state), encoding="utf-8")
-        (run / "task.txt").write_text("distill\n", encoding="utf-8")
+        (run / "workflow.txt").write_text("distill\n", encoding="utf-8")
         opener = FakeOpener({
             "choices": [{"message": {"content": json.dumps(valid_distill_result())}}],
             "usage": {"completion_tokens": 10},
@@ -389,13 +452,13 @@ class EvaluateTests(unittest.TestCase):
         aggregate = evaluate.evaluate(run, api_key="evaluation-key", api_url="http://example.test")
 
         self.assertEqual(aggregate["status"], "success")
-        self.assertEqual(aggregate["task"], "distill")
+        self.assertEqual(aggregate["workflow"], "distill")
         self.assertEqual(len(opener.requests), 1)
         prompt = opener.requests[0][0].data.decode("utf-8")
         self.assertIn("one source", prompt)
         self.assertIn("two source", prompt)
         self.assertNotIn("must not be sent", prompt)
-        output = json.loads((run / "evaluation" / "documents" / "shared.md.json").read_text())
+        output = json.loads((run / "evaluation" / "distill" / "documents" / "shared.md.json").read_text())
         self.assertEqual(len(output["provenance"]), 2)
 
     def test_distill_digest_changes_publish_failed_aggregate(self):
@@ -419,7 +482,7 @@ class EvaluateTests(unittest.TestCase):
                 ],
             }],
         }), encoding="utf-8")
-        (run / "task.txt").write_text("distill\n", encoding="utf-8")
+        (run / "workflow.txt").write_text("distill\n", encoding="utf-8")
 
         with self.assertRaises(evaluate.EvaluationError):
             evaluate.evaluate(run, api_key="evaluation-key", api_url="http://example.test")
@@ -430,7 +493,12 @@ class EvaluateTests(unittest.TestCase):
         self.assertTrue(aggregate_path.is_file())
         aggregate = json.loads(aggregate_path.read_text())
         self.assertEqual(aggregate["status"], "failed")
-        self.assertFalse((run / "evaluation" / "documents").exists())
+        workflows = aggregate.get("stages", {})
+        self.assertTrue(workflows)
+        for workflow in workflows:
+            documents = run / "evaluation" / workflow / "documents"
+            self.assertTrue(documents.is_dir())
+            self.assertFalse(list(documents.glob("*.json")))
         self.assertFalse(list(run.glob(".evaluation-*")))
 
 

@@ -16,7 +16,7 @@ depends = ["build"]
 run = 'cd "$MISE_PROJECT_ROOT" && mkdir -p tmp/bo-dev-home && HOME="$MISE_PROJECT_ROOT/tmp/bo-dev-home" node npm/run.js'
 
 [tasks.evals]
-description = "Run synthesis against a local evaluation corpus"
+description = "Run an evaluation workflow against a local corpus"
 run = 'cd "$MISE_PROJECT_ROOT" && ./evals/run.sh'
 
 [tasks.clean]

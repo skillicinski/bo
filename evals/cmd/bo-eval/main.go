@@ -21,7 +21,7 @@ func main() {
 }
 
 func run(args []string) error {
-	task, name, toolNames, err := parseTaskArgs(args)
+	workflow, name, toolNames, err := parseWorkflowArgs(args)
 	if err != nil {
 		return err
 	}
@@ -39,7 +39,7 @@ func run(args []string) error {
 	}
 	defer workspace.Close()
 	provider := deepseek.New(apiKey, os.Getenv("DEEPSEEK_API_URL"))
-	if task == "distill" {
+	if workflow == "distill" {
 		result, err := application.DistillWithTools(context.Background(), workspace, provider, application.DefaultSynthesisOptions(), toolNames, application.OperationOptions{Actor: "eval"})
 		if err != nil {
 			return err
@@ -60,14 +60,14 @@ func run(args []string) error {
 }
 
 func parseArgs(args []string) (string, []string, error) {
-	task, name, tools, err := parseTaskArgs(args)
-	if err != nil || task != "synth" {
+	workflow, name, tools, err := parseWorkflowArgs(args)
+	if err != nil || workflow != "synth" {
 		return "", nil, fmt.Errorf("%s", usage)
 	}
 	return name, tools, nil
 }
 
-func parseTaskArgs(args []string) (string, string, []string, error) {
+func parseWorkflowArgs(args []string) (string, string, []string, error) {
 	if len(args) < 3 || (args[0] != "synth" && args[0] != "distill") || args[1] == "" {
 		return "", "", nil, fmt.Errorf("%s", usage)
 	}
