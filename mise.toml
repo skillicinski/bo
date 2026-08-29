@@ -15,6 +15,10 @@ description = "Build and run the local CLI"
 depends = ["build"]
 run = 'cd "$MISE_PROJECT_ROOT" && mkdir -p tmp/bo-dev-home && HOME="$MISE_PROJECT_ROOT/tmp/bo-dev-home" node npm/run.js'
 
+[tasks.evals]
+description = "Run synthesis against a local evaluation corpus"
+run = 'cd "$MISE_PROJECT_ROOT" && ./evals/run.sh'
+
 [tasks.clean]
 description = "Remove local build and test artifacts"
 run = 'rm -f "$MISE_PROJECT_ROOT/npm/bin/bo" && rm -rf "$MISE_PROJECT_ROOT/tmp/bo-dev-home"'

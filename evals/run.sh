@@ -4,27 +4,49 @@ set -eu
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bo=${BO_BIN:-$repo/bin/bo}
 bo_eval=${BO_EVAL_BIN:-$repo/bin/bo-eval}
+usage='usage: ./evals/run.sh [--corpus name.txt|path] [--tools all|name,name,...]'
 
+corpus=$repo/evals/corpora/default.txt
 toolset=all
 while [ "$#" -gt 0 ]; do
     case "$1" in
+        --corpus)
+            [ "$#" -eq 1 ] && { printf '%s\n' "$usage" >&2; exit 2; }
+            case "$2" in
+                */*) corpus=$2 ;;
+                *) corpus=$repo/evals/corpora/$2 ;;
+            esac
+            shift 2
+            ;;
         --tools)
-            [ "$#" -eq 1 ] && { printf '%s\n' 'usage: ./evals/run.sh [--tools all|name,name,...]' >&2; exit 2; }
+            [ "$#" -eq 1 ] && { printf '%s\n' "$usage" >&2; exit 2; }
             toolset=$2
             shift 2
             ;;
         *)
-            printf '%s\n' 'usage: ./evals/run.sh [--tools all|name,name,...]' >&2
+            printf '%s\n' "$usage" >&2
             exit 2
             ;;
     esac
 done
 
+[ -f "$corpus" ] || { printf 'corpus not found: %s\n' "$corpus" >&2; exit 2; }
+sources=$(awk 'NF && $1 !~ /^#/ { sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); print }' "$corpus")
+[ -n "$sources" ] || { printf 'corpus has no sources: %s\n' "$corpus" >&2; exit 2; }
+: "${DEEPSEEK_API_KEY:?DEEPSEEK_API_KEY is required}"
+old_ifs=$IFS
+IFS='
+'
+set -f
+set -- $sources
+set +f
+IFS=$old_ifs
+
+cd "$repo"
 mkdir -p "$(dirname "$bo")"
 go build -o "$bo" "$repo/cmd/bo"
 mkdir -p "$(dirname "$bo_eval")"
 go build -o "$bo_eval" "$repo/evals/cmd/bo-eval"
-: "${DEEPSEEK_API_KEY:?DEEPSEEK_API_KEY is required}"
 
 run_id="synth-$(date +%s)-$$"
 work="$repo/evals/work/$run_id"
@@ -33,12 +55,12 @@ home="$work/home"
 target="$home/.bo/$run_id"
 raw="$report/raw"
 mkdir -p "$home" "$report" "$raw"
+cp "$corpus" "$report/corpus.txt"
 printf '%s\n' "$toolset" >"$report/tools.txt"
 
 HOME="$home" "$bo" seed --name "$run_id" >"$report/seed.log"
-urls=$(awk 'NF && $1 !~ /^#/ { print $1 }' "$repo/evals/manifest.txt")
 set +e
-HOME="$home" "$bo" snap "$run_id" $urls >"$report/snap.log" 2>&1
+HOME="$home" "$bo" snap "$run_id" "$@" >"$report/snap.log" 2>&1
 snap_status=$?
 set -e
 

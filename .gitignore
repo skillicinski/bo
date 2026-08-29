@@ -6,13 +6,11 @@
 /tmp*/
 tmp/
 
-# generated agent evaluation corpus and reports
+# local evaluation corpora and generated reports
 /evals/*
-!/evals/AGENTS.md
-!/evals/manifest.txt
-!/evals/demystifying-evals-for-ai-agents-anthropic.md
 !/evals/RUBRIC.md
 !/evals/run.sh
+!/evals/test_run.sh
 !/evals/evaluate.py
 !/evals/test_evaluate.py
 !/evals/cmd/

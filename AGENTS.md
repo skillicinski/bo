@@ -17,7 +17,6 @@
 - Inline single-line helpers that have only one call site.
 - Always ask before removing functionality or code that appears intentional.
 - Do not preserve backward compatibility unless the user asks for it.
-- For evaluation work, read `evals/AGENTS.md` before changing or running the corpus workflow.
 
 ## Local package development
 
@@ -36,6 +35,16 @@ mise run clean
 the current local binary, stores its workspace under `tmp/bo-dev-home`, and
 does not require a release. `mise run clean` removes the local binary and test
 workspace.
+
+## Evaluation runbook
+
+1. Run `mise install` from the repository root.
+2. Run `mkdir -p evals/corpora`, then create `evals/corpora/default.txt`. Put one URL or repository-relative Markdown path on each line. Blank lines and lines that start with `#` are ignored. The directory is local and ignored by Git.
+3. Run the default corpus with `DEEPSEEK_API_KEY="$(security find-generic-password -s deepseek-api-key -w)" mise run evals`. Set `DEEPSEEK_API_KEY` by another secure method on systems without the macOS keychain.
+4. Run another local corpus with `mise run evals --corpus regression.txt`. A bare name resolves under `evals/corpora/`; a path that contains `/` resolves from the repository root. Add `--tools all|name,name,...` only when the tool set must change.
+5. Inspect the printed `evals/results/<run-id>` path. Require `synth status: 0`, no missing summaries, and no raw hash changes. A nonzero `snap status` can contain reported fetch failures; inspect `expected-failures.log`.
+6. Read `evals/RUBRIC.md`, then score the run with `BO_EVAL_API_KEY=... python3 evals/evaluate.py evals/results/<run-id>`. The evaluator accepts only `BO_EVAL_API_KEY`.
+7. Inspect `evaluation/aggregate.json` and `evaluation/documents/*.json`. The runner also copies the selected corpus to `corpus.txt` in the run report. Treat `evals/corpora/`, `evals/work/`, and `evals/results/` as local data. Do not commit them or API keys.
 
 ## Git
 
