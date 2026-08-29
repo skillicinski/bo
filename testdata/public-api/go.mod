@@ -1,6 +1,6 @@
 module example.com/bo-consumer
 
-go 1.26.0
+go 1.27.0
 
 require github.com/skillicinski/bo v0.0.0
 
