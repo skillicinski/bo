@@ -1,0 +1,24 @@
+[tools]
+go = "1.27.0"
+node = "24"
+
+[tasks.build]
+description = "Build the local CLI binary"
+run = "cd \"$MISE_PROJECT_ROOT\" && mkdir -p npm/bin && CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' -o npm/bin/bo ./cmd/bo"
+
+[tasks.test]
+description = "Run Go tests"
+run = 'cd "$MISE_PROJECT_ROOT" && go test ./...'
+
+[tasks.bo]
+description = "Build and run the local CLI"
+depends = ["build"]
+run = 'cd "$MISE_PROJECT_ROOT" && mkdir -p tmp/bo-dev-home && HOME="$MISE_PROJECT_ROOT/tmp/bo-dev-home" node npm/run.js'
+
+[tasks.evals]
+description = "Run an evaluation workflow against a local corpus"
+run = 'cd "$MISE_PROJECT_ROOT" && ./evals/run.sh'
+
+[tasks.clean]
+description = "Remove local build and test artifacts"
+run = 'rm -f "$MISE_PROJECT_ROOT/npm/bin/bo" && rm -rf "$MISE_PROJECT_ROOT/tmp/bo-dev-home"'

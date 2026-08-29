@@ -6,32 +6,38 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-go@v6
         with:
-          components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v2
+          go-version-file: go.mod
 
       - name: Format
-        run: cargo fmt --check
+        run: test -z "$(gofmt -l .)"
 
-      - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Cargo deny
-        uses: EmbarkStudios/cargo-deny-action@v2
+      - name: Vet
+        run: go vet ./...
 
       - name: Test
-        run: cargo test
+        run: go test ./...
+
+      - name: Public API and README examples
+        working-directory: testdata/public-api
+        run: |
+          awk '/^```go$/{capture=1; next} capture && /^```$/{exit} capture{print}' ../../README.md > readme_example.go
+          test -s readme_example.go
+          test -z "$(gofmt -l readme_example.go)"
+          go test -mod=readonly ./...
+
+      - name: Module verification
+        run: go mod verify
+
+      - name: Vulnerability check
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
       - name: Install smoke test
-        run: ./scripts/smoke-test-install.sh
+        uses: ./.github/actions/install-smoke

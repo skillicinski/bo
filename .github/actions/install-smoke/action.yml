@@ -1,0 +1,41 @@
+name: Install smoke test
+description: Install bo and exercise the current local CLI contract outside the repository
+
+runs:
+  using: composite
+  steps:
+    - name: Install and run bo
+      shell: bash
+      run: |
+        set -euo pipefail
+        INSTALL_ROOT="$(mktemp -d)"
+        FAKE_HOME="$(mktemp -d)"
+        WORK_DIR="$(mktemp -d)"
+        cleanup() {
+          rm -rf "$INSTALL_ROOT" "$FAKE_HOME" "$WORK_DIR"
+        }
+        trap cleanup EXIT
+
+        GOBIN="$INSTALL_ROOT/bin" go install ./cmd/bo
+        BO="$INSTALL_ROOT/bin/bo"
+        cd "$WORK_DIR"
+
+        output=$(HOME="$FAKE_HOME" "$BO" seed --name test)
+        [[ "$output" == "seeded: test" ]]
+        [[ -d "$FAKE_HOME/.bo/test" ]]
+
+        if HOME="$FAKE_HOME" "$BO" seed --name test >/dev/null 2>&1; then
+          echo "existing seed unexpectedly succeeded" >&2
+          exit 1
+        fi
+
+        default_output=$(HOME="$FAKE_HOME" "$BO" seed)
+        [[ "$default_output" == seeded:\ * ]]
+        default_name="${default_output#seeded: }"
+        [[ "$default_name" == *-* ]]
+        [[ -d "$FAKE_HOME/.bo/$default_name" ]]
+
+        snap_output=$(HOME="$FAKE_HOME" "$BO" snap test "$GITHUB_WORKSPACE/README.md")
+        [[ "$snap_output" == "snapped: raw:README.md -> bo.md" ]]
+        state_output=$(HOME="$FAKE_HOME" "$BO" state test)
+        [[ "$state_output" == "1 documents snapped" ]]

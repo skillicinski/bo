@@ -1,45 +1,63 @@
-# Development Rules
+# Rules
 
 ## Conversational Style
 
 - Keep answers short and concise
+- Technical prose only, be direct
+- Comply with the international ASD-STE100 controlled language standard
 - No emojis in commits, issues, PR comments, or code
 - No fluff or cheerful filler text (e.g., "Thanks @user" not "Thanks so much @user!")
-- Technical prose only, be direct
 - When the user asks a question, answer it first before making edits or running implementation commands.
 - When responding to user feedback or an analysis, explicitly say whether you agree or disagree before saying what you changed.
 
 ## Code Quality
 
+- For design principles, refer to [architecture.md](docs/architecture.md)
 - Read files in full before wide-ranging changes, before editing files you have not fully inspected, and when asked to investigate or audit. Do not rely on search snippets for broad changes.
 - Inline single-line helpers that have only one call site.
 - Always ask before removing functionality or code that appears intentional.
 - Do not preserve backward compatibility unless the user asks for it.
 
-## Commands
+## Local package development
 
-- After code changes (not docs), run `cargo fmt --check` and `cargo clippy --all-targets --all-features -- -D warnings` with full output. Fix all errors and warnings before committing.
-- Before opening a PR, also run `cargo test` as required by `CONTRIBUTING.md`.
+Build and run the current sources through the same npm wrapper used by the
+released package:
 
-## Dependency and Install Security
+```bash
+mise install
+mise run build
+mise run test
+mise run bo seed --name notes
+mise run clean
+```
 
-- Treat npm dep and lockfile changes as reviewed code. Direct external deps stay pinned to exact versions.
-- Hydrate/update locally with npm install --ignore-scripts; clean/CI-style with npm ci --ignore-scripts. Don't run lifecycle scripts unless the user asks.
-- If dep metadata changes, refresh package-lock.json with npm install --package-lock-only --ignore-scripts.
+`mise run bo` rebuilds `npm/bin/bo` before each invocation, so it always uses
+the current local binary, stores its workspace under `tmp/bo-dev-home`, and
+does not require a release. `mise run clean` removes the local binary and test
+workspace.
+
+## Evals
+
+1. Run `mise install` from the repository root.
+2. Run `mkdir -p evals/corpora`, then create `evals/corpora/default.txt`. Put one URL or repository-relative Markdown path on each line. Blank lines and lines that start with `#` are ignored. The directory is local and ignored by Git.
+3. Run the default end-to-end workflow with `DEEPSEEK_API_KEY="$(security find-generic-password -s deepseek-api-key -w)" mise run evals`. Set `DEEPSEEK_API_KEY` by another secure method on systems without the macOS keychain.
+4. Run a focused workflow with `mise run evals --workflow summarize --corpus regression.txt` or `mise run evals --workflow distill --corpus regression.txt`. A bare corpus name resolves under `evals/corpora/`; a path that contains `/` resolves from the repository root. Add `--tools all|name,name,...` only for a focused workflow when the tool set must change.
+5. Inspect the printed `evals/results/<run-id>` path. For end-to-end runs, require `summarize status: 0`, `distill status: 0`, at least two successful source identities, one distillation document, unchanged raw and summary hashes, and no missing summaries. For focused runs, require the selected workflow status to be `0`. A nonzero `snap status` can contain reported fetch failures; inspect `expected-failures.log`.
+6. Read `evals/RUBRIC.md` and `evals/DISTILL_RUBRIC.md`, then score the run with `BO_EVAL_API_KEY=... python3 evals/evaluate.py evals/results/<run-id>`. The evaluator accepts only `BO_EVAL_API_KEY`.
+7. Inspect `evaluation/aggregate.json`, the stage aggregates under `evaluation/summarize/` and `evaluation/distill/`, and their `documents/` directories. The runner also copies the selected corpus to `corpus.txt` in the run report. Treat `evals/corpora/`, `evals/work/`, and `evals/results/` as local data. Do not commit them or API keys.
 
 ## Git
 
-Multiple pi sessions may be running in this cwd at the same time, each modifying different files. Git operations that touch unstaged, staged, or untracked files outside your own changes will stomp on other sessions' work. Follow these rules:
+Multiple agent sessions may be running in this cwd at the same time, each modifying different files. Git operations that touch unstaged, staged, or untracked files outside your own changes will stomp on other sessions' work. Do not use built-in web search to reach the project's Github repository, prefer the `gh` CLI instead.
 
-Committing:
+Committing changes:
 
 - Only commit files YOU changed in THIS session.
 - Stage explicit paths (git add <path1> <path2>); never git add -A / git add ..
 - Before committing, run git status and verify you are only staging your files.
 - Message format: {feat,fix,refactor,docs,test}[(scope)]: <commit message> (optionally multiple lines). Message is informative and concise.
 
-Never run (destroys other agents' work or bypasses checks):
-- git reset --hard, git checkout ., git clean -fd, git stash, git add -A, git add ., git commit --no-verify.
+Never run (destroys other agents' work or bypasses checks): `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, `git add -A`, `git add .`, `git commit --no-verify`.
 
 If rebase conflicts occur:
 
@@ -47,31 +65,11 @@ If rebase conflicts occur:
 - If a conflict is in a file you did not modify, abort and ask the user.
 - Never force push.
 
-## Issues & PRs
-
-See CONTRIBUTING.md for the contributor gate.
-
-### Solving issues
-
-- Read the issue body and comments, linked or blocking issues, canonical project documentation, and the milestone description when the issue is assigned to one. Confirm required predecessor work has merged.
-- Revalidate the issue against current `main`. Line numbers, proposed module boundaries, and implementation sketches are evidence, not immutable specifications.
-- If the premise is stale, duplicated, blocked, or conflicts with current architecture, update or close the issue before changing code.
-- Treat acceptance criteria and existing observable behavior as the contract unless the issue explicitly permits a breaking change. Do not add unspecified backward compatibility.
-- Prefer the smallest complete change. Do not expand scope or introduce abstractions without a concrete need in the current issue.
-- Do not reopen settled architectural decisions without new concrete evidence.
-- An issue is not solved when implementation ends. After required checks pass, audit the completed diff against the issue's acceptance criteria before declaring it done.
-- For non-trivial completed work, delegate a read-only review after the builder finishes, never in the same parallel batch:
-  - use `reviewer` for the default focused review;
-  - use `reviewer-ensemble` for significant multi-file changes needing independent cross-vendor review;
-  - use `adversarial-reviewer` for architecture, security, state consistency, migration, or other cross-cutting risks.
-- Treat delegated findings as review assertions until their evidence is verified. Do not discard an evidence-backed finding by majority vote.
-- Review findings cite `file:line` evidence and are classified as blockers, requested changes, or notes.
-
 ### Pull requests
 
 When posting issue/PR comments:
 
-- Write the comment to a temp file and post with gh issue/pr comment --body-file (never multi-line markdown via --body).
+- Write the comment to a temp file and post with `gh issue/pr comment --body-file` (never multi-line markdown via `--body`).
 - Keep comments concise, technical, in the user's tone.
 
 When closing issues via commit:
@@ -80,9 +78,9 @@ When closing issues via commit:
 
 When reviewing PRs:
 
-- Do not run gh pr checkout, git switch, or otherwise move the worktree to the PR branch unless the user explicitly asks.
-- Use gh pr view, gh pr diff, gh api, and local git show/git diff against fetched refs to inspect PR metadata, commits, and patches without changing branches.
-- If you need PR file contents, fetch/read them into temporary files or use git show <ref>:<path> without switching branches.
+- Do not run `gh pr checkout`, `git switch`, or otherwise move the worktree to the PR branch unless the user explicitly asks.
+- Use `gh pr view`, `gh pr diff`, `gh api`, and local `git show`/`git diff` against fetched refs to inspect PR metadata, commits, and patches without changing branches.
+- If you need PR file contents, fetch/read them into temporary files or use `git show <ref>:<path>` without switching branches.
 
 When creating PRs:
 
@@ -106,15 +104,14 @@ When creating PRs:
 This project follows [Semantic Versioning](https://semver.org/).
 
 1. Update `CHANGELOG.md` with the new version section.
-2. Local smoke test: build an unpublished release and smoke test from outside the repo (so it can't resolve workspace files):
-3. Bump `version` in `Cargo.toml`.
-4. Bump `version` in `npm/package.json` to match.
-5. Commit, merge to main.
-6. `git tag v<version> && git push --tags`
-7. **Approve the `npm-publish` GitHub Environment** — Actions tab → tag run → click *Review deployments* → approve. The job will not run until you do.
-8. **Approve the staged tarball on npmjs.com** — `npm stage publish` uploads to a staging queue, not to public. Open the package page on npmjs.com from a 2FA-trusted device and approve the pending stage.
+2. Local smoke test: build an unpublished release with `go install ./cmd/bo` and smoke test it from outside the repo (so it cannot resolve workspace files).
+3. Bump `version` in `npm/package.json`.
+4. Commit, merge to main.
+5. `git tag v<version> && git push --tags`
+6. **Approve the `npm-publish` GitHub Environment** — Actions tab → tag run → click *Review deployments* → approve. The job will not run until you do.
+7. **Approve the staged tarball on npmjs.com** — `npm stage publish` uploads to a staging queue, not to public. Open the package page on npmjs.com from a 2FA-trusted device and approve the pending stage.
 
-The `release.yml` workflow runs CI (format, clippy, deny, test), builds platform binaries for macOS Intel/Apple Silicon and Linux x86_64, creates a GitHub Release with the tarballs attached, and stages `@skillicinski/bo` to npm via OIDC trusted publishing.
+The `release.yml` workflow runs Go format, vet, vulnerability, module, and test checks, builds platform binaries for macOS Intel/Apple Silicon and Linux x86_64, creates a GitHub Release with the tarballs attached, and stages `@skillicinski/bo` to npm via OIDC trusted publishing.
 
 ### Why two human gates?
 

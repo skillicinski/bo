@@ -1,114 +1,203 @@
 # Architecture
 
-> **Canonical status:** this is the sole source of truth for bo's architecture. Other comments, agent instructions, and tests may link to or enforce this document; they must not define a competing layer model. Change this document and its enforcement in the same commit when the policy changes.
-
-bo favors code that a human can trace top-to-bottom and a machine can constrain with types. It uses a small inward dependency order rather than a named architecture framework.
-
-## Current topology
-
-bo is one Cargo package with separate library and binary crates. The current production code has these direct top-level dependencies:
+## Dependency graph
 
 ```text
-main ───────→ cli
-  └────────→ engine
-
-cli ───────→ adapters
- ├─────────→ engine
- └─────────→ domain
-
-engine ────→ domain
-adapters ──→ no bo layer
-domain ────→ no bo layer
+external Go consumer       -> bo
+cmd/bo                     -> bo
+evals/cmd/bo-eval          -> application, provider/deepseek, storage/local
+bo                         -> application, agent, domain, errors, provider/deepseek, source, source/file, source/url, storage/local
+application                -> agent, domain, errors, source
+source                     -> domain, errors
+source/file                -> source, domain, errors
+source/url                 -> source, domain, errors
+storage/local              -> application, domain, errors
+provider/deepseek          -> agent, errors
+agent                      -> errors
+domain                     -> errors
 ```
 
-This is an inventory, not the policy. In particular, direct dependencies may skip layers: the CLI uses domain types directly, and `main.rs` composes engine capabilities directly.
+Go's `internal/` rule prevents an external module from importing implementation
+packages. The root `bo` package is the supported external Go surface. The
+separate consumer module in `testdata/public-api` compiles that boundary in CI.
 
-The layers are not a pure-I/O sandwich. Command-specific filesystem work exists in `cli`; reusable filesystem and network capabilities exist in `engine`; source-specific network translation exists in `adapters`. The boundary is ownership and reuse, not whether a function performs I/O.
+## Terms
 
-## Target dependency policy
+- **Port:** a Go interface at a boundary. `bo.Workspace` is a port for storage;
+  a workflow can use a local, memory, or remote implementation.
+- **Composition root:** the package that selects concrete implementations and
+  connects them. `cmd/bo` selects the local workspace and calls `bo`.
+- **Aggregate:** one state object that keeps related records and their rules
+  together. A `SourceRecord` groups one source, its snapshots, and its summary.
+- **Opaque revision:** a value that callers may compare and pass back, but not
+  inspect. It lets a workspace reject an update based on stale state.
 
-The canonical inward order is:
+## Layer contracts
 
-```text
-main → cli → adapters → engine → domain
-```
+### `bo` public package
 
-This is an ordering, not a required call chain. A layer may depend on any layer to its right, including skipping intermediate layers. It must not depend on a layer to its left.
+The public package exposes workflows and stable data types.
 
-| Layer | May depend on |
-|---|---|
-| `main` | `cli`, `adapters`, `engine`, `domain` |
-| `cli` | `adapters`, `engine`, `domain` |
-| `adapters` | `engine`, `domain` |
-| `engine` | `domain` |
-| `domain` | no other bo layer |
+- Owns: requests, results, public errors, state types, workspace ports, source
+  composition, and supported constructors.
+- Does not own: CLI parsing, source routing, storage format, or provider HTTP.
+- Calls: application workflows and supported internal adapters.
 
-Dependencies within one layer are allowed, but cycles should be removed when they obscure ownership. Cross-layer paths in the library use explicit `crate::<layer>` paths; grouped crate-root imports and relative paths that can climb into another top-level layer are avoided so the architecture test can inspect every reference.
+### `cmd/bo`
 
-### Layer ownership
+The CLI converts arguments and results into a process interface.
 
-- **`main.rs` — process shell and composition root.** Owns argument parsing, process-wide tracing, stdout/stderr, exit codes, and construction of command dependencies. Keep domain policy out of it.
-- **`cli` — command application layer.** Owns command-specific orchestration, policy, intermediate stage contracts, and human/JSON rendering. "A stale branch must be repaired during synthesis" belongs here. Command-specific I/O may remain here.
-- **`adapters` — source-specific integrations.** Translates external protocols that do not belong to a generic engine capability. The current top-level adapter is YouTube ingestion, selected by `cli::collect`. It has no bo-layer dependencies today.
-- **`engine` — reusable capabilities.** Owns command-neutral fetching, extraction, persistence, retrieval, LLM transport, retry policy, and other shared operations. A function belongs here only when its name and signature contain no command-specific vocabulary. Engine never imports CLI or top-level adapters.
-- **`domain` — side-effect-free model and format contracts.** Owns entities, validated values, topology rules, serialization shapes, path naming, and document formatting. It performs no filesystem, network, or process I/O and imports no outer bo layer.
+- Owns: argument parsing, stdout and stderr, exit codes, and local dependency
+  selection.
+- Does not own: workflow rules, source fetching, or workspace persistence.
+- Calls: only the public `bo` package.
 
-Provider implementations under `engine::llm::providers` are part of the LLM capability: they implement the engine-owned `LlmProvider` contract. Top-level `adapters` are instead ingestion-source integrations. Do not move either merely to make all external HTTP code share one directory.
+### `internal/application`
 
-Use traits only at a real interchangeable or testable boundary. Do not add ports, repositories, or per-layer crates solely to make the diagram look purer.
+The application layer runs the workflows and records operation events.
 
-## Process I/O and diagnostics
+- Owns: workflow orchestration, validation order, and operation outcomes.
+- Does not own: CLI output, workspace selection, or local file operations.
+- Calls: domain types, the workspace port, the agent runtime, and the `source`
+  fetch port.
 
-`main` owns process streams. CLI renderers may produce human or JSON output, and interactive CLI code may prompt or diagnose. Engine, adapters, and domain return values, warnings, or errors instead of printing directly; this keeps reusable capabilities composable by another front end.
+### `internal/domain`
 
-Known departures are recorded rather than hidden:
+The domain layer defines the state and operation rules.
 
-- `engine::fetch` and `engine::summary` currently write fallback/retry diagnostics to stderr. Return or trace those diagnostics when those paths are next changed.
+- Owns: source records, snapshots, summaries, operations, and validation.
+- Does not own: filesystem, network, process, or provider behavior.
+- Calls: shared error definitions for validation failures.
 
-These are bounded cleanup targets, not reasons for a broad layer rewrite.
+### `internal/source`
 
-## Public surfaces and visibility
+The source layer routes an input to a source adapter.
 
-The supported product interface is the executable: command behavior, machine-readable JSON envelopes, and documented on-disk formats.
+- Owns: transport and plugin interfaces, input classification, and source
+  identity rules.
+- Does not own: application workflows, workspace writes, or CLI output.
+- Calls: domain types and shared errors.
 
-Cargo compiles `lib.rs`, `main.rs`, and integration tests as separate crates. Consequently, `main` and tests can only reach public library items, and `src/lib.rs` currently exposes `adapters`, `cli`, `domain`, and `engine`. `cli` is therefore objectively public Rust visibility; it must not be described as private.
+`source/file` reads local Markdown. `source/url` fetches HTML and YouTube
+transcripts. These adapters return the same domain snapshot shape.
 
-Reusable library code should live in `domain` and `engine`, but bo does not yet promise a stable Rust library API distinct from the CLI product. If real external Rust consumers require one, introduce a deliberate facade and move binary-only implementation behind it. Until then, do not add crate splits or re-export scaffolding for a hypothetical consumer.
+### `internal/source/file` and `internal/source/url`
 
-Within a layer, use the narrowest practical visibility. Synthesis stages use `pub(super)` for command-internal contracts; engine internals use `pub(crate)` when the binary does not need them.
+The source adapters translate external or local input into domain snapshots.
 
-## State and format decisions
+- Owns: file reads, HTTP requests, HTML conversion, and YouTube transcript
+  handling.
+- Does not own: source routing, workflow orchestration, or workspace writes.
+- Calls: `source`, domain types, shared errors, and their transport libraries.
 
-### Tree state is the topology source of truth
+### `internal/agent`
 
-`{tree}/.bo/state.json` is the only topology record. Branches store leaf slugs; `TreeState::branches_for_leaf` computes the inverse in memory. `pending.json` is transaction recovery state and `journal.jsonl` is an operational log, not a second topology model.
+The agent layer runs bounded provider-neutral completion loops.
 
-### The domain vocabulary is typed
+- Owns: turns, tool calls, limits, and provider-neutral messages.
+- Does not own: provider-specific HTTP, workspace selection, or CLI rendering.
+- Calls: the shared error package and the provider completion contract.
 
-`Tree`, `Branch`, and `Leaf` are the serialized entities used by the rest of the system; there is no parallel record/entity hierarchy. Values with invariants use validated types such as `Slug`, `Title`, `Timestamp`, and `Url`. Domain modules format serialized content but do not read or write it; persistence belongs to the owning engine or CLI operation.
+### `internal/provider/deepseek`
 
-On-disk format behavior is guarded by round-trip or byte-level tests. Do not add abstraction solely to deduplicate coincident fields or serialization code.
+The DeepSeek adapter translates the provider HTTP protocol.
 
-## LLM trust and tool boundaries
+- Owns: DeepSeek requests, responses, and transport errors.
+- Does not own: the agent loop, workspace selection, or CLI rendering.
+- Calls: the agent contract and shared errors.
 
-Every structured LLM response is deserialized and validated against known domain state before mutation. A single validation failure rejects the whole change; no partial write is allowed.
+### `internal/storage/local`
 
-The tool-calling split is intentional:
+The local adapter stores one named workspace on disk.
 
-- `engine::llm` owns provider-neutral transport messages, tool-call protocol types, provider serialization, timeout, and retry behavior.
-- `engine::agent` owns the bounded provider-neutral turn loop and generic tool contract.
-- `cli::synthesize::agent` owns synthesis-specific tools and orchestration.
+- Owns: workspace selection, Markdown files, `state.json`, `log.jsonl`, and
+  recovery-safe writes.
+- Does not own: workflow orchestration, source fetching, or CLI output.
+- Calls: application contracts, domain types, and shared errors.
 
-Tool arguments are untrusted input and become typed, validated values at the tool boundary.
+### `internal/errors`
 
-## Command pipelines
+The shared error package gives internal layers one failure vocabulary.
 
-Split a command into stage modules when an intermediate contract is independently meaningful and the split makes the workflow easier to trace. Synthesis is the exemplar: planning, prompting, parsing, validation, execution, repair, and rendering have distinct contracts.
+- Owns: error kinds, retryability, and context classification.
+- Does not own: workflow policy, output formatting, or HTTP status selection.
+- Calls: standard-library error behavior only.
 
-Stage count alone is not a rule. A command may stay in one file while its stages remain clear; split it when a contract needs isolated ownership or work in the file has become difficult to trace. Do not scaffold folders for expected future complexity.
+### `evals/cmd/bo-eval`
 
-## Enforcement and escalation
+The evaluation command is a separate composition root for controlled tests.
 
-`tests/architecture.rs` is the executable backstop for the dependency order. It scans every Rust file under `src/domain`, `src/engine`, `src/adapters`, and `src/cli`, not only `use` declarations, and enforces an unambiguous cross-layer path style so fully qualified calls are covered and common relative or aliased paths cannot bypass the check. Compiler visibility (`pub(super)`, `pub(crate)`) remains the first choice for narrower boundaries.
+- Owns: evaluation setup and explicit tool selection.
+- Does not own: production CLI behavior or the public API contract.
+- Calls: selected internal application, provider, and storage packages.
 
-The source scan is a guardrail, not semantic proof. Separate crates are the hard Rust boundary, but a workspace split is not justified for one product and one implementation team. Reconsider it only when a layer has an independent consumer/release lifecycle or repeated real violations show that the lightweight check is insufficient.
+## Workspace contract
+
+A workspace stores the documents, inventory, and event log for one named
+collection.
+
+It provides:
+
+- document reads;
+- inventory reads;
+- event reads and writes;
+- conditional snapshot, summary, and distillation-document updates.
+
+Each update includes a revision. The revision lets bo detect whether another
+process or a manual edit changed the workspace. A local workspace advances the
+revision after each successful content update and rejects stale updates.
+
+Workflows receive an already-open workspace. They do not select its location or
+close it. The caller owns workspace lifetime.
+
+## Snap flow
+
+For `bo snap notes ./note.md`, the flow is:
+
+1. `cmd/bo` opens `notes` with the local manager.
+2. `cmd/bo` calls `bo.Snap` with the workspace and source input.
+3. The public package composes the default URL and local Markdown adapters and
+   converts the request to the application contract.
+4. The application reads the current state and revision.
+5. The source workflow tries URL routing, then local Markdown routing.
+6. The selected adapter returns a title, source key, and bounded Markdown bytes.
+7. The application validates the result and chooses a document filename.
+8. The workspace commits the document, state, and operation event with the
+   expected revision.
+9. The application returns a `SnapResult`; the CLI renders the outcome.
+
+Cloud callers may disable local Markdown sources and provide an `http.Client`.
+The caller owns that client's DNS, redirect, and private-network policy. The
+source adapters apply one bounded read limit to local Markdown and all URL
+responses before parsing them.
+
+An external Go caller starts at step 2 and can provide any `bo.Workspace`
+implementation.
+
+## State model
+
+`State` contains one `SourceRecord` for each source. A source record contains
+the source key, immutable raw snapshots, and at most one current summary. The
+summary must refer to a snapshot in the same record. This is the aggregate rule
+that keeps related state consistent.
+
+State also contains create-only distillation records. A distill record stores
+its kind, timestamps, content baseline, and every raw or current-summary input
+with its source identity and content digest. It must reference documents from
+at least two source identities.
+
+## Distill flow
+
+For `bo distill notes`, the application reads the newest raw snapshot for each
+source and includes a summary only when it derives from that snapshot. The
+agent may read those bounded documents and either calls `skip_distill` or calls
+`write_distillation` with a structured title, introduction, sections, bullets, and
+source references. The host validates that every referenced document was read,
+computes its digest, renders deterministic Markdown, and commits the new
+document, state, and `write_distillation` event in one conditional transaction.
+Distill does not invoke or update the summary workflow.
+
+## Optional reading
+
+- [Aggregation and composition](https://atomicobject.com/oo-programming/object-oriented-aggregation)
+- [DDD aggregates](https://martinfowler.com/bliki/DDD_Aggregate.html)
