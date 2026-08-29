@@ -6,16 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-29
+
 ### Added
 
-- Go workflows for seeding, snapping, reading state, and synthesizing a local workspace.
-- Public workspace contracts for external Go backends.
+- A Go CLI and public Go API for local-first Markdown workspaces.
+- Workflows to seed workspaces, capture web pages or local Markdown, inspect state, synthesize summaries, and distill one cited document across sources.
+- Bounded runtime controls for synthesis and distillation.
 
 ### Changed
 
-- **Breaking:** replaced the previous CLI with the Go CLI; install from source
-  with `go install github.com/skillicinski/bo/cmd/bo@latest`.
-- Local DeepSeek agent credentials now use `DEEPSEEK_API_KEY` and `DEEPSEEK_API_URL`.
+- **Breaking:** replaced the previous CLI and workspace format. Existing workspaces are not migrated; install with `npm install -g @skillicinski/bo` or `go install github.com/skillicinski/bo/cmd/bo@latest`, then run `bo seed`.
+- DeepSeek agent configuration now uses `DEEPSEEK_API_KEY` and optional `DEEPSEEK_API_URL`.
 
 The versioned entries below describe the pre-greenfield product and remain for
 historical reference.
