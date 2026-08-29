@@ -37,7 +37,7 @@ jobs:
         run: go mod verify
 
       - name: Vulnerability check
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
       - name: Install smoke test
         uses: ./.github/actions/install-smoke
