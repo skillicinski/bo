@@ -144,7 +144,7 @@ func testSources(t *testing.T, workspace application.Workspace, count int) map[s
 	return sources
 }
 
-func TestSynthesisBatchesInOrderAndIsolatesContext(t *testing.T) {
+func TestSynthesisRunsIsolatedRuntimes(t *testing.T) {
 	store, target := seededStore(t)
 	sources := testSources(t, store, 3)
 	provider := &batchingProvider{sources: sources, includeLogs: true, includeCorpus: true, includeDoc: true, provideUsage: true}
@@ -165,37 +165,42 @@ func TestSynthesisBatchesInOrderAndIsolatesContext(t *testing.T) {
 		want = append(want, sourceKey)
 	}
 	sort.Strings(want)
-	for index, batch := range provider.batches {
-		if len(batch) != 1 || batch[0] != want[index] {
-			t.Fatalf("batch %d = %#v, want %q", index, batch, want[index])
+	for index, runtimeSources := range provider.batches {
+		if len(runtimeSources) != 1 || runtimeSources[0] != want[index] {
+			t.Fatalf("runtime %d = %#v, want %q", index, runtimeSources, want[index])
 		}
-		request := provider.requests[index*4]
-		if len(request.Messages) != 2 || strings.Contains(fmt.Sprint(request.Messages), want[(index+len(want)-1)%len(want)]) && index > 0 {
-			t.Fatalf("batch %d carried prior messages: %#v", index, request.Messages)
-		}
-		corpusRequest := provider.requests[index*4+2]
-		if strings.Contains(fmt.Sprint(corpusRequest.Messages), want[(index+1)%len(want)]) {
-			t.Fatalf("batch %d corpus contains another source: %#v", index, corpusRequest.Messages)
+		for requestIndex := index * 4; requestIndex < (index+1)*4; requestIndex++ {
+			request := provider.requests[requestIndex]
+			for otherIndex, otherSource := range want {
+				if otherIndex != index && strings.Contains(fmt.Sprint(request.Messages), otherSource) {
+					t.Fatalf("runtime %d request %d contains source %q: %#v", index, requestIndex, otherSource, request.Messages)
+				}
+			}
 		}
 	}
 }
 
-func TestSynthesisSmallCorpusUsesOneRuntime(t *testing.T) {
+func TestSynthesisUsesOneRuntimePerSource(t *testing.T) {
 	store, target := seededStore(t)
 	sources := testSources(t, store, 2)
 	provider := &batchingProvider{sources: sources, includeDoc: true, provideUsage: true}
 	config := application.SynthesisOptions{MaxTurns: 10, MaxToolCalls: 10, MaxToolOutputBytes: 4096, MaxResponseTokens: 32, TimeoutSeconds: 5}
 
 	result, err := application.Synthesize(context.Background(), store, provider, config, operationOptionsFor(target))
-	if err != nil || result.SummariesWritten != 2 || len(provider.batches) != 1 || len(provider.batches[0]) != 2 {
+	if err != nil || result.SummariesWritten != 2 || len(provider.batches) != len(sources) {
 		t.Fatalf("synthesis = %#v, batches = %#v, error = %v", result, provider.batches, err)
+	}
+	for index, runtimeSources := range provider.batches {
+		if len(runtimeSources) != 1 {
+			t.Fatalf("runtime %d = %#v", index, runtimeSources)
+		}
 	}
 	if result.Metrics.Usage == nil || result.Metrics.Usage.TotalTokens != 12 {
 		t.Fatalf("usage = %#v", result.Metrics.Usage)
 	}
 }
 
-func TestSynthesisBoundsStartupEventReadsAndKeepsReadLogs(t *testing.T) {
+func TestSynthesisRunsSixteenIsolatedRuntimesAndBoundsStartupEventReads(t *testing.T) {
 	store, target := seededStore(t)
 	sources := testSources(t, store, 16)
 	workspace := &countingWorkspace{Workspace: store}
@@ -206,10 +211,15 @@ func TestSynthesisBoundsStartupEventReadsAndKeepsReadLogs(t *testing.T) {
 	if err != nil || result.SummariesWritten != len(sources) {
 		t.Fatalf("synthesis = %#v, error = %v", result, err)
 	}
-	if len(provider.batches) != 2 || len(provider.batches[0]) != 15 || len(provider.batches[1]) != 1 {
+	if len(provider.batches) != len(sources) {
 		t.Fatalf("batches = %#v", provider.batches)
 	}
-	if workspace.eventReads != 0 || workspace.recentReads != 1 || workspace.stateReads != 2 {
+	for index, runtimeSources := range provider.batches {
+		if len(runtimeSources) != 1 {
+			t.Fatalf("runtime %d = %#v", index, runtimeSources)
+		}
+	}
+	if workspace.eventReads != 0 || workspace.recentReads != 1 || workspace.stateReads != len(sources) {
 		t.Fatalf("workspace reads = events %d, recent %d, state %d", workspace.eventReads, workspace.recentReads, workspace.stateReads)
 	}
 }
@@ -249,7 +259,7 @@ func TestSynthesisWithoutReadLogsSkipsRecentReadAndPromptInstruction(t *testing.
 	}
 }
 
-func TestSynthesisLaterFailurePreservesAndResumesEarlierBatches(t *testing.T) {
+func TestSynthesisLaterFailurePreservesAndResumesEarlierRuntimes(t *testing.T) {
 	store, target := seededStore(t)
 	sources := testSources(t, store, 3)
 	provider := &batchingProvider{
@@ -258,8 +268,13 @@ func TestSynthesisLaterFailurePreservesAndResumesEarlierBatches(t *testing.T) {
 	}
 	config := application.SynthesisOptions{MaxTurns: 2, MaxToolCalls: 2, MaxToolOutputBytes: 4096, MaxResponseTokens: 32, TimeoutSeconds: 5}
 	result, err := application.Synthesize(context.Background(), store, provider, config, operationOptionsFor(target))
-	if !internalerrors.IsKind(err, internalerrors.KindProviderRejected) || result.SummariesWritten != 1 || result.SummariesSkipped != 0 || result.Metrics.Usage != nil {
+	if !internalerrors.IsKind(err, internalerrors.KindProviderRejected) || result.SummariesWritten != 1 || result.SummariesSkipped != 0 || result.Metrics.Usage != nil || len(provider.batches) != 2 {
 		t.Fatalf("failed synthesis = %#v, error = %v", result, err)
+	}
+	for index, runtimeSources := range provider.batches {
+		if len(runtimeSources) != 1 {
+			t.Fatalf("failed runtime %d = %#v", index, runtimeSources)
+		}
 	}
 	firstSummary, err := store.ReadDocument(context.Background(), domain.SummaryRef("source-00.md"))
 	if err != nil {
@@ -299,7 +314,7 @@ func TestSynthesisLaterFailurePreservesAndResumesEarlierBatches(t *testing.T) {
 	}
 }
 
-func TestSynthesisUsesOneDeadlineAcrossBatches(t *testing.T) {
+func TestSynthesisUsesOneDeadlineAcrossRuntimes(t *testing.T) {
 	store, target := seededStore(t)
 	sources := testSources(t, store, 2)
 	provider := &batchingProvider{sources: sources, includeDoc: true, provideUsage: true, blockBatch: 2}

@@ -80,7 +80,6 @@ func runSynthesis(ctx context.Context, workspace Workspace, provider agent.Compl
 	written := map[string]bool{}
 	skipped := map[string]bool{}
 	result := SynthesisResult{}
-	batchLimit := synthesisBatchLimit(config)
 	usageKnown, usageReceived := true, false
 	var usage agent.TokenUsage
 	var events []Operation
@@ -120,40 +119,28 @@ func runSynthesis(ctx context.Context, workspace Workspace, provider agent.Compl
 			}
 			eventsLoaded = true
 		}
-		batchCount := batchLimit
-		if batchCount > len(pending) {
-			batchCount = len(pending)
-		}
-		batchKeys := pending[:batchCount]
-		batchSources := make(map[string]agentSource, batchCount)
-		for _, sourceKey := range batchKeys {
-			batchSources[sourceKey] = sources[sourceKey]
-		}
+		sourceKey := pending[0]
+		sourceSources := map[string]agentSource{sourceKey: sources[sourceKey]}
 		contextState := &agentContext{
-			ctx: runContext, workspace: workspace, documents: documents, sources: batchSources,
+			ctx: runContext, workspace: workspace, documents: documents, sources: sourceSources,
 			state: state, revision: revision, maxOutputBytes: config.MaxToolOutputBytes,
 			directory: workspace.Name(), options: options,
 			completed: map[string]bool{}, written: map[string]bool{}, mutationOps: map[string]Operation{},
 		}
 		if readLogsEnabled {
-			contextState.logEvents = scopedSynthesisEvents(events, batchSources)
+			contextState.logEvents = scopedSynthesisEvents(events, sourceSources)
 			contextState.logWindowLoaded = true
 		}
-		names := make([]string, 0, len(batchSources))
-		for _, source := range batchSources {
-			names = append(names, source.LatestFilename)
-		}
-		sort.Strings(names)
-		sourceKeys := append([]string{}, batchKeys...)
+		names := []string{sourceSources[sourceKey].LatestFilename}
 		messages := []agent.ChatMessage{
 			{Role: "system", Content: systemPrompt(contextState, names, readLogsEnabled)},
-			{Role: "user", Content: fmt.Sprintf("Produce one concise Markdown summary for every source identity. Use the newest raw snapshot as evidence and preserve each source's epistemic status. Source identities: %s", strings.Join(sourceKeys, ", "))},
+			{Role: "user", Content: fmt.Sprintf("Produce one concise Markdown summary for every source identity. Use the newest raw snapshot as evidence and preserve each source's epistemic status. Source identities: %s", sourceKey)},
 		}
 		runtime := agent.Runtime{
 			Provider: provider,
 			Tools:    synthTools(contextState, toolNames),
 			Done: func() bool {
-				return len(contextState.completed) == len(batchSources)
+				return len(contextState.completed) == len(sourceSources)
 			},
 		}
 		runtimeResult, runtimeErr := runtime.Run(runContext, messages, agent.Options{
@@ -191,10 +178,10 @@ func runSynthesis(ctx context.Context, workspace Workspace, provider agent.Compl
 		if runtimeErr != nil {
 			return result, runtimeErr
 		}
-		if len(contextState.completed) != len(batchSources) {
-			return result, internalerrors.ProviderMalformed(fmt.Sprintf("model stopped with missing summaries: %s", strings.Join(missingSources(batchSources, contextState.completed), ", ")), nil)
+		if len(contextState.completed) != len(sourceSources) {
+			return result, internalerrors.ProviderMalformed(fmt.Sprintf("model stopped with missing summaries: %s", strings.Join(missingSources(sourceSources, contextState.completed), ", ")), nil)
 		}
-		if batchCount == len(pending) {
+		if len(pending) == 1 {
 			break
 		}
 		state, revision, err = workspace.ReadState(runContext)
@@ -208,20 +195,6 @@ func runSynthesis(ctx context.Context, workspace Workspace, provider agent.Compl
 	result.SummariesWritten, result.SummariesSkipped = len(written), len(skipped)
 	return result, nil
 }
-
-func synthesisBatchLimit(config SynthesisOptions) int {
-	// ponytail: reserve one setup turn/call and two calls per source; add per-tool cost accounting if setup grows.
-	limit := config.MaxToolCalls - 1
-	if config.MaxTurns-1 < limit {
-		limit = config.MaxTurns - 1
-	}
-	limit /= 2
-	if limit < 1 {
-		return 1
-	}
-	return limit
-}
-
 func aggregateUsage(usage agent.TokenUsage, known, received bool) *agent.TokenUsage {
 	if !known || !received {
 		return nil

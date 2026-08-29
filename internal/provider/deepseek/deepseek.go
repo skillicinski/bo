@@ -135,6 +135,9 @@ func (c *Client) Complete(ctx context.Context, request agent.CompletionRequest) 
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBodyBytes+1))
 	if err != nil {
+		if contextErr := internalerrors.Context(err); contextErr != nil {
+			return agent.CompletionResponse{}, contextErr
+		}
 		return agent.CompletionResponse{}, internalerrors.TransientProviderTransport("reading API response failed", err)
 	}
 	if len(data) > maxResponseBodyBytes {

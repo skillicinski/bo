@@ -140,19 +140,31 @@ func TestCompleteClassifiesIncompleteFinishReasons(t *testing.T) {
 	}
 }
 
-func TestCompleteClassifiesResponseReadFailure(t *testing.T) {
-	cause := errors.New("connection reset")
-	client := New("key", "http://provider.test/completions")
-	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Body: failingReadCloser{err: cause}, Header: http.Header{}, Request: request}, nil
-	})}
-	_, err := client.Complete(context.Background(), agent.CompletionRequest{})
-	if !internalerrors.IsKind(err, internalerrors.KindProviderTransport) || !errors.Is(err, cause) {
-		t.Fatalf("error = %v", err)
-	}
-	var typed *internalerrors.Error
-	if !errors.As(err, &typed) || !typed.Retryable {
-		t.Fatalf("typed error = %#v", typed)
+func TestCompleteClassifiesResponseReadFailures(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		cause     error
+		kind      internalerrors.Kind
+		retryable bool
+	}{
+		{name: "deadline", cause: context.DeadlineExceeded, kind: internalerrors.KindDeadline},
+		{name: "canceled", cause: context.Canceled, kind: internalerrors.KindCanceled},
+		{name: "ordinary", cause: errors.New("connection reset"), kind: internalerrors.KindProviderTransport, retryable: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := New("key", "http://provider.test/completions")
+			client.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Body: failingReadCloser{err: test.cause}, Header: http.Header{}, Request: request}, nil
+			})}
+			_, err := client.Complete(context.Background(), agent.CompletionRequest{})
+			if !internalerrors.IsKind(err, test.kind) || !errors.Is(err, test.cause) {
+				t.Fatalf("error = %v", err)
+			}
+			var typed *internalerrors.Error
+			if !errors.As(err, &typed) || typed.Retryable != test.retryable {
+				t.Fatalf("typed error = %#v", typed)
+			}
+		})
 	}
 }
 
