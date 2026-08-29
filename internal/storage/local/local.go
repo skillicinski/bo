@@ -35,16 +35,16 @@ var (
 )
 
 const (
-	workspaceTransactionFile            = ".bo-transaction.json"
-	workspaceEventFile                  = "log.jsonl"
-	defaultOperationPageLimit           = 20
-	maxOperationEventBytes              = 1 << 20
-	workspaceTransactionVersion         = 1
-	workspaceTransactionPhaseReady      = "prepared"
-	workspaceTransactionPhaseCommit     = "commit"
-	workspaceTransactionKindSnapshot    = "snapshot"
-	workspaceTransactionKindSummary     = "summary"
-	workspaceTransactionKindSynthesized = "synthesized"
+	workspaceTransactionFile             = ".bo-transaction.json"
+	workspaceEventFile                   = "log.jsonl"
+	defaultOperationPageLimit            = 20
+	maxOperationEventBytes               = 1 << 20
+	workspaceTransactionVersion          = 1
+	workspaceTransactionPhaseReady       = "prepared"
+	workspaceTransactionPhaseCommit      = "commit"
+	workspaceTransactionKindSnapshot     = "snapshot"
+	workspaceTransactionKindSummary      = "summary"
+	workspaceTransactionKindDistillation = "distillation"
 )
 
 type workspaceTransaction struct {
@@ -142,11 +142,11 @@ func (s *Store) listDocuments(kind domain.DocumentKind) ([]domain.DocumentRef, e
 	directory := "."
 	switch kind {
 	case domain.DocumentKindRaw:
-	case domain.DocumentKindSummary, domain.DocumentKindSynthesized:
+	case domain.DocumentKindSummary, domain.DocumentKindDistillation:
 		if kind == domain.DocumentKindSummary {
 			directory = "summaries"
 		} else {
-			directory = "synthesized"
+			directory = "distillations"
 		}
 		if info, err := s.root.Lstat(directory); err != nil {
 			if os.IsNotExist(err) {
@@ -495,11 +495,11 @@ func (s *Store) CommitSummary(ctx context.Context, commit application.SummaryCom
 	return next, revision, nil
 }
 
-func (s *Store) CommitSynthesized(ctx context.Context, commit application.SynthesizedCommit, expected application.Revision) (domain.State, application.Revision, error) {
+func (s *Store) CommitDistillation(ctx context.Context, commit application.DistillationCommit, expected application.Revision) (domain.State, application.Revision, error) {
 	if err := contextErr(ctx); err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
-	if err := validateSynthesizedCommit(commit); err != nil {
+	if err := validateDistillationCommit(commit); err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
 	s.mu.Lock()
@@ -511,24 +511,24 @@ func (s *Store) CommitSynthesized(ctx context.Context, commit application.Synthe
 	if !currentRevision.Equal(expected) {
 		return domain.State{}, application.Revision{}, internalerrors.Conflict("workspace revision changed")
 	}
-	if err := s.ensureSynthesizedDirectory(); err != nil {
+	if err := s.ensureDistillationDirectory(); err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
-	path := filepath.Join("synthesized", commit.Filename)
+	path := filepath.Join("distillations", commit.Filename)
 	if _, err := s.root.Lstat(path); err == nil {
-		return domain.State{}, application.Revision{}, internalerrors.Wrap(internalerrors.KindAlreadyExists, "synthesized document already exists", internalerrors.ErrAlreadyExists)
+		return domain.State{}, application.Revision{}, internalerrors.Wrap(internalerrors.KindAlreadyExists, "distillation document already exists", internalerrors.ErrAlreadyExists)
 	} else if !os.IsNotExist(err) {
 		return domain.State{}, application.Revision{}, filesystem(filepath.Join(s.path, path), err)
 	}
-	record := domain.SynthesizedRecord{
+	record := domain.DistillationRecord{
 		Filename: commit.Filename, Kind: commit.Kind, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt,
-		DerivedFrom: append([]domain.SynthesizedInput(nil), commit.DerivedFrom...),
+		DerivedFrom: append([]domain.DistillationInput(nil), commit.DerivedFrom...),
 	}
-	if err := s.validateSynthesizedInputs(&current, record); err != nil {
+	if err := s.validateDistillationInputs(&current, record); err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
 	next := cloneState(current)
-	next.SynthesizedDocuments = append(next.SynthesizedDocuments, record)
+	next.DistillationDocuments = append(next.DistillationDocuments, record)
 	if err := next.Validate(); err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
@@ -536,7 +536,7 @@ func (s *Store) CommitSynthesized(ctx context.Context, commit application.Synthe
 	if err != nil {
 		return domain.State{}, application.Revision{}, normalizeStorageError("serializing state.json", err)
 	}
-	transaction := newWorkspaceTransaction(workspaceTransactionKindSynthesized, commit.Filename, nil, false, commit.Contents, oldState, data)
+	transaction := newWorkspaceTransaction(workspaceTransactionKindDistillation, commit.Filename, nil, false, commit.Contents, oldState, data)
 	if err := s.trackTransactionEvent(&transaction, commit.Event); err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
@@ -546,7 +546,7 @@ func (s *Store) CommitSynthesized(ctx context.Context, commit application.Synthe
 	if err := s.writeAtomic(path, transaction.DocumentTemporary, commit.Contents); err != nil {
 		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
 	}
-	if err := s.ensureDocumentBaseline(&next, domain.SynthesizedRef(commit.Filename), commit.Contents); err != nil {
+	if err := s.ensureDocumentBaseline(&next, domain.DistillationRef(commit.Filename), commit.Contents); err != nil {
 		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
 	}
 	data, err = domain.MarshalState(next)
@@ -938,13 +938,13 @@ func (s *Store) readState() (domain.State, []byte, application.Revision, error) 
 			return domain.State{}, nil, application.Revision{}, internalerrors.MissingResource(fmt.Sprintf("referenced summary is empty: %s", source.Summary.Filename))
 		}
 	}
-	for _, synthesized := range state.SynthesizedDocuments {
-		_, info, err := s.documentInfo(domain.SynthesizedRef(synthesized.Filename))
+	for _, distillation := range state.DistillationDocuments {
+		_, info, err := s.documentInfo(domain.DistillationRef(distillation.Filename))
 		if err != nil {
 			return domain.State{}, nil, application.Revision{}, err
 		}
 		if info.Size() == 0 {
-			return domain.State{}, nil, application.Revision{}, internalerrors.MissingResource(fmt.Sprintf("referenced synthesized document is empty: %s", synthesized.Filename))
+			return domain.State{}, nil, application.Revision{}, internalerrors.MissingResource(fmt.Sprintf("referenced distillation document is empty: %s", distillation.Filename))
 		}
 	}
 	revision, err := s.workspaceRevision(data)
@@ -967,8 +967,8 @@ func newWorkspaceTransaction(kind, name string, oldDocument []byte, hadOldDocume
 	documentTemporary := ".bo-raw-" + id + ".tmp"
 	if kind == workspaceTransactionKindSummary {
 		documentTemporary = filepath.Join("summaries", ".bo-summary-"+id+".tmp")
-	} else if kind == workspaceTransactionKindSynthesized {
-		documentTemporary = filepath.Join("synthesized", ".bo-synthesized-"+id+".tmp")
+	} else if kind == workspaceTransactionKindDistillation {
+		documentTemporary = filepath.Join("distillations", ".bo-distillation-"+id+".tmp")
 	}
 	return workspaceTransaction{
 		Version:              workspaceTransactionVersion,
@@ -993,7 +993,7 @@ func (transaction workspaceTransaction) validate() error {
 	if transaction.Phase != workspaceTransactionPhaseReady && transaction.Phase != workspaceTransactionPhaseCommit {
 		return internalerrors.Validation("invalid workspace transaction phase")
 	}
-	if transaction.Kind != workspaceTransactionKindSnapshot && transaction.Kind != workspaceTransactionKindSummary && transaction.Kind != workspaceTransactionKindSynthesized {
+	if transaction.Kind != workspaceTransactionKindSnapshot && transaction.Kind != workspaceTransactionKindSummary && transaction.Kind != workspaceTransactionKindDistillation {
 		return internalerrors.Validation("invalid workspace transaction kind")
 	}
 	if err := domain.ValidateDocumentName(transaction.DocumentName); err != nil {
@@ -1007,8 +1007,8 @@ func (transaction workspaceTransaction) validate() error {
 		if !validTransactionTemporary(transaction.DocumentTemporary, "summaries", ".bo-summary-") {
 			return internalerrors.Validation("invalid summary transaction temporary path")
 		}
-	} else if !validTransactionTemporary(transaction.DocumentTemporary, "synthesized", ".bo-synthesized-") {
-		return internalerrors.Validation("invalid synthesized transaction temporary path")
+	} else if !validTransactionTemporary(transaction.DocumentTemporary, "distillations", ".bo-distillation-") {
+		return internalerrors.Validation("invalid distillation transaction temporary path")
 	}
 	if !validTransactionTemporary(transaction.StateTemporary, ".", ".bo-state-") ||
 		!validTransactionTemporary(transaction.TransactionTemporary, ".", ".bo-transaction-") {
@@ -1183,8 +1183,8 @@ func (s *Store) optionalTransactionDocument(transaction workspaceTransaction) ([
 	kind := domain.DocumentKindRaw
 	if transaction.Kind == workspaceTransactionKindSummary {
 		kind = domain.DocumentKindSummary
-	} else if transaction.Kind == workspaceTransactionKindSynthesized {
-		kind = domain.DocumentKindSynthesized
+	} else if transaction.Kind == workspaceTransactionKindDistillation {
+		kind = domain.DocumentKindDistillation
 	}
 	return s.optionalDocument(domain.DocumentRef{Kind: kind, Name: transaction.DocumentName})
 }
@@ -1193,8 +1193,8 @@ func (transaction workspaceTransaction) documentPath() string {
 	if transaction.Kind == workspaceTransactionKindSummary {
 		return filepath.Join("summaries", transaction.DocumentName)
 	}
-	if transaction.Kind == workspaceTransactionKindSynthesized {
-		return filepath.Join("synthesized", transaction.DocumentName)
+	if transaction.Kind == workspaceTransactionKindDistillation {
+		return filepath.Join("distillations", transaction.DocumentName)
 	}
 	return transaction.DocumentName
 }
@@ -1229,7 +1229,7 @@ func (s *Store) removeWorkspaceTransaction(transaction workspaceTransaction) err
 func (s *Store) workspaceRevision(state []byte) (application.Revision, error) {
 	var data bytes.Buffer
 	writeRevisionPart(&data, state)
-	for _, kind := range []domain.DocumentKind{domain.DocumentKindRaw, domain.DocumentKindSummary, domain.DocumentKindSynthesized} {
+	for _, kind := range []domain.DocumentKind{domain.DocumentKindRaw, domain.DocumentKindSummary, domain.DocumentKindDistillation} {
 		refs, err := s.listDocuments(kind)
 		if err != nil {
 			return application.Revision{}, err
@@ -1287,9 +1287,9 @@ func (s *Store) ensureDocumentBaseline(state *domain.State, ref domain.DocumentR
 				return setBaseline(&summary.ContentDigest, &summary.ContentSize, &summary.ContentModifiedAt)
 			}
 		}
-	case domain.DocumentKindSynthesized:
-		for index := range state.SynthesizedDocuments {
-			record := &state.SynthesizedDocuments[index]
+	case domain.DocumentKindDistillation:
+		for index := range state.DistillationDocuments {
+			record := &state.DistillationDocuments[index]
 			if record.Filename == ref.Name {
 				return setBaseline(&record.ContentDigest, &record.ContentSize, &record.ContentModifiedAt)
 			}
@@ -1345,9 +1345,9 @@ func validateSummaryCommit(commit application.SummaryCommit) error {
 	})
 }
 
-func validateSynthesizedCommit(commit application.SynthesizedCommit) error {
-	if commit.Kind != domain.SynthesizedKindDistill {
-		return internalerrors.Validation("invalid synthesized kind")
+func validateDistillationCommit(commit application.DistillationCommit) error {
+	if commit.Kind != domain.DocumentKindDistillation {
+		return internalerrors.Validation("invalid distillation kind")
 	}
 	if err := domain.ValidateDocumentName(commit.Filename); err != nil {
 		return err
@@ -1359,15 +1359,15 @@ func validateSynthesizedCommit(commit application.SynthesizedCommit) error {
 		return err
 	}
 	if commit.UpdatedAt.Before(commit.CreatedAt) {
-		return internalerrors.Validation("synthesized updated_at is before created_at")
+		return internalerrors.Validation("distillation updated_at is before created_at")
 	}
 	if len(commit.DerivedFrom) == 0 {
-		return internalerrors.Validation("synthesized document must have inputs")
+		return internalerrors.Validation("distillation document must have inputs")
 	}
 	if strings.TrimSpace(string(commit.Contents)) == "" {
-		return internalerrors.Validation("synthesized document must be non-empty")
+		return internalerrors.Validation("distillation document must be non-empty")
 	}
-	return validateSynthesizedMutationEvent(commit.Event, commit.Filename)
+	return validateDistillationMutationEvent(commit.Event, commit.Filename)
 }
 
 type summaryEventProvenance struct {
@@ -1406,28 +1406,28 @@ func validateMutationEvent(event domain.Operation, command domain.OperationComma
 	return nil
 }
 
-func validateSynthesizedMutationEvent(event domain.Operation, filename string) error {
+func validateDistillationMutationEvent(event domain.Operation, filename string) error {
 	if err := event.Validate(); err != nil {
 		return internalerrors.Wrap(internalerrors.KindValidation, "invalid mutation event", err)
 	}
-	if event.Command != domain.CommandWriteSynthesized {
+	if event.Command != domain.CommandWriteDistillation {
 		return internalerrors.Validation("mutation event command does not match commit")
 	}
 	if event.Outcome != domain.OutcomeCommitted || event.Error != nil {
 		return internalerrors.Validation("mutation event must be committed without an error")
 	}
 	if event.Source != nil || event.Provenance != nil {
-		return internalerrors.Validation("synthesized mutation event must not contain source or provenance")
+		return internalerrors.Validation("distillation mutation event must not contain source or provenance")
 	}
-	if event.Document == nil || event.Document.Kind != domain.DocumentKindSynthesized || event.Document.Filename != filename {
+	if event.Document == nil || event.Document.Kind != domain.DocumentKindDistillation || event.Document.Filename != filename {
 		return internalerrors.Validation("mutation event document does not match commit")
 	}
 	return nil
 }
 
-func (s *Store) validateSynthesizedInputs(state *domain.State, record domain.SynthesizedRecord) error {
+func (s *Store) validateDistillationInputs(state *domain.State, record domain.DistillationRecord) error {
 	candidate := cloneState(*state)
-	candidate.SynthesizedDocuments = append(candidate.SynthesizedDocuments, record)
+	candidate.DistillationDocuments = append(candidate.DistillationDocuments, record)
 	if err := candidate.Validate(); err != nil {
 		return err
 	}
@@ -1494,8 +1494,8 @@ func applySummary(state domain.State, commit application.SummaryCommit) (domain.
 
 func cloneState(state domain.State) domain.State {
 	next := domain.State{Sources: make([]domain.SourceRecord, len(state.Sources))}
-	if state.SynthesizedDocuments != nil {
-		next.SynthesizedDocuments = make([]domain.SynthesizedRecord, len(state.SynthesizedDocuments))
+	if state.DistillationDocuments != nil {
+		next.DistillationDocuments = make([]domain.DistillationRecord, len(state.DistillationDocuments))
 	}
 	for index, source := range state.Sources {
 		next.Sources[index] = domain.SourceRecord{SourceKey: source.SourceKey, Snapshots: append([]domain.RawRecord(nil), source.Snapshots...)}
@@ -1504,9 +1504,9 @@ func cloneState(state domain.State) domain.State {
 			next.Sources[index].Summary = &summary
 		}
 	}
-	for index, record := range state.SynthesizedDocuments {
-		next.SynthesizedDocuments[index] = record
-		next.SynthesizedDocuments[index].DerivedFrom = append([]domain.SynthesizedInput(nil), record.DerivedFrom...)
+	for index, record := range state.DistillationDocuments {
+		next.DistillationDocuments[index] = record
+		next.DistillationDocuments[index].DerivedFrom = append([]domain.DistillationInput(nil), record.DerivedFrom...)
 	}
 	return next
 }
@@ -1609,17 +1609,17 @@ func (s *Store) ensureSummaryDirectory() error {
 	return syncRoot(s.root)
 }
 
-func (s *Store) ensureSynthesizedDirectory() error {
-	if info, err := s.root.Lstat("synthesized"); err == nil {
+func (s *Store) ensureDistillationDirectory() error {
+	if info, err := s.root.Lstat("distillations"); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return internalerrors.Filesystem("synthesized must be a directory")
+			return internalerrors.Filesystem("distillations must be a directory")
 		}
 		return nil
 	} else if !os.IsNotExist(err) {
-		return filesystem(filepath.Join(s.path, "synthesized"), err)
+		return filesystem(filepath.Join(s.path, "distillations"), err)
 	}
-	if err := s.root.Mkdir("synthesized", 0o755); err != nil {
-		return filesystem(filepath.Join(s.path, "synthesized"), err)
+	if err := s.root.Mkdir("distillations", 0o755); err != nil {
+		return filesystem(filepath.Join(s.path, "distillations"), err)
 	}
 	return syncRoot(s.root)
 }
@@ -1651,8 +1651,8 @@ func (s *Store) documentPath(ref domain.DocumentRef) (string, error) {
 		return ref.Name, nil
 	case domain.DocumentKindSummary:
 		return filepath.Join("summaries", ref.Name), nil
-	case domain.DocumentKindSynthesized:
-		return filepath.Join("synthesized", ref.Name), nil
+	case domain.DocumentKindDistillation:
+		return filepath.Join("distillations", ref.Name), nil
 	default:
 		return "", internalerrors.Validation("unsupported document kind")
 	}

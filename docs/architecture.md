@@ -141,7 +141,7 @@ It provides:
 - document reads;
 - inventory reads;
 - event reads and writes;
-- conditional snapshot, summary, and synthesized-document updates.
+- conditional snapshot, summary, and distillation-document updates.
 
 Each update includes a revision. The revision lets bo detect whether another
 process or a manual edit changed the workspace. A local workspace advances the
@@ -181,7 +181,7 @@ the source key, immutable raw snapshots, and at most one current summary. The
 summary must refer to a snapshot in the same record. This is the aggregate rule
 that keeps related state consistent.
 
-State also contains create-only synthesized records. A distill record stores
+State also contains create-only distillation records. A distill record stores
 its kind, timestamps, content baseline, and every raw or current-summary input
 with its source identity and content digest. It must reference documents from
 at least two source identities.
@@ -191,10 +191,10 @@ at least two source identities.
 For `bo distill notes`, the application reads the newest raw snapshot for each
 source and includes a summary only when it derives from that snapshot. The
 agent may read those bounded documents and either calls `skip_distill` or calls
-`write_distill` with a structured title, introduction, sections, bullets, and
+`write_distillation` with a structured title, introduction, sections, bullets, and
 source references. The host validates that every referenced document was read,
 computes its digest, renders deterministic Markdown, and commits the new
-document, state, and `write_synthesized` event in one conditional transaction.
+document, state, and `write_distillation` event in one conditional transaction.
 Distill does not invoke or update the summary workflow.
 
 ## Optional reading

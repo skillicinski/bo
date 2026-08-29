@@ -439,7 +439,7 @@ def _read_bytes(path: Path, description: str) -> bytes:
 
 
 def _safe_distill_filename(filename: object) -> str:
-    return _safe_markdown_filename(filename, "synthesized filename")
+    return _safe_markdown_filename(filename, "distillation filename")
 
 
 def _valid_digest(value: object, label: str) -> str:
@@ -449,7 +449,7 @@ def _valid_digest(value: object, label: str) -> str:
 
 
 def load_distill_documents(run_dir: Path) -> list[dict]:
-    """Load synthesized documents and only their recorded provenance inputs."""
+    """Load distillation documents and only their recorded provenance inputs."""
     run_dir = Path(run_dir)
     state = _read_json(run_dir / "state.json", "state.json")
     if not isinstance(state, dict):
@@ -483,41 +483,41 @@ def load_distill_documents(run_dir: Path) -> list[dict]:
                 raise EvaluationError(f"state contains duplicate summary: {filename}")
             summary_owners[filename] = source_key
 
-    records = state.get("synthesized_documents", [])
+    records = state.get("distillation_documents", [])
     if not isinstance(records, list):
-        raise EvaluationError("state synthesized_documents must be an array")
+        raise EvaluationError("state distillation_documents must be an array")
     if len(records) > MAX_DOCUMENTS:
         raise EvaluationError(
             f"document limit exceeded: {len(records)} > {MAX_DOCUMENTS}"
         )
-    synthesized_dir = run_dir / "synthesized"
+    distillation_dir = run_dir / "distillations"
     result = []
     for index, record in enumerate(records):
         if not isinstance(record, dict):
-            raise EvaluationError("state synthesized records must be objects")
+            raise EvaluationError("state distillation records must be objects")
         filename = _safe_distill_filename(record.get("filename"))
-        if record.get("kind") != "distill":
-            raise EvaluationError(f"state synthesized record {filename} has an invalid kind")
+        if record.get("kind") != "distillation":
+            raise EvaluationError(f"state distillation record {filename} has an invalid kind")
         inputs = record.get("derived_from")
         if not isinstance(inputs, list) or not inputs:
-            raise EvaluationError(f"state synthesized record {filename} has no provenance")
+            raise EvaluationError(f"state distillation record {filename} has no provenance")
         source_keys = set()
         evidence = []
         for input_index, item in enumerate(inputs):
             if not isinstance(item, dict):
-                raise EvaluationError("synthesized provenance entries must be objects")
+                raise EvaluationError("distillation provenance entries must be objects")
             source_key = item.get("source_key")
             if not isinstance(source_key, str) or not source_key:
-                raise EvaluationError("synthesized provenance source_key is invalid")
+                raise EvaluationError("distillation provenance source_key is invalid")
             kind = item.get("kind")
             if kind not in ("raw", "summary"):
-                raise EvaluationError("synthesized provenance kind is invalid")
+                raise EvaluationError("distillation provenance kind is invalid")
             input_filename = _safe_markdown_filename(item.get("filename"), "provenance filename")
             digest = _valid_digest(item.get("content_digest"), "provenance content_digest")
             owners = raw_owners if kind == "raw" else summary_owners
             if owners.get(input_filename) != source_key:
                 raise EvaluationError(
-                    f"synthesized provenance entry {index}:{input_index} does not belong to source {source_key}"
+                    f"distillation provenance entry {index}:{input_index} does not belong to source {source_key}"
                 )
             directory = run_dir / "raw" if kind == "raw" else run_dir / "summaries"
             path = directory / input_filename
@@ -536,13 +536,13 @@ def load_distill_documents(run_dir: Path) -> list[dict]:
             })
             source_keys.add(source_key)
         if len(source_keys) < 2:
-            raise EvaluationError(f"synthesized record {filename} has fewer than two source identities")
-        artifact_path = synthesized_dir / filename
+            raise EvaluationError(f"distillation record {filename} has fewer than two source identities")
+        artifact_path = distillation_dir / filename
         if artifact_path.is_symlink() or not artifact_path.is_file():
-            raise EvaluationError(f"missing synthesized document: {filename}")
-        artifact = _read_text(artifact_path, f"synthesized document {filename}")
+            raise EvaluationError(f"missing distillation document: {filename}")
+        artifact = _read_text(artifact_path, f"distillation document {filename}")
         if not artifact.strip():
-            raise EvaluationError(f"synthesized document is empty: {filename}")
+            raise EvaluationError(f"distillation document is empty: {filename}")
         result.append({"filename": filename, "artifact": artifact, "inputs": evidence})
     return result
 

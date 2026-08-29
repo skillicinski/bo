@@ -46,7 +46,7 @@ func DistillWithTools(ctx context.Context, workspace Workspace, provider agent.C
 	operation := newOperation(CommandDistill, options.Actor)
 	operation.Metrics = &domain.OperationMetrics{
 		Turns: result.Metrics.Turns, ToolCalls: result.Metrics.ToolCalls, Duration: result.Metrics.Duration,
-		SynthesizedWritten: boolCount(result.Filename != ""), SynthesizedSkipped: boolCount(result.Skipped),
+		DistillationWritten: boolCount(result.Filename != ""), DistillationSkipped: boolCount(result.Skipped),
 	}
 	if result.Metrics.Usage != nil {
 		operation.Metrics.Usage = &domain.TokenUsage{
@@ -137,7 +137,7 @@ func runDistill(ctx context.Context, workspace Workspace, provider agent.Complet
 		keys = append(keys, sourceKey)
 	}
 	sort.Strings(keys)
-	message := fmt.Sprintf("Select one useful cross-source theme supported by at least two distinct source identities. If no supported theme exists, call skip_distill. Otherwise call write_distill exactly once with a factual, structured Markdown document. Current source identities: %s. Latest raw documents: %s.", strings.Join(keys, ", "), strings.Join(names, ", "))
+	message := fmt.Sprintf("Select one useful cross-source theme supported by at least two distinct source identities. If no supported theme exists, call skip_distill. Otherwise call write_distillation exactly once with a factual, structured Markdown document. Current source identities: %s. Latest raw documents: %s.", strings.Join(keys, ", "), strings.Join(names, ", "))
 	runtime := agent.Runtime{
 		Provider: provider,
 		Tools:    distillTools(contextState, toolNames),
@@ -163,7 +163,7 @@ func runDistill(ctx context.Context, workspace Workspace, provider agent.Complet
 		return result, runtimeErr
 	}
 	if !contextState.completed && !contextState.skipped {
-		return result, internalerrors.ProviderMalformed("model stopped without write_distill or skip_distill", nil)
+		return result, internalerrors.ProviderMalformed("model stopped without write_distillation or skip_distill", nil)
 	}
 	result.Filename = contextState.filename
 	result.Skipped = contextState.skipped

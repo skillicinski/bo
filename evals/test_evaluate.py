@@ -354,24 +354,24 @@ class EvaluateTests(unittest.TestCase):
     def test_distill_evaluates_only_recorded_provenance(self):
         run = self.root / "distill-success"
         raw_dir = run / "raw"
-        synthesized_dir = run / "synthesized"
+        distillation_dir = run / "distillations"
         raw_dir.mkdir(parents=True)
-        synthesized_dir.mkdir()
+        distillation_dir.mkdir()
         one = "one source\n"
         two = "two source\n"
         (raw_dir / "one.md").write_text(one, encoding="utf-8")
         (raw_dir / "two.md").write_text(two, encoding="utf-8")
         (raw_dir / "extra.md").write_text("must not be sent\n", encoding="utf-8")
         artifact = "# Shared\n\nSources: [one.md](../one.md), [two.md](../two.md)\n"
-        (synthesized_dir / "shared.md").write_text(artifact, encoding="utf-8")
+        (distillation_dir / "shared.md").write_text(artifact, encoding="utf-8")
         state = {
             "sources": [
                 {"source_key": "https://example.test/one", "snapshots": [{"filename": "one.md"}]},
                 {"source_key": "https://example.test/two", "snapshots": [{"filename": "two.md"}]},
             ],
-            "synthesized_documents": [{
+            "distillation_documents": [{
                 "filename": "shared.md",
-                "kind": "distill",
+                "kind": "distillation",
                 "derived_from": [
                     {"source_key": "https://example.test/one", "kind": "raw", "filename": "one.md", "content_digest": hashlib.sha256(one.encode()).hexdigest()},
                     {"source_key": "https://example.test/two", "kind": "raw", "filename": "two.md", "content_digest": hashlib.sha256(two.encode()).hexdigest()},
@@ -401,19 +401,19 @@ class EvaluateTests(unittest.TestCase):
     def test_distill_digest_changes_publish_failed_aggregate(self):
         run = self.root / "distill-digest"
         raw_dir = run / "raw"
-        synthesized_dir = run / "synthesized"
+        distillation_dir = run / "distillations"
         raw_dir.mkdir(parents=True)
-        synthesized_dir.mkdir()
+        distillation_dir.mkdir()
         (raw_dir / "one.md").write_text("changed\n", encoding="utf-8")
         (raw_dir / "two.md").write_text("two\n", encoding="utf-8")
-        (synthesized_dir / "shared.md").write_text("# Shared\n", encoding="utf-8")
+        (distillation_dir / "shared.md").write_text("# Shared\n", encoding="utf-8")
         (run / "state.json").write_text(json.dumps({
             "sources": [
                 {"source_key": "https://example.test/one", "snapshots": [{"filename": "one.md"}]},
                 {"source_key": "https://example.test/two", "snapshots": [{"filename": "two.md"}]},
             ],
-            "synthesized_documents": [{
-                "filename": "shared.md", "kind": "distill", "derived_from": [
+            "distillation_documents": [{
+                "filename": "shared.md", "kind": "distillation", "derived_from": [
                     {"source_key": "https://example.test/one", "kind": "raw", "filename": "one.md", "content_digest": "0" * 64},
                     {"source_key": "https://example.test/two", "kind": "raw", "filename": "two.md", "content_digest": hashlib.sha256(b"two\n").hexdigest()},
                 ],

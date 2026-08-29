@@ -202,7 +202,7 @@ func (w errorWorkspace) CommitSummary(context.Context, bo.SummaryCommit, bo.Revi
 	return bo.State{}, bo.Revision{}, w.err
 }
 
-func (w errorWorkspace) CommitSynthesized(context.Context, bo.SynthesizedCommit, bo.Revision) (bo.State, bo.Revision, error) {
+func (w errorWorkspace) CommitDistillation(context.Context, bo.DistillationCommit, bo.Revision) (bo.State, bo.Revision, error) {
 	return bo.State{}, bo.Revision{}, w.err
 }
 

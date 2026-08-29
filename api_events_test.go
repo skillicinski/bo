@@ -42,7 +42,7 @@ func (w eventPageWorkspace) CommitSummary(context.Context, SummaryCommit, Revisi
 	return State{}, Revision{}, nil
 }
 
-func (w eventPageWorkspace) CommitSynthesized(context.Context, SynthesizedCommit, Revision) (State, Revision, error) {
+func (w eventPageWorkspace) CommitDistillation(context.Context, DistillationCommit, Revision) (State, Revision, error) {
 	return State{}, Revision{}, nil
 }
 

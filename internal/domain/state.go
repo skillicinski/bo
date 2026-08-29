@@ -17,8 +17,8 @@ import (
 )
 
 type State struct {
-	Sources              []SourceRecord      `json:"sources"`
-	SynthesizedDocuments []SynthesizedRecord `json:"synthesized_documents,omitempty"`
+	Sources               []SourceRecord       `json:"sources"`
+	DistillationDocuments []DistillationRecord `json:"distillation_documents,omitempty"`
 }
 
 // SourceRecord is the aggregate for one exact source identity.
@@ -46,22 +46,22 @@ type SummaryRecord struct {
 	ContentModifiedAt string    `json:"content_modified_at,omitempty"`
 }
 
-type SynthesizedInput struct {
+type DistillationInput struct {
 	SourceKey     string       `json:"source_key"`
 	Kind          DocumentKind `json:"kind"`
 	Filename      string       `json:"filename"`
 	ContentDigest string       `json:"content_digest"`
 }
 
-type SynthesizedRecord struct {
-	Filename          string             `json:"filename"`
-	Kind              SynthesizedKind    `json:"kind"`
-	CreatedAt         time.Time          `json:"created_at"`
-	UpdatedAt         time.Time          `json:"updated_at"`
-	ContentDigest     string             `json:"content_digest,omitempty"`
-	ContentSize       *int64             `json:"content_size,omitempty"`
-	ContentModifiedAt string             `json:"content_modified_at,omitempty"`
-	DerivedFrom       []SynthesizedInput `json:"derived_from"`
+type DistillationRecord struct {
+	Filename          string              `json:"filename"`
+	Kind              DocumentKind        `json:"kind"`
+	CreatedAt         time.Time           `json:"created_at"`
+	UpdatedAt         time.Time           `json:"updated_at"`
+	ContentDigest     string              `json:"content_digest,omitempty"`
+	ContentSize       *int64              `json:"content_size,omitempty"`
+	ContentModifiedAt string              `json:"content_modified_at,omitempty"`
+	DerivedFrom       []DistillationInput `json:"derived_from"`
 }
 
 func (s State) MarshalJSON() ([]byte, error) {
@@ -75,15 +75,15 @@ func (s State) MarshalJSON() ([]byte, error) {
 			sources[index].Snapshots = []RawRecord{}
 		}
 	}
-	var synthesized *[]SynthesizedRecord
-	if s.SynthesizedDocuments != nil {
-		value := append([]SynthesizedRecord{}, s.SynthesizedDocuments...)
-		synthesized = &value
+	var distillation *[]DistillationRecord
+	if s.DistillationDocuments != nil {
+		value := append([]DistillationRecord{}, s.DistillationDocuments...)
+		distillation = &value
 	}
 	return json.Marshal(struct {
-		Sources              []SourceRecord      `json:"sources"`
-		SynthesizedDocuments *[]SynthesizedRecord `json:"synthesized_documents,omitempty"`
-	}{Sources: sources, SynthesizedDocuments: synthesized})
+		Sources               []SourceRecord        `json:"sources"`
+		DistillationDocuments *[]DistillationRecord `json:"distillation_documents,omitempty"`
+	}{Sources: sources, DistillationDocuments: distillation})
 }
 
 func MarshalState(state State) ([]byte, error) {
@@ -186,60 +186,60 @@ func (s State) Validate() error {
 			return internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("sources[%d].summary.content_baseline", sourceIndex), err)
 		}
 	}
-	synthesizedFilenames := make(map[string]string, len(s.SynthesizedDocuments))
-	for index, record := range s.SynthesizedDocuments {
+	distillationFilenames := make(map[string]string, len(s.DistillationDocuments))
+	for index, record := range s.DistillationDocuments {
 		if err := ValidateDocumentName(record.Filename); err != nil {
-			return internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("synthesized_documents[%d].filename", index), err)
+			return internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("distillation_documents[%d].filename", index), err)
 		}
-		if previous, exists := synthesizedFilenames[record.Filename]; exists {
-			return internalerrors.Validation(fmt.Sprintf("synthesized_documents[%d].filename: already used by %s", index, previous))
+		if previous, exists := distillationFilenames[record.Filename]; exists {
+			return internalerrors.Validation(fmt.Sprintf("distillation_documents[%d].filename: already used by %s", index, previous))
 		}
-		synthesizedFilenames[record.Filename] = fmt.Sprintf("synthesized_documents[%d]", index)
-		if record.Kind != SynthesizedKindDistill {
-			return internalerrors.Validation(fmt.Sprintf("synthesized_documents[%d].kind: invalid synthesized kind %q", index, record.Kind))
+		distillationFilenames[record.Filename] = fmt.Sprintf("distillation_documents[%d]", index)
+		if record.Kind != DocumentKindDistillation {
+			return internalerrors.Validation(fmt.Sprintf("distillation_documents[%d].kind: invalid distillation kind %q", index, record.Kind))
 		}
 		if err := ValidateTimestamp(record.CreatedAt); err != nil {
-			return internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("synthesized_documents[%d].created_at", index), err)
+			return internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("distillation_documents[%d].created_at", index), err)
 		}
 		if err := ValidateTimestamp(record.UpdatedAt); err != nil {
-			return internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("synthesized_documents[%d].updated_at", index), err)
+			return internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("distillation_documents[%d].updated_at", index), err)
 		}
 		if record.UpdatedAt.Before(record.CreatedAt) {
-			return internalerrors.Validation(fmt.Sprintf("synthesized_documents[%d].updated_at: before created_at", index))
+			return internalerrors.Validation(fmt.Sprintf("distillation_documents[%d].updated_at: before created_at", index))
 		}
 		if err := validateDocumentBaseline(record.ContentDigest, record.ContentSize, record.ContentModifiedAt); err != nil {
-			return internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("synthesized_documents[%d].content_baseline", index), err)
+			return internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("distillation_documents[%d].content_baseline", index), err)
 		}
 		if len(record.DerivedFrom) < 1 {
-			return internalerrors.Validation(fmt.Sprintf("synthesized_documents[%d].derived_from: must not be empty", index))
+			return internalerrors.Validation(fmt.Sprintf("distillation_documents[%d].derived_from: must not be empty", index))
 		}
 		inputKeys := make(map[string]struct{}, len(record.DerivedFrom))
 		distinctSources := make(map[string]struct{}, len(record.DerivedFrom))
 		for inputIndex, input := range record.DerivedFrom {
 			if err := ValidateSourceKey(input.SourceKey); err != nil {
-				return internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("synthesized_documents[%d].derived_from[%d].source_key", index, inputIndex), err)
+				return internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("distillation_documents[%d].derived_from[%d].source_key", index, inputIndex), err)
 			}
 			if input.Kind != DocumentKindRaw && input.Kind != DocumentKindSummary {
-				return internalerrors.Validation(fmt.Sprintf("synthesized_documents[%d].derived_from[%d].kind: invalid document kind %q", index, inputIndex, input.Kind))
+				return internalerrors.Validation(fmt.Sprintf("distillation_documents[%d].derived_from[%d].kind: invalid document kind %q", index, inputIndex, input.Kind))
 			}
 			if err := ValidateDocumentName(input.Filename); err != nil {
-				return internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("synthesized_documents[%d].derived_from[%d].filename", index, inputIndex), err)
+				return internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("distillation_documents[%d].derived_from[%d].filename", index, inputIndex), err)
 			}
 			if err := validateDigest(input.ContentDigest); err != nil {
-				return internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("synthesized_documents[%d].derived_from[%d].content_digest", index, inputIndex), err)
+				return internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("distillation_documents[%d].derived_from[%d].content_digest", index, inputIndex), err)
 			}
 			key := fmt.Sprintf("%s\x00%s\x00%s", input.SourceKey, input.Kind, input.Filename)
 			if _, exists := inputKeys[key]; exists {
-				return internalerrors.Validation(fmt.Sprintf("synthesized_documents[%d].derived_from[%d]: duplicate input", index, inputIndex))
+				return internalerrors.Validation(fmt.Sprintf("distillation_documents[%d].derived_from[%d]: duplicate input", index, inputIndex))
 			}
 			inputKeys[key] = struct{}{}
 			distinctSources[input.SourceKey] = struct{}{}
 			if !sourceContainsDocument(s.Sources, input) {
-				return internalerrors.Validation(fmt.Sprintf("synthesized_documents[%d].derived_from[%d]: document %q does not belong to source %q", index, inputIndex, input.Filename, input.SourceKey))
+				return internalerrors.Validation(fmt.Sprintf("distillation_documents[%d].derived_from[%d]: document %q does not belong to source %q", index, inputIndex, input.Filename, input.SourceKey))
 			}
 		}
 		if len(distinctSources) < 2 {
-			return internalerrors.Validation(fmt.Sprintf("synthesized_documents[%d].derived_from: must contain at least two source identities", index))
+			return internalerrors.Validation(fmt.Sprintf("distillation_documents[%d].derived_from: must contain at least two source identities", index))
 		}
 	}
 	return nil
@@ -255,7 +255,7 @@ func validateDigest(digest string) error {
 	return nil
 }
 
-func sourceContainsDocument(sources []SourceRecord, input SynthesizedInput) bool {
+func sourceContainsDocument(sources []SourceRecord, input DistillationInput) bool {
 	for _, source := range sources {
 		if source.SourceKey != input.SourceKey {
 			continue

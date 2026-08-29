@@ -448,7 +448,7 @@ func TestLocalSummaryCommitDoesNotUseFixedTemporary(t *testing.T) {
 	}
 }
 
-func TestLocalSynthesizedCommitListsReadsAndRecordsProvenance(t *testing.T) {
+func TestLocalDistillationCommitListsReadsAndRecordsProvenance(t *testing.T) {
 	store, _ := seededStore(t)
 	_, revision, err := store.ReadState(context.Background())
 	if err != nil {
@@ -470,39 +470,39 @@ func TestLocalSynthesizedCommitListsReadsAndRecordsProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	commit := application.SynthesizedCommit{
-		Kind: domain.SynthesizedKindDistill, Filename: "shared-facts.md", CreatedAt: time.Unix(3, 0).UTC(), UpdatedAt: time.Unix(3, 0).UTC(), Contents: []byte("# Shared facts\n"),
-		DerivedFrom: []domain.SynthesizedInput{
+	commit := application.DistillationCommit{
+		Kind: domain.DocumentKindDistillation, Filename: "shared-facts.md", CreatedAt: time.Unix(3, 0).UTC(), UpdatedAt: time.Unix(3, 0).UTC(), Contents: []byte("# Shared facts\n"),
+		DerivedFrom: []domain.DistillationInput{
 			{SourceKey: "https://example.test/one", Kind: domain.DocumentKindRaw, Filename: "one.md", ContentDigest: application.NewRevision(one).String()},
 			{SourceKey: "https://example.test/two", Kind: domain.DocumentKindRaw, Filename: "two.md", ContentDigest: application.NewRevision(two).String()},
 		},
 		Event: domain.Operation{
-			OperationID: "synthesized-test", Attempt: 1, Timestamp: "1970-01-01T00:00:03Z", Actor: "test",
-			Command: domain.CommandWriteSynthesized, Outcome: domain.OutcomeCommitted,
-			Document: &domain.DocumentIdentity{Kind: domain.DocumentKindSynthesized, Filename: "shared-facts.md"},
+			OperationID: "distillation-test", Attempt: 1, Timestamp: "1970-01-01T00:00:03Z", Actor: "test",
+			Command: domain.CommandWriteDistillation, Outcome: domain.OutcomeCommitted,
+			Document: &domain.DocumentIdentity{Kind: domain.DocumentKindDistillation, Filename: "shared-facts.md"},
 		},
 	}
-	state, revision, err := store.CommitSynthesized(context.Background(), commit, revision)
-	if err != nil || len(state.SynthesizedDocuments) != 1 {
+	state, revision, err := store.CommitDistillation(context.Background(), commit, revision)
+	if err != nil || len(state.DistillationDocuments) != 1 {
 		t.Fatalf("commit state = %#v, error = %v", state, err)
 	}
-	refs, err := store.ListDocuments(context.Background(), domain.DocumentKindSynthesized)
-	if err != nil || len(refs) != 1 || refs[0] != domain.SynthesizedRef("shared-facts.md") {
-		t.Fatalf("synthesized refs = %#v, error = %v", refs, err)
+	refs, err := store.ListDocuments(context.Background(), domain.DocumentKindDistillation)
+	if err != nil || len(refs) != 1 || refs[0] != domain.DistillationRef("shared-facts.md") {
+		t.Fatalf("distillation refs = %#v, error = %v", refs, err)
 	}
-	contents, err := store.ReadDocument(context.Background(), domain.SynthesizedRef("shared-facts.md"))
+	contents, err := store.ReadDocument(context.Background(), domain.DistillationRef("shared-facts.md"))
 	if err != nil || string(contents) != string(commit.Contents) {
-		t.Fatalf("synthesized contents = %q, error = %v", contents, err)
+		t.Fatalf("distillation contents = %q, error = %v", contents, err)
 	}
 	loaded, _, err := store.ReadState(context.Background())
-	if err != nil || loaded.SynthesizedDocuments[0].ContentDigest != application.NewRevision(commit.Contents).String() || loaded.SynthesizedDocuments[0].ContentSize == nil {
-		t.Fatalf("synthesized baseline = %#v, error = %v", loaded.SynthesizedDocuments, err)
+	if err != nil || loaded.DistillationDocuments[0].ContentDigest != application.NewRevision(commit.Contents).String() || loaded.DistillationDocuments[0].ContentSize == nil {
+		t.Fatalf("distillation baseline = %#v, error = %v", loaded.DistillationDocuments, err)
 	}
 	page, err := store.ReadEvents(context.Background(), 0, 20)
-	if err != nil || page.Entries[len(page.Entries)-1].Command != domain.CommandWriteSynthesized {
-		t.Fatalf("synthesized event = %#v, error = %v", page, err)
+	if err != nil || page.Entries[len(page.Entries)-1].Command != domain.CommandWriteDistillation {
+		t.Fatalf("distillation event = %#v, error = %v", page, err)
 	}
-	if _, _, err := store.CommitSynthesized(context.Background(), commit, revision); !bo.IsKind(err, bo.ErrorKindAlreadyExists) {
-		t.Fatalf("duplicate synthesized commit error = %v", err)
+	if _, _, err := store.CommitDistillation(context.Background(), commit, revision); !bo.IsKind(err, bo.ErrorKindAlreadyExists) {
+		t.Fatalf("duplicate distillation commit error = %v", err)
 	}
 }

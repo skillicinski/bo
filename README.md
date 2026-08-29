@@ -70,7 +70,7 @@ Use runtime limits such as `--max-turns`, `--max-tool-calls`, and
 
 Distill selects one useful theme supported by at least two source identities.
 It reads current raw snapshots and current summaries, then creates at most one
-new Markdown document under `synthesized/`. It never changes summaries.
+new Markdown document under `distillations/`. It never changes summaries.
 
 ```bash
 bo distill notes
@@ -158,9 +158,9 @@ writes, and conditional document updates. Each update includes the `Revision`
 returned by the last state read. The revision lets bo detect a concurrent or
 manual change; a backend should reject a stale revision.
 
-`Distill` creates one `SynthesizedRecord` with exact raw and summary input
+`Distill` creates one `DistillationRecord` with exact raw and summary input
 references and content digests. A backend implements this through
-`CommitSynthesized`; synthesized documents use the `synthesized/` document
+`CommitDistillation`; distillation documents use the `distillations/` document
 kind and are create-only.
 
 For a cloud caller, pass `SnapSourceConfig` in `SnapRequest` to disable local

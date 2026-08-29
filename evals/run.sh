@@ -108,11 +108,11 @@ if [ -d "$target/summaries" ]; then
     done
 fi
 
-if [ "$task" = distill ] && [ -d "$target/synthesized" ]; then
-	mkdir -p "$report/synthesized"
-	for file in "$target"/synthesized/*.md; do
+if [ "$task" = distill ] && [ -d "$target/distillations" ]; then
+	mkdir -p "$report/distillations"
+	for file in "$target"/distillations/*.md; do
 		[ -f "$file" ] || continue
-		cp "$file" "$report/synthesized/$(basename "$file")"
+		cp "$file" "$report/distillations/$(basename "$file")"
 	done
 fi
 

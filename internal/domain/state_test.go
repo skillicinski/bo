@@ -75,15 +75,15 @@ func TestStateJSONIsStable(t *testing.T) {
 	}
 }
 
-func TestSynthesizedStateJSONAndValidation(t *testing.T) {
+func TestDistillationStateJSONAndValidation(t *testing.T) {
 	validTime := time.Date(2026, time.August, 23, 12, 34, 56, 0, time.UTC)
-	state := validSynthesizedState(validTime)
+	state := validDistillationState(validTime)
 	data, err := domain.MarshalState(state)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), `"synthesized_documents"`) {
-		t.Fatalf("synthesized state field is missing: %s", data)
+	if !strings.Contains(string(data), `"distillation_documents"`) {
+		t.Fatalf("distillation state field is missing: %s", data)
 	}
 	roundTrip, err := domain.UnmarshalState(data)
 	if err != nil {
@@ -93,42 +93,44 @@ func TestSynthesizedStateJSONAndValidation(t *testing.T) {
 		t.Fatalf("state changed after round trip: %#v != %#v", state, roundTrip)
 	}
 	oldState, err := domain.UnmarshalState([]byte(`{"sources":[]}`))
-	if err != nil || len(oldState.SynthesizedDocuments) != 0 {
-		t.Fatalf("state without synthesized_documents = %#v, %v", oldState, err)
+	if err != nil || len(oldState.DistillationDocuments) != 0 {
+		t.Fatalf("state without distillation_documents = %#v, %v", oldState, err)
 	}
 
 	cases := []struct {
 		name   string
 		mutate func(*domain.State)
 	}{
-		{name: "invalid synthesized kind", mutate: func(state *domain.State) { state.SynthesizedDocuments[0].Kind = "unknown" }},
+		{name: "invalid distillation kind", mutate: func(state *domain.State) { state.DistillationDocuments[0].Kind = "unknown" }},
 		{name: "invalid input kind", mutate: func(state *domain.State) {
-			state.SynthesizedDocuments[0].DerivedFrom[0].Kind = domain.DocumentKindSynthesized
+			state.DistillationDocuments[0].DerivedFrom[0].Kind = domain.DocumentKindDistillation
 		}},
-		{name: "invalid input digest", mutate: func(state *domain.State) { state.SynthesizedDocuments[0].DerivedFrom[0].ContentDigest = "not-a-digest" }},
-		{name: "missing input", mutate: func(state *domain.State) { state.SynthesizedDocuments[0].DerivedFrom[0].Filename = "missing.md" }},
+		{name: "invalid input digest", mutate: func(state *domain.State) {
+			state.DistillationDocuments[0].DerivedFrom[0].ContentDigest = "not-a-digest"
+		}},
+		{name: "missing input", mutate: func(state *domain.State) { state.DistillationDocuments[0].DerivedFrom[0].Filename = "missing.md" }},
 		{name: "wrong input owner", mutate: func(state *domain.State) {
-			state.SynthesizedDocuments[0].DerivedFrom[0].SourceKey = "https://example.test/two"
+			state.DistillationDocuments[0].DerivedFrom[0].SourceKey = "https://example.test/two"
 		}},
 		{name: "duplicate input", mutate: func(state *domain.State) {
-			state.SynthesizedDocuments[0].DerivedFrom = append(state.SynthesizedDocuments[0].DerivedFrom, state.SynthesizedDocuments[0].DerivedFrom[0])
+			state.DistillationDocuments[0].DerivedFrom = append(state.DistillationDocuments[0].DerivedFrom, state.DistillationDocuments[0].DerivedFrom[0])
 		}},
 		{name: "one source identity", mutate: func(state *domain.State) {
-			state.SynthesizedDocuments[0].DerivedFrom = state.SynthesizedDocuments[0].DerivedFrom[:2]
+			state.DistillationDocuments[0].DerivedFrom = state.DistillationDocuments[0].DerivedFrom[:2]
 		}},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			candidate := validSynthesizedState(validTime)
+			candidate := validDistillationState(validTime)
 			test.mutate(&candidate)
 			if _, err := domain.MarshalState(candidate); err == nil {
-				t.Fatal("invalid synthesized state was accepted")
+				t.Fatal("invalid distillation state was accepted")
 			}
 		})
 	}
 }
 
-func validSynthesizedState(timestamp time.Time) domain.State {
+func validDistillationState(timestamp time.Time) domain.State {
 	return domain.State{Sources: []domain.SourceRecord{
 		{
 			SourceKey: "https://example.test/one",
@@ -136,9 +138,9 @@ func validSynthesizedState(timestamp time.Time) domain.State {
 			Summary:   &domain.SummaryRecord{Filename: "one-summary.md", DerivedFrom: "one.md", CreatedAt: timestamp, UpdatedAt: timestamp},
 		},
 		{SourceKey: "https://example.test/two", Snapshots: []domain.RawRecord{{Filename: "two.md", WrittenAt: timestamp.Add(time.Second)}}},
-	}, SynthesizedDocuments: []domain.SynthesizedRecord{{
-		Filename: "distill.md", Kind: domain.SynthesizedKindDistill, CreatedAt: timestamp, UpdatedAt: timestamp,
-		DerivedFrom: []domain.SynthesizedInput{
+	}, DistillationDocuments: []domain.DistillationRecord{{
+		Filename: "distill.md", Kind: domain.DocumentKindDistillation, CreatedAt: timestamp, UpdatedAt: timestamp,
+		DerivedFrom: []domain.DistillationInput{
 			{SourceKey: "https://example.test/one", Kind: domain.DocumentKindRaw, Filename: "one.md", ContentDigest: testDigest("one\n")},
 			{SourceKey: "https://example.test/one", Kind: domain.DocumentKindSummary, Filename: "one-summary.md", ContentDigest: testDigest("one summary\n")},
 			{SourceKey: "https://example.test/two", Kind: domain.DocumentKindRaw, Filename: "two.md", ContentDigest: testDigest("two\n")},

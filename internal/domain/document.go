@@ -3,9 +3,9 @@ package domain
 type DocumentKind string
 
 const (
-	DocumentKindRaw         DocumentKind = "raw"
-	DocumentKindSummary     DocumentKind = "summary"
-	DocumentKindSynthesized DocumentKind = "synthesized"
+	DocumentKindRaw          DocumentKind = "raw"
+	DocumentKindSummary      DocumentKind = "summary"
+	DocumentKindDistillation DocumentKind = "distillation"
 )
 
 type DocumentRef struct {
@@ -15,10 +15,6 @@ type DocumentRef struct {
 
 func RawRef(name string) DocumentRef     { return DocumentRef{Kind: DocumentKindRaw, Name: name} }
 func SummaryRef(name string) DocumentRef { return DocumentRef{Kind: DocumentKindSummary, Name: name} }
-func SynthesizedRef(name string) DocumentRef {
-	return DocumentRef{Kind: DocumentKindSynthesized, Name: name}
+func DistillationRef(name string) DocumentRef {
+	return DocumentRef{Kind: DocumentKindDistillation, Name: name}
 }
-
-type SynthesizedKind string
-
-const SynthesizedKindDistill SynthesizedKind = "distill"

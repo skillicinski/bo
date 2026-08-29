@@ -136,7 +136,7 @@ func TestPublicDistill(t *testing.T) {
 				"role": "assistant",
 				"tool_calls": []any{map[string]any{
 					"id": "write", "type": "function",
-					"function": map[string]string{"name": "write_distill", "arguments": `{"title":"Shared facts","introduction":"intro","sections":[{"heading":"Facts","paragraph":"paragraph","bullets":["one","two"],"sources":[{"source_key":"https://example.test/one","kind":"raw","filename":"one.md"},{"source_key":"https://example.test/two","kind":"raw","filename":"two.md"}]}]}`},
+					"function": map[string]string{"name": "write_distillation", "arguments": `{"title":"Shared facts","introduction":"intro","sections":[{"heading":"Facts","paragraph":"paragraph","bullets":["one","two"],"sources":[{"source_key":"https://example.test/one","kind":"raw","filename":"one.md"},{"source_key":"https://example.test/two","kind":"raw","filename":"two.md"}]}]}`},
 				}},
 			},
 			"finish_reason": "tool_calls",
@@ -160,7 +160,7 @@ func TestPublicDistill(t *testing.T) {
 		}),
 		Options: bo.SynthesisOptions{MaxTurns: 3, MaxToolCalls: 3, MaxToolOutputBytes: 4096, MaxResponseTokens: 64, TimeoutSeconds: 5},
 	})
-	if err != nil || result.Skipped || result.Filename != "shared-facts.md" || len(store.state.SynthesizedDocuments) != 1 {
+	if err != nil || result.Skipped || result.Filename != "shared-facts.md" || len(store.state.DistillationDocuments) != 1 {
 		t.Fatalf("distill = %#v, error = %v, state = %#v", result, err, store.state)
 	}
 }
