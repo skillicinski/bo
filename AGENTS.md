@@ -36,7 +36,7 @@ the current local binary, stores its workspace under `tmp/bo-dev-home`, and
 does not require a release. `mise run clean` removes the local binary and test
 workspace.
 
-## Evaluation runbook
+## Evals
 
 1. Run `mise install` from the repository root.
 2. Run `mkdir -p evals/corpora`, then create `evals/corpora/default.txt`. Put one URL or repository-relative Markdown path on each line. Blank lines and lines that start with `#` are ignored. The directory is local and ignored by Git.
