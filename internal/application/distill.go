@@ -22,10 +22,12 @@ type DistillRequest struct {
 }
 
 type DistillResult struct {
-	Filename string        `json:"filename,omitempty"`
-	Skipped  bool          `json:"skipped"`
-	Reason   string        `json:"reason,omitempty"`
-	Metrics  agent.Metrics `json:"metrics"`
+	Filename  string        `json:"filename,omitempty"`
+	Skipped   bool          `json:"skipped"`
+	Reason    string        `json:"reason,omitempty"`
+	Committed []Operation   `json:"-"`
+	Filenames []string      `json:"-"`
+	Metrics   agent.Metrics `json:"metrics"`
 }
 
 func Distill(ctx context.Context, workspace Workspace, provider agent.CompletionProvider, config SynthesisOptions, options OperationOptions) (DistillResult, error) {
@@ -43,10 +45,11 @@ func DistillWithTools(ctx context.Context, workspace Workspace, provider agent.C
 		return DistillResult{}, internalerrors.Request("workspace is not configured")
 	}
 	result, returnErr = runDistill(ctx, workspace, provider, config, toolNames, options)
+	written := distillationCount(result)
 	operation := newOperation(CommandDistill, options.Actor)
 	operation.Metrics = &domain.OperationMetrics{
 		Turns: result.Metrics.Turns, ToolCalls: result.Metrics.ToolCalls, Duration: result.Metrics.Duration,
-		DistillationWritten: boolCount(result.Filename != ""), DistillationSkipped: boolCount(result.Skipped),
+		DistillationWritten: written, DistillationSkipped: boolCount(result.Skipped && written == 0),
 	}
 	if result.Metrics.Usage != nil {
 		operation.Metrics.Usage = &domain.TokenUsage{
@@ -69,6 +72,13 @@ func boolCount(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+func distillationCount(result DistillResult) int {
+	if len(result.Filenames) > 0 {
+		return len(result.Filenames)
+	}
+	return boolCount(result.Filename != "")
 }
 
 func distillFailure(ctx context.Context, workspace Workspace, actor string, cause error) error {
@@ -101,6 +111,9 @@ func runDistill(ctx context.Context, workspace Workspace, provider agent.Complet
 	if len(catalog.sources) == 0 {
 		return DistillResult{}, internalerrors.MissingResource("no current raw Markdown documents in workspace")
 	}
+	if len(catalog.sources) < 2 {
+		return DistillResult{Skipped: true, Reason: "at least two source identities are required"}, nil
+	}
 	result := DistillResult{}
 	readLogsEnabled := false
 	for _, name := range toolNames {
@@ -119,7 +132,7 @@ func runDistill(ctx context.Context, workspace Workspace, provider agent.Complet
 	contextState := &distillContext{
 		directory: workspace.Name(), workspace: workspace, options: options,
 		catalog: catalog, state: state, revision: revision, maxOutputBytes: config.MaxToolOutputBytes,
-		readDocuments: map[string][]byte{}, readRefs: map[string]bool{}, mutationOps: map[string]Operation{},
+		readDocuments: map[string][]byte{}, readRefs: map[string]bool{}, readDistillations: map[string]bool{}, mutationOps: map[string]Operation{},
 	}
 	if readLogsEnabled {
 		contextState.logEvents = scopedSynthesisEvents(events, catalog.sources)
@@ -135,12 +148,12 @@ func runDistill(ctx context.Context, workspace Workspace, provider agent.Complet
 		keys = append(keys, sourceKey)
 	}
 	sort.Strings(keys)
-	message := fmt.Sprintf("Select one useful cross-source theme supported by at least two distinct source identities. If no supported theme exists, call skip_distill. Otherwise call write_distillation exactly once with a factual, structured Markdown document. Current source identities: %s. Latest raw documents: %s.", strings.Join(keys, ", "), strings.Join(names, ", "))
+	message := fmt.Sprintf("Process every useful cross-source theme supported by at least two distinct source identities. For a new topic, call write_distillation once; for an existing topic with changed evidence, call edit_distillation once after reading it. When no unprocessed theme remains, call skip_distill exactly once. Current source identities: %s. Latest raw documents: %s.", strings.Join(keys, ", "), strings.Join(names, ", "))
 	runtime := agent.Runtime{
 		Provider: provider,
 		Tools:    distillTools(contextState, toolNames),
 		Done: func() bool {
-			return contextState.completed || contextState.skipped
+			return contextState.skipped
 		},
 	}
 	runtimeContext, cancel := context.WithTimeout(ctx, time.Duration(config.RuntimeTimeoutSeconds)*time.Second)
@@ -154,6 +167,8 @@ func runDistill(ctx context.Context, workspace Workspace, provider agent.Complet
 	})
 	cancel()
 	result.Metrics = runtimeResult.Metrics
+	result.Committed = append(result.Committed, contextState.committed...)
+	result.Filenames = append(result.Filenames, contextState.filenames...)
 	if contextState.eventFailure != nil {
 		if runtimeErr != nil {
 			return result, errors.Join(contextState.eventFailure, runtimeErr)
@@ -163,11 +178,15 @@ func runDistill(ctx context.Context, workspace Workspace, provider agent.Complet
 	if runtimeErr != nil {
 		return result, runtimeErr
 	}
-	if !contextState.completed && !contextState.skipped {
-		return result, internalerrors.ProviderMalformed("model stopped without write_distillation or skip_distill", nil)
+	if !contextState.skipped {
+		return result, internalerrors.ProviderMalformed("model stopped without skip_distill", nil)
 	}
-	result.Filename = contextState.filename
-	result.Skipped = contextState.skipped
+	if len(result.Filenames) > 0 {
+		result.Filename = result.Filenames[len(result.Filenames)-1]
+	} else {
+		result.Filename = contextState.filename
+	}
+	result.Skipped = contextState.skipped && len(result.Filenames) == 0
 	result.Reason = contextState.reason
 	return result, nil
 }

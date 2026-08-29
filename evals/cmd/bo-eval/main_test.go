@@ -17,8 +17,8 @@ func TestParseArgsRequiresExplicitTools(t *testing.T) {
 }
 
 func TestParseWorkflowArgsSupportsDistill(t *testing.T) {
-	workflow, name, tools, err := parseWorkflowArgs([]string{"distill", "notes", "--tools", "read_document,write_distillation"})
-	if err != nil || workflow != "distill" || name != "notes" || len(tools) != 2 || tools[1] != "write_distillation" {
+	workflow, name, tools, err := parseWorkflowArgs([]string{"distill", "notes", "--tools", "read_document,write_distillation,skip_distill"})
+	if err != nil || workflow != "distill" || name != "notes" || len(tools) != 3 || tools[2] != "skip_distill" {
 		t.Fatalf("parseWorkflowArgs = %q, %q, %#v, %v", workflow, name, tools, err)
 	}
 }

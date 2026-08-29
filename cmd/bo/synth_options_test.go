@@ -26,6 +26,24 @@ func TestParseSynthOptions(t *testing.T) {
 	}
 }
 
+func TestParseSynthMode(t *testing.T) {
+	mode, args, err := parseSynthMode([]string{"summarize", "--max-turns", "2"})
+	if err != nil || mode != bo.SynthModeSummarize || len(args) != 2 {
+		t.Fatalf("summarize mode = %v, %v, %v", mode, args, err)
+	}
+	mode, args, err = parseSynthMode([]string{"distill"})
+	if err != nil || mode != bo.SynthModeDistill || len(args) != 0 {
+		t.Fatalf("distill mode = %v, %v, %v", mode, args, err)
+	}
+	mode, args, err = parseSynthMode([]string{"--max-turns", "2"})
+	if err != nil || mode != bo.SynthModeDefault || len(args) != 2 {
+		t.Fatalf("default mode = %v, %v, %v", mode, args, err)
+	}
+	if _, _, err := parseSynthMode([]string{"unknown"}); err == nil {
+		t.Fatal("unknown mode succeeded")
+	}
+}
+
 func TestAddSeedHintUsesErrorKind(t *testing.T) {
 	err := bo.NewError(bo.ErrorKindMissingResource, "target is missing")
 	hinted := addSeedHint(err, "notes")

@@ -3,24 +3,31 @@ package main
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/skillicinski/bo"
 )
 
 func synthUsage() string {
-	return "usage: bo synth <name> [--max-turns N] [--max-tool-calls N] [--max-tool-output-bytes N] [--max-response-tokens N] [--timeout-seconds N]"
-}
-
-func distillUsage() string {
-	return "usage: bo distill <name> [--max-turns N] [--max-tool-calls N] [--max-tool-output-bytes N] [--max-response-tokens N] [--timeout-seconds N]"
+	return "usage: bo synth <name> [summarize|distill] [--max-turns N] [--max-tool-calls N] [--max-tool-output-bytes N] [--max-response-tokens N] [--timeout-seconds N]"
 }
 
 func parseSynthOptions(args []string) (bo.SynthesisOptions, error) {
 	return parseAgentOptions(args, synthUsage())
 }
 
-func parseDistillOptions(args []string) (bo.SynthesisOptions, error) {
-	return parseAgentOptions(args, distillUsage())
+func parseSynthMode(args []string) (bo.SynthMode, []string, error) {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return bo.SynthModeDefault, args, nil
+	}
+	switch args[0] {
+	case "summarize":
+		return bo.SynthModeSummarize, args[1:], nil
+	case "distill":
+		return bo.SynthModeDistill, args[1:], nil
+	default:
+		return bo.SynthModeDefault, nil, fmt.Errorf("%s", synthUsage())
+	}
 }
 
 func parseAgentOptions(args []string, usage string) (bo.SynthesisOptions, error) {

@@ -329,31 +329,44 @@ class EvaluateTests(unittest.TestCase):
         artifact = "# Shared\n\nSources: [article-0.md](../article-0.md), [article-1.md](../article-1.md)\n"
         (run / "distillations").mkdir()
         (run / "distillations" / "shared.md").write_text(artifact, encoding="utf-8")
+        (run / "distillations" / "other.md").write_text(
+            artifact.replace("Shared", "Other"), encoding="utf-8"
+        )
         state = json.loads((run / "state.json").read_text())
-        state["distillation_documents"] = [{
-            "filename": "shared.md",
-            "kind": "distillation",
-            "derived_from": [
-                {
-                    "source_key": "https://example.test/0",
-                    "kind": "raw",
-                    "filename": "article-0.md",
-                    "content_digest": hashlib.sha256(b"raw source\n").hexdigest(),
-                },
-                {
-                    "source_key": "https://example.test/1",
-                    "kind": "raw",
-                    "filename": "article-1.md",
-                    "content_digest": hashlib.sha256(b"raw source\n").hexdigest(),
-                },
-            ],
-        }]
+        distill_inputs = [
+            {
+                "source_key": "https://example.test/0",
+                "kind": "raw",
+                "filename": "article-0.md",
+                "content_digest": hashlib.sha256(b"raw source\n").hexdigest(),
+            },
+            {
+                "source_key": "https://example.test/1",
+                "kind": "raw",
+                "filename": "article-1.md",
+                "content_digest": hashlib.sha256(b"raw source\n").hexdigest(),
+            },
+        ]
+        state["distillation_documents"] = [
+            {
+                "filename": filename,
+                "topic": "shared-facts" if filename == "shared.md" else "other-facts",
+                "kind": "distillation",
+                "derived_from": distill_inputs,
+            }
+            for filename in ("shared.md", "other.md")
+        ]
         (run / "state.json").write_text(json.dumps(state), encoding="utf-8")
 
         class SequenceOpener:
             def __init__(self):
                 self.requests = []
-                self.responses = [valid_result(), valid_result(), valid_distill_result()]
+                self.responses = [
+                    valid_result(),
+                    valid_result(),
+                    valid_distill_result(),
+                    valid_distill_result(),
+                ]
 
             def __call__(self, request, timeout):
                 self.requests.append((request, timeout))
@@ -374,9 +387,10 @@ class EvaluateTests(unittest.TestCase):
         self.assertNotIn("scores", aggregate)
         self.assertEqual(aggregate["stages"]["summarize"]["status"], "success")
         self.assertEqual(aggregate["stages"]["distill"]["status"], "success")
-        self.assertEqual(len(opener.requests), 3)
+        self.assertEqual(len(opener.requests), 4)
         self.assertTrue((run / "evaluation" / "summarize" / "documents").is_dir())
         self.assertTrue((run / "evaluation" / "distill" / "documents" / "shared.md.json").is_file())
+        self.assertTrue((run / "evaluation" / "distill" / "documents" / "other.md.json").is_file())
 
     def test_validation_failure_after_request_has_no_partial_documents(self):
         run = self.make_run(count=2)

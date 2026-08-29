@@ -812,7 +812,7 @@ def _evaluate_distill_stage(
     documents = load_distill_documents(run_dir)
     if not documents:
         if required:
-            raise EvaluationError("end-to-end distill requires exactly one distillation document")
+            raise EvaluationError("end-to-end distill requires at least one distillation document")
         return {
             **metadata,
             "status": "skipped",
@@ -821,10 +821,6 @@ def _evaluate_distill_stage(
             "output_tokens": 0,
             "scores": {},
         }, []
-    if required and len(documents) != 1:
-        raise EvaluationError(
-            f"end-to-end distill requires exactly one distillation document, found {len(documents)}"
-        )
     key = api_key if api_key is not None else os.environ.get("BO_EVAL_API_KEY", "")
     if not key:
         raise EvaluationError("BO_EVAL_API_KEY is not set")

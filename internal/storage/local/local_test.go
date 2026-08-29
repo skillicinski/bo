@@ -471,7 +471,7 @@ func TestLocalDistillationCommitListsReadsAndRecordsProvenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	commit := application.DistillationCommit{
-		Kind: domain.DocumentKindDistillation, Filename: "shared-facts.md", CreatedAt: time.Unix(3, 0).UTC(), UpdatedAt: time.Unix(3, 0).UTC(), Contents: []byte("# Shared facts\n"),
+		Kind: domain.DocumentKindDistillation, Filename: "shared-facts.md", Topic: "shared-facts", CreatedAt: time.Unix(3, 0).UTC(), UpdatedAt: time.Unix(3, 0).UTC(), Contents: []byte("# Shared facts\n"),
 		DerivedFrom: []domain.DistillationInput{
 			{SourceKey: "https://example.test/one", Kind: domain.DocumentKindRaw, Filename: "one.md", ContentDigest: application.NewRevision(one).String()},
 			{SourceKey: "https://example.test/two", Kind: domain.DocumentKindRaw, Filename: "two.md", ContentDigest: application.NewRevision(two).String()},
@@ -495,12 +495,20 @@ func TestLocalDistillationCommitListsReadsAndRecordsProvenance(t *testing.T) {
 		t.Fatalf("distillation contents = %q, error = %v", contents, err)
 	}
 	loaded, _, err := store.ReadState(context.Background())
-	if err != nil || loaded.DistillationDocuments[0].ContentDigest != application.NewRevision(commit.Contents).String() || loaded.DistillationDocuments[0].ContentSize == nil {
+	if err != nil || loaded.DistillationDocuments[0].Topic != "shared-facts" || loaded.DistillationDocuments[0].ContentDigest != application.NewRevision(commit.Contents).String() || loaded.DistillationDocuments[0].ContentSize == nil {
 		t.Fatalf("distillation baseline = %#v, error = %v", loaded.DistillationDocuments, err)
 	}
 	page, err := store.ReadEvents(context.Background(), 0, 20)
 	if err != nil || page.Entries[len(page.Entries)-1].Command != domain.CommandWriteDistillation {
 		t.Fatalf("distillation event = %#v, error = %v", page, err)
+	}
+	changed := commit
+	changed.Update = true
+	changed.Topic = "other-topic"
+	changed.UpdatedAt = time.Unix(4, 0).UTC()
+	changed.Event.Timestamp = changed.UpdatedAt.Format(time.RFC3339Nano)
+	if _, _, err := store.CommitDistillation(context.Background(), changed, revision); !bo.IsKind(err, bo.ErrorKindValidation) {
+		t.Fatalf("topic-changing update error = %v", err)
 	}
 	if _, _, err := store.CommitDistillation(context.Background(), commit, revision); !bo.IsKind(err, bo.ErrorKindAlreadyExists) {
 		t.Fatalf("duplicate distillation commit error = %v", err)

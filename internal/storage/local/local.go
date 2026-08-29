@@ -515,20 +515,58 @@ func (s *Store) CommitDistillation(ctx context.Context, commit application.Disti
 		return domain.State{}, application.Revision{}, err
 	}
 	path := filepath.Join("distillations", commit.Filename)
-	if _, err := s.root.Lstat(path); err == nil {
+	oldContents, hadOldContents, err := s.optionalDocument(domain.DistillationRef(commit.Filename))
+	if err != nil {
+		return domain.State{}, application.Revision{}, err
+	}
+	if !commit.Update && hadOldContents {
 		return domain.State{}, application.Revision{}, internalerrors.Wrap(internalerrors.KindAlreadyExists, "distillation document already exists", internalerrors.ErrAlreadyExists)
-	} else if !os.IsNotExist(err) {
-		return domain.State{}, application.Revision{}, filesystem(filepath.Join(s.path, path), err)
+	}
+	if commit.Update && !hadOldContents {
+		return domain.State{}, application.Revision{}, internalerrors.MissingResource("distillation document is missing")
 	}
 	record := domain.DistillationRecord{
-		Filename: commit.Filename, Kind: commit.Kind, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt,
+		Filename: commit.Filename, Topic: commit.Topic, Kind: commit.Kind, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt,
 		DerivedFrom: append([]domain.DistillationInput(nil), commit.DerivedFrom...),
+	}
+	replaced := false
+	for index := range current.DistillationDocuments {
+		if current.DistillationDocuments[index].Filename != commit.Filename {
+			continue
+		}
+		if !commit.Update {
+			return domain.State{}, application.Revision{}, internalerrors.AlreadyExists("distillation document already belongs to workspace state")
+		}
+		if current.DistillationDocuments[index].Topic != record.Topic {
+			return domain.State{}, application.Revision{}, internalerrors.Validation("distillation topic cannot change on update")
+		}
+		record.CreatedAt = current.DistillationDocuments[index].CreatedAt
+		replaced = true
+		break
+	}
+	if commit.Update && !replaced {
+		return domain.State{}, application.Revision{}, internalerrors.Conflict("distillation document exists outside workspace state")
+	}
+	if commit.Update {
+		if err := s.ensureDocumentBaseline(&current, domain.DistillationRef(commit.Filename), oldContents); err != nil {
+			return domain.State{}, application.Revision{}, err
+		}
 	}
 	if err := s.validateDistillationInputs(&current, record); err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
 	next := cloneState(current)
-	next.DistillationDocuments = append(next.DistillationDocuments, record)
+	if replaced {
+		for index := range next.DistillationDocuments {
+			if next.DistillationDocuments[index].Filename == commit.Filename {
+				next.DistillationDocuments[index] = record
+				break
+			}
+		}
+	}
+	if !replaced {
+		next.DistillationDocuments = append(next.DistillationDocuments, record)
+	}
 	if err := next.Validate(); err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
@@ -536,7 +574,7 @@ func (s *Store) CommitDistillation(ctx context.Context, commit application.Disti
 	if err != nil {
 		return domain.State{}, application.Revision{}, normalizeStorageError("serializing state.json", err)
 	}
-	transaction := newWorkspaceTransaction(workspaceTransactionKindDistillation, commit.Filename, nil, false, commit.Contents, oldState, data)
+	transaction := newWorkspaceTransaction(workspaceTransactionKindDistillation, commit.Filename, oldContents, hadOldContents, commit.Contents, oldState, data)
 	if err := s.trackTransactionEvent(&transaction, commit.Event); err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
@@ -1352,6 +1390,9 @@ func validateDistillationCommit(commit application.DistillationCommit) error {
 	if err := domain.ValidateDocumentName(commit.Filename); err != nil {
 		return err
 	}
+	if err := domain.ValidateTopic(commit.Topic); err != nil {
+		return err
+	}
 	if err := domain.ValidateTimestamp(commit.CreatedAt); err != nil {
 		return err
 	}
@@ -1427,7 +1468,17 @@ func validateDistillationMutationEvent(event domain.Operation, filename string) 
 
 func (s *Store) validateDistillationInputs(state *domain.State, record domain.DistillationRecord) error {
 	candidate := cloneState(*state)
-	candidate.DistillationDocuments = append(candidate.DistillationDocuments, record)
+	replaced := false
+	for index := range candidate.DistillationDocuments {
+		if candidate.DistillationDocuments[index].Filename == record.Filename {
+			candidate.DistillationDocuments[index] = record
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		candidate.DistillationDocuments = append(candidate.DistillationDocuments, record)
+	}
 	if err := candidate.Validate(); err != nil {
 		return err
 	}
