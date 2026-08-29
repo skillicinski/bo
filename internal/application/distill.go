@@ -90,13 +90,11 @@ func runDistill(ctx context.Context, workspace Workspace, provider agent.Complet
 		return DistillResult{}, internalerrors.Request("distill provider is not configured")
 	}
 	config = normalizedSynthesisOptions(config)
-	runContext, cancel := context.WithTimeout(ctx, time.Duration(config.TimeoutSeconds)*time.Second)
-	defer cancel()
-	state, revision, err := workspace.ReadState(runContext)
+	state, revision, err := workspace.ReadState(ctx)
 	if err != nil {
 		return DistillResult{}, normalizeError(err, internalerrors.KindFilesystem, "reading workspace state")
 	}
-	catalog, err := buildDistillCatalog(runContext, workspace, state)
+	catalog, err := buildDistillCatalog(ctx, workspace, state)
 	if err != nil {
 		return DistillResult{}, err
 	}
@@ -113,13 +111,13 @@ func runDistill(ctx context.Context, workspace Workspace, provider agent.Complet
 	}
 	var events []Operation
 	if readLogsEnabled {
-		events, err = readRecentSynthesisEvents(runContext, workspace)
+		events, err = readRecentSynthesisEvents(ctx, workspace)
 		if err != nil {
 			return DistillResult{}, err
 		}
 	}
 	contextState := &distillContext{
-		ctx: runContext, directory: workspace.Name(), workspace: workspace, options: options,
+		directory: workspace.Name(), workspace: workspace, options: options,
 		catalog: catalog, state: state, revision: revision, maxOutputBytes: config.MaxToolOutputBytes,
 		readDocuments: map[string][]byte{}, readRefs: map[string]bool{}, mutationOps: map[string]Operation{},
 	}
@@ -145,13 +143,16 @@ func runDistill(ctx context.Context, workspace Workspace, provider agent.Complet
 			return contextState.completed || contextState.skipped
 		},
 	}
-	runtimeResult, runtimeErr := runtime.Run(runContext, []agent.ChatMessage{
+	runtimeContext, cancel := context.WithTimeout(ctx, time.Duration(config.RuntimeTimeoutSeconds)*time.Second)
+	contextState.ctx = runtimeContext
+	runtimeResult, runtimeErr := runtime.Run(runtimeContext, []agent.ChatMessage{
 		{Role: "system", Content: distillSystemPrompt(contextState, readLogsEnabled)},
 		{Role: "user", Content: message},
 	}, agent.Options{
 		MaxTurns: config.MaxTurns, MaxToolCalls: config.MaxToolCalls,
 		MaxToolOutputBytes: config.MaxToolOutputBytes, MaxResponseTokens: config.MaxResponseTokens,
 	})
+	cancel()
 	result.Metrics = runtimeResult.Metrics
 	if contextState.eventFailure != nil {
 		if runtimeErr != nil {

@@ -74,7 +74,7 @@ func TestPublicWorkflows(t *testing.T) {
 			})},
 		}),
 		Options: bo.SynthesisOptions{
-			MaxTurns: 1, MaxToolCalls: 1, MaxToolOutputBytes: 1024, MaxResponseTokens: 64, TimeoutSeconds: 5,
+			MaxTurns: 1, MaxToolCalls: 1, MaxToolOutputBytes: 1024, MaxResponseTokens: 64, RuntimeTimeoutSeconds: 5,
 		},
 		Operations: options,
 	})
@@ -158,7 +158,7 @@ func TestPublicDistill(t *testing.T) {
 				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(payload)), Header: http.Header{"Content-Type": []string{"application/json"}}, Request: request}, nil
 			})},
 		}),
-		Options: bo.SynthesisOptions{MaxTurns: 3, MaxToolCalls: 3, MaxToolOutputBytes: 4096, MaxResponseTokens: 64, TimeoutSeconds: 5},
+		Options: bo.SynthesisOptions{MaxTurns: 3, MaxToolCalls: 3, MaxToolOutputBytes: 4096, MaxResponseTokens: 64, RuntimeTimeoutSeconds: 5},
 	})
 	if err != nil || result.Skipped || result.Filename != "shared-facts.md" || len(store.state.DistillationDocuments) != 1 {
 		t.Fatalf("distill = %#v, error = %v, state = %#v", result, err, store.state)

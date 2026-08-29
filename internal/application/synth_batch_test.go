@@ -31,6 +31,7 @@ type batchingProvider struct {
 	written       map[string]bool
 	batches       [][]string
 	requests      []agent.CompletionRequest
+	contexts      []context.Context
 	deadlines     []time.Time
 }
 
@@ -62,6 +63,7 @@ func (w *countingWorkspace) ReadState(ctx context.Context) (domain.State, applic
 
 func (p *batchingProvider) Complete(ctx context.Context, request agent.CompletionRequest) (agent.CompletionResponse, error) {
 	request.Messages = append([]agent.ChatMessage{}, request.Messages...)
+	p.contexts = append(p.contexts, ctx)
 	p.requests = append(p.requests, request)
 	if deadline, ok := ctx.Deadline(); ok {
 		p.deadlines = append(p.deadlines, deadline)
@@ -148,7 +150,7 @@ func TestSynthesisRunsIsolatedRuntimes(t *testing.T) {
 	store, target := seededStore(t)
 	sources := testSources(t, store, 3)
 	provider := &batchingProvider{sources: sources, includeLogs: true, includeCorpus: true, includeDoc: true, provideUsage: true}
-	config := application.SynthesisOptions{MaxTurns: 4, MaxToolCalls: 5, MaxToolOutputBytes: 4096, MaxResponseTokens: 32, TimeoutSeconds: 5}
+	config := application.SynthesisOptions{MaxTurns: 4, MaxToolCalls: 5, MaxToolOutputBytes: 4096, MaxResponseTokens: 32, RuntimeTimeoutSeconds: 5}
 
 	result, err := application.SynthesizeWithTools(context.Background(), store, provider, config, []string{"read_logs", "read_corpus", "read_document", "write_summary"}, operationOptionsFor(target))
 	if err != nil || result.SummariesWritten != len(sources) || result.SummariesSkipped != 0 {
@@ -184,7 +186,7 @@ func TestSynthesisUsesOneRuntimePerSource(t *testing.T) {
 	store, target := seededStore(t)
 	sources := testSources(t, store, 2)
 	provider := &batchingProvider{sources: sources, includeDoc: true, provideUsage: true}
-	config := application.SynthesisOptions{MaxTurns: 10, MaxToolCalls: 10, MaxToolOutputBytes: 4096, MaxResponseTokens: 32, TimeoutSeconds: 5}
+	config := application.SynthesisOptions{MaxTurns: 10, MaxToolCalls: 10, MaxToolOutputBytes: 4096, MaxResponseTokens: 32, RuntimeTimeoutSeconds: 5}
 
 	result, err := application.Synthesize(context.Background(), store, provider, config, operationOptionsFor(target))
 	if err != nil || result.SummariesWritten != 2 || len(provider.batches) != len(sources) {
@@ -205,7 +207,7 @@ func TestSynthesisRunsSixteenIsolatedRuntimesAndBoundsStartupEventReads(t *testi
 	sources := testSources(t, store, 16)
 	workspace := &countingWorkspace{Workspace: store}
 	provider := &batchingProvider{sources: sources, includeLogs: true, includeDoc: true}
-	config := application.SynthesisOptions{MaxTurns: 32, MaxToolCalls: 64, MaxToolOutputBytes: 8192, MaxResponseTokens: 32, TimeoutSeconds: 5}
+	config := application.SynthesisOptions{MaxTurns: 32, MaxToolCalls: 64, MaxToolOutputBytes: 8192, MaxResponseTokens: 32, RuntimeTimeoutSeconds: 5}
 
 	result, err := application.Synthesize(context.Background(), workspace, provider, config, operationOptionsFor(target))
 	if err != nil || result.SummariesWritten != len(sources) {
@@ -266,7 +268,7 @@ func TestSynthesisLaterFailurePreservesAndResumesEarlierRuntimes(t *testing.T) {
 		sources: sources, includeDoc: true, provideUsage: true, failBatch: 2,
 		failure: internalerrors.ProviderRejected("later batch failed", false),
 	}
-	config := application.SynthesisOptions{MaxTurns: 2, MaxToolCalls: 2, MaxToolOutputBytes: 4096, MaxResponseTokens: 32, TimeoutSeconds: 5}
+	config := application.SynthesisOptions{MaxTurns: 2, MaxToolCalls: 2, MaxToolOutputBytes: 4096, MaxResponseTokens: 32, RuntimeTimeoutSeconds: 5}
 	result, err := application.Synthesize(context.Background(), store, provider, config, operationOptionsFor(target))
 	if !internalerrors.IsKind(err, internalerrors.KindProviderRejected) || result.SummariesWritten != 1 || result.SummariesSkipped != 0 || result.Metrics.Usage != nil || len(provider.batches) != 2 {
 		t.Fatalf("failed synthesis = %#v, error = %v", result, err)
@@ -314,24 +316,61 @@ func TestSynthesisLaterFailurePreservesAndResumesEarlierRuntimes(t *testing.T) {
 	}
 }
 
-func TestSynthesisUsesOneDeadlineAcrossRuntimes(t *testing.T) {
+func TestSynthesisUsesFreshRuntimeDeadlines(t *testing.T) {
+	store, target := seededStore(t)
+	sources := testSources(t, store, 2)
+	provider := &batchingProvider{sources: sources, includeDoc: true, provideUsage: true}
+	config := application.SynthesisOptions{MaxTurns: 2, MaxToolCalls: 2, MaxToolOutputBytes: 4096, MaxResponseTokens: 32, RuntimeTimeoutSeconds: 1}
+
+	result, err := application.Synthesize(context.Background(), store, provider, config, operationOptionsFor(target))
+	if err != nil || result.SummariesWritten != len(sources) {
+		t.Fatalf("synthesis = %#v, error = %v", result, err)
+	}
+	if len(provider.contexts) != 4 || len(provider.deadlines) != 4 {
+		t.Fatalf("provider deadlines = %#v", provider.deadlines)
+	}
+	if provider.contexts[0] != provider.contexts[1] || provider.contexts[2] != provider.contexts[3] || provider.contexts[0] == provider.contexts[2] {
+		t.Fatalf("runtime contexts = %#v", provider.contexts)
+	}
+	if !provider.deadlines[0].Equal(provider.deadlines[1]) || !provider.deadlines[2].Equal(provider.deadlines[3]) {
+		t.Fatalf("deadlines within runtime differ: %#v", provider.deadlines)
+	}
+	if provider.deadlines[0].Equal(provider.deadlines[2]) {
+		t.Fatalf("runtime deadlines were reused: %#v", provider.deadlines)
+	}
+}
+
+func TestSynthesisCallerDeadlineStopsOperationAndResumes(t *testing.T) {
 	store, target := seededStore(t)
 	sources := testSources(t, store, 2)
 	provider := &batchingProvider{sources: sources, includeDoc: true, provideUsage: true, blockBatch: 2}
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	config := application.SynthesisOptions{MaxTurns: 2, MaxToolCalls: 2, MaxToolOutputBytes: 4096, MaxResponseTokens: 32, RuntimeTimeoutSeconds: 5}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	config := application.SynthesisOptions{MaxTurns: 2, MaxToolCalls: 2, MaxToolOutputBytes: 4096, MaxResponseTokens: 32, TimeoutSeconds: 5}
 
 	result, err := application.Synthesize(ctx, store, provider, config, operationOptionsFor(target))
 	if !internalerrors.IsKind(err, internalerrors.KindDeadline) || result.SummariesWritten != 1 || result.SummariesSkipped != 0 {
 		t.Fatalf("timed synthesis = %#v, error = %v", result, err)
 	}
-	if len(provider.deadlines) < 3 {
-		t.Fatalf("provider deadlines = %#v", provider.deadlines)
+	firstSummary, err := store.ReadDocument(context.Background(), domain.SummaryRef("source-00.md"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, deadline := range provider.deadlines[1:] {
-		if !deadline.Equal(provider.deadlines[0]) {
-			t.Fatalf("deadlines differ: %#v", provider.deadlines)
-		}
+	state, _, err := store.ReadState(context.Background())
+	if err != nil || state.Sources[0].Summary == nil {
+		t.Fatalf("state after cancellation = %#v, error = %v", state, err)
+	}
+
+	resumeProvider := &batchingProvider{sources: sources, includeDoc: true, provideUsage: true}
+	resumed, err := application.Synthesize(context.Background(), store, resumeProvider, config, operationOptionsFor(target))
+	if err != nil || resumed.SummariesWritten != 1 || resumed.SummariesSkipped != 1 || len(resumeProvider.batches) != 1 {
+		t.Fatalf("resumed synthesis = %#v, batches = %#v, error = %v", resumed, resumeProvider.batches, err)
+	}
+	if len(resumeProvider.batches[0]) != 1 || resumeProvider.batches[0][0] == "https://example.test/00" {
+		t.Fatalf("resume rewrote completed source: %#v", resumeProvider.batches)
+	}
+	lastSummary, err := store.ReadDocument(context.Background(), domain.SummaryRef("source-00.md"))
+	if err != nil || string(lastSummary) != string(firstSummary) {
+		t.Fatalf("completed summary changed: before %q, after %q, error %v", firstSummary, lastSummary, err)
 	}
 }

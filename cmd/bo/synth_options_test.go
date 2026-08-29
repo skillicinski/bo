@@ -12,7 +12,7 @@ func TestParseSynthOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.MaxTurns != 2 || config.MaxToolCalls != 3 || config.MaxToolOutputBytes != 4 || config.MaxResponseTokens != 5 || config.TimeoutSeconds != 6 {
+	if config.MaxTurns != 2 || config.MaxToolCalls != 3 || config.MaxToolOutputBytes != 4 || config.MaxResponseTokens != 5 || config.RuntimeTimeoutSeconds != 6 {
 		t.Fatalf("config = %#v", config)
 	}
 	if _, err := parseSynthOptions([]string{"--unknown", "1"}); err == nil {

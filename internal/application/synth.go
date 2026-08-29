@@ -68,9 +68,7 @@ func runSynthesis(ctx context.Context, workspace Workspace, provider agent.Compl
 		return SynthesisResult{}, internalerrors.Request("synthesis provider is not configured")
 	}
 	config = normalizedSynthesisOptions(config)
-	runContext, cancel := context.WithTimeout(ctx, time.Duration(config.TimeoutSeconds)*time.Second)
-	defer cancel()
-	documents, err := DiscoverDocuments(runContext, workspace)
+	documents, err := DiscoverDocuments(ctx, workspace)
 	if err != nil {
 		return SynthesisResult{}, err
 	}
@@ -91,7 +89,7 @@ func runSynthesis(ctx context.Context, workspace Workspace, provider agent.Compl
 		}
 	}
 	eventsLoaded := !readLogsEnabled
-	state, revision, err := workspace.ReadState(runContext)
+	state, revision, err := workspace.ReadState(ctx)
 	if err != nil {
 		return result, normalizeError(err, internalerrors.KindFilesystem, "reading workspace state")
 	}
@@ -113,7 +111,7 @@ func runSynthesis(ctx context.Context, workspace Workspace, provider agent.Compl
 			break
 		}
 		if readLogsEnabled && !eventsLoaded {
-			events, err = readRecentSynthesisEvents(runContext, workspace)
+			events, err = readRecentSynthesisEvents(ctx, workspace)
 			if err != nil {
 				return result, err
 			}
@@ -122,7 +120,7 @@ func runSynthesis(ctx context.Context, workspace Workspace, provider agent.Compl
 		sourceKey := pending[0]
 		sourceSources := map[string]agentSource{sourceKey: sources[sourceKey]}
 		contextState := &agentContext{
-			ctx: runContext, workspace: workspace, documents: documents, sources: sourceSources,
+			ctx: ctx, workspace: workspace, documents: documents, sources: sourceSources,
 			state: state, revision: revision, maxOutputBytes: config.MaxToolOutputBytes,
 			directory: workspace.Name(), options: options,
 			completed: map[string]bool{}, written: map[string]bool{}, mutationOps: map[string]Operation{},
@@ -143,10 +141,13 @@ func runSynthesis(ctx context.Context, workspace Workspace, provider agent.Compl
 				return len(contextState.completed) == len(sourceSources)
 			},
 		}
-		runtimeResult, runtimeErr := runtime.Run(runContext, messages, agent.Options{
+		runtimeContext, cancel := context.WithTimeout(ctx, time.Duration(config.RuntimeTimeoutSeconds)*time.Second)
+		contextState.ctx = runtimeContext
+		runtimeResult, runtimeErr := runtime.Run(runtimeContext, messages, agent.Options{
 			MaxTurns: config.MaxTurns, MaxToolCalls: config.MaxToolCalls,
 			MaxToolOutputBytes: config.MaxToolOutputBytes, MaxResponseTokens: config.MaxResponseTokens,
 		})
+		cancel()
 		result.Metrics.Turns += runtimeResult.Metrics.Turns
 		result.Metrics.ToolCalls += runtimeResult.Metrics.ToolCalls
 		result.Metrics.Duration += runtimeResult.Metrics.Duration
@@ -184,7 +185,7 @@ func runSynthesis(ctx context.Context, workspace Workspace, provider agent.Compl
 		if len(pending) == 1 {
 			break
 		}
-		state, revision, err = workspace.ReadState(runContext)
+		state, revision, err = workspace.ReadState(ctx)
 		if err != nil {
 			result.Metrics.Usage = aggregateUsage(usage, usageKnown, usageReceived)
 			result.SummariesWritten, result.SummariesSkipped = len(written), len(skipped)
@@ -256,8 +257,8 @@ func normalizedSynthesisOptions(config SynthesisOptions) SynthesisOptions {
 	if config.MaxResponseTokens <= 0 {
 		config.MaxResponseTokens = defaults.MaxResponseTokens
 	}
-	if config.TimeoutSeconds <= 0 {
-		config.TimeoutSeconds = defaults.TimeoutSeconds
+	if config.RuntimeTimeoutSeconds <= 0 {
+		config.RuntimeTimeoutSeconds = defaults.RuntimeTimeoutSeconds
 	}
 	return config
 }

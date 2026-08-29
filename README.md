@@ -64,7 +64,8 @@ bo synth notes
 ```
 
 Use runtime limits such as `--max-turns`, `--max-tool-calls`, and
-`--timeout-seconds` when required.
+`--timeout-seconds` when required. The timeout applies to each agent runtime;
+the caller context controls the complete workflow.
 
 ### 5. Distill across sources
 

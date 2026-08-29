@@ -376,7 +376,8 @@ type SynthesisOptions struct {
 	MaxToolCalls       int
 	MaxToolOutputBytes int
 	MaxResponseTokens  int
-	TimeoutSeconds     int
+	// RuntimeTimeoutSeconds limits each agent runtime. The caller context controls the complete workflow.
+	RuntimeTimeoutSeconds int
 }
 
 func DefaultSynthesisOptions() SynthesisOptions {
@@ -384,7 +385,7 @@ func DefaultSynthesisOptions() SynthesisOptions {
 	return SynthesisOptions{
 		MaxTurns: defaults.MaxTurns, MaxToolCalls: defaults.MaxToolCalls,
 		MaxToolOutputBytes: defaults.MaxToolOutputBytes, MaxResponseTokens: defaults.MaxResponseTokens,
-		TimeoutSeconds: defaults.TimeoutSeconds,
+		RuntimeTimeoutSeconds: defaults.RuntimeTimeoutSeconds,
 	}
 }
 
@@ -554,7 +555,7 @@ func Synth(ctx context.Context, request SynthRequest) (SynthResult, error) {
 	result, err := app.Synthesize(ctx, workspace, request.Provider.completion, app.SynthesisOptions{
 		MaxTurns: request.Options.MaxTurns, MaxToolCalls: request.Options.MaxToolCalls,
 		MaxToolOutputBytes: request.Options.MaxToolOutputBytes, MaxResponseTokens: request.Options.MaxResponseTokens,
-		TimeoutSeconds: request.Options.TimeoutSeconds,
+		RuntimeTimeoutSeconds: request.Options.RuntimeTimeoutSeconds,
 	}, internalOperationOptions(request.Operations))
 	return publicSynthResult(result), publicError(err)
 }
@@ -566,7 +567,7 @@ func Distill(ctx context.Context, request DistillRequest) (DistillResult, error)
 	result, err := app.Distill(ctx, &publicWorkspace{workspace: request.Workspace}, request.Provider.completion, app.SynthesisOptions{
 		MaxTurns: request.Options.MaxTurns, MaxToolCalls: request.Options.MaxToolCalls,
 		MaxToolOutputBytes: request.Options.MaxToolOutputBytes, MaxResponseTokens: request.Options.MaxResponseTokens,
-		TimeoutSeconds: request.Options.TimeoutSeconds,
+		RuntimeTimeoutSeconds: request.Options.RuntimeTimeoutSeconds,
 	}, internalOperationOptions(request.Operations))
 	return publicDistillResult(result), publicError(err)
 }

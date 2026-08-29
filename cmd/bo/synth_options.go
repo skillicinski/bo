@@ -51,7 +51,7 @@ func parseAgentOptions(args []string, usage string) (bo.SynthesisOptions, error)
 		case "--max-response-tokens":
 			config.MaxResponseTokens = number
 		case "--timeout-seconds":
-			config.TimeoutSeconds = number
+			config.RuntimeTimeoutSeconds = number
 		}
 	}
 	return config, nil

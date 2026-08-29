@@ -79,9 +79,13 @@ func operationOptionsFor(target string) application.OperationOptions {
 type fakeProvider struct {
 	responses []agent.CompletionResponse
 	requests  []agent.CompletionRequest
+	deadlines []time.Time
 }
 
-func (p *fakeProvider) Complete(_ context.Context, request agent.CompletionRequest) (agent.CompletionResponse, error) {
+func (p *fakeProvider) Complete(ctx context.Context, request agent.CompletionRequest) (agent.CompletionResponse, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		p.deadlines = append(p.deadlines, deadline)
+	}
 	p.requests = append(p.requests, request)
 	response := p.responses[0]
 	p.responses = p.responses[1:]
@@ -109,7 +113,7 @@ func TestSynthesizeReplaysToolMessagesAndUpsertsSummary(t *testing.T) {
 		toolResponse("read-1", "read_summary", "{\"source_key\":\"https://example.test/article\"}"),
 		toolResponse("edit-1", "edit_summary", "{\"source_key\":\"https://example.test/article\",\"markdown\":\"# Summary\\n\\nfact\\n\"}"),
 	}}
-	result, err := application.Synthesize(context.Background(), store, provider, application.SynthesisOptions{MaxTurns: 4, MaxToolCalls: 3, MaxToolOutputBytes: 256, MaxResponseTokens: 16, TimeoutSeconds: 5}, operationOptionsFor(target))
+	result, err := application.Synthesize(context.Background(), store, provider, application.SynthesisOptions{MaxTurns: 4, MaxToolCalls: 3, MaxToolOutputBytes: 256, MaxResponseTokens: 16, RuntimeTimeoutSeconds: 5}, operationOptionsFor(target))
 	if err != nil || result.SummariesWritten != 1 {
 		t.Fatalf("Synthesize = %#v, %v", result, err)
 	}
@@ -162,7 +166,7 @@ func TestSynthesizeWithReducedToolSet(t *testing.T) {
 		toolResponse("read-1", "read_document", "{\"filename\":\"article.md\"}"),
 		toolResponse("write-1", "write_summary", "{\"source_key\":\"https://example.test/article\",\"markdown\":\"latest fact\\n\"}"),
 	}}
-	result, err := application.SynthesizeWithTools(context.Background(), store, provider, application.SynthesisOptions{MaxTurns: 2, MaxToolCalls: 2, MaxToolOutputBytes: 256, MaxResponseTokens: 16, TimeoutSeconds: 5}, []string{"read_document", "write_summary"}, operationOptionsFor(target))
+	result, err := application.SynthesizeWithTools(context.Background(), store, provider, application.SynthesisOptions{MaxTurns: 2, MaxToolCalls: 2, MaxToolOutputBytes: 256, MaxResponseTokens: 16, RuntimeTimeoutSeconds: 5}, []string{"read_document", "write_summary"}, operationOptionsFor(target))
 	if err != nil || result.SummariesWritten != 1 {
 		t.Fatalf("SynthesizeWithTools = %#v, %v", result, err)
 	}

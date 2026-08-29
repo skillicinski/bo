@@ -3,13 +3,14 @@ package application
 import "github.com/skillicinski/bo/internal/agent"
 
 type SynthesisOptions struct {
-	// SynthesisOptions contains bounded synthesis runtime limits. Provider credentials and
-	// model selection belong to the composition root and provider adapter.
-	MaxTurns           int
-	MaxToolCalls       int
-	MaxToolOutputBytes int
-	MaxResponseTokens  int
-	TimeoutSeconds     int
+	// SynthesisOptions contains bounded per-agent-runtime limits. Provider credentials and
+	// model selection belong to the composition root and provider adapter. RuntimeTimeoutSeconds
+	// limits one agent runtime; the caller context controls the complete workflow.
+	MaxTurns              int
+	MaxToolCalls          int
+	MaxToolOutputBytes    int
+	MaxResponseTokens     int
+	RuntimeTimeoutSeconds int
 }
 
 type SynthesisResult struct {
@@ -23,6 +24,6 @@ func DefaultSynthesisOptions() SynthesisOptions {
 	return SynthesisOptions{
 		MaxTurns: defaults.MaxTurns, MaxToolCalls: defaults.MaxToolCalls,
 		MaxToolOutputBytes: defaults.MaxToolOutputBytes, MaxResponseTokens: defaults.MaxResponseTokens,
-		TimeoutSeconds: 120,
+		RuntimeTimeoutSeconds: 120,
 	}
 }

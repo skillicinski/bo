@@ -22,9 +22,17 @@ func TestDistillCreatesOneCrossSourceDocument(t *testing.T) {
 		toolResponse("read-two", "read_document", `{"filename":"two.md"}`),
 		toolResponse("write", "write_distillation", `{"title":"Shared facts","introduction":"Both sources report related facts.","sections":[{"heading":"Common facts","paragraph":"The sources describe the same subject.","bullets":["One source reports one fact.","The other source reports another fact."],"sources":[{"source_key":"https://example.test/one","kind":"raw","filename":"one.md"},{"source_key":"https://example.test/two","kind":"raw","filename":"two.md"}]}]}`),
 	}}
-	result, err := application.Distill(context.Background(), store, provider, application.DefaultSynthesisOptions(), operationOptionsFor(target))
+	result, err := application.Distill(context.Background(), store, provider, application.SynthesisOptions{MaxTurns: 4, MaxToolCalls: 4, MaxToolOutputBytes: 4096, MaxResponseTokens: 32, RuntimeTimeoutSeconds: 5}, operationOptionsFor(target))
 	if err != nil || result.Skipped || result.Filename != "shared-facts.md" {
 		t.Fatalf("Distill = %#v, %v", result, err)
+	}
+	if len(provider.deadlines) != 3 {
+		t.Fatalf("runtime deadlines = %#v", provider.deadlines)
+	}
+	for _, deadline := range provider.deadlines[1:] {
+		if !deadline.Equal(provider.deadlines[0]) {
+			t.Fatalf("runtime deadlines differ: %#v", provider.deadlines)
+		}
 	}
 	data, err := store.ReadDocument(context.Background(), domain.DistillationRef(result.Filename))
 	if err != nil || !strings.Contains(string(data), "[one.md](../one.md)") || !strings.Contains(string(data), "## Sources") {
