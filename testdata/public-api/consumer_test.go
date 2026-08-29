@@ -83,6 +83,88 @@ func TestPublicWorkflows(t *testing.T) {
 	}
 }
 
+func TestPublicDistill(t *testing.T) {
+	ctx := context.Background()
+	store := &storage{
+		state: bo.State{Sources: []bo.SourceRecord{
+			{SourceKey: "https://example.test/one", Snapshots: []bo.RawRecord{{Filename: "one.md", WrittenAt: time.Unix(1, 0).UTC()}}},
+			{SourceKey: "https://example.test/two", Snapshots: []bo.RawRecord{{Filename: "two.md", WrittenAt: time.Unix(2, 0).UTC()}}},
+		}},
+		revision: bo.NewRevision(nil),
+		documents: map[bo.DocumentRef][]byte{
+			bo.RawRef("one.md"): []byte("one\n"),
+			bo.RawRef("two.md"): []byte("two\n"),
+		},
+	}
+	response, err := json.Marshal(map[string]any{
+		"choices": []any{map[string]any{
+			"message": map[string]any{
+				"role": "assistant",
+				"tool_calls": []any{map[string]any{
+					"id": "read-one", "type": "function",
+					"function": map[string]string{"name": "read_document", "arguments": `{"filename":"one.md"}`},
+				}},
+			},
+			"finish_reason": "tool_calls",
+		}},
+		"usage": map[string]int{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	responses := [][]byte{response}
+	writeResponse, err := json.Marshal(map[string]any{
+		"choices": []any{map[string]any{
+			"message": map[string]any{
+				"role": "assistant",
+				"tool_calls": []any{map[string]any{
+					"id": "read-two", "type": "function",
+					"function": map[string]string{"name": "read_document", "arguments": `{"filename":"two.md"}`},
+				}},
+			},
+			"finish_reason": "tool_calls",
+		}},
+		"usage": map[string]int{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	responses = append(responses, writeResponse)
+	finalResponse, err := json.Marshal(map[string]any{
+		"choices": []any{map[string]any{
+			"message": map[string]any{
+				"role": "assistant",
+				"tool_calls": []any{map[string]any{
+					"id": "write", "type": "function",
+					"function": map[string]string{"name": "write_distill", "arguments": `{"title":"Shared facts","introduction":"intro","sections":[{"heading":"Facts","paragraph":"paragraph","bullets":["one","two"],"sources":[{"source_key":"https://example.test/one","kind":"raw","filename":"one.md"},{"source_key":"https://example.test/two","kind":"raw","filename":"two.md"}]}]}`},
+				}},
+			},
+			"finish_reason": "tool_calls",
+		}},
+		"usage": map[string]int{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	responses = append(responses, finalResponse)
+	index := 0
+	result, err := bo.Distill(ctx, bo.DistillRequest{
+		Workspace: workspace{name: "consumer", store: store},
+		Provider: bo.NewDeepSeekProvider(bo.DeepSeekConfig{
+			APIKey: "test", Endpoint: "https://provider.test/completions",
+			HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				payload := responses[index]
+				index++
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(payload)), Header: http.Header{"Content-Type": []string{"application/json"}}, Request: request}, nil
+			})},
+		}),
+		Options: bo.SynthesisOptions{MaxTurns: 3, MaxToolCalls: 3, MaxToolOutputBytes: 4096, MaxResponseTokens: 64, TimeoutSeconds: 5},
+	})
+	if err != nil || result.Skipped || result.Filename != "shared-facts.md" || len(store.state.SynthesizedDocuments) != 1 {
+		t.Fatalf("distill = %#v, error = %v, state = %#v", result, err, store.state)
+	}
+}
+
 func TestConfiguredSnapSources(t *testing.T) {
 	ctx := context.Background()
 	path := writeSource(t)

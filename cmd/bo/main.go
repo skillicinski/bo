@@ -10,7 +10,7 @@ import (
 	"github.com/skillicinski/bo"
 )
 
-const usage = "usage: bo seed [--name <name>] | bo snap <name> <source>... | bo state <name> [--full] | bo synth <name> [options]"
+const usage = "usage: bo seed [--name <name>] | bo snap <name> <source>... | bo state <name> [--full] | bo synth <name> [options] | bo distill <name> [options]"
 
 func main() {
 	args := os.Args[1:]
@@ -27,6 +27,8 @@ func main() {
 		runState(args[1:])
 	case "synth":
 		runSynth(args[1:])
+	case "distill":
+		runDistill(args[1:])
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(1)
@@ -153,6 +155,46 @@ func runSynth(args []string) {
 		fail("synth", err.Error())
 	}
 	fmt.Printf("%d summaries written\n", result.SummariesWritten)
+}
+
+func runDistill(args []string) {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		fail("distill", distillUsage())
+	}
+	name := args[0]
+	config, err := parseDistillOptions(args[1:])
+	if err != nil {
+		fail("distill", err.Error())
+	}
+	apiKey := os.Getenv("DEEPSEEK_API_KEY")
+	if apiKey == "" {
+		fail("distill", "DEEPSEEK_API_KEY is not set")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fail("distill", err.Error())
+	}
+	endpoint := os.Getenv("DEEPSEEK_API_URL")
+	workspace, err := bo.NewLocalManager(home).Open(context.Background(), name)
+	if err != nil {
+		fail("distill", err.Error())
+	}
+	defer workspace.Close()
+	provider := bo.NewDeepSeekProvider(bo.DeepSeekConfig{APIKey: apiKey, Endpoint: endpoint})
+	result, err := bo.Distill(context.Background(), bo.DistillRequest{
+		Workspace:  workspace,
+		Provider:   provider,
+		Options:    config,
+		Operations: bo.OperationOptions{Actor: "cli"},
+	})
+	if err != nil {
+		fail("distill", err.Error())
+	}
+	if result.Skipped {
+		fmt.Printf("distill skipped: %s\n", result.Reason)
+		return
+	}
+	fmt.Printf("distilled: %s\n", result.Filename)
 }
 
 func addSeedHint(err error, name string) error {

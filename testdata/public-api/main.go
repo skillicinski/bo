@@ -32,6 +32,11 @@ func (s *storage) ListDocuments(_ context.Context, kind bo.DocumentKind) ([]bo.D
 			refs = append(refs, bo.SummaryRef(source.Summary.Filename))
 		}
 	}
+	if kind == bo.DocumentKindSynthesized {
+		for _, document := range s.state.SynthesizedDocuments {
+			refs = append(refs, bo.SynthesizedRef(document.Filename))
+		}
+	}
 	return refs, nil
 }
 
@@ -136,6 +141,27 @@ func (s *storage) CommitSummary(_ context.Context, commit bo.SummaryCommit, expe
 	return s.state, s.revision, nil
 }
 
+func (s *storage) CommitSynthesized(_ context.Context, commit bo.SynthesizedCommit, expected bo.Revision) (bo.State, bo.Revision, error) {
+	if !expected.Equal(s.revision) {
+		return bo.State{}, bo.Revision{}, bo.NewError(bo.ErrorKindConflict, "workspace revision changed")
+	}
+	if s.documents == nil {
+		s.documents = map[bo.DocumentRef][]byte{}
+	}
+	ref := bo.SynthesizedRef(commit.Filename)
+	if _, exists := s.documents[ref]; exists {
+		return bo.State{}, bo.Revision{}, bo.NewError(bo.ErrorKindAlreadyExists, "document already exists")
+	}
+	s.documents[ref] = append([]byte(nil), commit.Contents...)
+	s.events = append(s.events, commit.Event)
+	inputs := append([]bo.SynthesizedInput(nil), commit.DerivedFrom...)
+	s.state.SynthesizedDocuments = append(s.state.SynthesizedDocuments, bo.SynthesizedRecord{
+		Filename: commit.Filename, Kind: commit.Kind, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt, DerivedFrom: inputs,
+	})
+	s.revision = s.advanceRevision()
+	return s.state, s.revision, nil
+}
+
 type workspace struct {
 	name  string
 	store *storage
@@ -165,6 +191,9 @@ func (w workspace) CommitSnapshot(ctx context.Context, commit bo.SnapshotCommit,
 }
 func (w workspace) CommitSummary(ctx context.Context, commit bo.SummaryCommit, expected bo.Revision) (bo.State, bo.Revision, error) {
 	return w.store.CommitSummary(ctx, commit, expected)
+}
+func (w workspace) CommitSynthesized(ctx context.Context, commit bo.SynthesizedCommit, expected bo.Revision) (bo.State, bo.Revision, error) {
+	return w.store.CommitSynthesized(ctx, commit, expected)
 }
 func (w workspace) Close() error { return nil }
 

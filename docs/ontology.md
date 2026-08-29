@@ -22,6 +22,19 @@ erDiagram
         timestamp created_at
         timestamp updated_at
     }
+    SYNTHESIZED_DOCUMENT {
+        string filename PK
+        string kind
+        timestamp created_at
+        timestamp updated_at
+    }
+    SOURCE_DOCUMENT_INPUT {
+        string source_key FK
+        string kind
+        string filename FK
+        string content_digest
+    }
+    SYNTHESIZED_DOCUMENT }o--o{ SOURCE_DOCUMENT_INPUT : cites
 ```
 
 ## SourceIdentity
@@ -70,3 +83,9 @@ filename and creation time, updates its timestamp, and replaces its
 Document entries may also contain `content_digest`, `content_size`, and
 `content_modified_at` inventory metadata for conditional writes. These fields
 are not operation events.
+
+`SYNTHESIZED_DOCUMENT` records are stored in `synthesized_documents` and use
+`derived_from` inputs with `source_key`, `kind`, `filename`, and a SHA-256
+`content_digest`. Raw and summary inputs from one source count as one source;
+each distill record must cite at least two source identities. Synthesized
+documents are create-only and do not provide evidence to the distill agent.

@@ -9,6 +9,7 @@ tmp/
 # local evaluation corpora and generated reports
 /evals/*
 !/evals/RUBRIC.md
+!/evals/DISTILL_RUBRIC.md
 !/evals/run.sh
 !/evals/test_run.sh
 !/evals/evaluate.py

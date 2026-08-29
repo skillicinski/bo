@@ -50,6 +50,16 @@ type SummaryCommit struct {
 	Event        Operation
 }
 
+type SynthesizedCommit struct {
+	Kind        domain.SynthesizedKind
+	Filename    string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	DerivedFrom []domain.SynthesizedInput
+	Contents    []byte
+	Event       Operation
+}
+
 // Workspace is the persistence boundary for one workspace.
 type Workspace interface {
 	Name() string
@@ -59,6 +69,7 @@ type Workspace interface {
 	WorkspaceEvents
 	CommitSnapshot(context.Context, SnapshotCommit, Revision) (domain.State, Revision, error)
 	CommitSummary(context.Context, SummaryCommit, Revision) (domain.State, Revision, error)
+	CommitSynthesized(context.Context, SynthesizedCommit, Revision) (domain.State, Revision, error)
 }
 
 // WorkspaceEvents is the durable event portion of the workspace contract.
@@ -77,13 +88,15 @@ type OperationCommand = domain.OperationCommand
 type OperationOutcome = domain.OperationOutcome
 
 const (
-	CommandSeed         = domain.CommandSeed
-	CommandSnap         = domain.CommandSnap
-	CommandState        = domain.CommandState
-	CommandSynth        = domain.CommandSynth
-	CommandWriteSummary = domain.CommandWriteSummary
-	OutcomeCommitted    = domain.OutcomeCommitted
-	OutcomeFailed       = domain.OutcomeFailed
+	CommandSeed             = domain.CommandSeed
+	CommandSnap             = domain.CommandSnap
+	CommandState            = domain.CommandState
+	CommandSynth            = domain.CommandSynth
+	CommandDistill          = domain.CommandDistill
+	CommandWriteSummary     = domain.CommandWriteSummary
+	CommandWriteSynthesized = domain.CommandWriteSynthesized
+	OutcomeCommitted        = domain.OutcomeCommitted
+	OutcomeFailed           = domain.OutcomeFailed
 )
 
 type OperationPage struct {

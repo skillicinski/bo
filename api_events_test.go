@@ -42,6 +42,10 @@ func (w eventPageWorkspace) CommitSummary(context.Context, SummaryCommit, Revisi
 	return State{}, Revision{}, nil
 }
 
+func (w eventPageWorkspace) CommitSynthesized(context.Context, SynthesizedCommit, Revision) (State, Revision, error) {
+	return State{}, Revision{}, nil
+}
+
 func (w eventPageWorkspace) Close() error { return nil }
 
 func validPublicEvent(id string, outcome OperationOutcome) Operation {

@@ -11,11 +11,13 @@ import (
 type OperationCommand string
 
 const (
-	CommandSeed         OperationCommand = "seed"
-	CommandSnap         OperationCommand = "snap"
-	CommandState        OperationCommand = "state"
-	CommandSynth        OperationCommand = "synth"
-	CommandWriteSummary OperationCommand = "write_summary"
+	CommandSeed             OperationCommand = "seed"
+	CommandSnap             OperationCommand = "snap"
+	CommandState            OperationCommand = "state"
+	CommandSynth            OperationCommand = "synth"
+	CommandDistill          OperationCommand = "distill"
+	CommandWriteSummary     OperationCommand = "write_summary"
+	CommandWriteSynthesized OperationCommand = "write_synthesized"
 )
 
 type OperationOutcome string
@@ -51,12 +53,14 @@ type TokenUsage struct {
 }
 
 type OperationMetrics struct {
-	Turns            int           `json:"turns"`
-	ToolCalls        int           `json:"tool_calls"`
-	Duration         time.Duration `json:"duration"`
-	SummariesWritten int           `json:"summaries_written"`
-	SummariesSkipped int           `json:"summaries_skipped"`
-	Usage            *TokenUsage   `json:"usage,omitempty"`
+	Turns              int           `json:"turns"`
+	ToolCalls          int           `json:"tool_calls"`
+	Duration           time.Duration `json:"duration"`
+	SummariesWritten   int           `json:"summaries_written"`
+	SummariesSkipped   int           `json:"summaries_skipped"`
+	SynthesizedWritten int           `json:"synthesized_written,omitempty"`
+	SynthesizedSkipped int           `json:"synthesized_skipped,omitempty"`
+	Usage              *TokenUsage   `json:"usage,omitempty"`
 }
 
 // Operation is a durable, typed application event.
@@ -122,7 +126,7 @@ func (o Operation) Validate() error {
 		return fmt.Errorf("actor must not be empty")
 	}
 	switch o.Command {
-	case CommandSeed, CommandSnap, CommandState, CommandSynth, CommandWriteSummary:
+	case CommandSeed, CommandSnap, CommandState, CommandSynth, CommandDistill, CommandWriteSummary, CommandWriteSynthesized:
 	default:
 		return fmt.Errorf("invalid command %q", o.Command)
 	}
@@ -146,7 +150,7 @@ func (o Operation) Validate() error {
 		}
 	}
 	if o.Document != nil {
-		if o.Document.Kind != DocumentKindRaw && o.Document.Kind != DocumentKindSummary {
+		if o.Document.Kind != DocumentKindRaw && o.Document.Kind != DocumentKindSummary && o.Document.Kind != DocumentKindSynthesized {
 			return fmt.Errorf("document kind is invalid")
 		}
 		if err := ValidateDocumentName(o.Document.Filename); err != nil {
@@ -172,7 +176,7 @@ func (o Operation) Validate() error {
 		if o.Metrics.Duration < 0 {
 			return fmt.Errorf("metrics duration must not be negative")
 		}
-		if o.Metrics.Turns < 0 || o.Metrics.ToolCalls < 0 || o.Metrics.SummariesWritten < 0 || o.Metrics.SummariesSkipped < 0 {
+		if o.Metrics.Turns < 0 || o.Metrics.ToolCalls < 0 || o.Metrics.SummariesWritten < 0 || o.Metrics.SummariesSkipped < 0 || o.Metrics.SynthesizedWritten < 0 || o.Metrics.SynthesizedSkipped < 0 {
 			return fmt.Errorf("metrics counts must not be negative")
 		}
 		if o.Metrics.Usage != nil && (o.Metrics.Usage.PromptTokens < 0 || o.Metrics.Usage.CompletionTokens < 0 || o.Metrics.Usage.TotalTokens < 0) {

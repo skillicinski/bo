@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import shutil
@@ -25,6 +26,13 @@ def valid_result(score=4):
         "coverage": {"score": score, "evidence": ["main subject"]},
         "usefulness": {"score": score, "evidence": ["concise"]},
         "page_cleanliness": {"score": score, "evidence": ["no boilerplate"]},
+    }
+
+
+def valid_distill_result(score=4):
+    return {
+        criterion: {"score": score, "evidence": [criterion.replace("_", " ")]}
+        for criterion in evaluate.DISTILL_CRITERIA
     }
 
 
@@ -331,6 +339,90 @@ class EvaluateTests(unittest.TestCase):
         with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "agent-key"}, clear=True):
             with self.assertRaises(evaluate.EvaluationError):
                 evaluate.evaluate(run, api_url="http://example.test")
+        self.assert_failed_without_documents(run)
+
+    def test_distill_skip_does_not_require_evaluator_key(self):
+        run = self.make_run(run_id="distill-skip")
+        (run / "task.txt").write_text("distill\n", encoding="utf-8")
+
+        aggregate = evaluate.evaluate(run)
+
+        self.assertEqual(aggregate["status"], "skipped")
+        self.assertEqual(aggregate["task"], "distill")
+        self.assertFalse((run / "evaluation" / "documents").exists())
+
+    def test_distill_evaluates_only_recorded_provenance(self):
+        run = self.root / "distill-success"
+        raw_dir = run / "raw"
+        synthesized_dir = run / "synthesized"
+        raw_dir.mkdir(parents=True)
+        synthesized_dir.mkdir()
+        one = "one source\n"
+        two = "two source\n"
+        (raw_dir / "one.md").write_text(one, encoding="utf-8")
+        (raw_dir / "two.md").write_text(two, encoding="utf-8")
+        (raw_dir / "extra.md").write_text("must not be sent\n", encoding="utf-8")
+        artifact = "# Shared\n\nSources: [one.md](../one.md), [two.md](../two.md)\n"
+        (synthesized_dir / "shared.md").write_text(artifact, encoding="utf-8")
+        state = {
+            "sources": [
+                {"source_key": "https://example.test/one", "snapshots": [{"filename": "one.md"}]},
+                {"source_key": "https://example.test/two", "snapshots": [{"filename": "two.md"}]},
+            ],
+            "synthesized_documents": [{
+                "filename": "shared.md",
+                "kind": "distill",
+                "derived_from": [
+                    {"source_key": "https://example.test/one", "kind": "raw", "filename": "one.md", "content_digest": hashlib.sha256(one.encode()).hexdigest()},
+                    {"source_key": "https://example.test/two", "kind": "raw", "filename": "two.md", "content_digest": hashlib.sha256(two.encode()).hexdigest()},
+                ],
+            }],
+        }
+        (run / "state.json").write_text(json.dumps(state), encoding="utf-8")
+        (run / "task.txt").write_text("distill\n", encoding="utf-8")
+        opener = FakeOpener({
+            "choices": [{"message": {"content": json.dumps(valid_distill_result())}}],
+            "usage": {"completion_tokens": 10},
+        })
+        evaluate.urlopen = opener
+
+        aggregate = evaluate.evaluate(run, api_key="evaluation-key", api_url="http://example.test")
+
+        self.assertEqual(aggregate["status"], "success")
+        self.assertEqual(aggregate["task"], "distill")
+        self.assertEqual(len(opener.requests), 1)
+        prompt = opener.requests[0][0].data.decode("utf-8")
+        self.assertIn("one source", prompt)
+        self.assertIn("two source", prompt)
+        self.assertNotIn("must not be sent", prompt)
+        output = json.loads((run / "evaluation" / "documents" / "shared.md.json").read_text())
+        self.assertEqual(len(output["provenance"]), 2)
+
+    def test_distill_digest_changes_publish_failed_aggregate(self):
+        run = self.root / "distill-digest"
+        raw_dir = run / "raw"
+        synthesized_dir = run / "synthesized"
+        raw_dir.mkdir(parents=True)
+        synthesized_dir.mkdir()
+        (raw_dir / "one.md").write_text("changed\n", encoding="utf-8")
+        (raw_dir / "two.md").write_text("two\n", encoding="utf-8")
+        (synthesized_dir / "shared.md").write_text("# Shared\n", encoding="utf-8")
+        (run / "state.json").write_text(json.dumps({
+            "sources": [
+                {"source_key": "https://example.test/one", "snapshots": [{"filename": "one.md"}]},
+                {"source_key": "https://example.test/two", "snapshots": [{"filename": "two.md"}]},
+            ],
+            "synthesized_documents": [{
+                "filename": "shared.md", "kind": "distill", "derived_from": [
+                    {"source_key": "https://example.test/one", "kind": "raw", "filename": "one.md", "content_digest": "0" * 64},
+                    {"source_key": "https://example.test/two", "kind": "raw", "filename": "two.md", "content_digest": hashlib.sha256(b"two\n").hexdigest()},
+                ],
+            }],
+        }), encoding="utf-8")
+        (run / "task.txt").write_text("distill\n", encoding="utf-8")
+
+        with self.assertRaises(evaluate.EvaluationError):
+            evaluate.evaluate(run, api_key="evaluation-key", api_url="http://example.test")
         self.assert_failed_without_documents(run)
 
     def assert_failed_without_documents(self, run):

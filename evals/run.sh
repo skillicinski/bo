@@ -4,12 +4,21 @@ set -eu
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bo=${BO_BIN:-$repo/bin/bo}
 bo_eval=${BO_EVAL_BIN:-$repo/bin/bo-eval}
-usage='usage: ./evals/run.sh [--corpus name.txt|path] [--tools all|name,name,...]'
+usage='usage: ./evals/run.sh [--task synth|distill] [--corpus name.txt|path] [--tools all|name,name,...]'
 
+task=synth
 corpus=$repo/evals/corpora/default.txt
 toolset=all
 while [ "$#" -gt 0 ]; do
-    case "$1" in
+	case "$1" in
+		--task)
+			[ "$#" -eq 1 ] && { printf '%s\n' "$usage" >&2; exit 2; }
+			case "$2" in
+				synth|distill) task=$2 ;;
+				*) printf '%s\n' "$usage" >&2; exit 2 ;;
+			esac
+			shift 2
+			;;
         --corpus)
             [ "$#" -eq 1 ] && { printf '%s\n' "$usage" >&2; exit 2; }
             case "$2" in
@@ -48,7 +57,7 @@ go build -o "$bo" "$repo/cmd/bo"
 mkdir -p "$(dirname "$bo_eval")"
 go build -o "$bo_eval" "$repo/evals/cmd/bo-eval"
 
-run_id="synth-$(date +%s)-$$"
+run_id="$task-$(date +%s)-$$"
 work="$repo/evals/work/$run_id"
 report="$repo/evals/results/$run_id"
 home="$work/home"
@@ -57,6 +66,7 @@ raw="$report/raw"
 mkdir -p "$home" "$report" "$raw"
 cp "$corpus" "$report/corpus.txt"
 printf '%s\n' "$toolset" >"$report/tools.txt"
+printf '%s\n' "$task" >"$report/task.txt"
 
 HOME="$home" "$bo" seed --name "$run_id" >"$report/seed.log"
 set +e
@@ -85,8 +95,8 @@ else
 fi
 
 set +e
-HOME="$home" "$bo_eval" synth "$run_id" --tools "$toolset" >"$report/synth.log" 2>&1
-synth_status=$?
+HOME="$home" "$bo_eval" "$task" "$run_id" --tools "$toolset" >"$report/$task.log" 2>&1
+task_status=$?
 set -e
 
 cp "$target/state.json" "$report/state.json"
@@ -98,6 +108,16 @@ if [ -d "$target/summaries" ]; then
     done
 fi
 
+if [ "$task" = distill ] && [ -d "$target/synthesized" ]; then
+	mkdir -p "$report/synthesized"
+	for file in "$target"/synthesized/*.md; do
+		[ -f "$file" ] || continue
+		cp "$file" "$report/synthesized/$(basename "$file")"
+	done
+fi
+
+missing=0
+if [ "$task" = synth ]; then
 : >"$report/missing-summaries.log"
 python3 - "$target/state.json" "$target" >"$report/missing-summaries.log" <<'PY'
 import json
@@ -130,13 +150,16 @@ for source_key in sorted(source_keys):
         print(f"missing summary: {source_key}")
 PY
 missing=$(wc -l <"$report/missing-summaries.log" | tr -d ' ')
+fi
 
 hashes >"$report/raw-after.sha256"
 if ! diff -u "$report/raw-before.sha256" "$report/raw-after.sha256" >"$report/raw-hash-diff.log"; then
-    printf '%s\n' "raw hashes changed" >>"$report/missing-summaries.log"
-    missing=$((missing + 1))
+	if [ "$task" = synth ]; then
+		printf '%s\n' "raw hashes changed" >>"$report/missing-summaries.log"
+	fi
+	missing=$((missing + 1))
 fi
 
-printf 'snap status: %s\nsynth status: %s\nmissing summaries or hash changes: %s\nexpected failures: %s\nreport: %s\n' \
-    "$snap_status" "$synth_status" "$missing" "$(wc -l <"$report/expected-failures.log" | tr -d ' ')" "$report"
-[ "$synth_status" -eq 0 ] && [ "$missing" -eq 0 ]
+printf 'task: %s\nsnap status: %s\n%s status: %s\nmissing summaries or hash changes: %s\nexpected failures: %s\nreport: %s\n' \
+	"$task" "$snap_status" "$task" "$task_status" "$missing" "$(wc -l <"$report/expected-failures.log" | tr -d ' ')" "$report"
+[ "$task_status" -eq 0 ] && [ "$missing" -eq 0 ]

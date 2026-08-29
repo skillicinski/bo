@@ -447,3 +447,62 @@ func TestLocalSummaryCommitDoesNotUseFixedTemporary(t *testing.T) {
 		t.Fatalf("state after commit = %#v, %v", loaded, err)
 	}
 }
+
+func TestLocalSynthesizedCommitListsReadsAndRecordsProvenance(t *testing.T) {
+	store, _ := seededStore(t)
+	_, revision, err := store.ReadState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	one := []byte("one\n")
+	_, revision, err = store.CommitSnapshot(context.Background(), application.SnapshotCommit{
+		SourceKey: "https://example.test/one", Filename: "one.md", WrittenAt: time.Unix(1, 0).UTC(), Contents: one,
+		Event: snapshotEvent("https://example.test/one", "one.md", time.Unix(1, 0).UTC()),
+	}, revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two := []byte("two\n")
+	_, revision, err = store.CommitSnapshot(context.Background(), application.SnapshotCommit{
+		SourceKey: "https://example.test/two", Filename: "two.md", WrittenAt: time.Unix(2, 0).UTC(), Contents: two,
+		Event: snapshotEvent("https://example.test/two", "two.md", time.Unix(2, 0).UTC()),
+	}, revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit := application.SynthesizedCommit{
+		Kind: domain.SynthesizedKindDistill, Filename: "shared-facts.md", CreatedAt: time.Unix(3, 0).UTC(), UpdatedAt: time.Unix(3, 0).UTC(), Contents: []byte("# Shared facts\n"),
+		DerivedFrom: []domain.SynthesizedInput{
+			{SourceKey: "https://example.test/one", Kind: domain.DocumentKindRaw, Filename: "one.md", ContentDigest: application.NewRevision(one).String()},
+			{SourceKey: "https://example.test/two", Kind: domain.DocumentKindRaw, Filename: "two.md", ContentDigest: application.NewRevision(two).String()},
+		},
+		Event: domain.Operation{
+			OperationID: "synthesized-test", Attempt: 1, Timestamp: "1970-01-01T00:00:03Z", Actor: "test",
+			Command: domain.CommandWriteSynthesized, Outcome: domain.OutcomeCommitted,
+			Document: &domain.DocumentIdentity{Kind: domain.DocumentKindSynthesized, Filename: "shared-facts.md"},
+		},
+	}
+	state, revision, err := store.CommitSynthesized(context.Background(), commit, revision)
+	if err != nil || len(state.SynthesizedDocuments) != 1 {
+		t.Fatalf("commit state = %#v, error = %v", state, err)
+	}
+	refs, err := store.ListDocuments(context.Background(), domain.DocumentKindSynthesized)
+	if err != nil || len(refs) != 1 || refs[0] != domain.SynthesizedRef("shared-facts.md") {
+		t.Fatalf("synthesized refs = %#v, error = %v", refs, err)
+	}
+	contents, err := store.ReadDocument(context.Background(), domain.SynthesizedRef("shared-facts.md"))
+	if err != nil || string(contents) != string(commit.Contents) {
+		t.Fatalf("synthesized contents = %q, error = %v", contents, err)
+	}
+	loaded, _, err := store.ReadState(context.Background())
+	if err != nil || loaded.SynthesizedDocuments[0].ContentDigest != application.NewRevision(commit.Contents).String() || loaded.SynthesizedDocuments[0].ContentSize == nil {
+		t.Fatalf("synthesized baseline = %#v, error = %v", loaded.SynthesizedDocuments, err)
+	}
+	page, err := store.ReadEvents(context.Background(), 0, 20)
+	if err != nil || page.Entries[len(page.Entries)-1].Command != domain.CommandWriteSynthesized {
+		t.Fatalf("synthesized event = %#v, error = %v", page, err)
+	}
+	if _, _, err := store.CommitSynthesized(context.Background(), commit, revision); !bo.IsKind(err, bo.ErrorKindAlreadyExists) {
+		t.Fatalf("duplicate synthesized commit error = %v", err)
+	}
+}

@@ -1,6 +1,8 @@
 package domain_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"reflect"
 	"strings"
@@ -71,6 +73,82 @@ func TestStateJSONIsStable(t *testing.T) {
 	if string(data) != want {
 		t.Fatalf("unexpected state: %q", data)
 	}
+}
+
+func TestSynthesizedStateJSONAndValidation(t *testing.T) {
+	validTime := time.Date(2026, time.August, 23, 12, 34, 56, 0, time.UTC)
+	state := validSynthesizedState(validTime)
+	data, err := domain.MarshalState(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"synthesized_documents"`) {
+		t.Fatalf("synthesized state field is missing: %s", data)
+	}
+	roundTrip, err := domain.UnmarshalState(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(state, roundTrip) {
+		t.Fatalf("state changed after round trip: %#v != %#v", state, roundTrip)
+	}
+	oldState, err := domain.UnmarshalState([]byte(`{"sources":[]}`))
+	if err != nil || len(oldState.SynthesizedDocuments) != 0 {
+		t.Fatalf("state without synthesized_documents = %#v, %v", oldState, err)
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*domain.State)
+	}{
+		{name: "invalid synthesized kind", mutate: func(state *domain.State) { state.SynthesizedDocuments[0].Kind = "unknown" }},
+		{name: "invalid input kind", mutate: func(state *domain.State) {
+			state.SynthesizedDocuments[0].DerivedFrom[0].Kind = domain.DocumentKindSynthesized
+		}},
+		{name: "invalid input digest", mutate: func(state *domain.State) { state.SynthesizedDocuments[0].DerivedFrom[0].ContentDigest = "not-a-digest" }},
+		{name: "missing input", mutate: func(state *domain.State) { state.SynthesizedDocuments[0].DerivedFrom[0].Filename = "missing.md" }},
+		{name: "wrong input owner", mutate: func(state *domain.State) {
+			state.SynthesizedDocuments[0].DerivedFrom[0].SourceKey = "https://example.test/two"
+		}},
+		{name: "duplicate input", mutate: func(state *domain.State) {
+			state.SynthesizedDocuments[0].DerivedFrom = append(state.SynthesizedDocuments[0].DerivedFrom, state.SynthesizedDocuments[0].DerivedFrom[0])
+		}},
+		{name: "one source identity", mutate: func(state *domain.State) {
+			state.SynthesizedDocuments[0].DerivedFrom = state.SynthesizedDocuments[0].DerivedFrom[:2]
+		}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := validSynthesizedState(validTime)
+			test.mutate(&candidate)
+			if _, err := domain.MarshalState(candidate); err == nil {
+				t.Fatal("invalid synthesized state was accepted")
+			}
+		})
+	}
+}
+
+func validSynthesizedState(timestamp time.Time) domain.State {
+	return domain.State{Sources: []domain.SourceRecord{
+		{
+			SourceKey: "https://example.test/one",
+			Snapshots: []domain.RawRecord{{Filename: "one.md", WrittenAt: timestamp}},
+			Summary:   &domain.SummaryRecord{Filename: "one-summary.md", DerivedFrom: "one.md", CreatedAt: timestamp, UpdatedAt: timestamp},
+		},
+		{SourceKey: "https://example.test/two", Snapshots: []domain.RawRecord{{Filename: "two.md", WrittenAt: timestamp.Add(time.Second)}}},
+	}, SynthesizedDocuments: []domain.SynthesizedRecord{{
+		Filename: "distill.md", Kind: domain.SynthesizedKindDistill, CreatedAt: timestamp, UpdatedAt: timestamp,
+		DerivedFrom: []domain.SynthesizedInput{
+			{SourceKey: "https://example.test/one", Kind: domain.DocumentKindRaw, Filename: "one.md", ContentDigest: testDigest("one\n")},
+			{SourceKey: "https://example.test/one", Kind: domain.DocumentKindSummary, Filename: "one-summary.md", ContentDigest: testDigest("one summary\n")},
+			{SourceKey: "https://example.test/two", Kind: domain.DocumentKindRaw, Filename: "two.md", ContentDigest: testDigest("two\n")},
+		},
+	}}}
+}
+
+func testDigest(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(digest[:])
 }
 
 func TestStateBaselineMetadataRoundTripsZeroLength(t *testing.T) {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate bo summaries with a separate, opt-in model request."""
+"""Evaluate bo synthesis artifacts with a separate, opt-in model request."""
 
 from __future__ import annotations
 
@@ -21,8 +21,10 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 MODEL = "deepseek-v4-pro"
 PROMPT_VERSION = "summary-evaluator-v3"
+DISTILL_PROMPT_VERSION = "distill-evaluator-v1"
 DEFAULT_API_URL = "https://api.deepseek.com/chat/completions"
 RUBRIC_PATH = Path(__file__).with_name("RUBRIC.md")
+DISTILL_RUBRIC_PATH = Path(__file__).with_name("DISTILL_RUBRIC.md")
 
 MAX_DOCUMENTS = 32
 MAX_INPUT_BYTES = 256 * 1024
@@ -39,6 +41,13 @@ LIMITS = {
 }
 
 CRITERIA = ("faithfulness", "coverage", "usefulness", "page_cleanliness")
+DISTILL_CRITERIA = (
+    "faithfulness",
+    "cross_source_integration",
+    "usefulness",
+    "structure",
+    "source_attribution",
+)
 FAITHFULNESS_GROUPS = (
     "source_facts",
     "author_experience_measurements",
@@ -147,6 +156,25 @@ def validate_structured_output(value: object) -> dict:
             )
             grouped[group] = _nonempty_evidence(item, f"faithfulness.evidence.{group}")
         normalized[criterion] = {"score": score, "evidence": grouped}
+    return normalized
+
+
+def validate_distill_structured_output(value: object) -> dict:
+    """Validate one distill evaluation response."""
+    if not isinstance(value, dict):
+        raise EvaluationError("model output must be a JSON object")
+    normalized = {}
+    for criterion in DISTILL_CRITERIA:
+        section = value.get(criterion)
+        if not isinstance(section, dict):
+            raise EvaluationError(f"{criterion} must be an object")
+        score = section.get("score")
+        if not _is_integer(score) or not 1 <= score <= 5:
+            raise EvaluationError(f"{criterion}.score must be an integer from 1 to 5")
+        normalized[criterion] = {
+            "score": score,
+            "evidence": _nonempty_evidence(section.get("evidence"), f"{criterion}.evidence"),
+        }
     return normalized
 
 
@@ -403,6 +431,153 @@ Summary ({pair['summary_filename']}):
 """
 
 
+def _read_bytes(path: Path, description: str) -> bytes:
+    try:
+        return path.read_bytes()
+    except OSError as error:
+        raise EvaluationError(f"reading {description} failed: {error}") from error
+
+
+def _safe_distill_filename(filename: object) -> str:
+    return _safe_markdown_filename(filename, "synthesized filename")
+
+
+def _valid_digest(value: object, label: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", value):
+        raise EvaluationError(f"{label} must be a SHA-256 hex digest")
+    return value.lower()
+
+
+def load_distill_documents(run_dir: Path) -> list[dict]:
+    """Load synthesized documents and only their recorded provenance inputs."""
+    run_dir = Path(run_dir)
+    state = _read_json(run_dir / "state.json", "state.json")
+    if not isinstance(state, dict):
+        raise EvaluationError("state.json must contain an object")
+    sources = state.get("sources")
+    if not isinstance(sources, list):
+        raise EvaluationError("state.json must contain a sources array")
+
+    raw_owners = {}
+    summary_owners = {}
+    for source in sources:
+        if not isinstance(source, dict) or not isinstance(source.get("source_key"), str) or not source["source_key"]:
+            raise EvaluationError("state source record has an invalid source_key")
+        source_key = source["source_key"]
+        snapshots = source.get("snapshots")
+        if not isinstance(snapshots, list):
+            raise EvaluationError(f"state source {source_key} must contain snapshots")
+        for snapshot in snapshots:
+            if not isinstance(snapshot, dict):
+                raise EvaluationError("state snapshot records must be objects")
+            filename = _safe_snapshot_filename(snapshot.get("filename"))
+            if filename in raw_owners:
+                raise EvaluationError(f"state contains duplicate snapshot: {filename}")
+            raw_owners[filename] = source_key
+        summary = source.get("summary")
+        if summary is not None:
+            if not isinstance(summary, dict):
+                raise EvaluationError(f"state source {source_key} summary must be an object")
+            filename = _safe_summary_filename(summary.get("filename"))
+            if filename in summary_owners:
+                raise EvaluationError(f"state contains duplicate summary: {filename}")
+            summary_owners[filename] = source_key
+
+    records = state.get("synthesized_documents", [])
+    if not isinstance(records, list):
+        raise EvaluationError("state synthesized_documents must be an array")
+    if len(records) > MAX_DOCUMENTS:
+        raise EvaluationError(
+            f"document limit exceeded: {len(records)} > {MAX_DOCUMENTS}"
+        )
+    synthesized_dir = run_dir / "synthesized"
+    result = []
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            raise EvaluationError("state synthesized records must be objects")
+        filename = _safe_distill_filename(record.get("filename"))
+        if record.get("kind") != "distill":
+            raise EvaluationError(f"state synthesized record {filename} has an invalid kind")
+        inputs = record.get("derived_from")
+        if not isinstance(inputs, list) or not inputs:
+            raise EvaluationError(f"state synthesized record {filename} has no provenance")
+        source_keys = set()
+        evidence = []
+        for input_index, item in enumerate(inputs):
+            if not isinstance(item, dict):
+                raise EvaluationError("synthesized provenance entries must be objects")
+            source_key = item.get("source_key")
+            if not isinstance(source_key, str) or not source_key:
+                raise EvaluationError("synthesized provenance source_key is invalid")
+            kind = item.get("kind")
+            if kind not in ("raw", "summary"):
+                raise EvaluationError("synthesized provenance kind is invalid")
+            input_filename = _safe_markdown_filename(item.get("filename"), "provenance filename")
+            digest = _valid_digest(item.get("content_digest"), "provenance content_digest")
+            owners = raw_owners if kind == "raw" else summary_owners
+            if owners.get(input_filename) != source_key:
+                raise EvaluationError(
+                    f"synthesized provenance entry {index}:{input_index} does not belong to source {source_key}"
+                )
+            directory = run_dir / "raw" if kind == "raw" else run_dir / "summaries"
+            path = directory / input_filename
+            if path.is_symlink() or not path.is_file():
+                raise EvaluationError(f"missing provenance document: {kind}/{input_filename}")
+            data = _read_bytes(path, f"provenance document {input_filename}")
+            actual_digest = hashlib.sha256(data).hexdigest()
+            if actual_digest != digest:
+                raise EvaluationError(f"provenance digest changed: {kind}/{input_filename}")
+            text = _read_text(path, f"provenance document {input_filename}")
+            evidence.append({
+                "source_key": source_key,
+                "kind": kind,
+                "filename": input_filename,
+                "content": text,
+            })
+            source_keys.add(source_key)
+        if len(source_keys) < 2:
+            raise EvaluationError(f"synthesized record {filename} has fewer than two source identities")
+        artifact_path = synthesized_dir / filename
+        if artifact_path.is_symlink() or not artifact_path.is_file():
+            raise EvaluationError(f"missing synthesized document: {filename}")
+        artifact = _read_text(artifact_path, f"synthesized document {filename}")
+        if not artifact.strip():
+            raise EvaluationError(f"synthesized document is empty: {filename}")
+        result.append({"filename": filename, "artifact": artifact, "inputs": evidence})
+    return result
+
+
+def build_distill_prompt(rubric: str, document: dict) -> str:
+    inputs = "\n\n".join(
+        f"Source identity: {item['source_key']}\n{item['kind']} document ({item['filename']}):\n---\n{item['content']}\n---"
+        for item in document["inputs"]
+    )
+    return f"""You are evaluating a cross-source Markdown distill document.
+Use only the supplied provenance documents and distill artifact. Score each
+criterion from 1 to 5. Justify every score with concrete, source-grounded
+examples. Use one to three concise sentences for each evidence value. Return
+JSON only with this exact shape:
+{{
+  "faithfulness": {{"score": 1, "evidence": "..."}},
+  "cross_source_integration": {{"score": 1, "evidence": "..."}},
+  "usefulness": {{"score": 1, "evidence": "..."}},
+  "structure": {{"score": 1, "evidence": "..."}},
+  "source_attribution": {{"score": 1, "evidence": "..."}}
+}}
+
+Rubric:
+{rubric}
+
+Distill artifact ({document['filename']}):
+---
+{document['artifact']}
+---
+
+Provenance documents:
+{inputs}
+"""
+
+
 def _token_count(payload: dict) -> int:
     usage = payload.get("usage")
     if not isinstance(usage, dict) or "completion_tokens" not in usage:
@@ -525,6 +700,118 @@ def _failed_aggregate(metadata: dict, error: Exception) -> dict:
     }
 
 
+def _run_task(run_dir: Path) -> str:
+    task_path = run_dir / "task.txt"
+    if not task_path.exists():
+        return "synth"
+    task = _read_text(task_path, "task.txt").strip()
+    if task not in ("synth", "distill"):
+        raise EvaluationError(f"unsupported evaluation task: {task}")
+    return task
+
+
+def evaluate_distill(
+    run_path: Union[str, Path],
+    api_key: Optional[str] = None,
+    api_url: Optional[str] = None,
+) -> dict:
+    run_dir = Path(run_path)
+    try:
+        rubric_bytes = DISTILL_RUBRIC_PATH.read_bytes()
+        rubric = rubric_bytes.decode("utf-8")
+    except OSError as error:
+        raise EvaluationError(f"reading DISTILL_RUBRIC.md failed: {error}") from error
+    except UnicodeError as error:
+        raise EvaluationError(f"reading DISTILL_RUBRIC.md failed: {error}") from error
+    metadata = {
+        **_metadata(run_dir.name, hashlib.sha256(rubric_bytes).hexdigest()),
+        "task": "distill",
+        "prompt_version": DISTILL_PROMPT_VERSION,
+    }
+    if (run_dir / "evaluation").exists():
+        raise EvaluationError(f"evaluation directory already exists: {run_dir / 'evaluation'}")
+    try:
+        documents = load_distill_documents(run_dir)
+        if not documents:
+            aggregate = {
+                **metadata,
+                "status": "skipped",
+                "document_count": 0,
+                "scored_document_count": 0,
+                "output_tokens": 0,
+                "scores": {},
+            }
+            _publish(run_dir, aggregate, [])
+            return aggregate
+        key = api_key if api_key is not None else os.environ.get("BO_EVAL_API_KEY", "")
+        if not key:
+            raise EvaluationError("BO_EVAL_API_KEY is not set")
+        endpoint = api_url or os.environ.get("BO_EVAL_API_URL") or DEFAULT_API_URL
+        total_tokens = 0
+        output_documents = []
+        document_names = set()
+        for document in documents:
+            input_bytes = len(document["artifact"].encode("utf-8")) + sum(
+                len(item["content"].encode("utf-8")) for item in document["inputs"]
+            )
+            if input_bytes > MAX_INPUT_BYTES:
+                raise EvaluationError(
+                    f"input limit exceeded for {document['filename']}: {input_bytes} > {MAX_INPUT_BYTES} bytes"
+                )
+            if total_tokens >= MAX_TOTAL_OUTPUT_TOKENS:
+                raise EvaluationError(
+                    f"total output token budget exceeded: {total_tokens} >= {MAX_TOTAL_OUTPUT_TOKENS}"
+                )
+            value, output_tokens = request_evaluation(
+                endpoint, key, build_distill_prompt(rubric, document)
+            )
+            result = validate_distill_structured_output(value)
+            if total_tokens + output_tokens > MAX_TOTAL_OUTPUT_TOKENS:
+                raise EvaluationError(
+                    "total output token budget exceeded: "
+                    f"{total_tokens + output_tokens} > {MAX_TOTAL_OUTPUT_TOKENS}"
+                )
+            total_tokens += output_tokens
+            output_filename = _document_filename(document["filename"])
+            if output_filename in document_names:
+                raise EvaluationError(f"document result filename collision: {output_filename}")
+            document_names.add(output_filename)
+            output_documents.append((
+                output_filename,
+                {
+                    **metadata,
+                    "filename": document["filename"],
+                    "output_tokens": output_tokens,
+                    "provenance": [
+                        {key: item[key] for key in ("source_key", "kind", "filename")}
+                        for item in document["inputs"]
+                    ],
+                    **result,
+                },
+            ))
+        scores = {
+            criterion: round(
+                sum(document[1][criterion]["score"] for document in output_documents)
+                / len(output_documents),
+                3,
+            )
+            for criterion in DISTILL_CRITERIA
+        }
+        aggregate = {
+            **metadata,
+            "status": "success",
+            "document_count": len(documents),
+            "scored_document_count": len(output_documents),
+            "output_tokens": total_tokens,
+            "scores": scores,
+        }
+        _publish(run_dir, aggregate, output_documents)
+        return aggregate
+    except EvaluationError as error:
+        _publish(run_dir, _failed_aggregate(metadata, error), [])
+        raise
+
+
 def evaluate(
     run_path: Union[str, Path],
     api_key: Optional[str] = None,
@@ -533,6 +820,8 @@ def evaluate(
     run_dir = Path(run_path)
     if not run_dir.is_dir():
         raise EvaluationError(f"result directory does not exist: {run_dir}")
+    if _run_task(run_dir) == "distill":
+        return evaluate_distill(run_dir, api_key=api_key, api_url=api_url)
     try:
         rubric_bytes = RUBRIC_PATH.read_bytes()
         rubric = rubric_bytes.decode("utf-8")

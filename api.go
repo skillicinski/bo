@@ -94,8 +94,9 @@ func IsAlreadyExists(err error) bool {
 type DocumentKind string
 
 const (
-	DocumentKindRaw     DocumentKind = "raw"
-	DocumentKindSummary DocumentKind = "summary"
+	DocumentKindRaw         DocumentKind = "raw"
+	DocumentKindSummary     DocumentKind = "summary"
+	DocumentKindSynthesized DocumentKind = "synthesized"
 )
 
 type DocumentRef struct {
@@ -105,6 +106,13 @@ type DocumentRef struct {
 
 func RawRef(name string) DocumentRef     { return DocumentRef{Kind: DocumentKindRaw, Name: name} }
 func SummaryRef(name string) DocumentRef { return DocumentRef{Kind: DocumentKindSummary, Name: name} }
+func SynthesizedRef(name string) DocumentRef {
+	return DocumentRef{Kind: DocumentKindSynthesized, Name: name}
+}
+
+type SynthesizedKind string
+
+const SynthesizedKindDistill SynthesizedKind = "distill"
 
 type Revision struct{ digest [sha256.Size]byte }
 
@@ -141,6 +149,24 @@ type SummaryRecord struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+type SynthesizedInput struct {
+	SourceKey     string       `json:"source_key"`
+	Kind          DocumentKind `json:"kind"`
+	Filename      string       `json:"filename"`
+	ContentDigest string       `json:"content_digest"`
+}
+
+type SynthesizedRecord struct {
+	Filename          string             `json:"filename"`
+	Kind              SynthesizedKind    `json:"kind"`
+	CreatedAt         time.Time          `json:"created_at"`
+	UpdatedAt         time.Time          `json:"updated_at"`
+	ContentDigest     string             `json:"content_digest,omitempty"`
+	ContentSize       *int64             `json:"content_size,omitempty"`
+	ContentModifiedAt string             `json:"content_modified_at,omitempty"`
+	DerivedFrom       []SynthesizedInput `json:"derived_from"`
+}
+
 type SourceRecord struct {
 	SourceKey string         `json:"source_key"`
 	Snapshots []RawRecord    `json:"snapshots"`
@@ -148,7 +174,8 @@ type SourceRecord struct {
 }
 
 type State struct {
-	Sources []SourceRecord `json:"sources"`
+	Sources              []SourceRecord      `json:"sources"`
+	SynthesizedDocuments []SynthesizedRecord `json:"synthesized_documents,omitempty"`
 }
 
 func (s State) SnapshotCount() int {
@@ -169,6 +196,7 @@ type Workspace interface {
 	WorkspaceEvents
 	CommitSnapshot(context.Context, SnapshotCommit, Revision) (State, Revision, error)
 	CommitSummary(context.Context, SummaryCommit, Revision) (State, Revision, error)
+	CommitSynthesized(context.Context, SynthesizedCommit, Revision) (State, Revision, error)
 	Close() error
 }
 
@@ -200,6 +228,16 @@ type SummaryCommit struct {
 	Event        Operation
 }
 
+type SynthesizedCommit struct {
+	Kind        SynthesizedKind
+	Filename    string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	DerivedFrom []SynthesizedInput
+	Contents    []byte
+	Event       Operation
+}
+
 type WorkspaceCreator interface {
 	Create(context.Context, string, Operation) (string, error)
 }
@@ -207,11 +245,13 @@ type WorkspaceCreator interface {
 type OperationCommand string
 
 const (
-	CommandSeed         OperationCommand = "seed"
-	CommandSnap         OperationCommand = "snap"
-	CommandState        OperationCommand = "state"
-	CommandSynth        OperationCommand = "synth"
-	CommandWriteSummary OperationCommand = "write_summary"
+	CommandSeed             OperationCommand = "seed"
+	CommandSnap             OperationCommand = "snap"
+	CommandState            OperationCommand = "state"
+	CommandSynth            OperationCommand = "synth"
+	CommandDistill          OperationCommand = "distill"
+	CommandWriteSummary     OperationCommand = "write_summary"
+	CommandWriteSynthesized OperationCommand = "write_synthesized"
 )
 
 type OperationOutcome string
@@ -247,12 +287,14 @@ type TokenUsage struct {
 }
 
 type OperationMetrics struct {
-	Turns            int           `json:"turns"`
-	ToolCalls        int           `json:"tool_calls"`
-	Duration         time.Duration `json:"duration"`
-	SummariesWritten int           `json:"summaries_written"`
-	SummariesSkipped int           `json:"summaries_skipped"`
-	Usage            *TokenUsage   `json:"usage,omitempty"`
+	Turns              int           `json:"turns"`
+	ToolCalls          int           `json:"tool_calls"`
+	Duration           time.Duration `json:"duration"`
+	SummariesWritten   int           `json:"summaries_written"`
+	SummariesSkipped   int           `json:"summaries_skipped"`
+	SynthesizedWritten int           `json:"synthesized_written,omitempty"`
+	SynthesizedSkipped int           `json:"synthesized_skipped,omitempty"`
+	Usage              *TokenUsage   `json:"usage,omitempty"`
 }
 
 type Operation struct {
@@ -392,6 +434,20 @@ type SynthResult struct {
 	Metrics          Metrics `json:"metrics"`
 }
 
+type DistillRequest struct {
+	Workspace  Workspace
+	Provider   Provider
+	Options    SynthesisOptions
+	Operations OperationOptions
+}
+
+type DistillResult struct {
+	Filename string  `json:"filename,omitempty"`
+	Skipped  bool    `json:"skipped"`
+	Reason   string  `json:"reason,omitempty"`
+	Metrics  Metrics `json:"metrics"`
+}
+
 type LocalManager struct {
 	manager *loc.Manager
 }
@@ -507,6 +563,18 @@ func Synth(ctx context.Context, request SynthRequest) (SynthResult, error) {
 	return publicSynthResult(result), publicError(err)
 }
 
+func Distill(ctx context.Context, request DistillRequest) (DistillResult, error) {
+	if request.Workspace == nil {
+		return DistillResult{}, NewError(ErrorKindRequest, "workspace is not configured")
+	}
+	result, err := app.Distill(ctx, &publicWorkspace{workspace: request.Workspace}, request.Provider.completion, app.SynthesisOptions{
+		MaxTurns: request.Options.MaxTurns, MaxToolCalls: request.Options.MaxToolCalls,
+		MaxToolOutputBytes: request.Options.MaxToolOutputBytes, MaxResponseTokens: request.Options.MaxResponseTokens,
+		TimeoutSeconds: request.Options.TimeoutSeconds,
+	}, internalOperationOptions(request.Operations))
+	return publicDistillResult(result), publicError(err)
+}
+
 type localWorkspace struct {
 	workspace *loc.Store
 }
@@ -582,6 +650,18 @@ func (w *localWorkspace) CommitSummary(ctx context.Context, commit SummaryCommit
 	state, revision, err := w.workspace.CommitSummary(ctx, internalSummaryCommit(commit), internalRevision(expected))
 	if err != nil {
 		return State{}, Revision{}, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "committing summary"))
+	}
+	converted, err := publicState(state)
+	if err != nil {
+		return State{}, Revision{}, publicError(err)
+	}
+	return converted, publicRevision(revision), nil
+}
+
+func (w *localWorkspace) CommitSynthesized(ctx context.Context, commit SynthesizedCommit, expected Revision) (State, Revision, error) {
+	state, revision, err := w.workspace.CommitSynthesized(ctx, internalSynthesizedCommit(commit), internalRevision(expected))
+	if err != nil {
+		return State{}, Revision{}, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "committing synthesized document"))
 	}
 	converted, err := publicState(state)
 	if err != nil {
@@ -704,6 +784,22 @@ func (w *publicWorkspace) CommitSummary(ctx context.Context, commit app.SummaryC
 	return converted, internalRevision, nil
 }
 
+func (w *publicWorkspace) CommitSynthesized(ctx context.Context, commit app.SynthesizedCommit, expected app.Revision) (internaldomain.State, app.Revision, error) {
+	state, revision, err := w.workspace.CommitSynthesized(ctx, publicSynthesizedCommit(commit), publicRevision(expected))
+	if err != nil {
+		return internaldomain.State{}, app.Revision{}, internalErrorAs(err, internalerrors.KindFilesystem, "committing synthesized document")
+	}
+	converted, err := internalState(state)
+	if err != nil {
+		return internaldomain.State{}, app.Revision{}, internalError(err)
+	}
+	internalRevision, err := app.RevisionFromString(revision.String())
+	if err != nil {
+		return internaldomain.State{}, app.Revision{}, internalError(err)
+	}
+	return converted, internalRevision, nil
+}
+
 func internalOperationOptions(options OperationOptions) app.OperationOptions {
 	return app.OperationOptions{Actor: options.Actor}
 }
@@ -748,12 +844,28 @@ func internalSummaryCommit(commit SummaryCommit) app.SummaryCommit {
 	return app.SummaryCommit{SourceKey: commit.SourceKey, Filename: commit.Filename, DerivedFrom: commit.DerivedFrom, RawWrittenAt: commit.RawWrittenAt, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt, Contents: commit.Contents, Event: internalOperation(commit.Event)}
 }
 
+func internalSynthesizedCommit(commit SynthesizedCommit) app.SynthesizedCommit {
+	inputs := make([]internaldomain.SynthesizedInput, len(commit.DerivedFrom))
+	for index, input := range commit.DerivedFrom {
+		inputs[index] = internaldomain.SynthesizedInput{SourceKey: input.SourceKey, Kind: internaldomain.DocumentKind(input.Kind), Filename: input.Filename, ContentDigest: input.ContentDigest}
+	}
+	return app.SynthesizedCommit{Kind: internaldomain.SynthesizedKind(commit.Kind), Filename: commit.Filename, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt, DerivedFrom: inputs, Contents: commit.Contents, Event: internalOperation(commit.Event)}
+}
+
 func publicSummaryCommit(commit app.SummaryCommit) SummaryCommit {
 	return SummaryCommit{SourceKey: commit.SourceKey, Filename: commit.Filename, DerivedFrom: commit.DerivedFrom, RawWrittenAt: commit.RawWrittenAt, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt, Contents: commit.Contents, Event: publicOperation(commit.Event)}
 }
 
+func publicSynthesizedCommit(commit app.SynthesizedCommit) SynthesizedCommit {
+	inputs := make([]SynthesizedInput, len(commit.DerivedFrom))
+	for index, input := range commit.DerivedFrom {
+		inputs[index] = SynthesizedInput{SourceKey: input.SourceKey, Kind: DocumentKind(input.Kind), Filename: input.Filename, ContentDigest: input.ContentDigest}
+	}
+	return SynthesizedCommit{Kind: SynthesizedKind(commit.Kind), Filename: commit.Filename, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt, DerivedFrom: inputs, Contents: commit.Contents, Event: publicOperation(commit.Event)}
+}
+
 func internalState(state State) (internaldomain.State, error) {
-	result := internaldomain.State{Sources: make([]internaldomain.SourceRecord, len(state.Sources))}
+	result := internaldomain.State{Sources: make([]internaldomain.SourceRecord, len(state.Sources)), SynthesizedDocuments: make([]internaldomain.SynthesizedRecord, len(state.SynthesizedDocuments))}
 	for index, source := range state.Sources {
 		result.Sources[index] = internaldomain.SourceRecord{SourceKey: source.SourceKey, Snapshots: make([]internaldomain.RawRecord, len(source.Snapshots))}
 		for snapshotIndex, snapshot := range source.Snapshots {
@@ -763,6 +875,9 @@ func internalState(state State) (internaldomain.State, error) {
 			result.Sources[index].Summary = &internaldomain.SummaryRecord{Filename: source.Summary.Filename, DerivedFrom: source.Summary.DerivedFrom, CreatedAt: source.Summary.CreatedAt, UpdatedAt: source.Summary.UpdatedAt}
 		}
 	}
+	for index, record := range state.SynthesizedDocuments {
+		result.SynthesizedDocuments[index] = internalSynthesizedRecord(record)
+	}
 	return result, result.Validate()
 }
 
@@ -770,7 +885,7 @@ func publicState(state internaldomain.State) (State, error) {
 	if err := state.Validate(); err != nil {
 		return State{}, err
 	}
-	result := State{Sources: make([]SourceRecord, len(state.Sources))}
+	result := State{Sources: make([]SourceRecord, len(state.Sources)), SynthesizedDocuments: make([]SynthesizedRecord, len(state.SynthesizedDocuments))}
 	for index, source := range state.Sources {
 		result.Sources[index] = SourceRecord{SourceKey: source.SourceKey, Snapshots: make([]RawRecord, len(source.Snapshots))}
 		for snapshotIndex, snapshot := range source.Snapshots {
@@ -780,7 +895,36 @@ func publicState(state internaldomain.State) (State, error) {
 			result.Sources[index].Summary = &SummaryRecord{Filename: source.Summary.Filename, DerivedFrom: source.Summary.DerivedFrom, CreatedAt: source.Summary.CreatedAt, UpdatedAt: source.Summary.UpdatedAt}
 		}
 	}
+	for index, record := range state.SynthesizedDocuments {
+		result.SynthesizedDocuments[index] = publicSynthesizedRecord(record)
+	}
 	return result, nil
+}
+
+func internalSynthesizedRecord(record SynthesizedRecord) internaldomain.SynthesizedRecord {
+	inputs := make([]internaldomain.SynthesizedInput, len(record.DerivedFrom))
+	for index, input := range record.DerivedFrom {
+		inputs[index] = internaldomain.SynthesizedInput{SourceKey: input.SourceKey, Kind: internaldomain.DocumentKind(input.Kind), Filename: input.Filename, ContentDigest: input.ContentDigest}
+	}
+	var size *int64
+	if record.ContentSize != nil {
+		value := *record.ContentSize
+		size = &value
+	}
+	return internaldomain.SynthesizedRecord{Filename: record.Filename, Kind: internaldomain.SynthesizedKind(record.Kind), CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, ContentDigest: record.ContentDigest, ContentSize: size, ContentModifiedAt: record.ContentModifiedAt, DerivedFrom: inputs}
+}
+
+func publicSynthesizedRecord(record internaldomain.SynthesizedRecord) SynthesizedRecord {
+	inputs := make([]SynthesizedInput, len(record.DerivedFrom))
+	for index, input := range record.DerivedFrom {
+		inputs[index] = SynthesizedInput{SourceKey: input.SourceKey, Kind: DocumentKind(input.Kind), Filename: input.Filename, ContentDigest: input.ContentDigest}
+	}
+	var size *int64
+	if record.ContentSize != nil {
+		value := *record.ContentSize
+		size = &value
+	}
+	return SynthesizedRecord{Filename: record.Filename, Kind: SynthesizedKind(record.Kind), CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, ContentDigest: record.ContentDigest, ContentSize: size, ContentModifiedAt: record.ContentModifiedAt, DerivedFrom: inputs}
 }
 
 func internalOperation(operation Operation) internaldomain.Operation {
@@ -808,6 +952,7 @@ func internalOperation(operation Operation) internaldomain.Operation {
 		result.Metrics = &internaldomain.OperationMetrics{
 			Turns: operation.Metrics.Turns, ToolCalls: operation.Metrics.ToolCalls, Duration: operation.Metrics.Duration,
 			SummariesWritten: operation.Metrics.SummariesWritten, SummariesSkipped: operation.Metrics.SummariesSkipped,
+			SynthesizedWritten: operation.Metrics.SynthesizedWritten, SynthesizedSkipped: operation.Metrics.SynthesizedSkipped,
 		}
 		if operation.Metrics.Usage != nil {
 			result.Metrics.Usage = &internaldomain.TokenUsage{PromptTokens: operation.Metrics.Usage.PromptTokens, CompletionTokens: operation.Metrics.Usage.CompletionTokens, TotalTokens: operation.Metrics.Usage.TotalTokens}
@@ -841,6 +986,7 @@ func publicOperation(operation internaldomain.Operation) Operation {
 		result.Metrics = &OperationMetrics{
 			Turns: operation.Metrics.Turns, ToolCalls: operation.Metrics.ToolCalls, Duration: operation.Metrics.Duration,
 			SummariesWritten: operation.Metrics.SummariesWritten, SummariesSkipped: operation.Metrics.SummariesSkipped,
+			SynthesizedWritten: operation.Metrics.SynthesizedWritten, SynthesizedSkipped: operation.Metrics.SynthesizedSkipped,
 		}
 		if operation.Metrics.Usage != nil {
 			result.Metrics.Usage = &TokenUsage{PromptTokens: operation.Metrics.Usage.PromptTokens, CompletionTokens: operation.Metrics.Usage.CompletionTokens, TotalTokens: operation.Metrics.Usage.TotalTokens}
@@ -867,6 +1013,14 @@ func publicSnapOutcomes(outcomes []app.SnapOutcome) []SnapOutcome {
 
 func publicSynthResult(result app.SynthesisResult) SynthResult {
 	converted := SynthResult{SummariesWritten: result.SummariesWritten, SummariesSkipped: result.SummariesSkipped, Metrics: Metrics{Turns: result.Metrics.Turns, ToolCalls: result.Metrics.ToolCalls, Duration: result.Metrics.Duration}}
+	if result.Metrics.Usage != nil {
+		converted.Metrics.Usage = &TokenUsage{PromptTokens: result.Metrics.Usage.PromptTokens, CompletionTokens: result.Metrics.Usage.CompletionTokens, TotalTokens: result.Metrics.Usage.TotalTokens}
+	}
+	return converted
+}
+
+func publicDistillResult(result app.DistillResult) DistillResult {
+	converted := DistillResult{Filename: result.Filename, Skipped: result.Skipped, Reason: result.Reason, Metrics: Metrics{Turns: result.Metrics.Turns, ToolCalls: result.Metrics.ToolCalls, Duration: result.Metrics.Duration}}
 	if result.Metrics.Usage != nil {
 		converted.Metrics.Usage = &TokenUsage{PromptTokens: result.Metrics.Usage.PromptTokens, CompletionTokens: result.Metrics.Usage.CompletionTokens, TotalTokens: result.Metrics.Usage.TotalTokens}
 	}
