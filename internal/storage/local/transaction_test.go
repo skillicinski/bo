@@ -57,7 +57,7 @@ func TestPreparedSummaryTransactionRollsBackAfterSummaryRename(t *testing.T) {
 		SourceKey: "raw:note.md", Filename: "note.md", DerivedFrom: "note.md",
 		RawWrittenAt: time.Unix(1, 0).UTC(), CreatedAt: time.Unix(2, 0).UTC(), UpdatedAt: time.Unix(3, 0).UTC(), Contents: []byte("new\n"),
 	}
-	next, err := applySummary(current, commit)
+	next, err := current.ApplySummary(commit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestSnapshotTransactionRollsBackAfterRawRename(t *testing.T) {
 	commit := application.SnapshotCommit{
 		SourceKey: "raw:note.md", Filename: "note.md", WrittenAt: time.Unix(1, 0).UTC(), Contents: []byte("note\n"),
 	}
-	next, err := appendSnapshot(current, commit)
+	next, err := current.ApplySnapshot(commit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestCommittedSnapshotTransactionFinishesAfterMarkerPublication(t *testing.T
 	commit := application.SnapshotCommit{
 		SourceKey: "raw:note.md", Filename: "note.md", WrittenAt: time.Unix(1, 0).UTC(), Contents: []byte("note\n"),
 	}
-	next, err := appendSnapshot(current, commit)
+	next, err := current.ApplySnapshot(commit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestPreparedTransactionSurvivesFailedRollbackPublication(t *testing.T) {
 	commit := application.SnapshotCommit{
 		SourceKey: "raw:note.md", Filename: "note.md", WrittenAt: time.Unix(1, 0).UTC(), Contents: []byte("note\n"),
 	}
-	next, err := appendSnapshot(current, commit)
+	next, err := current.ApplySnapshot(commit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +315,7 @@ func TestPreparedTransactionRecoversPartialWorkspaceEvent(t *testing.T) {
 			Source: &domain.SourceIdentity{SourceKey: "raw:note.md"}, Document: &domain.DocumentIdentity{Kind: domain.DocumentKindRaw, Filename: "note.md"},
 		},
 	}
-	next, err := appendSnapshot(current, commit)
+	next, err := current.ApplySnapshot(commit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +389,7 @@ func TestCommittedTransactionRecoversWorkspaceEvent(t *testing.T) {
 			Source: &domain.SourceIdentity{SourceKey: "raw:note.md"}, Document: &domain.DocumentIdentity{Kind: domain.DocumentKindRaw, Filename: "note.md"},
 		},
 	}
-	next, err := appendSnapshot(current, commit)
+	next, err := current.ApplySnapshot(commit)
 	if err != nil {
 		t.Fatal(err)
 	}

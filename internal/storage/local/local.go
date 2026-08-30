@@ -330,7 +330,7 @@ func (s *Store) CommitSnapshot(ctx context.Context, commit application.SnapshotC
 	if err := contextErr(ctx); err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
-	if err := validateSnapshotCommit(commit); err != nil {
+	if err := commit.Validate(); err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
 	s.mu.Lock()
@@ -347,7 +347,7 @@ func (s *Store) CommitSnapshot(ctx context.Context, commit application.SnapshotC
 	} else if !os.IsNotExist(err) {
 		return domain.State{}, application.Revision{}, filesystem(filepath.Join(s.path, commit.Filename), err)
 	}
-	next, err := appendSnapshot(current, commit)
+	next, err := current.ApplySnapshot(commit)
 	if err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
@@ -399,7 +399,7 @@ func (s *Store) CommitSummary(ctx context.Context, commit application.SummaryCom
 	if err := contextErr(ctx); err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
-	if err := validateSummaryCommit(commit); err != nil {
+	if err := commit.Validate(); err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
 	s.mu.Lock()
@@ -431,9 +431,6 @@ func (s *Store) CommitSummary(ctx context.Context, commit application.SummaryCom
 	}
 	summary := summaryRecord(current, commit.SourceKey)
 	if summary != nil {
-		if summary.Filename != commit.Filename {
-			return domain.State{}, application.Revision{}, internalerrors.Validation("summary filename cannot change")
-		}
 		if !hadOldContents {
 			return domain.State{}, application.Revision{}, internalerrors.MissingResource("referenced summary is missing")
 		}
@@ -444,7 +441,7 @@ func (s *Store) CommitSummary(ctx context.Context, commit application.SummaryCom
 	if summary == nil && hadOldContents {
 		return domain.State{}, application.Revision{}, internalerrors.Conflict("summary exists outside workspace state")
 	}
-	next, err := applySummary(current, commit)
+	next, err := current.ApplySummary(commit)
 	if err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
@@ -499,7 +496,7 @@ func (s *Store) CommitDistillation(ctx context.Context, commit application.Disti
 	if err := contextErr(ctx); err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
-	if err := validateDistillationCommit(commit); err != nil {
+	if err := commit.Validate(); err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
 	s.mu.Lock()
@@ -525,49 +522,13 @@ func (s *Store) CommitDistillation(ctx context.Context, commit application.Disti
 	if commit.Update && !hadOldContents {
 		return domain.State{}, application.Revision{}, internalerrors.MissingResource("distillation document is missing")
 	}
-	record := domain.DistillationRecord{
-		Filename: commit.Filename, Topic: commit.Topic, Kind: commit.Kind, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt,
-		DerivedFrom: append([]domain.DistillationInput(nil), commit.DerivedFrom...),
-	}
-	replaced := false
-	for index := range current.DistillationDocuments {
-		if current.DistillationDocuments[index].Filename != commit.Filename {
-			continue
-		}
-		if !commit.Update {
-			return domain.State{}, application.Revision{}, internalerrors.AlreadyExists("distillation document already belongs to workspace state")
-		}
-		if current.DistillationDocuments[index].Topic != record.Topic {
-			return domain.State{}, application.Revision{}, internalerrors.Validation("distillation topic cannot change on update")
-		}
-		record.CreatedAt = current.DistillationDocuments[index].CreatedAt
-		replaced = true
-		break
-	}
-	if commit.Update && !replaced {
-		return domain.State{}, application.Revision{}, internalerrors.Conflict("distillation document exists outside workspace state")
-	}
 	if commit.Update {
 		if err := s.ensureDocumentBaseline(&current, domain.DistillationRef(commit.Filename), oldContents); err != nil {
 			return domain.State{}, application.Revision{}, err
 		}
 	}
-	if err := s.validateDistillationInputs(&current, record); err != nil {
-		return domain.State{}, application.Revision{}, err
-	}
-	next := cloneState(current)
-	if replaced {
-		for index := range next.DistillationDocuments {
-			if next.DistillationDocuments[index].Filename == commit.Filename {
-				next.DistillationDocuments[index] = record
-				break
-			}
-		}
-	}
-	if !replaced {
-		next.DistillationDocuments = append(next.DistillationDocuments, record)
-	}
-	if err := next.Validate(); err != nil {
+	next, err := s.applyDistillation(current, commit)
+	if err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
 	data, err := domain.MarshalState(next)
@@ -1345,230 +1306,25 @@ func writeRevisionPart(buffer *bytes.Buffer, value []byte) {
 	buffer.Write(value)
 }
 
-func validateSnapshotCommit(commit application.SnapshotCommit) error {
-	if err := domain.ValidateSourceKey(commit.SourceKey); err != nil {
-		return err
+func (s *Store) applyDistillation(state domain.State, commit application.DistillationCommit) (domain.State, error) {
+	next, err := state.ApplyDistillation(commit)
+	if err != nil {
+		return domain.State{}, err
 	}
-	if err := domain.ValidateDocumentName(commit.Filename); err != nil {
-		return err
-	}
-	if err := domain.ValidateTimestamp(commit.WrittenAt); err != nil {
-		return err
-	}
-	return validateMutationEvent(commit.Event, domain.CommandSnap, commit.SourceKey, domain.DocumentKindRaw, commit.Filename, nil)
-}
-
-func validateSummaryCommit(commit application.SummaryCommit) error {
-	if err := domain.ValidateSourceKey(commit.SourceKey); err != nil {
-		return err
-	}
-	if err := domain.ValidateDocumentName(commit.Filename); err != nil {
-		return err
-	}
-	if err := domain.ValidateDocumentName(commit.DerivedFrom); err != nil {
-		return err
-	}
-	if err := domain.ValidateTimestamp(commit.RawWrittenAt); err != nil {
-		return err
-	}
-	if err := domain.ValidateTimestamp(commit.CreatedAt); err != nil {
-		return err
-	}
-	if err := domain.ValidateTimestamp(commit.UpdatedAt); err != nil {
-		return err
-	}
-	return validateMutationEvent(commit.Event, domain.CommandWriteSummary, commit.SourceKey, domain.DocumentKindSummary, commit.Filename, &summaryEventProvenance{
-		derivedFrom:  commit.DerivedFrom,
-		rawWrittenAt: commit.RawWrittenAt,
-	})
-}
-
-func validateDistillationCommit(commit application.DistillationCommit) error {
-	if commit.Kind != domain.DocumentKindDistillation {
-		return internalerrors.Validation("invalid distillation kind")
-	}
-	if err := domain.ValidateDocumentName(commit.Filename); err != nil {
-		return err
-	}
-	if err := domain.ValidateTopic(commit.Topic); err != nil {
-		return err
-	}
-	if err := domain.ValidateTimestamp(commit.CreatedAt); err != nil {
-		return err
-	}
-	if err := domain.ValidateTimestamp(commit.UpdatedAt); err != nil {
-		return err
-	}
-	if commit.UpdatedAt.Before(commit.CreatedAt) {
-		return internalerrors.Validation("distillation updated_at is before created_at")
-	}
-	if len(commit.DerivedFrom) == 0 {
-		return internalerrors.Validation("distillation document must have inputs")
-	}
-	if strings.TrimSpace(string(commit.Contents)) == "" {
-		return internalerrors.Validation("distillation document must be non-empty")
-	}
-	return validateDistillationMutationEvent(commit.Event, commit.Filename)
-}
-
-type summaryEventProvenance struct {
-	derivedFrom  string
-	rawWrittenAt time.Time
-}
-
-func validateMutationEvent(event domain.Operation, command domain.OperationCommand, sourceKey string, kind domain.DocumentKind, filename string, provenance *summaryEventProvenance) error {
-	if err := event.Validate(); err != nil {
-		return internalerrors.Wrap(internalerrors.KindValidation, "invalid mutation event", err)
-	}
-	if event.Command != command {
-		return internalerrors.Validation("mutation event command does not match commit")
-	}
-	if event.Outcome != domain.OutcomeCommitted || event.Error != nil {
-		return internalerrors.Validation("mutation event must be committed without an error")
-	}
-	if event.Source == nil || event.Source.SourceKey != sourceKey {
-		return internalerrors.Validation("mutation event source does not match commit")
-	}
-	if event.Document == nil || event.Document.Kind != kind || event.Document.Filename != filename {
-		return internalerrors.Validation("mutation event document does not match commit")
-	}
-	if provenance == nil {
-		if event.Provenance != nil {
-			return internalerrors.Validation("mutation event provenance is not allowed")
-		}
-		return nil
-	}
-	if event.Provenance == nil || event.Provenance.DerivedFrom == nil ||
-		event.Provenance.DerivedFrom.Kind != domain.DocumentKindRaw ||
-		event.Provenance.DerivedFrom.Filename != provenance.derivedFrom ||
-		event.Provenance.RawWrittenAt == nil || !event.Provenance.RawWrittenAt.Equal(provenance.rawWrittenAt) {
-		return internalerrors.Validation("mutation event provenance does not match commit")
-	}
-	return nil
-}
-
-func validateDistillationMutationEvent(event domain.Operation, filename string) error {
-	if err := event.Validate(); err != nil {
-		return internalerrors.Wrap(internalerrors.KindValidation, "invalid mutation event", err)
-	}
-	if event.Command != domain.CommandWriteDistillation {
-		return internalerrors.Validation("mutation event command does not match commit")
-	}
-	if event.Outcome != domain.OutcomeCommitted || event.Error != nil {
-		return internalerrors.Validation("mutation event must be committed without an error")
-	}
-	if event.Source != nil || event.Provenance != nil {
-		return internalerrors.Validation("distillation mutation event must not contain source or provenance")
-	}
-	if event.Document == nil || event.Document.Kind != domain.DocumentKindDistillation || event.Document.Filename != filename {
-		return internalerrors.Validation("mutation event document does not match commit")
-	}
-	return nil
-}
-
-func (s *Store) validateDistillationInputs(state *domain.State, record domain.DistillationRecord) error {
-	candidate := cloneState(*state)
-	replaced := false
-	for index := range candidate.DistillationDocuments {
-		if candidate.DistillationDocuments[index].Filename == record.Filename {
-			candidate.DistillationDocuments[index] = record
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		candidate.DistillationDocuments = append(candidate.DistillationDocuments, record)
-	}
-	if err := candidate.Validate(); err != nil {
-		return err
-	}
-	for _, input := range record.DerivedFrom {
+	for _, input := range commit.DerivedFrom {
 		ref := domain.DocumentRef{Kind: input.Kind, Name: input.Filename}
 		contents, err := s.readDocument(ref)
 		if err != nil {
-			return err
+			return domain.State{}, err
 		}
 		if !strings.EqualFold(application.NewRevision(contents).String(), input.ContentDigest) {
-			return internalerrors.Conflict(fmt.Sprintf("workspace document changed: %s", input.Filename))
+			return domain.State{}, internalerrors.Conflict(fmt.Sprintf("workspace document changed: %s", input.Filename))
 		}
-		if err := s.ensureDocumentBaseline(state, ref, contents); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func appendSnapshot(state domain.State, commit application.SnapshotCommit) (domain.State, error) {
-	next := cloneState(state)
-	for index := range next.Sources {
-		if next.Sources[index].SourceKey != commit.SourceKey {
-			continue
-		}
-		for _, snapshot := range next.Sources[index].Snapshots {
-			if snapshot.Filename == commit.Filename {
-				return domain.State{}, internalerrors.AlreadyExists("snapshot already belongs to workspace state")
-			}
-		}
-		next.Sources[index].Snapshots = append(next.Sources[index].Snapshots, domain.RawRecord{Filename: commit.Filename, WrittenAt: commit.WrittenAt})
-		return next, next.Validate()
-	}
-	next.Sources = append(next.Sources, domain.SourceRecord{
-		SourceKey: commit.SourceKey,
-		Snapshots: []domain.RawRecord{{Filename: commit.Filename, WrittenAt: commit.WrittenAt}},
-	})
-	return next, next.Validate()
-}
-
-func applySummary(state domain.State, commit application.SummaryCommit) (domain.State, error) {
-	next := cloneState(state)
-	record := &domain.SummaryRecord{Filename: commit.Filename, DerivedFrom: commit.DerivedFrom, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt}
-	for index := range next.Sources {
-		if next.Sources[index].SourceKey != commit.SourceKey {
-			continue
-		}
-		if !hasSnapshot(next.Sources[index].Snapshots, commit.DerivedFrom) {
-			if len(next.Sources[index].Snapshots) != 0 {
-				return domain.State{}, internalerrors.Validation("summary must derive from a workspace snapshot")
-			}
-			next.Sources[index].Snapshots = []domain.RawRecord{{Filename: commit.DerivedFrom, WrittenAt: commit.RawWrittenAt}}
-		}
-		next.Sources[index].Summary = record
-		return next, next.Validate()
-	}
-	next.Sources = append(next.Sources, domain.SourceRecord{
-		SourceKey: commit.SourceKey,
-		Snapshots: []domain.RawRecord{{Filename: commit.DerivedFrom, WrittenAt: commit.RawWrittenAt}},
-		Summary:   record,
-	})
-	return next, next.Validate()
-}
-
-func cloneState(state domain.State) domain.State {
-	next := domain.State{Sources: make([]domain.SourceRecord, len(state.Sources))}
-	if state.DistillationDocuments != nil {
-		next.DistillationDocuments = make([]domain.DistillationRecord, len(state.DistillationDocuments))
-	}
-	for index, source := range state.Sources {
-		next.Sources[index] = domain.SourceRecord{SourceKey: source.SourceKey, Snapshots: append([]domain.RawRecord(nil), source.Snapshots...)}
-		if source.Summary != nil {
-			summary := *source.Summary
-			next.Sources[index].Summary = &summary
+		if err := s.ensureDocumentBaseline(&next, ref, contents); err != nil {
+			return domain.State{}, err
 		}
 	}
-	for index, record := range state.DistillationDocuments {
-		next.DistillationDocuments[index] = record
-		next.DistillationDocuments[index].DerivedFrom = append([]domain.DistillationInput(nil), record.DerivedFrom...)
-	}
-	return next
-}
-
-func hasSnapshot(snapshots []domain.RawRecord, filename string) bool {
-	for _, snapshot := range snapshots {
-		if snapshot.Filename == filename {
-			return true
-		}
-	}
-	return false
+	return next, nil
 }
 
 func snapshotRecord(state domain.State, sourceKey, filename string) *domain.RawRecord {

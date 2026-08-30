@@ -141,7 +141,7 @@ func seedWorkspaceAttempt(rootPath, target string, event *domain.Operation) (boo
 	state := domain.State{Sources: []domain.SourceRecord{}}
 	if event != nil {
 		event.Normalize()
-		if err := validateSeedEvent(*event); err != nil {
+		if err := event.ValidateSeed(); err != nil {
 			return false, err
 		}
 	}
@@ -201,19 +201,6 @@ func initializeEvents(target string, event *domain.Operation) error {
 		return filesystem(filepath.Join(target, eventFile), err)
 	}
 	return syncRoot(root)
-}
-
-func validateSeedEvent(event domain.Operation) error {
-	if err := event.Validate(); err != nil {
-		return internalerrors.Wrap(internalerrors.KindValidation, "invalid seed event", err)
-	}
-	if event.Command != domain.CommandSeed || event.Outcome != domain.OutcomeCommitted || event.Error != nil {
-		return internalerrors.Validation("seed event must be a committed seed without an error")
-	}
-	if event.Source != nil || event.Document != nil || event.Provenance != nil {
-		return internalerrors.Validation("seed event must not contain source, document, or provenance")
-	}
-	return nil
 }
 
 func syncDirectory(path string) error {

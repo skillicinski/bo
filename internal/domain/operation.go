@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
 type OperationCommand string
@@ -182,6 +184,19 @@ func (o Operation) Validate() error {
 		if o.Metrics.Usage != nil && (o.Metrics.Usage.PromptTokens < 0 || o.Metrics.Usage.CompletionTokens < 0 || o.Metrics.Usage.TotalTokens < 0) {
 			return fmt.Errorf("metrics usage counts must not be negative")
 		}
+	}
+	return nil
+}
+
+func (o Operation) ValidateSeed() error {
+	if err := o.Validate(); err != nil {
+		return internalerrors.Wrap(internalerrors.KindValidation, "invalid seed event", err)
+	}
+	if o.Command != CommandSeed || o.Outcome != OutcomeCommitted || o.Error != nil {
+		return internalerrors.Validation("seed event must be a committed seed without an error")
+	}
+	if o.Source != nil || o.Document != nil || o.Provenance != nil {
+		return internalerrors.Validation("seed event must not contain source, document, or provenance")
 	}
 	return nil
 }

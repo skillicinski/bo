@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"time"
 
 	"github.com/skillicinski/bo/internal/domain"
 	internalerrors "github.com/skillicinski/bo/internal/errors"
@@ -31,37 +30,9 @@ func (r Revision) Equal(other Revision) bool { return r == other }
 func (r Revision) IsZero() bool              { return r == Revision{} }
 func (r Revision) String() string            { return hex.EncodeToString(r.digest[:]) }
 
-type SnapshotCommit struct {
-	SourceKey string
-	Filename  string
-	WrittenAt time.Time
-	Contents  []byte
-	Event     Operation
-}
-
-type SummaryCommit struct {
-	SourceKey    string
-	Filename     string
-	DerivedFrom  string
-	RawWrittenAt time.Time
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	Contents     []byte
-	Event        Operation
-}
-
-type DistillationCommit struct {
-	Kind     domain.DocumentKind
-	Filename string
-	Topic    string
-	// Update replaces an existing distillation record with the same filename.
-	Update      bool
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	DerivedFrom []domain.DistillationInput
-	Contents    []byte
-	Event       Operation
-}
+type SnapshotCommit = domain.SnapshotCommit
+type SummaryCommit = domain.SummaryCommit
+type DistillationCommit = domain.DistillationCommit
 
 // Workspace is the persistence boundary for one workspace.
 type Workspace interface {

@@ -243,7 +243,7 @@ func (s State) Validate() error {
 			}
 			inputKeys[key] = struct{}{}
 			distinctSources[input.SourceKey] = struct{}{}
-			if !sourceContainsDocument(s.Sources, input) {
+			if !s.ContainsDocument(input) {
 				return internalerrors.Validation(fmt.Sprintf("distillation_documents[%d].derived_from[%d]: document %q does not belong to source %q", index, inputIndex, input.Filename, input.SourceKey))
 			}
 		}
@@ -264,8 +264,9 @@ func validateDigest(digest string) error {
 	return nil
 }
 
-func sourceContainsDocument(sources []SourceRecord, input DistillationInput) bool {
-	for _, source := range sources {
+// ContainsDocument reports whether input names a document in its source aggregate.
+func (s State) ContainsDocument(input DistillationInput) bool {
+	for _, source := range s.Sources {
 		if source.SourceKey != input.SourceKey {
 			continue
 		}
@@ -282,6 +283,9 @@ func sourceContainsDocument(sources []SourceRecord, input DistillationInput) boo
 	}
 	return false
 }
+
+// ValidateContentDigest validates a document content digest.
+func ValidateContentDigest(digest string) error { return validateDigest(digest) }
 
 func ValidateSourceKey(sourceKey string) error {
 	if sourceKey == "" {
