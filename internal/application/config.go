@@ -16,7 +16,25 @@ type SynthesisOptions struct {
 type SynthesisResult struct {
 	SummariesWritten int           `json:"summaries_written"`
 	SummariesSkipped int           `json:"summaries_skipped"`
+	Committed        []Operation   `json:"-"`
 	Metrics          agent.Metrics `json:"metrics"`
+}
+
+type SynthMode string
+
+const (
+	SynthModeDefault   SynthMode = ""
+	SynthModeSummarize SynthMode = "summarize"
+	SynthModeDistill   SynthMode = "distill"
+)
+
+type SynthResult struct {
+	SummariesWritten    int
+	SummariesSkipped    int
+	DistillationWritten int
+	DistillationSkipped int
+	Committed           []Operation
+	Metrics             agent.Metrics
 }
 
 func DefaultSynthesisOptions() SynthesisOptions {

@@ -55,6 +55,7 @@ type DistillationInput struct {
 
 type DistillationRecord struct {
 	Filename          string              `json:"filename"`
+	Topic             string              `json:"topic,omitempty"`
 	Kind              DocumentKind        `json:"kind"`
 	CreatedAt         time.Time           `json:"created_at"`
 	UpdatedAt         time.Time           `json:"updated_at"`
@@ -187,6 +188,7 @@ func (s State) Validate() error {
 		}
 	}
 	distillationFilenames := make(map[string]string, len(s.DistillationDocuments))
+	distillationTopics := make(map[string]string, len(s.DistillationDocuments))
 	for index, record := range s.DistillationDocuments {
 		if err := ValidateDocumentName(record.Filename); err != nil {
 			return internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("distillation_documents[%d].filename", index), err)
@@ -195,6 +197,13 @@ func (s State) Validate() error {
 			return internalerrors.Validation(fmt.Sprintf("distillation_documents[%d].filename: already used by %s", index, previous))
 		}
 		distillationFilenames[record.Filename] = fmt.Sprintf("distillation_documents[%d]", index)
+		if err := ValidateTopic(record.Topic); err != nil {
+			return internalerrors.Wrap(internalerrors.KindValidation, fmt.Sprintf("distillation_documents[%d].topic", index), err)
+		}
+		if previous, exists := distillationTopics[record.Topic]; exists {
+			return internalerrors.Validation(fmt.Sprintf("distillation_documents[%d].topic: already used by %s", index, previous))
+		}
+		distillationTopics[record.Topic] = fmt.Sprintf("distillation_documents[%d]", index)
 		if record.Kind != DocumentKindDistillation {
 			return internalerrors.Validation(fmt.Sprintf("distillation_documents[%d].kind: invalid distillation kind %q", index, record.Kind))
 		}
@@ -340,6 +349,40 @@ func ValidateDocumentName(name string) error {
 		if unicode.IsControl(r) {
 			return internalerrors.Validation("document name must not contain control characters")
 		}
+	}
+	return nil
+}
+
+func CanonicalTopic(topic string) (string, error) {
+	topic = strings.TrimSpace(topic)
+	var builder strings.Builder
+	lastDash := false
+	for _, r := range topic {
+		if unicode.IsControl(r) {
+			return "", internalerrors.Validation("topic must not contain control characters")
+		}
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			builder.WriteRune(unicode.ToLower(r))
+			lastDash = false
+		} else if builder.Len() > 0 && !lastDash {
+			builder.WriteByte('-')
+			lastDash = true
+		}
+	}
+	canonical := strings.TrimRight(builder.String(), "-")
+	if canonical == "" {
+		return "", internalerrors.Validation("topic must contain letters or digits")
+	}
+	return canonical, nil
+}
+
+func ValidateTopic(topic string) error {
+	canonical, err := CanonicalTopic(topic)
+	if err != nil {
+		return err
+	}
+	if topic != canonical {
+		return internalerrors.Validation("topic must use canonical kebab-case")
 	}
 	return nil
 }

@@ -105,7 +105,7 @@ func TestSynthesizeReplaysToolMessagesAndUpsertsSummary(t *testing.T) {
 	oldRaw := commitRaw(t, store, "https://example.test/article", "old.md", time.Unix(1, 0).UTC(), []byte("# Old Article\n\nold fact\n"))
 	commitRaw(t, store, "https://example.test/article", "article.md", time.Unix(2, 0).UTC(), []byte("# Article\n\nfact\n"))
 	commitSummary(t, store, application.SummaryCommit{
-		SourceKey: "https://example.test/article", Filename: "article.md", DerivedFrom: oldRaw.Name,
+		SourceKey: "https://example.test/article", Filename: "article-summary.md", DerivedFrom: oldRaw.Name,
 		RawWrittenAt: time.Unix(1, 0).UTC(), CreatedAt: time.Unix(2, 0).UTC(), UpdatedAt: time.Unix(3, 0).UTC(), Contents: []byte("old summary"),
 	})
 	provider := &fakeProvider{responses: []agent.CompletionResponse{
@@ -130,12 +130,15 @@ func TestSynthesizeReplaysToolMessagesAndUpsertsSummary(t *testing.T) {
 	if len(provider.requests[1].Messages) != 4 || provider.requests[1].Messages[2].ToolCalls[0].ID != "corpus-1" || provider.requests[1].Messages[3].ToolCallID != "corpus-1" {
 		t.Fatalf("tool replay = %#v", provider.requests[1].Messages)
 	}
-	data, err := store.ReadDocument(context.Background(), domain.SummaryRef("article.md"))
+	data, err := store.ReadDocument(context.Background(), domain.SummaryRef("article-summary.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(data) != "# Summary\n\nfact\n" {
 		t.Fatalf("summary = %q", data)
+	}
+	if len(result.Committed) != 1 || result.Committed[0].Document == nil || result.Committed[0].Document.Filename != "article-summary.md" {
+		t.Fatalf("summary operation = %#v", result.Committed)
 	}
 	state, _, err := store.ReadState(context.Background())
 	if err != nil {
@@ -315,5 +318,74 @@ func TestSynthesizeWithToolsValidatesNames(t *testing.T) {
 		if _, err := application.SynthesizeWithTools(context.Background(), nil, nil, application.DefaultSynthesisOptions(), names, application.OperationOptions{}); err == nil {
 			t.Fatalf("tool names accepted: %v", names)
 		}
+	}
+}
+
+func TestSynthDefaultRunsSummariesThenDistill(t *testing.T) {
+	store, target := seededStore(t)
+	commitRaw(t, store, "https://example.test/one", "one.md", time.Unix(1, 0).UTC(), []byte("one fact\n"))
+	commitRaw(t, store, "https://example.test/two", "two.md", time.Unix(2, 0).UTC(), []byte("two fact\n"))
+	provider := &fakeProvider{responses: []agent.CompletionResponse{
+		toolResponse("read-one", "read_document", `{"filename":"one.md"}`),
+		toolResponse("write-one", "write_summary", `{"source_key":"https://example.test/one","markdown":"one summary\n"}`),
+		toolResponse("read-two", "read_document", `{"filename":"two.md"}`),
+		toolResponse("write-two", "write_summary", `{"source_key":"https://example.test/two","markdown":"two summary\n"}`),
+		toolResponse("read-distill-one", "read_document", `{"filename":"one.md"}`),
+		toolResponse("read-distill-two", "read_document", `{"filename":"two.md"}`),
+		toolResponse("write-distill", "write_distillation", `{"topic":"shared-facts","title":"Shared facts","introduction":"Both sources report facts.","sections":[{"heading":"Facts","paragraph":"The sources report related facts.","bullets":["One reports one fact.","The other reports another fact."],"sources":[{"source_key":"https://example.test/one","kind":"raw","filename":"one.md"},{"source_key":"https://example.test/two","kind":"raw","filename":"two.md"}]}]}`),
+		toolResponse("skip-distill", "skip_distill", `{"reason":"No other supported themes remain."}`),
+	}}
+	result, err := application.Synth(context.Background(), store, provider, application.DefaultSynthesisOptions(), application.SynthModeDefault, operationOptionsFor(target))
+	if err != nil || result.SummariesWritten != 2 || result.DistillationWritten != 1 || len(result.Committed) != 3 {
+		t.Fatalf("Synth = %#v, %v", result, err)
+	}
+	page, err := store.ReadEvents(context.Background(), 0, application.MaxOperationPageLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Entries[len(page.Entries)-1].Command != domain.CommandSynth {
+		t.Fatalf("last operation = %#v", page.Entries[len(page.Entries)-1])
+	}
+	for _, event := range page.Entries {
+		if event.Command == domain.CommandDistill {
+			t.Fatalf("default synth recorded a separate distill operation: %#v", event)
+		}
+	}
+}
+
+func TestSynthDistillProcessesMultipleTopics(t *testing.T) {
+	store, target := seededStore(t)
+	commitRaw(t, store, "https://example.test/one", "one.md", time.Unix(1, 0).UTC(), []byte("one fact\n"))
+	commitRaw(t, store, "https://example.test/two", "two.md", time.Unix(2, 0).UTC(), []byte("two fact\n"))
+	provider := &fakeProvider{responses: []agent.CompletionResponse{
+		toolResponse("read-one", "read_document", `{"filename":"one.md"}`),
+		toolResponse("read-two", "read_document", `{"filename":"two.md"}`),
+		toolResponse("write-shared", "write_distillation", `{"topic":"shared-facts","title":"Shared facts","introduction":"Both sources report facts.","sections":[{"heading":"Facts","paragraph":"The sources report related facts.","bullets":["One reports one fact.","The other reports another fact."],"sources":[{"source_key":"https://example.test/one","kind":"raw","filename":"one.md"},{"source_key":"https://example.test/two","kind":"raw","filename":"two.md"}]}]}`),
+		toolResponse("write-other", "write_distillation", `{"topic":"other-facts","title":"Other facts","introduction":"Both sources provide more facts.","sections":[{"heading":"More facts","paragraph":"The sources provide another useful relationship.","bullets":["One provides one fact.","The other provides another fact."],"sources":[{"source_key":"https://example.test/one","kind":"raw","filename":"one.md"},{"source_key":"https://example.test/two","kind":"raw","filename":"two.md"}]}]}`),
+		toolResponse("skip", "skip_distill", `{"reason":"No other supported themes remain."}`),
+	}}
+	result, err := application.Synth(context.Background(), store, provider, application.SynthesisOptions{MaxTurns: 5, MaxToolCalls: 5, MaxToolOutputBytes: 4096, MaxResponseTokens: 64, RuntimeTimeoutSeconds: 5}, application.SynthModeDistill, operationOptionsFor(target))
+	if err != nil || result.DistillationWritten != 2 || result.DistillationSkipped != 0 || len(result.Committed) != 2 {
+		t.Fatalf("Synth = %#v, %v", result, err)
+	}
+	state, _, err := store.ReadState(context.Background())
+	if err != nil || len(state.DistillationDocuments) != 2 {
+		t.Fatalf("state = %#v, %v", state, err)
+	}
+	if state.DistillationDocuments[0].Topic != "shared-facts" || state.DistillationDocuments[1].Topic != "other-facts" {
+		t.Fatalf("topics = %#v", state.DistillationDocuments)
+	}
+	page, err := store.ReadEvents(context.Background(), 0, application.MaxOperationPageLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var writes []domain.Operation
+	for _, event := range page.Entries {
+		if event.Command == domain.CommandWriteDistillation {
+			writes = append(writes, event)
+		}
+	}
+	if len(writes) != 2 || writes[0].OperationID == writes[1].OperationID || writes[0].Attempt != 1 || writes[1].Attempt != 1 {
+		t.Fatalf("distillation operations = %#v", writes)
 	}
 }

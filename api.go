@@ -154,6 +154,7 @@ type DistillationInput struct {
 
 type DistillationRecord struct {
 	Filename          string              `json:"filename"`
+	Topic             string              `json:"topic,omitempty"`
 	Kind              DocumentKind        `json:"kind"`
 	CreatedAt         time.Time           `json:"created_at"`
 	UpdatedAt         time.Time           `json:"updated_at"`
@@ -225,8 +226,11 @@ type SummaryCommit struct {
 }
 
 type DistillationCommit struct {
-	Kind        DocumentKind
-	Filename    string
+	Kind     DocumentKind
+	Filename string
+	Topic    string
+	// Update replaces an existing distillation record with the same filename.
+	Update      bool
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	DerivedFrom []DistillationInput
@@ -248,6 +252,14 @@ const (
 	CommandDistill           OperationCommand = "distill"
 	CommandWriteSummary      OperationCommand = "write_summary"
 	CommandWriteDistillation OperationCommand = "write_distillation"
+)
+
+type SynthMode string
+
+const (
+	SynthModeDefault   SynthMode = ""
+	SynthModeSummarize SynthMode = "summarize"
+	SynthModeDistill   SynthMode = "distill"
 )
 
 type OperationOutcome string
@@ -421,28 +433,23 @@ type Metrics struct {
 type SynthRequest struct {
 	Workspace  Workspace
 	Provider   Provider
+	Mode       SynthMode
 	Options    SynthesisOptions
 	Operations OperationOptions
+}
+
+type OperationReport struct {
+	Operation OperationCommand   `json:"operation"`
+	Documents []DocumentIdentity `json:"documents"`
 }
 
 type SynthResult struct {
-	SummariesWritten int     `json:"summaries_written"`
-	SummariesSkipped int     `json:"summaries_skipped"`
-	Metrics          Metrics `json:"metrics"`
-}
-
-type DistillRequest struct {
-	Workspace  Workspace
-	Provider   Provider
-	Options    SynthesisOptions
-	Operations OperationOptions
-}
-
-type DistillResult struct {
-	Filename string  `json:"filename,omitempty"`
-	Skipped  bool    `json:"skipped"`
-	Reason   string  `json:"reason,omitempty"`
-	Metrics  Metrics `json:"metrics"`
+	SummariesWritten    int               `json:"summaries_written"`
+	SummariesSkipped    int               `json:"summaries_skipped"`
+	DistillationWritten int               `json:"distillation_written"`
+	DistillationSkipped int               `json:"distillation_skipped"`
+	Report              []OperationReport `json:"report,omitempty"`
+	Metrics             Metrics           `json:"metrics"`
 }
 
 type LocalManager struct {
@@ -552,24 +559,12 @@ func Synth(ctx context.Context, request SynthRequest) (SynthResult, error) {
 		return SynthResult{}, NewError(ErrorKindRequest, "workspace is not configured")
 	}
 	workspace := &publicWorkspace{workspace: request.Workspace}
-	result, err := app.Synthesize(ctx, workspace, request.Provider.completion, app.SynthesisOptions{
+	result, err := app.Synth(ctx, workspace, request.Provider.completion, app.SynthesisOptions{
 		MaxTurns: request.Options.MaxTurns, MaxToolCalls: request.Options.MaxToolCalls,
 		MaxToolOutputBytes: request.Options.MaxToolOutputBytes, MaxResponseTokens: request.Options.MaxResponseTokens,
 		RuntimeTimeoutSeconds: request.Options.RuntimeTimeoutSeconds,
-	}, internalOperationOptions(request.Operations))
+	}, app.SynthMode(request.Mode), internalOperationOptions(request.Operations))
 	return publicSynthResult(result), publicError(err)
-}
-
-func Distill(ctx context.Context, request DistillRequest) (DistillResult, error) {
-	if request.Workspace == nil {
-		return DistillResult{}, NewError(ErrorKindRequest, "workspace is not configured")
-	}
-	result, err := app.Distill(ctx, &publicWorkspace{workspace: request.Workspace}, request.Provider.completion, app.SynthesisOptions{
-		MaxTurns: request.Options.MaxTurns, MaxToolCalls: request.Options.MaxToolCalls,
-		MaxToolOutputBytes: request.Options.MaxToolOutputBytes, MaxResponseTokens: request.Options.MaxResponseTokens,
-		RuntimeTimeoutSeconds: request.Options.RuntimeTimeoutSeconds,
-	}, internalOperationOptions(request.Operations))
-	return publicDistillResult(result), publicError(err)
 }
 
 type localWorkspace struct {
@@ -846,7 +841,7 @@ func internalDistillationCommit(commit DistillationCommit) app.DistillationCommi
 	for index, input := range commit.DerivedFrom {
 		inputs[index] = internaldomain.DistillationInput{SourceKey: input.SourceKey, Kind: internaldomain.DocumentKind(input.Kind), Filename: input.Filename, ContentDigest: input.ContentDigest}
 	}
-	return app.DistillationCommit{Kind: internaldomain.DocumentKind(commit.Kind), Filename: commit.Filename, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt, DerivedFrom: inputs, Contents: commit.Contents, Event: internalOperation(commit.Event)}
+	return app.DistillationCommit{Kind: internaldomain.DocumentKind(commit.Kind), Filename: commit.Filename, Topic: commit.Topic, Update: commit.Update, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt, DerivedFrom: inputs, Contents: commit.Contents, Event: internalOperation(commit.Event)}
 }
 
 func publicSummaryCommit(commit app.SummaryCommit) SummaryCommit {
@@ -858,7 +853,7 @@ func publicDistillationCommit(commit app.DistillationCommit) DistillationCommit 
 	for index, input := range commit.DerivedFrom {
 		inputs[index] = DistillationInput{SourceKey: input.SourceKey, Kind: DocumentKind(input.Kind), Filename: input.Filename, ContentDigest: input.ContentDigest}
 	}
-	return DistillationCommit{Kind: DocumentKind(commit.Kind), Filename: commit.Filename, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt, DerivedFrom: inputs, Contents: commit.Contents, Event: publicOperation(commit.Event)}
+	return DistillationCommit{Kind: DocumentKind(commit.Kind), Filename: commit.Filename, Topic: commit.Topic, Update: commit.Update, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt, DerivedFrom: inputs, Contents: commit.Contents, Event: publicOperation(commit.Event)}
 }
 
 func internalState(state State) (internaldomain.State, error) {
@@ -908,7 +903,7 @@ func internalDistillationRecord(record DistillationRecord) internaldomain.Distil
 		value := *record.ContentSize
 		size = &value
 	}
-	return internaldomain.DistillationRecord{Filename: record.Filename, Kind: internaldomain.DocumentKind(record.Kind), CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, ContentDigest: record.ContentDigest, ContentSize: size, ContentModifiedAt: record.ContentModifiedAt, DerivedFrom: inputs}
+	return internaldomain.DistillationRecord{Filename: record.Filename, Topic: record.Topic, Kind: internaldomain.DocumentKind(record.Kind), CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, ContentDigest: record.ContentDigest, ContentSize: size, ContentModifiedAt: record.ContentModifiedAt, DerivedFrom: inputs}
 }
 
 func publicDistillationRecord(record internaldomain.DistillationRecord) DistillationRecord {
@@ -921,7 +916,7 @@ func publicDistillationRecord(record internaldomain.DistillationRecord) Distilla
 		value := *record.ContentSize
 		size = &value
 	}
-	return DistillationRecord{Filename: record.Filename, Kind: DocumentKind(record.Kind), CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, ContentDigest: record.ContentDigest, ContentSize: size, ContentModifiedAt: record.ContentModifiedAt, DerivedFrom: inputs}
+	return DistillationRecord{Filename: record.Filename, Topic: record.Topic, Kind: DocumentKind(record.Kind), CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, ContentDigest: record.ContentDigest, ContentSize: size, ContentModifiedAt: record.ContentModifiedAt, DerivedFrom: inputs}
 }
 
 func internalOperation(operation Operation) internaldomain.Operation {
@@ -1008,20 +1003,49 @@ func publicSnapOutcomes(outcomes []app.SnapOutcome) []SnapOutcome {
 	return result
 }
 
-func publicSynthResult(result app.SynthesisResult) SynthResult {
-	converted := SynthResult{SummariesWritten: result.SummariesWritten, SummariesSkipped: result.SummariesSkipped, Metrics: Metrics{Turns: result.Metrics.Turns, ToolCalls: result.Metrics.ToolCalls, Duration: result.Metrics.Duration}}
+func publicSynthResult(result app.SynthResult) SynthResult {
+	converted := SynthResult{
+		SummariesWritten: result.SummariesWritten, SummariesSkipped: result.SummariesSkipped,
+		DistillationWritten: result.DistillationWritten, DistillationSkipped: result.DistillationSkipped,
+		Report:  publicOperationReport(result.Committed),
+		Metrics: Metrics{Turns: result.Metrics.Turns, ToolCalls: result.Metrics.ToolCalls, Duration: result.Metrics.Duration},
+	}
 	if result.Metrics.Usage != nil {
 		converted.Metrics.Usage = &TokenUsage{PromptTokens: result.Metrics.Usage.PromptTokens, CompletionTokens: result.Metrics.Usage.CompletionTokens, TotalTokens: result.Metrics.Usage.TotalTokens}
 	}
 	return converted
 }
 
-func publicDistillResult(result app.DistillResult) DistillResult {
-	converted := DistillResult{Filename: result.Filename, Skipped: result.Skipped, Reason: result.Reason, Metrics: Metrics{Turns: result.Metrics.Turns, ToolCalls: result.Metrics.ToolCalls, Duration: result.Metrics.Duration}}
-	if result.Metrics.Usage != nil {
-		converted.Metrics.Usage = &TokenUsage{PromptTokens: result.Metrics.Usage.PromptTokens, CompletionTokens: result.Metrics.Usage.CompletionTokens, TotalTokens: result.Metrics.Usage.TotalTokens}
+func publicOperationReport(operations []app.Operation) []OperationReport {
+	reports := make([]OperationReport, 0, 2)
+	for _, operation := range operations {
+		if operation.Outcome != app.OutcomeCommitted || operation.Document == nil {
+			continue
+		}
+		index := -1
+		for reportIndex := range reports {
+			if reports[reportIndex].Operation == OperationCommand(operation.Command) {
+				index = reportIndex
+				break
+			}
+		}
+		if index == -1 {
+			reports = append(reports, OperationReport{Operation: OperationCommand(operation.Command)})
+			index = len(reports) - 1
+		}
+		document := DocumentIdentity{Kind: DocumentKind(operation.Document.Kind), Filename: operation.Document.Filename}
+		duplicate := false
+		for _, existing := range reports[index].Documents {
+			if existing == document {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			reports[index].Documents = append(reports[index].Documents, document)
+		}
 	}
-	return converted
+	return reports
 }
 
 func publicError(err error) error {

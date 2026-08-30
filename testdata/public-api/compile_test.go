@@ -8,7 +8,6 @@ var (
 	_ bo.WorkspaceCreator = creator{}
 
 	_ = bo.DefaultSynthesisOptions
-	_ = bo.Distill
 	_ = bo.NewDeepSeekProvider
 	_ = bo.NewError
 	_ = bo.NewLocalManager

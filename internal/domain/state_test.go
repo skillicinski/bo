@@ -102,6 +102,8 @@ func TestDistillationStateJSONAndValidation(t *testing.T) {
 		mutate func(*domain.State)
 	}{
 		{name: "invalid distillation kind", mutate: func(state *domain.State) { state.DistillationDocuments[0].Kind = "unknown" }},
+		{name: "empty topic", mutate: func(state *domain.State) { state.DistillationDocuments[0].Topic = "" }},
+		{name: "non-canonical topic", mutate: func(state *domain.State) { state.DistillationDocuments[0].Topic = "Distill Topic" }},
 		{name: "invalid input kind", mutate: func(state *domain.State) {
 			state.DistillationDocuments[0].DerivedFrom[0].Kind = domain.DocumentKindDistillation
 		}},
@@ -139,7 +141,7 @@ func validDistillationState(timestamp time.Time) domain.State {
 		},
 		{SourceKey: "https://example.test/two", Snapshots: []domain.RawRecord{{Filename: "two.md", WrittenAt: timestamp.Add(time.Second)}}},
 	}, DistillationDocuments: []domain.DistillationRecord{{
-		Filename: "distill.md", Kind: domain.DocumentKindDistillation, CreatedAt: timestamp, UpdatedAt: timestamp,
+		Filename: "distill.md", Topic: "distill-topic", Kind: domain.DocumentKindDistillation, CreatedAt: timestamp, UpdatedAt: timestamp,
 		DerivedFrom: []domain.DistillationInput{
 			{SourceKey: "https://example.test/one", Kind: domain.DocumentKindRaw, Filename: "one.md", ContentDigest: testDigest("one\n")},
 			{SourceKey: "https://example.test/one", Kind: domain.DocumentKindSummary, Filename: "one-summary.md", ContentDigest: testDigest("one summary\n")},

@@ -90,6 +90,7 @@ type agentContext struct {
 	completed       map[string]bool
 	written         map[string]bool
 	mutationOps     map[string]Operation
+	committed       []Operation
 	logEvents       []Operation
 	logWindowLoaded bool
 	eventFailure    error
@@ -258,14 +259,6 @@ func executeToolCall(context *agentContext, call agent.ToolCall) (output string,
 		if _, ok := context.sources[sourceKey]; !ok {
 			return "", fmt.Errorf("unknown source: %s", sourceKey)
 		}
-		if mutation != nil {
-			mutation.Document = &domain.DocumentIdentity{Kind: domain.DocumentKindSummary, Filename: context.sources[sourceKey].LatestFilename}
-			writtenAt := context.sources[sourceKey].LatestWrittenAt
-			mutation.Provenance = &domain.OperationProvenance{DerivedFrom: &domain.DocumentIdentity{Kind: domain.DocumentKindRaw, Filename: context.sources[sourceKey].LatestFilename}}
-			if !writtenAt.IsZero() {
-				mutation.Provenance.RawWrittenAt = &writtenAt
-			}
-		}
 		existing := summaryRecord(context.state, sourceKey)
 		if name == toolWriteSummary && existing != nil {
 			return "", fmt.Errorf("summary already exists for source: %s", sourceKey)
@@ -273,9 +266,10 @@ func executeToolCall(context *agentContext, call agent.ToolCall) (output string,
 		if name == toolEditSummary && existing == nil {
 			return "", fmt.Errorf("no summary exists for source: %s", sourceKey)
 		}
-		if err := writeSummary(context, sourceKey, markdown, existing, *mutation); err != nil {
+		if err := writeSummary(context, sourceKey, markdown, existing, mutation); err != nil {
 			return "", err
 		}
+		context.committed = append(context.committed, committedOperation(*mutation))
 		context.completed[sourceKey] = true
 		context.written[sourceKey] = true
 		return name + " succeeded: " + sourceKey, nil
@@ -443,7 +437,7 @@ func synthesisState(state domain.State, sources map[string]agentSource) domain.S
 	return result
 }
 
-func writeSummary(context *agentContext, sourceKey, markdown string, existing *domain.SummaryRecord, operation Operation) error {
+func writeSummary(context *agentContext, sourceKey, markdown string, existing *domain.SummaryRecord, operation *Operation) error {
 	source, ok := context.sources[sourceKey]
 	if !ok {
 		return fmt.Errorf("unknown source: %s", sourceKey)
@@ -478,7 +472,7 @@ func writeSummary(context *agentContext, sourceKey, markdown string, existing *d
 	if !writtenAt.IsZero() {
 		operation.Provenance.RawWrittenAt = &writtenAt
 	}
-	committed := committedOperation(operation)
+	committed := committedOperation(*operation)
 	state, revision, err := context.workspace.CommitSummary(context.ctx, SummaryCommit{
 		SourceKey: sourceKey, Filename: filename, DerivedFrom: source.LatestFilename,
 		RawWrittenAt: writtenAt, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt,

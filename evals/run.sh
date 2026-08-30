@@ -254,8 +254,8 @@ PY
 }
 
 validate_distillation() {
-	require_one=$1
-	python3 - "$target/state.json" "$target" "$require_one" <<'PY'
+	require_output=$1
+	python3 - "$target/state.json" "$target" "$require_output" <<'PY'
 import hashlib
 import json
 import os
@@ -280,8 +280,8 @@ def parse_timestamp(value):
         raise ValueError("snapshot written_at must include a timezone")
     return parsed.astimezone(timezone.utc)
 
-state_path, target, require_one = sys.argv[1:]
-require_one = require_one == "1"
+state_path, target, require_output = sys.argv[1:]
+require_output = require_output == "1"
 with open(state_path, encoding="utf-8") as file:
     state = json.load(file)
 sources = state.get("sources")
@@ -295,10 +295,8 @@ if os.path.isdir(artifacts_dir):
         path = os.path.join(artifacts_dir, name)
         if name.endswith(".md") and os.path.isfile(path) and not os.path.islink(path):
             artifact_names.append(name)
-if require_one and len(artifact_names) != 1:
-    raise ValueError(f"end-to-end requires exactly one distillation document, found {len(artifact_names)}")
-if not require_one and len(artifact_names) > 1:
-    raise ValueError(f"distill produced more than one document: {len(artifact_names)}")
+if require_output and not artifact_names:
+    raise ValueError("end-to-end requires at least one distillation document")
 if len(records) != len(artifact_names):
     raise ValueError("distillation state and files do not match")
 

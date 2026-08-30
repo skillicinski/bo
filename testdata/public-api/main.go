@@ -149,6 +149,26 @@ func (s *storage) CommitDistillation(_ context.Context, commit bo.DistillationCo
 		s.documents = map[bo.DocumentRef][]byte{}
 	}
 	ref := bo.DistillationRef(commit.Filename)
+	if commit.Update {
+		if _, exists := s.documents[ref]; !exists {
+			return bo.State{}, bo.Revision{}, bo.NewError(bo.ErrorKindMissingResource, "document does not exist")
+		}
+		for index := range s.state.DistillationDocuments {
+			if s.state.DistillationDocuments[index].Filename != commit.Filename {
+				continue
+			}
+			if s.state.DistillationDocuments[index].Topic != commit.Topic {
+				return bo.State{}, bo.Revision{}, bo.NewError(bo.ErrorKindValidation, "distillation topic cannot change on update")
+			}
+			s.documents[ref] = append([]byte(nil), commit.Contents...)
+			s.events = append(s.events, commit.Event)
+			s.state.DistillationDocuments[index].UpdatedAt = commit.UpdatedAt
+			s.state.DistillationDocuments[index].DerivedFrom = append([]bo.DistillationInput(nil), commit.DerivedFrom...)
+			s.revision = s.advanceRevision()
+			return s.state, s.revision, nil
+		}
+		return bo.State{}, bo.Revision{}, bo.NewError(bo.ErrorKindConflict, "distillation document is not indexed")
+	}
 	if _, exists := s.documents[ref]; exists {
 		return bo.State{}, bo.Revision{}, bo.NewError(bo.ErrorKindAlreadyExists, "document already exists")
 	}
@@ -156,7 +176,7 @@ func (s *storage) CommitDistillation(_ context.Context, commit bo.DistillationCo
 	s.events = append(s.events, commit.Event)
 	inputs := append([]bo.DistillationInput(nil), commit.DerivedFrom...)
 	s.state.DistillationDocuments = append(s.state.DistillationDocuments, bo.DistillationRecord{
-		Filename: commit.Filename, Kind: commit.Kind, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt, DerivedFrom: inputs,
+		Filename: commit.Filename, Topic: commit.Topic, Kind: commit.Kind, CreatedAt: commit.CreatedAt, UpdatedAt: commit.UpdatedAt, DerivedFrom: inputs,
 	})
 	s.revision = s.advanceRevision()
 	return s.state, s.revision, nil

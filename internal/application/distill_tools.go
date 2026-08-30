@@ -18,16 +18,19 @@ import (
 )
 
 const (
+	toolReadDistillation  = "read_distillation"
 	toolWriteDistillation = "write_distillation"
+	toolEditDistillation  = "edit_distillation"
 	toolSkipDistill       = "skip_distill"
 )
 
-var allDistillTools = []string{toolReadCorpus, toolReadLogs, toolReadDocument, toolReadSummary, toolWriteDistillation, toolSkipDistill}
+var allDistillTools = []string{toolReadCorpus, toolReadLogs, toolReadDocument, toolReadSummary, toolReadDistillation, toolWriteDistillation, toolEditDistillation, toolSkipDistill}
 
 type distillCatalog struct {
-	sources   map[string]agentSource
-	documents map[string]distillDocument
-	state     domain.State
+	sources       map[string]agentSource
+	documents     map[string]distillDocument
+	distillations map[string]domain.DistillationRecord
+	state         domain.State
 }
 
 type distillDocument struct {
@@ -36,24 +39,27 @@ type distillDocument struct {
 }
 
 type distillContext struct {
-	ctx             context.Context
-	directory       string
-	workspace       Workspace
-	options         OperationOptions
-	catalog         distillCatalog
-	state           domain.State
-	revision        Revision
-	maxOutputBytes  int
-	readDocuments   map[string][]byte
-	readRefs        map[string]bool
-	mutationOps     map[string]Operation
-	filename        string
-	reason          string
-	completed       bool
-	skipped         bool
-	logEvents       []Operation
-	logWindowLoaded bool
-	eventFailure    error
+	ctx               context.Context
+	directory         string
+	workspace         Workspace
+	options           OperationOptions
+	catalog           distillCatalog
+	state             domain.State
+	revision          Revision
+	maxOutputBytes    int
+	readDocuments     map[string][]byte
+	readRefs          map[string]bool
+	readDistillations map[string]bool
+	mutationOps       map[string]Operation
+	committed         []Operation
+	filenames         []string
+	filename          string
+	reason            string
+	equivalent        bool
+	skipped           bool
+	logEvents         []Operation
+	logWindowLoaded   bool
+	eventFailure      error
 }
 
 type distillSourceReference struct {
@@ -70,9 +76,11 @@ type distillSection struct {
 }
 
 type distillWriteArguments struct {
+	Topic        string           `json:"topic"`
 	Title        string           `json:"title"`
 	Introduction string           `json:"introduction"`
 	Sections     []distillSection `json:"sections"`
+	Filename     string           `json:"filename,omitempty"`
 }
 
 func normalizeDistillTools(names []string) ([]string, error) {
@@ -95,6 +103,9 @@ func normalizeDistillTools(names []string) ([]string, error) {
 		seen[name] = true
 		validated = append(validated, name)
 	}
+	if !seen[toolSkipDistill] {
+		return nil, fmt.Errorf("distill tool set must include %s", toolSkipDistill)
+	}
 	return validated, nil
 }
 
@@ -106,11 +117,14 @@ func distillTools(contextState *distillContext, names []string) []agent.Tool {
 		return executeDistillTool(contextState, call)
 	}
 	definitions := map[string]agent.Tool{
-		toolReadCorpus:   {Definition: agent.ToolDefinition{Function: agent.ToolDeclaration{Name: toolReadCorpus, Description: "Read the current raw snapshots and current summaries available for cross-source evidence.", Parameters: objectParameters(map[string]any{}, []string{})}}, Execute: execute},
-		toolReadLogs:     {Definition: agent.ToolDefinition{Function: agent.ToolDeclaration{Name: toolReadLogs, Description: "Read paginated operation log entries for the current directory, newest first.", Parameters: objectParameters(map[string]any{"offset": map[string]any{"type": "integer", "default": 0, "minimum": 0}, "limit": map[string]any{"type": "integer", "default": 20, "minimum": 1, "maximum": 100}}, []string{})}}, Execute: execute},
-		toolReadDocument: {Definition: agent.ToolDefinition{Function: agent.ToolDeclaration{Name: toolReadDocument, Description: "Read one newest raw Markdown snapshot by its exact filename.", Parameters: objectParameters(map[string]any{"filename": map[string]any{"type": "string"}}, []string{"filename"})}}, Execute: execute},
-		toolReadSummary:  {Definition: agent.ToolDefinition{Function: agent.ToolDeclaration{Name: toolReadSummary, Description: "Read the current summary for one source identity when it derives from that source's newest raw snapshot.", Parameters: objectParameters(map[string]any{"source_key": map[string]any{"type": "string"}}, []string{"source_key"})}}, Execute: execute},
+		toolReadCorpus:       {Definition: agent.ToolDefinition{Function: agent.ToolDeclaration{Name: toolReadCorpus, Description: "Read the current raw snapshots and current summaries available for cross-source evidence.", Parameters: objectParameters(map[string]any{}, []string{})}}, Execute: execute},
+		toolReadLogs:         {Definition: agent.ToolDefinition{Function: agent.ToolDeclaration{Name: toolReadLogs, Description: "Read paginated operation log entries for the current directory, newest first.", Parameters: objectParameters(map[string]any{"offset": map[string]any{"type": "integer", "default": 0, "minimum": 0}, "limit": map[string]any{"type": "integer", "default": 20, "minimum": 1, "maximum": 100}}, []string{})}}, Execute: execute},
+		toolReadDocument:     {Definition: agent.ToolDefinition{Function: agent.ToolDeclaration{Name: toolReadDocument, Description: "Read one newest raw Markdown snapshot by its exact filename.", Parameters: objectParameters(map[string]any{"filename": map[string]any{"type": "string"}}, []string{"filename"})}}, Execute: execute},
+		toolReadSummary:      {Definition: agent.ToolDefinition{Function: agent.ToolDeclaration{Name: toolReadSummary, Description: "Read the current summary for one source identity when it derives from that source's newest raw snapshot.", Parameters: objectParameters(map[string]any{"source_key": map[string]any{"type": "string"}}, []string{"source_key"})}}, Execute: execute},
+		toolReadDistillation: {Definition: agent.ToolDefinition{Function: agent.ToolDeclaration{Name: toolReadDistillation, Description: "Read an existing distillation candidate for topic matching. It is not evidence.", Parameters: objectParameters(map[string]any{"filename": map[string]any{"type": "string"}}, []string{"filename"})}}, Execute: execute},
 		toolWriteDistillation: {Definition: agent.ToolDefinition{Function: agent.ToolDeclaration{Name: toolWriteDistillation, Description: "Create one cross-source Markdown distill document with a title, introduction, structured sections, bullets, and source references.", Parameters: objectParameters(map[string]any{
+			"topic":        map[string]any{"type": "string"},
+			"filename":     map[string]any{"type": "string"},
 			"title":        map[string]any{"type": "string"},
 			"introduction": map[string]any{"type": "string"},
 			"sections": map[string]any{
@@ -141,9 +155,13 @@ func distillTools(contextState *distillContext, names []string) []agent.Tool {
 					"additionalProperties": false,
 				},
 			},
-		}, []string{"title", "introduction", "sections"})}}, Execute: execute},
+		}, []string{"topic", "title", "introduction", "sections"})}}, Execute: execute},
 		toolSkipDistill: {Definition: agent.ToolDefinition{Function: agent.ToolDeclaration{Name: toolSkipDistill, Description: "Report that no useful theme is supported by at least two distinct source identities.", Parameters: objectParameters(map[string]any{"reason": map[string]any{"type": "string"}}, []string{"reason"})}}, Execute: execute},
 	}
+	edit := definitions[toolWriteDistillation]
+	edit.Definition.Function.Name = toolEditDistillation
+	edit.Definition.Function.Description = "Edit an existing distillation document after reading it and merging newly relevant evidence."
+	definitions[toolEditDistillation] = edit
 	tools := make([]agent.Tool, 0, len(names))
 	for _, name := range names {
 		tools = append(tools, definitions[name])
@@ -157,8 +175,11 @@ func buildDistillCatalog(ctx context.Context, workspace Workspace, state domain.
 		return distillCatalog{}, err
 	}
 	groups := sourceGroups(documents, state)
-	catalog := distillCatalog{sources: map[string]agentSource{}, documents: map[string]distillDocument{}}
+	catalog := distillCatalog{sources: map[string]agentSource{}, documents: map[string]distillDocument{}, distillations: map[string]domain.DistillationRecord{}}
 	filtered := domain.State{Sources: []domain.SourceRecord{}}
+	for _, record := range state.DistillationDocuments {
+		catalog.distillations[record.Filename] = record
+	}
 	for _, source := range state.Sources {
 		latest, ok := groups[source.SourceKey]
 		if !ok {
@@ -203,15 +224,31 @@ func distillSystemPrompt(contextState *distillContext, readLogsEnabled bool) str
 	if readLogsEnabled {
 		logInstruction = " Before reading evidence, inspect recent scoped operation entries, including failed attempts, with read_logs."
 	}
-	return fmt.Sprintf("You are bo's cross-source distill agent for %s. Select one useful theme supported by at least two distinct source identities, or explicitly call skip_distill when no supported theme exists. Use only the current raw snapshots and summaries exposed by the host; stale summaries and distillation documents are not evidence. Preserve qualifications, uncertainty, authorship, measurements, recommendations, opinions, and forecasts. The host owns document access, current-snapshot selection, provenance, filename allocation, and publication.%s Available source identities: %s.", contextState.directory, logInstruction, strings.Join(keys, ", "))
+	distillations := make([]string, 0, len(contextState.catalog.distillations))
+	for filename, record := range contextState.catalog.distillations {
+		label := filename
+		if record.Topic != "" {
+			label = record.Topic + " (" + filename + ")"
+		}
+		distillations = append(distillations, label)
+	}
+	sort.Strings(distillations)
+	existingInstruction := " No existing distillation candidates are available."
+	if len(distillations) > 0 {
+		existingInstruction = fmt.Sprintf(" Existing distillation candidates are available by topic and filename: %s. Read a candidate before editing it; candidates are not evidence.", strings.Join(distillations, ", "))
+	}
+	taskInstruction := "Process every useful unprocessed theme supported by at least two distinct source identities. Use write_distillation once for each new topic or edit_distillation once for each existing topic with changed evidence after reading it. If current evidence exactly matches an existing topic, skip that topic and continue. Call skip_distill exactly once only when no unprocessed theme remains."
+	return fmt.Sprintf("You are bo's cross-source distill agent for %s. %s Use only the current raw snapshots and summaries exposed by the host as evidence; stale summaries and distillation documents are not evidence. Preserve qualifications, uncertainty, authorship, measurements, recommendations, opinions, and forecasts. The host owns document access, current-snapshot selection, provenance, filename allocation, and publication.%s%s Available source identities: %s.", contextState.directory, taskInstruction, logInstruction, existingInstruction, strings.Join(keys, ", "))
 }
 
 func executeDistillTool(contextState *distillContext, call agent.ToolCall) (output string, returnErr error) {
 	name := call.Function.Name
 	var mutation *Operation
+	mutationKey := ""
 	commitFailureRecorded := false
-	if name == toolWriteDistillation {
-		event := contextState.nextMutationOperation()
+	if name == toolWriteDistillation || name == toolEditDistillation {
+		mutationKey = distillMutationKey(call)
+		event := contextState.nextMutationOperation(mutationKey)
 		mutation = &event
 		defer func() {
 			if returnErr == nil || commitFailureRecorded {
@@ -272,13 +309,25 @@ func executeDistillTool(contextState *distillContext, call agent.ToolCall) (outp
 			return "", fmt.Errorf("read_summary.source_key must be a string")
 		}
 		return readDistillSummary(contextState, sourceKey)
-	case toolWriteDistillation:
-		if contextState.completed || contextState.skipped {
+	case toolReadDistillation:
+		if len(arguments) != 1 {
+			return "", fmt.Errorf("read_distillation arguments must contain only filename")
+		}
+		filename, err := stringArgument(arguments, "filename")
+		if err != nil {
+			return "", fmt.Errorf("read_distillation.filename must be a string")
+		}
+		return readDistillation(contextState, filename)
+	case toolWriteDistillation, toolEditDistillation:
+		if contextState.skipped {
 			return "", fmt.Errorf("distill already has a terminal result")
 		}
 		var write distillWriteArguments
 		if err := decodeStrictArguments(call.Function.Arguments, &write); err != nil {
-			return "", fmt.Errorf("write_distillation arguments are malformed: %v", err)
+			return "", fmt.Errorf("%s arguments are malformed: %v", name, err)
+		}
+		if name == toolEditDistillation && strings.TrimSpace(write.Filename) == "" {
+			return "", fmt.Errorf("edit_distillation.filename must be non-empty")
 		}
 		if err := validateDistillWrite(contextState, write); err != nil {
 			return "", err
@@ -286,14 +335,18 @@ func executeDistillTool(contextState *distillContext, call agent.ToolCall) (outp
 		if mutation == nil {
 			return "", fmt.Errorf("write_distillation mutation is not configured")
 		}
-		filename, err, recorded := writeDistillation(contextState, write, *mutation)
+		filename, err, recorded := writeDistillation(contextState, write, *mutation, mutationKey)
 		commitFailureRecorded = recorded
 		if err != nil {
 			return "", err
 		}
-		contextState.completed = true
+		if contextState.equivalent {
+			contextState.equivalent = false
+			return name + " skipped: an equivalent distillation already exists; continue with another topic", nil
+		}
 		contextState.filename = filename
-		return "write_distillation succeeded: " + filename, nil
+		contextState.filenames = append(contextState.filenames, filename)
+		return name + " succeeded: " + filename, nil
 	case toolSkipDistill:
 		if len(arguments) != 1 {
 			return "", fmt.Errorf("skip_distill arguments must contain only reason")
@@ -302,7 +355,7 @@ func executeDistillTool(contextState *distillContext, call agent.ToolCall) (outp
 		if err != nil || strings.TrimSpace(reason) == "" {
 			return "", fmt.Errorf("skip_distill.reason must be a non-empty string")
 		}
-		if contextState.completed || contextState.skipped {
+		if contextState.skipped {
 			return "", fmt.Errorf("distill already has a terminal result")
 		}
 		contextState.skipped = true
@@ -313,16 +366,43 @@ func executeDistillTool(contextState *distillContext, call agent.ToolCall) (outp
 	}
 }
 
-func (contextState *distillContext) nextMutationOperation() Operation {
-	operation, ok := contextState.mutationOps[toolWriteDistillation]
+func (contextState *distillContext) nextMutationOperation(key string) Operation {
+	operation, ok := contextState.mutationOps[key]
 	if !ok {
 		operation = newOperation(CommandWriteDistillation, contextState.options.Actor)
 	} else {
 		operation.Attempt++
 		operation.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
 	}
-	contextState.mutationOps[toolWriteDistillation] = operation
+	contextState.mutationOps[key] = operation
 	return operation
+}
+
+func distillMutationKey(call agent.ToolCall) string {
+	var arguments struct {
+		Topic    string `json:"topic"`
+		Title    string `json:"title"`
+		Filename string `json:"filename"`
+	}
+	if err := json.Unmarshal([]byte(call.Function.Arguments), &arguments); err == nil {
+		key := strings.TrimSpace(arguments.Topic)
+		if key == "" {
+			key = strings.TrimSpace(arguments.Title)
+		}
+		if key == "" {
+			key = strings.TrimSpace(arguments.Filename)
+		}
+		if key != "" {
+			if canonical, err := normalizeDistillTopic(key); err == nil {
+				return canonical
+			}
+			return key
+		}
+	}
+	if call.ID != "" {
+		return call.ID
+	}
+	return toolWriteDistillation
 }
 
 func objectArguments(raw string) (map[string]json.RawMessage, error) {
@@ -382,6 +462,25 @@ func readDistillSummary(contextState *distillContext, sourceKey string) (string,
 	return "", fmt.Errorf("no current summary exists for source: %s", sourceKey)
 }
 
+func readDistillation(contextState *distillContext, filename string) (string, error) {
+	filename = strings.TrimPrefix(filename, "distillations/")
+	if filename == "" || strings.ContainsAny(filename, `/\\`) || domain.ValidateDocumentName(filename) != nil {
+		return "", fmt.Errorf("read_distillation.filename must be a distillation Markdown filename")
+	}
+	if _, ok := contextState.catalog.distillations[filename]; !ok {
+		return "", fmt.Errorf("unknown distillation document: %s", filename)
+	}
+	data, err := contextState.workspace.ReadDocument(contextState.ctx, domain.DistillationRef(filename))
+	if err != nil {
+		return "", normalizeError(err, internalerrors.KindFilesystem, "reading distillation")
+	}
+	if len(data) > contextState.maxOutputBytes {
+		return "", fmt.Errorf("distillation document is too large to edit safely (max %d bytes)", contextState.maxOutputBytes)
+	}
+	contextState.readDistillations[filename] = true
+	return string(data), nil
+}
+
 func readDistillDocumentRef(contextState *distillContext, key string, document distillDocument) (string, error) {
 	data, err := contextState.workspace.ReadDocument(contextState.ctx, document.Ref)
 	if err != nil {
@@ -395,6 +494,12 @@ func readDistillDocumentRef(contextState *distillContext, key string, document d
 func validateDistillWrite(contextState *distillContext, write distillWriteArguments) error {
 	if strings.TrimSpace(write.Title) == "" {
 		return fmt.Errorf("write_distillation.title must be non-empty")
+	}
+	if strings.TrimSpace(write.Topic) == "" {
+		return fmt.Errorf("write_distillation.topic must be non-empty")
+	}
+	if _, err := normalizeDistillTopic(write.Topic); err != nil {
+		return fmt.Errorf("write_distillation.topic is invalid: %v", err)
 	}
 	if strings.TrimSpace(write.Introduction) == "" {
 		return fmt.Errorf("write_distillation.introduction must be non-empty")
@@ -448,7 +553,17 @@ func validateDistillWrite(contextState *distillContext, write distillWriteArgume
 	return nil
 }
 
-func writeDistillation(contextState *distillContext, write distillWriteArguments, operation Operation) (string, error, bool) {
+func normalizeDistillTopic(topic string) (string, error) {
+	topic = strings.TrimSpace(topic)
+	return domain.CanonicalTopic(topic)
+}
+
+func writeDistillation(contextState *distillContext, write distillWriteArguments, operation Operation, mutationKey string) (string, error, bool) {
+	contextState.equivalent = false
+	topic, err := normalizeDistillTopic(write.Topic)
+	if err != nil {
+		return "", err, false
+	}
 	markdown := renderDistill(write)
 	if len(markdown) > contextState.maxOutputBytes {
 		return "", fmt.Errorf("distill exceeds max tool output bytes (%d)", contextState.maxOutputBytes), false
@@ -457,19 +572,55 @@ func writeDistillation(contextState *distillContext, write distillWriteArguments
 	if err != nil {
 		return "", err, false
 	}
-	createdAt := time.Now().UTC()
+	target := strings.TrimSpace(write.Filename)
+	var existing *domain.DistillationRecord
+	if target != "" {
+		if err := domain.ValidateDocumentName(target); err != nil {
+			return "", fmt.Errorf("distillation filename is invalid: %v", err), false
+		}
+		record, ok := contextState.catalog.distillations[target]
+		if !ok {
+			return "", fmt.Errorf("no existing distillation document: %s", target), false
+		}
+		if !contextState.readDistillations[target] {
+			return "", fmt.Errorf("existing distillation document was not read: %s", target), false
+		}
+		existing = &record
+		if existing.Topic != "" && existing.Topic != topic {
+			return "", fmt.Errorf("distillation topic %q does not match existing topic %q", topic, existing.Topic), false
+		}
+	}
 	inputs := distillInputs(contextState, write)
+	if equivalentDistillation(contextState.catalog.distillations, topic, inputs) {
+		contextState.equivalent = true
+		contextState.reason = "an equivalent distillation already exists"
+		return "", nil, true
+	}
+	if existing == nil {
+		for filename, record := range contextState.catalog.distillations {
+			if record.Topic == topic {
+				return "", fmt.Errorf("distillation topic already exists in %s; use edit_distillation", filename), false
+			}
+		}
+	}
+	createdAt := time.Now().UTC()
+	if existing != nil {
+		createdAt = existing.CreatedAt
+	}
 	for attempt := 1; attempt <= maxRawCommitAttempts; attempt++ {
-		filename := slug + ".md"
-		if attempt == 2 {
-			filename = fmt.Sprintf("%s--%d.md", slug, createdAt.UnixNano())
-		} else if attempt > 2 {
-			filename = fmt.Sprintf("%s--%d--%d.md", slug, createdAt.UnixNano(), attempt)
+		filename, update := target, existing != nil
+		if existing == nil {
+			filename = slug + ".md"
+			if attempt == 2 {
+				filename = fmt.Sprintf("%s--%d.md", slug, createdAt.UnixNano())
+			} else if attempt > 2 {
+				filename = fmt.Sprintf("%s--%d--%d.md", slug, createdAt.UnixNano(), attempt)
+			}
 		}
 		attemptOperation := operation
 		attemptOperation.Attempt = operation.Attempt + attempt - 1
 		attemptOperation.Document = &domain.DocumentIdentity{Kind: domain.DocumentKindDistillation, Filename: filename}
-		contextState.mutationOps[toolWriteDistillation] = attemptOperation
+		contextState.mutationOps[mutationKey] = attemptOperation
 		if err := contextState.ctx.Err(); err != nil {
 			contextErr := internalerrors.Context(err)
 			if eventErr := recordFailedOperation(contextState.ctx, contextState.workspace, attemptOperation, contextErr); eventErr != nil {
@@ -480,11 +631,16 @@ func writeDistillation(contextState *distillContext, write distillWriteArguments
 		}
 		committed := committedOperation(attemptOperation)
 		state, revision, err := contextState.workspace.CommitDistillation(contextState.ctx, DistillationCommit{
-			Kind: domain.DocumentKindDistillation, Filename: filename, CreatedAt: createdAt, UpdatedAt: createdAt,
+			Kind: domain.DocumentKindDistillation, Filename: filename, Topic: topic, Update: update, CreatedAt: createdAt, UpdatedAt: time.Now().UTC(),
 			DerivedFrom: inputs, Contents: []byte(markdown), Event: committed,
 		}, contextState.revision)
 		if err == nil {
 			contextState.state, contextState.revision = state, revision
+			contextState.catalog.distillations = make(map[string]domain.DistillationRecord, len(state.DistillationDocuments))
+			for _, record := range state.DistillationDocuments {
+				contextState.catalog.distillations[record.Filename] = record
+			}
+			contextState.committed = append(contextState.committed, committed)
 			return filename, nil, true
 		}
 		if eventErr := recordFailedOperation(contextState.ctx, contextState.workspace, attemptOperation, err); eventErr != nil {
@@ -496,6 +652,36 @@ func writeDistillation(contextState *distillContext, write distillWriteArguments
 		}
 	}
 	return "", internalerrors.Wrap(internalerrors.KindAlreadyExists, "distillation document filename attempts exhausted", internalerrors.ErrAlreadyExists), true
+}
+
+func equivalentDistillation(records map[string]domain.DistillationRecord, topic string, inputs []domain.DistillationInput) bool {
+	want := make(map[string]bool, len(inputs))
+	for _, input := range inputs {
+		want[distillationInputKey(input)] = true
+	}
+	for _, record := range records {
+		if record.Topic != topic {
+			continue
+		}
+		if len(record.DerivedFrom) != len(inputs) {
+			continue
+		}
+		match := true
+		for _, input := range record.DerivedFrom {
+			if !want[distillationInputKey(input)] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
+func distillationInputKey(input domain.DistillationInput) string {
+	return input.SourceKey + "\x00" + string(input.Kind) + "\x00" + input.Filename + "\x00" + input.ContentDigest
 }
 
 func distillInputs(contextState *distillContext, write distillWriteArguments) []domain.DistillationInput {

@@ -1,8 +1,8 @@
 # bo
 
 `bo` is a local-first knowledge workspace. It stores source snapshots as
-Markdown, keeps workspace state on disk, and can synthesize summaries or one
-cross-source distill document with an LLM. No server or database is required.
+Markdown, keeps workspace state on disk, and can synthesize summaries and
+cross-source distill documents with an LLM. No server or database is required.
 
 ## Install
 
@@ -23,7 +23,7 @@ The CLI stores local workspaces under `$HOME/.bo`. Set `HOME` on Unix or
 
 ## CLI workflows
 
-The CLI has five workflows. Each command works with one named local workspace.
+The CLI has four workflows. Each command works with one named local workspace.
 
 ### 1. Seed a workspace
 
@@ -53,7 +53,7 @@ bo state notes --full
 
 The short form prints the snapshot count. `--full` prints the state JSON.
 
-### 4. Synthesize summaries
+### 4. Synthesize summaries and distillations
 
 Synthesis needs a DeepSeek API key. It reads the newest raw snapshot for each
 source and writes summaries back to the same workspace.
@@ -63,22 +63,18 @@ export DEEPSEEK_API_KEY=...
 bo synth notes
 ```
 
-Use runtime limits such as `--max-turns`, `--max-tool-calls`, and
-`--timeout-seconds` when required. The timeout applies to each agent runtime;
-the caller context controls the complete workflow.
-
-### 5. Distill across sources
-
-Distill selects one useful theme supported by at least two source identities.
-It reads current raw snapshots and current summaries, then creates at most one
-new Markdown document under `distillations/`. It never changes summaries.
+The default runs the summary stage for missing summaries, then the distill
+stage. Use a stage name to run only one stage:
 
 ```bash
-bo distill notes
+bo synth notes summarize
+bo synth notes distill
 ```
 
-The command reports the created filename or why it skipped the write. It uses
-the same runtime limit flags as `bo synth`.
+Use runtime limits such as `--max-turns`, `--max-tool-calls`, and
+`--timeout-seconds` when required. The timeout applies to each agent runtime;
+the caller context controls the complete workflow. The command prints one
+heading for each write operation and lists the documents it created or edited.
 
 ## Go library
 
@@ -88,12 +84,14 @@ instead of CLI output. A library caller follows the same workflow as the CLI:
 1. create a workspace manager;
 2. seed it if needed;
 3. open the workspace;
-4. call `Snap`, `ReadState`, `Synth`, or `Distill`;
+4. call `Snap`, `ReadState`, or `Synth`;
 5. handle the result and close the workspace.
 
 `Seed` creates a workspace, `Snap` reads source content and stores a raw
-snapshot, `ReadState` returns the inventory, `Synth` writes summaries, and
-`Distill` writes one cross-source document.
+snapshot, `ReadState` returns the inventory, and `Synth` writes summaries or
+cross-source distillations. Set `SynthRequest.Mode` to
+`SynthModeSummarize` or `SynthModeDistill` to run one stage; the zero value
+runs both.
 
 The local adapter is available through `LocalManager`:
 
@@ -151,7 +149,7 @@ func main() {
 ```
 
 Applications can provide another backend by implementing `bo.Workspace` and
-passing it to `Snap`, `ReadState`, `Synth`, or `Distill`. The
+passing it to `Snap`, `ReadState`, or `Synth`. The
 [external backend example](testdata/public-api/main.go) uses an in-memory
 store, compiles as a separate Go module, and runs the public workflows in CI.
 `Workspace` is the interface for document reads, state reads, event reads and
@@ -159,10 +157,10 @@ writes, and conditional document updates. Each update includes the `Revision`
 returned by the last state read. The revision lets bo detect a concurrent or
 manual change; a backend should reject a stale revision.
 
-`Distill` creates one `DistillationRecord` with exact raw and summary input
-references and content digests. A backend implements this through
-`CommitDistillation`; distillation documents use the `distillations/` document
-kind and are create-only.
+`Synth` creates or updates `DistillationRecord` values with a topic and exact
+raw and summary input references and content digests. A backend implements this
+through `CommitDistillation`; distillation documents use the
+`distillations/` document kind.
 
 For a cloud caller, pass `SnapSourceConfig` in `SnapRequest` to disable local
 Markdown reads and provide a controlled `http.Client`. The caller owns DNS,

@@ -78,7 +78,7 @@ func TestPublicWorkflows(t *testing.T) {
 		},
 		Operations: options,
 	})
-	if err != nil || result.SummariesWritten != 1 || synthStore.state.Sources[0].Summary == nil || string(synthStore.documents[bo.RawRef("article.md")]) != "# Article\n\ncontent\n" || string(synthStore.documents[bo.SummaryRef("article.md")]) != "# Summary\n\ncontent\n" {
+	if err != nil || result.SummariesWritten != 1 || len(result.Report) != 1 || result.Report[0].Operation != bo.CommandWriteSummary || len(result.Report[0].Documents) != 1 || result.Report[0].Documents[0].Filename != "article.md" || synthStore.state.Sources[0].Summary == nil || string(synthStore.documents[bo.RawRef("article.md")]) != "# Article\n\ncontent\n" || string(synthStore.documents[bo.SummaryRef("article.md")]) != "# Summary\n\ncontent\n" {
 		t.Fatalf("synth = %#v, error = %v, state = %#v", result, err, synthStore.state)
 	}
 }
@@ -136,7 +136,7 @@ func TestPublicDistill(t *testing.T) {
 				"role": "assistant",
 				"tool_calls": []any{map[string]any{
 					"id": "write", "type": "function",
-					"function": map[string]string{"name": "write_distillation", "arguments": `{"title":"Shared facts","introduction":"intro","sections":[{"heading":"Facts","paragraph":"paragraph","bullets":["one","two"],"sources":[{"source_key":"https://example.test/one","kind":"raw","filename":"one.md"},{"source_key":"https://example.test/two","kind":"raw","filename":"two.md"}]}]}`},
+					"function": map[string]string{"name": "write_distillation", "arguments": `{"topic":"shared-facts","title":"Shared facts","introduction":"intro","sections":[{"heading":"Facts","paragraph":"paragraph","bullets":["one","two"],"sources":[{"source_key":"https://example.test/one","kind":"raw","filename":"one.md"},{"source_key":"https://example.test/two","kind":"raw","filename":"two.md"}]}]}`},
 				}},
 			},
 			"finish_reason": "tool_calls",
@@ -147,8 +147,25 @@ func TestPublicDistill(t *testing.T) {
 		t.Fatal(err)
 	}
 	responses = append(responses, finalResponse)
+	skipResponse, err := json.Marshal(map[string]any{
+		"choices": []any{map[string]any{
+			"message": map[string]any{
+				"role": "assistant",
+				"tool_calls": []any{map[string]any{
+					"id": "skip", "type": "function",
+					"function": map[string]string{"name": "skip_distill", "arguments": `{"reason":"No other supported themes remain."}`},
+				}},
+			},
+			"finish_reason": "tool_calls",
+		}},
+		"usage": map[string]int{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	responses = append(responses, skipResponse)
 	index := 0
-	result, err := bo.Distill(ctx, bo.DistillRequest{
+	result, err := bo.Synth(ctx, bo.SynthRequest{
 		Workspace: workspace{name: "consumer", store: store},
 		Provider: bo.NewDeepSeekProvider(bo.DeepSeekConfig{
 			APIKey: "test", Endpoint: "https://provider.test/completions",
@@ -158,10 +175,17 @@ func TestPublicDistill(t *testing.T) {
 				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(payload)), Header: http.Header{"Content-Type": []string{"application/json"}}, Request: request}, nil
 			})},
 		}),
-		Options: bo.SynthesisOptions{MaxTurns: 3, MaxToolCalls: 3, MaxToolOutputBytes: 4096, MaxResponseTokens: 64, RuntimeTimeoutSeconds: 5},
+		Mode:    bo.SynthModeDistill,
+		Options: bo.SynthesisOptions{MaxTurns: 4, MaxToolCalls: 4, MaxToolOutputBytes: 4096, MaxResponseTokens: 64, RuntimeTimeoutSeconds: 5},
 	})
-	if err != nil || result.Skipped || result.Filename != "shared-facts.md" || len(store.state.DistillationDocuments) != 1 {
+	if err != nil || result.DistillationWritten != 1 || len(store.state.DistillationDocuments) != 1 {
 		t.Fatalf("distill = %#v, error = %v, state = %#v", result, err, store.state)
+	}
+	_, _, err = store.CommitDistillation(ctx, bo.DistillationCommit{
+		Filename: "shared-facts.md", Topic: "other-facts", Update: true,
+	}, store.revision)
+	if !bo.IsKind(err, bo.ErrorKindValidation) {
+		t.Fatalf("topic-changing update error = %v", err)
 	}
 }
 

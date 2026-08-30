@@ -56,7 +56,8 @@ The CLI converts arguments and results into a process interface.
 
 The application layer runs the workflows and records operation events.
 
-- Owns: workflow orchestration, validation order, and operation outcomes.
+- Owns: workflow orchestration, synthesis stage selection, validation order,
+  and operation outcomes.
 - Does not own: CLI output, workspace selection, or local file operations.
 - Calls: domain types, the workspace port, the agent runtime, and the `source`
   fetch port.
@@ -181,21 +182,28 @@ the source key, immutable raw snapshots, and at most one current summary. The
 summary must refer to a snapshot in the same record. This is the aggregate rule
 that keeps related state consistent.
 
-State also contains create-only distillation records. A distill record stores
-its kind, timestamps, content baseline, and every raw or current-summary input
+State also contains distillation records. A distill record stores its kind,
+topic, timestamps, content baseline, and every raw or current-summary input
 with its source identity and content digest. It must reference documents from
-at least two source identities.
+at least two source identities. A matching topic may update an existing record
+in place while preserving its creation time.
 
-## Distill flow
+## Synth flow
 
-For `bo distill notes`, the application reads the newest raw snapshot for each
-source and includes a summary only when it derives from that snapshot. The
-agent may read those bounded documents and either calls `skip_distill` or calls
-`write_distillation` with a structured title, introduction, sections, bullets, and
-source references. The host validates that every referenced document was read,
-computes its digest, renders deterministic Markdown, and commits the new
-document, state, and `write_distillation` event in one conditional transaction.
-Distill does not invoke or update the summary workflow.
+For `bo synth notes`, the application first summarizes raw documents without a
+current summary, then reads the newest raw snapshot for each source and
+includes a summary only when it derives from that snapshot. `summarize` and
+`distill` select one stage. The distill stage processes all useful unprocessed
+topics in one bounded agent runtime and ends with an explicit skip result.
+
+The distill agent may read current raw and summary documents, inspect existing
+distillation candidates for topic matching, and call `skip_distill`,
+`write_distillation`, or `edit_distillation`. The host validates every evidence
+reference, computes its digest, renders deterministic Markdown, and commits the
+document, state, and mutation event in one conditional transaction. Matching
+requires the topic and the complete set of input references and digests. An
+unchanged topic and input set is skipped. The public `Synth` result reports
+committed documents grouped by mutation operation.
 
 ## Optional reading
 

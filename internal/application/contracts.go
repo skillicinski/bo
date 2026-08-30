@@ -51,8 +51,11 @@ type SummaryCommit struct {
 }
 
 type DistillationCommit struct {
-	Kind        domain.DocumentKind
-	Filename    string
+	Kind     domain.DocumentKind
+	Filename string
+	Topic    string
+	// Update replaces an existing distillation record with the same filename.
+	Update      bool
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	DerivedFrom []domain.DistillationInput

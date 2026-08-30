@@ -24,6 +24,7 @@ erDiagram
     }
     DISTILLATION_DOCUMENT {
         string filename PK
+        string topic UK
         string kind
         timestamp created_at
         timestamp updated_at
@@ -85,8 +86,12 @@ Document entries may also contain `content_digest`, `content_size`, and
 are not operation events.
 
 `DISTILLATION_DOCUMENT` records are stored in `distillation_documents` under
-`distillations/` and use
+`distillations/` and identify their stable topic. They use
 `derived_from` inputs with `source_key`, `kind`, `filename`, and a SHA-256
 `content_digest`. Raw and summary inputs from one source count as one source;
 each distill record must cite at least two source identities. Distillation
-documents are create-only and do not provide evidence to the distill agent.
+documents can be updated in place when the distill agent merges a matching
+topic. The record keeps its creation time and refreshes its content, update
+time, and exact input references. Exact matching uses the topic and all input
+references and digests. Distillation documents do not provide evidence to the
+distill agent.
