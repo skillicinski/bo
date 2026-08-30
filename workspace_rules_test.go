@@ -49,11 +49,21 @@ func TestPublicWorkspaceRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := state.Validate(); err != nil || !state.ContainsDocument(distillation.DerivedFrom[0]) {
-		t.Fatalf("state validation = %v, contains input = %t", err, state.ContainsDocument(distillation.DerivedFrom[0]))
+	if err := state.Validate(); err != nil {
+		t.Fatalf("state validation = %v", err)
 	}
-	if err := bo.ValidateDocumentName("../facts.md"); !bo.IsKind(err, bo.ErrorKindValidation) {
+	invalidName := string([]byte{0xff, '.', 'm', 'd'})
+	if err := bo.ValidateDocumentName(invalidName); !bo.IsKind(err, bo.ErrorKindValidation) {
 		t.Fatalf("document validation error = %v", err)
+	}
+	invalidState := bo.State{Sources: []bo.SourceRecord{{SourceKey: one.SourceKey, Snapshots: []bo.RawRecord{{Filename: invalidName, WrittenAt: timeOne}}}}}
+	if err := invalidState.Validate(); !bo.IsKind(err, bo.ErrorKindValidation) {
+		t.Fatalf("state validation error = %v", err)
+	}
+	invalidOperation := workspaceRuleEvent("valid", timeOne, bo.CommandSnap, bo.RawRef("one.md"), one.SourceKey, nil)
+	invalidOperation.OperationID = string([]byte{0xff})
+	if err := invalidOperation.Validate(); !bo.IsKind(err, bo.ErrorKindValidation) {
+		t.Fatalf("operation validation error = %v", err)
 	}
 	updated := distillation
 	updated.Update = true

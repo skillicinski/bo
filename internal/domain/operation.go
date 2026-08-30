@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
@@ -103,11 +104,11 @@ func (o *Operation) Normalize() {
 }
 
 func (o Operation) Validate() error {
+	if !utf8.ValidString(o.OperationID) || strings.ContainsAny(o.OperationID, `/\\`) {
+		return fmt.Errorf("operation_id must be one path component")
+	}
 	if o.OperationID == "" {
 		return fmt.Errorf("operation_id must not be empty")
-	}
-	if strings.ContainsAny(o.OperationID, `/\\`) {
-		return fmt.Errorf("operation_id must be one path component")
 	}
 	for _, r := range o.OperationID {
 		if unicode.IsControl(r) {

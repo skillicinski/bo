@@ -189,17 +189,6 @@ func (s State) Validate() error {
 	return publicError(err)
 }
 
-// ContainsDocument reports whether input names a document in its source aggregate.
-func (s State) ContainsDocument(input DistillationInput) bool {
-	state, err := internalState(s)
-	if err != nil {
-		return false
-	}
-	return state.ContainsDocument(internaldomain.DistillationInput{
-		SourceKey: input.SourceKey, Kind: internaldomain.DocumentKind(input.Kind), Filename: input.Filename,
-	})
-}
-
 // ApplySnapshot returns the state after a raw document commit.
 func (s State) ApplySnapshot(commit SnapshotCommit) (State, error) {
 	if err := commit.Validate(); err != nil {
@@ -259,21 +248,6 @@ func ValidateDocumentKind(kind DocumentKind) error {
 // ValidateDocumentName validates a workspace document name.
 func ValidateDocumentName(name string) error {
 	return publicError(internaldomain.ValidateDocumentName(name))
-}
-
-// ValidateSourceKey validates a stored source identity.
-func ValidateSourceKey(sourceKey string) error {
-	return publicError(internaldomain.ValidateSourceKey(sourceKey))
-}
-
-// ValidateTopic validates a canonical distillation topic.
-func ValidateTopic(topic string) error {
-	return publicError(internaldomain.ValidateTopic(topic))
-}
-
-// ValidateTimestamp validates a UTC workspace timestamp.
-func ValidateTimestamp(timestamp time.Time) error {
-	return publicError(internaldomain.ValidateTimestamp(timestamp))
 }
 
 // ValidateContentDigest validates a SHA-256 document content digest.

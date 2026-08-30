@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
@@ -345,7 +346,7 @@ func credentialQueryParameter(rawQuery string) bool {
 }
 
 func ValidateDocumentName(name string) error {
-	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) || strings.ContainsRune(name, 0) ||
+	if !utf8.ValidString(name) || name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) || strings.ContainsRune(name, 0) ||
 		!strings.EqualFold(filepath.Ext(name), ".md") {
 		return internalerrors.Validation("document name must be a Markdown file name")
 	}
