@@ -55,7 +55,7 @@ The short form prints the snapshot count. `--full` prints the state JSON.
 
 ### 4. Synthesize summaries and distillations
 
-Synthesis needs a DeepSeek API key. It reads the newest raw snapshot for each
+Synthesis uses DeepSeek by default. It reads the newest raw snapshot for each
 source and writes summaries back to the same workspace.
 
 ```bash
@@ -70,6 +70,30 @@ stage. Use a stage name to run only one stage:
 bo synth notes summarize
 bo synth notes distill
 ```
+
+Select Gemini with a personal API key:
+
+```bash
+export GEMINI_API_KEY=...
+bo synth notes --provider gemini
+```
+
+`GOOGLE_API_KEY` is accepted as a fallback. If both variables are set,
+`GEMINI_API_KEY` wins. The provider also accepts `GEMINI_MODEL` and the
+optional `GEMINI_API_URL` base endpoint override.
+
+Select Gemini through Vertex AI with Application Default Credentials:
+
+```bash
+gcloud auth application-default login
+export GOOGLE_CLOUD_PROJECT=your-project
+export GOOGLE_CLOUD_LOCATION=global
+bo synth notes --provider vertex
+```
+
+Vertex AI uses the attached service identity when `bo` runs on Google Cloud.
+The default model is `gemini-2.5-flash`; set `GEMINI_MODEL` to select another
+model.
 
 Use runtime limits such as `--max-turns`, `--max-tool-calls`, and
 `--timeout-seconds` when required. The timeout applies to each agent runtime;
@@ -168,6 +192,13 @@ redirect, and private-network policy for that client.
 
 Public workflow errors use `bo.Error` and `bo.ErrorKind`. Use `bo.IsKind` or
 `bo.IsAlreadyExists` instead of matching error strings.
+
+Applications can construct Gemini providers with `NewGeminiProvider` and
+`GeminiConfig{APIKey: ...}`. For Vertex AI, use
+`NewVertexGeminiProvider` with `GeminiConfig{ProjectID: ..., Location: ...}`;
+it obtains an access token from Application Default Credentials. Set
+`GeminiConfig.Endpoint` to an API base URL when a local HTTP test server is
+needed.
 
 ## License
 

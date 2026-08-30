@@ -15,6 +15,7 @@ import (
 	internaldomain "github.com/skillicinski/bo/internal/domain"
 	internalerrors "github.com/skillicinski/bo/internal/errors"
 	deepseek "github.com/skillicinski/bo/internal/provider/deepseek"
+	gemini "github.com/skillicinski/bo/internal/provider/gemini"
 	"github.com/skillicinski/bo/internal/source"
 	filesource "github.com/skillicinski/bo/internal/source/file"
 	urlsource "github.com/skillicinski/bo/internal/source/url"
@@ -532,6 +533,40 @@ func NewDeepSeekProvider(config DeepSeekConfig) Provider {
 		client.HTTPClient = config.HTTPClient
 	}
 	return Provider{completion: client}
+}
+
+// GeminiConfig configures the Gemini Developer API or Vertex AI Gemini.
+// Endpoint is an injectable API base URL; an empty value selects the provider
+// default. Vertex AI also requires ProjectID and Location.
+type GeminiConfig struct {
+	APIKey     string
+	ProjectID  string
+	Location   string
+	Endpoint   string
+	Model      string
+	HTTPClient *http.Client
+}
+
+// NewGeminiProvider returns a Gemini Developer API provider authenticated with
+// an API key.
+func NewGeminiProvider(config GeminiConfig) Provider {
+	client := gemini.New(gemini.Config{
+		APIKey: config.APIKey, Endpoint: config.Endpoint, Model: config.Model, HTTPClient: config.HTTPClient,
+	})
+	return Provider{completion: client}
+}
+
+// NewVertexGeminiProvider returns a Vertex AI Gemini provider authenticated by
+// Application Default Credentials.
+func NewVertexGeminiProvider(ctx context.Context, config GeminiConfig) (Provider, error) {
+	client, err := gemini.NewVertex(ctx, gemini.Config{
+		ProjectID: config.ProjectID, Location: config.Location, Endpoint: config.Endpoint,
+		Model: config.Model, HTTPClient: config.HTTPClient,
+	})
+	if err != nil {
+		return Provider{}, publicError(err)
+	}
+	return Provider{completion: client}, nil
 }
 
 type Metrics struct {

@@ -128,25 +128,27 @@ func runSynth(args []string) {
 	if err != nil {
 		fail("synth", err.Error())
 	}
-	config, err := parseSynthOptions(optionArgs)
+	providerName, optionArgs, err := parseSynthProvider(optionArgs)
 	if err != nil {
 		fail("synth", err.Error())
 	}
-	apiKey := os.Getenv("DEEPSEEK_API_KEY")
-	if apiKey == "" {
-		fail("synth", "DEEPSEEK_API_KEY is not set")
+	config, err := parseSynthOptions(optionArgs)
+	if err != nil {
+		fail("synth", err.Error())
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fail("synth", err.Error())
 	}
-	endpoint := os.Getenv("DEEPSEEK_API_URL")
 	workspace, err := bo.NewLocalManager(home).Open(context.Background(), name)
 	if err != nil {
 		fail("synth", err.Error())
 	}
 	defer workspace.Close()
-	provider := bo.NewDeepSeekProvider(bo.DeepSeekConfig{APIKey: apiKey, Endpoint: endpoint})
+	provider, err := synthProvider(providerName)
+	if err != nil {
+		fail("synth", err.Error())
+	}
 	result, err := bo.Synth(context.Background(), bo.SynthRequest{
 		Workspace:  workspace,
 		Provider:   provider,
@@ -159,6 +161,41 @@ func runSynth(args []string) {
 		fail("synth", err.Error())
 	}
 	printSynthReport(result)
+}
+
+func synthProvider(name string) (bo.Provider, error) {
+	switch name {
+	case "deepseek":
+		apiKey := os.Getenv("DEEPSEEK_API_KEY")
+		if apiKey == "" {
+			return bo.Provider{}, fmt.Errorf("DEEPSEEK_API_KEY is not set")
+		}
+		return bo.NewDeepSeekProvider(bo.DeepSeekConfig{APIKey: apiKey, Endpoint: os.Getenv("DEEPSEEK_API_URL"), Model: os.Getenv("DEEPSEEK_MODEL")}), nil
+	case "gemini":
+		apiKey := geminiAPIKey()
+		if apiKey == "" {
+			return bo.Provider{}, fmt.Errorf("GEMINI_API_KEY or GOOGLE_API_KEY is not set")
+		}
+		return bo.NewGeminiProvider(bo.GeminiConfig{APIKey: apiKey, Endpoint: os.Getenv("GEMINI_API_URL"), Model: os.Getenv("GEMINI_MODEL")}), nil
+	case "vertex":
+		projectID := os.Getenv("GOOGLE_CLOUD_PROJECT")
+		location := os.Getenv("GOOGLE_CLOUD_LOCATION")
+		if projectID == "" || location == "" {
+			return bo.Provider{}, fmt.Errorf("GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION are required for vertex")
+		}
+		return bo.NewVertexGeminiProvider(context.Background(), bo.GeminiConfig{
+			ProjectID: projectID, Location: location, Endpoint: os.Getenv("GEMINI_API_URL"), Model: os.Getenv("GEMINI_MODEL"),
+		})
+	default:
+		return bo.Provider{}, fmt.Errorf("%s", synthUsage())
+	}
+}
+
+func geminiAPIKey() string {
+	if key := os.Getenv("GEMINI_API_KEY"); key != "" {
+		return key
+	}
+	return os.Getenv("GOOGLE_API_KEY")
 }
 
 func printSynthReport(result bo.SynthResult) {

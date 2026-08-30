@@ -103,9 +103,13 @@ When creating PRs:
 
 This project follows [Semantic Versioning](https://semver.org/).
 
+Keep `npm/package.json` at the latest published version while a release is
+under review. Bump it to the new changelog version only when the release is
+approved for publication.
+
 1. Update `CHANGELOG.md` with the new version section.
 2. Local smoke test: build an unpublished release with `go install ./cmd/bo` and smoke test it from outside the repo (so it cannot resolve workspace files).
-3. Bump `version` in `npm/package.json`.
+3. At release time, bump `version` in `npm/package.json` to the new changelog version.
 4. Commit, merge to main.
 5. `git tag v<version> && git push --tags`
 6. **Approve the `npm-publish` GitHub Environment** — Actions tab → tag run → click *Review deployments* → approve. The job will not run until you do.

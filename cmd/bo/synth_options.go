@@ -9,7 +9,7 @@ import (
 )
 
 func synthUsage() string {
-	return "usage: bo synth <name> [summarize|distill] [--max-turns N] [--max-tool-calls N] [--max-tool-output-bytes N] [--max-response-tokens N] [--timeout-seconds N]"
+	return "usage: bo synth <name> [summarize|distill] [--provider deepseek|gemini|vertex] [--max-turns N] [--max-tool-calls N] [--max-tool-output-bytes N] [--max-response-tokens N] [--timeout-seconds N]"
 }
 
 func parseSynthOptions(args []string) (bo.SynthesisOptions, error) {
@@ -28,6 +28,28 @@ func parseSynthMode(args []string) (bo.SynthMode, []string, error) {
 	default:
 		return bo.SynthModeDefault, nil, fmt.Errorf("%s", synthUsage())
 	}
+}
+
+func parseSynthProvider(args []string) (string, []string, error) {
+	provider := "deepseek"
+	remaining := make([]string, 0, len(args))
+	for index := 0; index < len(args); index++ {
+		if args[index] != "--provider" {
+			remaining = append(remaining, args[index])
+			continue
+		}
+		if index+1 >= len(args) {
+			return "", nil, fmt.Errorf("missing value for --provider")
+		}
+		provider = args[index+1]
+		index++
+		switch provider {
+		case "deepseek", "gemini", "vertex":
+		default:
+			return "", nil, fmt.Errorf("%s", synthUsage())
+		}
+	}
+	return provider, remaining, nil
 }
 
 func parseAgentOptions(args []string, usage string) (bo.SynthesisOptions, error) {

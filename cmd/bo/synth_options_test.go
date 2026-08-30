@@ -44,6 +44,35 @@ func TestParseSynthMode(t *testing.T) {
 	}
 }
 
+func TestParseSynthProvider(t *testing.T) {
+	provider, args, err := parseSynthProvider([]string{"--provider", "gemini", "--max-turns", "2"})
+	if err != nil || provider != "gemini" || len(args) != 2 {
+		t.Fatalf("provider = %q, args = %#v, error = %v", provider, args, err)
+	}
+	provider, args, err = parseSynthProvider([]string{"--max-turns", "2"})
+	if err != nil || provider != "deepseek" || len(args) != 2 {
+		t.Fatalf("default provider = %q, args = %#v, error = %v", provider, args, err)
+	}
+	if _, _, err := parseSynthProvider([]string{"--provider"}); err == nil {
+		t.Fatal("missing provider value succeeded")
+	}
+	if _, _, err := parseSynthProvider([]string{"--provider", "unknown"}); err == nil {
+		t.Fatal("unknown provider succeeded")
+	}
+}
+
+func TestGeminiAPIKeyPrefersGeminiName(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "gemini-key")
+	t.Setenv("GOOGLE_API_KEY", "google-key")
+	if got := geminiAPIKey(); got != "gemini-key" {
+		t.Fatalf("key = %q", got)
+	}
+	t.Setenv("GEMINI_API_KEY", "")
+	if got := geminiAPIKey(); got != "google-key" {
+		t.Fatalf("fallback key = %q", got)
+	}
+}
+
 func TestAddSeedHintUsesErrorKind(t *testing.T) {
 	err := bo.NewError(bo.ErrorKindMissingResource, "target is missing")
 	hinted := addSeedHint(err, "notes")

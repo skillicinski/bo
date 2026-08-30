@@ -6,13 +6,14 @@
 external Go consumer       -> bo
 cmd/bo                     -> bo
 evals/cmd/bo-eval          -> application, provider/deepseek, storage/local
-bo                         -> application, agent, domain, errors, provider/deepseek, source, source/file, source/url, storage/local
+bo                         -> application, agent, domain, errors, provider/deepseek, provider/gemini, source, source/file, source/url, storage/local
 application                -> agent, domain, errors, source
 source                     -> domain, errors
 source/file                -> source, domain, errors
 source/url                 -> source, domain, errors
 storage/local              -> application, domain, errors
 provider/deepseek          -> agent, errors
+provider/gemini            -> agent, errors, oauth2/google
 agent                      -> errors
 domain                     -> errors
 ```
@@ -106,6 +107,16 @@ The DeepSeek adapter translates the provider HTTP protocol.
 - Owns: DeepSeek requests, responses, and transport errors.
 - Does not own: the agent loop, workspace selection, or CLI rendering.
 - Calls: the agent contract and shared errors.
+
+### `internal/provider/gemini`
+
+The Gemini adapter translates the native `generateContent` protocol for the
+Gemini Developer API and Vertex AI.
+
+- Owns: Gemini requests, responses, API-key headers, Vertex AI endpoint paths,
+  and ADC access tokens.
+- Does not own: the agent loop, workspace selection, or CLI rendering.
+- Calls: the agent contract, shared errors, and Google's ADC OAuth2 package.
 
 ### `internal/storage/local`
 

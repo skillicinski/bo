@@ -37,6 +37,8 @@ type ChatMessage struct {
 	Name       string
 	ToolCalls  []ToolCall
 	ToolCallID string
+	// ProviderMetadata is immutable provider-owned state for message replay.
+	ProviderMetadata string
 }
 
 type ToolCall struct {
