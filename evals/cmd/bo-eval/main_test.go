@@ -36,6 +36,18 @@ func TestReadCorpusIgnoresCommentsAndBlankLines(t *testing.T) {
 	}
 }
 
+func TestGeminiThinkingBudget(t *testing.T) {
+	t.Setenv("GEMINI_THINKING_BUDGET", "0")
+	budget, err := geminiThinkingBudget()
+	if err != nil || budget == nil || *budget != 0 {
+		t.Fatalf("budget = %v, %v", budget, err)
+	}
+	t.Setenv("GEMINI_THINKING_BUDGET", "-2")
+	if _, err := geminiThinkingBudget(); err == nil {
+		t.Fatal("invalid budget succeeded")
+	}
+}
+
 func writeTestFile(path, contents string) error {
 	return os.WriteFile(path, []byte(contents), 0o600)
 }

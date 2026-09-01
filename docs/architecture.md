@@ -31,8 +31,8 @@ separate consumer module in `testdata/public-api` compiles that boundary in CI.
   connects them. `cmd/bo` selects the local workspace and calls `bo`.
 - **Task:** one evaluation input, workflow, and explicit success criteria.
 - **Trial:** one isolated execution of a task.
-- **Trajectory:** the recorded command output, public operation events, and
-  execution metadata for one trial.
+- **Trajectory:** the recorded command output, public operation events, runtime
+  telemetry, and execution metadata for one trial.
 - **Outcome:** the final workspace state produced by a trial.
 - **Aggregate:** one state object that keeps related records and their rules
   together. A `SourceRecord` groups one source, its snapshots, and its summary.
@@ -148,7 +148,8 @@ The evaluation harness is a separate composition root for repeatable agent
 trials.
 
 - Owns: fixture capture, isolated workspaces, runtime adapters, trajectory
-  records, deterministic outcome checks, and pass@k/pass^k aggregation.
+  records, deterministic outcome checks, expected-output checks, and
+  pass@k/pass^k aggregation.
 - Does not own: synthesis rules, provider protocols, or internal application
   seams.
 - Calls: the small `evals/cmd/bo-eval` adapter for the package runtime and an
@@ -246,8 +247,12 @@ distillation candidates for topic matching, and call `skip_distill`,
 reference, computes its digest, renders deterministic Markdown, and commits the
 document, state, and mutation event in one conditional transaction. Matching
 requires the topic and the complete set of input references and digests. An
-unchanged topic and input set is skipped. The public `Synth` result reports
-committed documents grouped by mutation operation.
+unchanged topic and input set is skipped. When no distillation exists yet, the
+host does not accept a skip until the agent has read evidence from two source
+identities; when two current summaries are available, it requires two summary
+reads first. This guard is shared by direct `distill` and the distill stage of
+`synth`. The public `Synth` result reports committed documents grouped by
+mutation operation.
 
 ## Optional reading
 

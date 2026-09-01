@@ -27,6 +27,12 @@ func TestDistillCreatesOneCrossSourceDocument(t *testing.T) {
 	if err != nil || result.Skipped || result.Filename != "shared-facts.md" {
 		t.Fatalf("Distill = %#v, %v", result, err)
 	}
+	if len(result.Telemetry) != 1 || result.Telemetry[0].Workflow != "distill" || result.Telemetry[0].TerminalReason != "done" || result.Telemetry[0].TerminalDetail != "No other supported themes remain." || len(result.Telemetry[0].ToolCalls) != 4 {
+		t.Fatalf("Distill telemetry = %#v", result.Telemetry)
+	}
+	if result.Telemetry[0].ToolCalls[0].Name != "read_document" || result.Telemetry[0].ToolCalls[0].ArgumentsPreview != `{"filename":"one.md"}` || result.Telemetry[0].ToolCalls[3].Name != "skip_distill" {
+		t.Fatalf("Distill tool telemetry = %#v", result.Telemetry[0].ToolCalls)
+	}
 	if len(provider.deadlines) != 4 {
 		t.Fatalf("runtime deadlines = %#v", provider.deadlines)
 	}
@@ -45,22 +51,57 @@ func TestDistillCreatesOneCrossSourceDocument(t *testing.T) {
 	}
 }
 
-func TestDistillRejectsUnreadReferencesAndAllowsSkip(t *testing.T) {
+func TestDistillRequiresEvidenceBeforeSkip(t *testing.T) {
 	store, target := seededStore(t)
 	commitRaw(t, store, "https://example.test/one", "one.md", time.Unix(1, 0).UTC(), []byte("one fact\n"))
 	commitRaw(t, store, "https://example.test/two", "two.md", time.Unix(2, 0).UTC(), []byte("two fact\n"))
 	provider := &fakeProvider{responses: []agent.CompletionResponse{
 		toolResponse("read-one", "read_document", `{"filename":"one.md"}`),
 		toolResponse("write", "write_distillation", `{"topic":"shared-facts","title":"Shared facts","introduction":"intro","sections":[{"heading":"Facts","paragraph":"paragraph","bullets":["one","two"],"sources":[{"source_key":"https://example.test/one","kind":"raw","filename":"one.md"},{"source_key":"https://example.test/two","kind":"raw","filename":"two.md"}]}]}`),
-		toolResponse("skip", "skip_distill", `{"reason":"The second source was not read."}`),
+		toolResponse("premature-skip", "skip_distill", `{"reason":"The second source was not read."}`),
+		toolResponse("read-two", "read_document", `{"filename":"two.md"}`),
+		toolResponse("skip", "skip_distill", `{"reason":"No other supported themes remain."}`),
 	}}
 	result, err := application.Distill(context.Background(), store, provider, application.DefaultSynthesisOptions(), operationOptionsFor(target))
-	if err != nil || !result.Skipped || result.Reason == "" || result.Filename != "" {
+	if err != nil || !result.Skipped || result.Reason == "" || result.Filename != "" || len(provider.requests) != 5 {
 		t.Fatalf("Distill = %#v, %v", result, err)
+	}
+	if !strings.Contains(fmt.Sprint(provider.requests[3].Messages), "at least two distinct source identities") {
+		t.Fatalf("premature skip was accepted: %#v", provider.requests)
 	}
 	state, _, err := store.ReadState(context.Background())
 	if err != nil || len(state.DistillationDocuments) != 0 {
 		t.Fatalf("state = %#v, %v", state, err)
+	}
+}
+
+func TestDistillRequiresTwoCurrentSummaryReadsBeforeSkip(t *testing.T) {
+	store, target := seededStore(t)
+	commitRaw(t, store, "https://example.test/one", "one.md", time.Unix(1, 0).UTC(), []byte("one fact\n"))
+	commitRaw(t, store, "https://example.test/two", "two.md", time.Unix(2, 0).UTC(), []byte("two fact\n"))
+	commitSummary(t, store, application.SummaryCommit{
+		SourceKey: "https://example.test/one", Filename: "one-summary.md", DerivedFrom: "one.md",
+		RawWrittenAt: time.Unix(1, 0).UTC(), CreatedAt: time.Unix(3, 0).UTC(), UpdatedAt: time.Unix(3, 0).UTC(), Contents: []byte("one summary\n"),
+	})
+	commitSummary(t, store, application.SummaryCommit{
+		SourceKey: "https://example.test/two", Filename: "two-summary.md", DerivedFrom: "two.md",
+		RawWrittenAt: time.Unix(2, 0).UTC(), CreatedAt: time.Unix(4, 0).UTC(), UpdatedAt: time.Unix(4, 0).UTC(), Contents: []byte("two summary\n"),
+	})
+	provider := &fakeProvider{responses: []agent.CompletionResponse{
+		toolResponse("read-one-summary", "read_summary", `{"source_key":"https://example.test/one"}`),
+		toolResponse("premature-skip", "skip_distill", `{"reason":"No theme found."}`),
+		toolResponse("read-two-summary", "read_summary", `{"source_key":"https://example.test/two"}`),
+		toolResponse("skip", "skip_distill", `{"reason":"No other supported themes remain."}`),
+	}}
+	result, err := application.Distill(context.Background(), store, provider, application.DefaultSynthesisOptions(), operationOptionsFor(target))
+	if err != nil || !result.Skipped || len(provider.requests) != 4 {
+		t.Fatalf("Distill = %#v, requests = %d, error = %v", result, len(provider.requests), err)
+	}
+	if !strings.Contains(fmt.Sprint(provider.requests[0].Messages), "one-summary.md") || !strings.Contains(fmt.Sprint(provider.requests[0].Messages), "read current summaries for at least two distinct source identities") {
+		t.Fatalf("summary survey instruction is missing: %#v", provider.requests[0])
+	}
+	if !strings.Contains(fmt.Sprint(provider.requests[2].Messages), "current summaries") {
+		t.Fatalf("summary guard was not reported: %#v", provider.requests)
 	}
 }
 

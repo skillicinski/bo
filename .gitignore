@@ -8,8 +8,8 @@ tmp/
 
 # local evaluation corpora and generated reports
 /evals/*
-!/evals/RUBRIC.md
-!/evals/DISTILL_RUBRIC.md
+!/evals/rubrics/
+!/evals/rubrics/*.md
 !/evals/README.md
 !/evals/harness
 !/evals/harness.py

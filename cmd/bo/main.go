@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/skillicinski/bo"
@@ -176,15 +177,23 @@ func synthProvider(name string) (bo.Provider, error) {
 		if apiKey == "" {
 			return bo.Provider{}, fmt.Errorf("GEMINI_API_KEY or GOOGLE_API_KEY is not set")
 		}
-		return bo.NewGeminiProvider(bo.GeminiConfig{APIKey: apiKey, Endpoint: os.Getenv("GEMINI_API_URL"), Model: os.Getenv("GEMINI_MODEL")}), nil
+		thinkingBudget, err := geminiThinkingBudget()
+		if err != nil {
+			return bo.Provider{}, err
+		}
+		return bo.NewGeminiProvider(bo.GeminiConfig{APIKey: apiKey, Endpoint: os.Getenv("GEMINI_API_URL"), Model: os.Getenv("GEMINI_MODEL"), ThinkingBudget: thinkingBudget}), nil
 	case "vertex":
 		projectID := os.Getenv("GOOGLE_CLOUD_PROJECT")
 		location := os.Getenv("GOOGLE_CLOUD_LOCATION")
 		if projectID == "" || location == "" {
 			return bo.Provider{}, fmt.Errorf("GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION are required for vertex")
 		}
+		thinkingBudget, err := geminiThinkingBudget()
+		if err != nil {
+			return bo.Provider{}, err
+		}
 		return bo.NewVertexGeminiProvider(context.Background(), bo.GeminiConfig{
-			ProjectID: projectID, Location: location, Endpoint: os.Getenv("GEMINI_API_URL"), Model: os.Getenv("GEMINI_MODEL"),
+			ProjectID: projectID, Location: location, Endpoint: os.Getenv("GEMINI_API_URL"), Model: os.Getenv("GEMINI_MODEL"), ThinkingBudget: thinkingBudget,
 		})
 	default:
 		return bo.Provider{}, fmt.Errorf("%s", synthUsage())
@@ -196,6 +205,18 @@ func geminiAPIKey() string {
 		return key
 	}
 	return os.Getenv("GOOGLE_API_KEY")
+}
+
+func geminiThinkingBudget() (*int, error) {
+	value := os.Getenv("GEMINI_THINKING_BUDGET")
+	if value == "" {
+		return nil, nil
+	}
+	budget, err := strconv.Atoi(value)
+	if err != nil || budget < -1 {
+		return nil, fmt.Errorf("GEMINI_THINKING_BUDGET must be -1 or a non-negative integer")
+	}
+	return &budget, nil
 }
 
 func printSynthReport(result bo.SynthResult) {

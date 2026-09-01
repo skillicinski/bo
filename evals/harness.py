@@ -140,6 +140,18 @@ def capture(args: argparse.Namespace) -> int:
         if not target.is_dir():
             raise HarnessError(f"refusing to replace non-directory fixture: {target}")
 
+    preserved_expected = target / "expected" if target.exists() and (target / "expected").is_dir() and not (target / "expected").is_symlink() else None
+    preserved_expected_distillations = None
+    if target.exists():
+        try:
+            previous_task = read_json(target / "task.json", "existing fixture task.json")
+        except HarnessError:
+            previous_task = None
+        if isinstance(previous_task, dict):
+            previous_success = previous_task.get("success")
+            if isinstance(previous_success, dict) and "expected_distillations" in previous_success:
+                preserved_expected_distillations = previous_success["expected_distillations"]
+
     binary = ensure_binary(EVAL_BINARY, "./evals/cmd/bo-eval")
     temporary_home = Path(tempfile.mkdtemp(prefix="bo-eval-capture-"))
     temporary_fixture = Path(tempfile.mkdtemp(prefix=".fixture-", dir=FIXTURES))
@@ -161,21 +173,23 @@ def capture(args: argparse.Namespace) -> int:
         captured_workspace = temporary_home / ".bo" / "capture"
         if not captured_workspace.is_dir():
             raise HarnessError("capture did not produce a workspace")
-        write_json(
-            temporary_fixture / "task.json",
-            {
-                "schema_version": 1,
-                "name": target.name,
-                "workflow": "end-to-end",
-                "instructions": "Run the configured bo workflow against the seeded workspace. Preserve raw source documents.",
-                "success": {
-                    "min_source_identities": 2,
-                    "require_distillation": True,
-                },
+        task = {
+            "schema_version": 1,
+            "name": target.name,
+            "workflow": "end-to-end",
+            "instructions": "Run the configured bo workflow against the seeded workspace. Preserve raw source documents.",
+            "success": {
+                "min_source_identities": 2,
+                "require_distillation": True,
             },
-        )
+        }
+        if preserved_expected_distillations is not None:
+            task["success"]["expected_distillations"] = preserved_expected_distillations
+        write_json(temporary_fixture / "task.json", task)
         (temporary_fixture / "corpus.txt").write_text("\n".join(sources) + "\n", encoding="utf-8")
         shutil.copytree(captured_workspace, temporary_fixture / "workspace")
+        if preserved_expected is not None:
+            shutil.copytree(preserved_expected, temporary_fixture / "expected")
         if target.exists():
             shutil.rmtree(target)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -212,12 +226,37 @@ def load_task(fixture: Path) -> dict:
     require_distillation = success.get("require_distillation", False)
     if not isinstance(require_distillation, bool):
         raise HarnessError("fixture success.require_distillation must be boolean")
+    expected_distillations = success.get("expected_distillations", [])
+    if not isinstance(expected_distillations, list):
+        raise HarnessError("fixture success.expected_distillations must be an array")
+    topics = set()
+    for index, expected in enumerate(expected_distillations):
+        if not isinstance(expected, dict):
+            raise HarnessError(f"fixture success.expected_distillations[{index}] must be an object")
+        topic = expected.get("topic")
+        if not safe_topic(topic):
+            raise HarnessError(f"fixture success.expected_distillations[{index}].topic must be canonical kebab-case")
+        if topic in topics:
+            raise HarnessError(f"fixture success.expected_distillations has duplicate topic: {topic}")
+        topics.add(topic)
+        reference = expected.get("reference")
+        if not isinstance(reference, str) or not reference:
+            raise HarnessError(f"fixture success.expected_distillations[{index}].reference must be non-empty")
+        source_keys = expected.get("source_keys")
+        if not isinstance(source_keys, list) or len(source_keys) < 2 or any(not isinstance(key, str) or not key for key in source_keys):
+            raise HarnessError(f"fixture success.expected_distillations[{index}].source_keys must contain at least two source identities")
+        if len(set(source_keys)) != len(source_keys):
+            raise HarnessError(f"fixture success.expected_distillations[{index}].source_keys must be unique")
     return {
         "schema_version": 1,
         "name": task["name"],
         "instructions": task["instructions"],
         "workflow": workflow,
-        "success": {"min_source_identities": minimum, "require_distillation": require_distillation},
+        "success": {
+            "min_source_identities": minimum,
+            "require_distillation": require_distillation,
+            "expected_distillations": expected_distillations,
+        },
     }
 
 
@@ -276,6 +315,35 @@ def validate_workspace(workspace: Path) -> dict:
 
 def safe_markdown_name(value: object) -> bool:
     return isinstance(value, str) and "\\" not in value and Path(value).name == value and Path(value).suffix.lower() == ".md"
+
+
+def safe_topic(value: object) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    parts = value.split("-")
+    return value == value.lower() and all(part and all(character.isalnum() for character in part) for part in parts)
+
+
+def validate_expected_distillations(fixture: Path, state: dict, expected: list[dict]) -> None:
+    source_keys = {source.get("source_key") for source in state["sources"] if isinstance(source, dict)}
+    fixture = fixture.resolve()
+    for item in expected:
+        reference = Path(item["reference"])
+        if reference.is_absolute() or "\\" in item["reference"] or any(part in ("", ".", "..") for part in reference.parts) or not safe_markdown_name(reference.name):
+            raise HarnessError(f"fixture expected distillation reference is unsafe: {item['reference']}")
+        candidate = fixture / reference
+        if candidate.is_symlink():
+            raise HarnessError(f"fixture expected distillation reference is a symlink: {item['reference']}")
+        path = candidate.resolve()
+        try:
+            path.relative_to(fixture)
+        except ValueError as error:
+            raise HarnessError(f"fixture expected distillation reference escapes fixture: {item['reference']}") from error
+        if not path.is_file() or not path.read_text(encoding="utf-8").strip():
+            raise HarnessError(f"fixture expected distillation reference is missing or empty: {item['reference']}")
+        missing = [key for key in item["source_keys"] if key not in source_keys]
+        if missing:
+            raise HarnessError(f"fixture expected distillation {item['topic']} names unknown sources: {', '.join(missing)}")
 
 
 def snapshot_time(value: object) -> datetime:
@@ -349,7 +417,7 @@ def summary_check(workspace: Path, state: dict) -> tuple[bool, str]:
     return True, f"{len(state['sources'])} current summaries"
 
 
-def distillation_check(workspace: Path, state: dict, required: bool) -> tuple[bool, str]:
+def distillation_check(workspace: Path, state: dict, required: bool, expected: list[dict] | None = None) -> tuple[bool, str]:
     records = state.get("distillation_documents", [])
     if not isinstance(records, list):
         return False, "state distillation_documents is not an array"
@@ -372,16 +440,16 @@ def distillation_check(workspace: Path, state: dict, required: bool) -> tuple[bo
             summary_owners[summary.get("filename")] = source["source_key"]
             if summary.get("derived_from") == latest["filename"]:
                 current_summaries[summary.get("filename")] = source["source_key"]
-    expected = set()
+    expected_files = set()
     for record in records:
         if not isinstance(record, dict) or record.get("kind") != "distillation":
             return False, "invalid distillation record"
         filename = record.get("filename")
         if not safe_markdown_name(filename):
             return False, f"invalid distillation filename: {filename}"
-        if filename in expected:
+        if filename in expected_files:
             return False, f"duplicate distillation record: {filename}"
-        expected.add(filename)
+        expected_files.add(filename)
         path = workspace / "distillations" / filename
         try:
             nonempty = bool(path.read_text(encoding="utf-8").strip()) if safe_markdown_name(filename) else False
@@ -413,8 +481,20 @@ def distillation_check(workspace: Path, state: dict, required: bool) -> tuple[bo
         if len(owners) < 2:
             return False, f"distillation uses fewer than two source identities: {record.get('filename')}"
     actual = {path.name for path in distillations_dir.glob("*.md")}
-    if actual != expected:
-        return False, f"distillation inventory mismatch: expected {len(expected)}, found {len(actual)}"
+    if actual != expected_files:
+        return False, f"distillation inventory mismatch: expected {len(expected_files)}, found {len(actual)}"
+    for item in expected or []:
+        record = next((record for record in records if record.get("topic") == item["topic"]), None)
+        if record is None:
+            return False, f"missing expected distillation topic: {item['topic']}"
+        owners = {
+            provenance.get("source_key")
+            for provenance in record.get("derived_from", [])
+            if isinstance(provenance, dict)
+        }
+        missing = [source_key for source_key in item["source_keys"] if source_key not in owners]
+        if missing:
+            return False, f"distillation topic {item['topic']} is missing expected source identities: {', '.join(missing)}"
     return True, f"{len(records)} distillation documents"
 
 
@@ -460,6 +540,27 @@ def runtime_json(stdout_path: Path) -> dict | None:
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None
     return value if isinstance(value, dict) else None
+
+
+def runtime_telemetry(runtime_results: list[dict | None]) -> list[dict]:
+    telemetry = []
+    for index, runtime_result in enumerate(runtime_results, 1):
+        entry = {"stage": index, "workflow": None, "provider": None, "telemetry": []}
+        if not isinstance(runtime_result, dict):
+            entry["status"] = "missing_runtime_result"
+            telemetry.append(entry)
+            continue
+        entry["workflow"] = runtime_result.get("workflow")
+        entry["provider"] = runtime_result.get("provider")
+        result = runtime_result.get("result")
+        if not isinstance(result, dict) or not isinstance(result.get("telemetry"), list):
+            entry["status"] = "missing"
+            telemetry.append(entry)
+            continue
+        entry["telemetry"] = result["telemetry"]
+        entry["status"] = "present"
+        telemetry.append(entry)
+    return telemetry
 
 
 def stage_status(workflow: str, exit_code: int | None, summary_ok: bool, distill_ok: bool) -> dict[str, int]:
@@ -644,6 +745,7 @@ def run_trial(
             stderr.write((process_error + "\n").encode())
     runtime_results = [runtime_json(stage_stdout) for stage_stdout, _ in stage_outputs]
     runtime_result = next((result for result in reversed(runtime_results) if result is not None), None)
+    telemetry = runtime_telemetry(runtime_results)
     exit_detail = "process exited 0" if exit_code == 0 else "process timed out" if timed_out else process_error or f"process exit: {exit_code}"
     checks: list[dict] = [check("exit_code", exit_code == 0, exit_detail)]
     summary_ok = False
@@ -699,6 +801,7 @@ def run_trial(
                     workspace,
                     state,
                     workflow == "end-to-end" and task["success"]["require_distillation"],
+                    task["success"]["expected_distillations"] if workflow in ("distill", "end-to-end") else None,
                 )
             except (OSError, UnicodeError, KeyError, TypeError) as error:
                 distill_ok, detail = False, f"distillation check failed: {error}"
@@ -737,11 +840,12 @@ def run_trial(
     statuses = stage_status(workflow, exit_code, summary_ok, distill_ok)
     status = "passed" if all(item["status"] == "passed" for item in checks) else "failed"
     trajectory = {
-        "schema_version": 1,
+        "schema_version": 2,
         "command": actual_commands[0] if len(actual_commands) == 1 else actual_commands,
         "stdout": "stdout.log",
         "stderr": "stderr.log",
         "events": events,
+        "telemetry": telemetry,
         "workspace": "home/.bo/eval",
     }
     if len(actual_commands) > 1:
@@ -765,6 +869,7 @@ def run_trial(
         "timed_out": timed_out,
         "stage_status": statuses,
         "checks": checks,
+        "telemetry": telemetry,
         "outcome": {
             "workspace": "home/.bo/eval",
             "source_count": len(state.get("sources", [])) if isinstance(state, dict) else 0,
@@ -841,6 +946,7 @@ def run_eval(args: argparse.Namespace) -> int:
         raise HarnessError(f"unsupported workflow: {workflow}")
     task = {**task, "workflow": workflow, "provider": args.provider}
     fixture_state = validate_workspace(fixture / "workspace")
+    validate_expected_distillations(fixture, fixture_state, task["success"]["expected_distillations"])
     baseline_raw = file_hashes(fixture / "workspace")
     baseline_summaries = file_hashes(fixture / "workspace" / "summaries")
     baseline_distillations = file_hashes(fixture / "workspace" / "distillations")

@@ -24,8 +24,14 @@ Each fixture has this local layout:
 <fixture>/
   corpus.txt
   task.json
+  expected/
+    distillations/
   workspace/
 ```
+
+`expected/distillations/` contains hand-curated reference outputs. The harness
+checks the topic and source identities named by `task.json`, but does not seed
+the reference documents into a trial.
 
 The workspace is copied for every trial. The harness records stdout, stderr,
 the public operation log, final state, deterministic checks, and pass@k and

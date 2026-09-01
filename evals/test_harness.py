@@ -51,7 +51,8 @@ class HarnessTests(unittest.TestCase):
                 "(p/'summaries').mkdir(); "
                 "[ (p/'summaries'/s['snapshots'][0]['filename']).write_text('summary') and s.update({'summary': {'filename': s['snapshots'][0]['filename'], 'derived_from': s['snapshots'][0]['filename']}}) for s in state['sources'] ]; "
                 "(p/'state.json').write_text(json.dumps(state)); "
-                "Path(p, 'seen').write_text(os.environ['BO_EVAL_TASK'])"
+                "Path(p, 'seen').write_text(os.environ['BO_EVAL_TASK']); "
+                "print(json.dumps({'command':'run','workflow':'summarize','provider':'deepseek','result':{'telemetry':[{'workflow':'summarize','source_key':'one','terminal_reason':'assistant_message','tool_calls':[{'name':'read_document'}]}]}}))"
             )
             task = {"success": {"min_source_identities": 2, "require_distillation": False}}
             record = harness.run_trial(
@@ -72,6 +73,10 @@ class HarnessTests(unittest.TestCase):
             self.assertEqual(record["status"], "passed")
             self.assertIn("task.json", (trial / "home" / ".bo" / "eval" / "seen").read_text())
             self.assertEqual(record["stage_status"], {"summarize": 0})
+            telemetry = json.loads((trial / "trajectory.json").read_text())["telemetry"]
+            self.assertEqual(telemetry[0]["status"], "present")
+            self.assertEqual(telemetry[0]["telemetry"][0]["tool_calls"][0]["name"], "read_document")
+            self.assertEqual(record["telemetry"], telemetry)
 
     def test_command_trial_fails_when_raw_changes(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -151,6 +156,37 @@ class HarnessTests(unittest.TestCase):
             passed, detail = harness.distillation_check(workspace, state, True)
             self.assertFalse(passed)
             self.assertIn("current summary", detail)
+
+    def test_distillation_check_requires_expected_topics_and_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = make_workspace(Path(directory))
+            (workspace / "distillations").mkdir()
+            (workspace / "distillations" / "shared.md").write_text("shared\n", encoding="utf-8")
+            state = json.loads((workspace / "state.json").read_text(encoding="utf-8"))
+            state["distillation_documents"] = [{
+                "kind": "distillation",
+                "topic": "shared-facts",
+                "filename": "shared.md",
+                "derived_from": [
+                    {"source_key": "one", "kind": "raw", "filename": "one.md", "content_digest": hashlib.sha256(b"one source\n").hexdigest()},
+                    {"source_key": "two", "kind": "raw", "filename": "two.md", "content_digest": hashlib.sha256(b"two source\n").hexdigest()},
+                ],
+            }]
+            passed, detail = harness.distillation_check(
+                workspace,
+                state,
+                True,
+                [{"topic": "shared-facts", "source_keys": ["one", "two"]}],
+            )
+            self.assertTrue(passed, detail)
+            passed, detail = harness.distillation_check(
+                workspace,
+                state,
+                True,
+                [{"topic": "other-facts", "source_keys": ["one", "two"]}],
+            )
+            self.assertFalse(passed)
+            self.assertIn("missing expected distillation topic", detail)
 
     def test_external_end_to_end_requires_stable_summary_events(self):
         events = [

@@ -253,12 +253,28 @@ func newProvider(name string) (bo.Provider, error) {
 		if key == "" {
 			return bo.Provider{}, errors.New("GEMINI_API_KEY or GOOGLE_API_KEY is not set")
 		}
+		thinkingBudget, err := geminiThinkingBudget()
+		if err != nil {
+			return bo.Provider{}, err
+		}
 		return bo.NewGeminiProvider(bo.GeminiConfig{
-			APIKey: key, Endpoint: os.Getenv("GEMINI_API_URL"), Model: os.Getenv("GEMINI_MODEL"),
+			APIKey: key, Endpoint: os.Getenv("GEMINI_API_URL"), Model: os.Getenv("GEMINI_MODEL"), ThinkingBudget: thinkingBudget,
 		}), nil
 	default:
 		return bo.Provider{}, errors.New(usage)
 	}
+}
+
+func geminiThinkingBudget() (*int, error) {
+	value := os.Getenv("GEMINI_THINKING_BUDGET")
+	if value == "" {
+		return nil, nil
+	}
+	budget, err := strconv.Atoi(value)
+	if err != nil || budget < -1 {
+		return nil, errors.New("GEMINI_THINKING_BUDGET must be -1 or a non-negative integer")
+	}
+	return &budget, nil
 }
 
 func readCorpus(path string) ([]string, error) {
