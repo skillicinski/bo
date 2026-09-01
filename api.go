@@ -380,6 +380,7 @@ type TokenUsage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+	ThoughtsTokens   int `json:"thoughts_tokens,omitempty"`
 }
 
 type OperationMetrics struct {
@@ -539,19 +540,23 @@ func NewDeepSeekProvider(config DeepSeekConfig) Provider {
 // Endpoint is an injectable API base URL; an empty value selects the provider
 // default. Vertex AI also requires ProjectID and Location.
 type GeminiConfig struct {
-	APIKey     string
-	ProjectID  string
-	Location   string
-	Endpoint   string
-	Model      string
-	HTTPClient *http.Client
+	APIKey    string
+	ProjectID string
+	Location  string
+	Endpoint  string
+	Model     string
+	// ThinkingBudget sets Gemini thinking tokens. Nil uses the provider default,
+	// 0 disables thinking, and -1 enables dynamic thinking.
+	ThinkingBudget *int
+	HTTPClient     *http.Client
 }
 
 // NewGeminiProvider returns a Gemini Developer API provider authenticated with
 // an API key.
 func NewGeminiProvider(config GeminiConfig) Provider {
 	client := gemini.New(gemini.Config{
-		APIKey: config.APIKey, Endpoint: config.Endpoint, Model: config.Model, HTTPClient: config.HTTPClient,
+		APIKey: config.APIKey, Endpoint: config.Endpoint, Model: config.Model,
+		ThinkingBudget: config.ThinkingBudget, HTTPClient: config.HTTPClient,
 	})
 	return Provider{completion: client}
 }
@@ -561,7 +566,7 @@ func NewGeminiProvider(config GeminiConfig) Provider {
 func NewVertexGeminiProvider(ctx context.Context, config GeminiConfig) (Provider, error) {
 	client, err := gemini.NewVertex(ctx, gemini.Config{
 		ProjectID: config.ProjectID, Location: config.Location, Endpoint: config.Endpoint,
-		Model: config.Model, HTTPClient: config.HTTPClient,
+		Model: config.Model, ThinkingBudget: config.ThinkingBudget, HTTPClient: config.HTTPClient,
 	})
 	if err != nil {
 		return Provider{}, publicError(err)
@@ -574,6 +579,35 @@ type Metrics struct {
 	ToolCalls int           `json:"tool_calls"`
 	Usage     *TokenUsage   `json:"usage,omitempty"`
 	Duration  time.Duration `json:"duration"`
+}
+
+// ToolCallTelemetry records bounded metadata for one provider-requested tool call.
+// ArgumentsPreview is populated only for read and terminal tools.
+type ToolCallTelemetry struct {
+	Turn                int    `json:"turn"`
+	Index               int    `json:"index"`
+	ID                  string `json:"id,omitempty"`
+	Name                string `json:"name"`
+	ArgumentsBytes      int    `json:"arguments_bytes"`
+	ArgumentsSHA256     string `json:"arguments_sha256"`
+	ArgumentsPreview    string `json:"arguments_preview,omitempty"`
+	OutputBytes         int    `json:"output_bytes"`
+	OutputReturnedBytes int    `json:"output_returned_bytes"`
+	OutputSHA256        string `json:"output_sha256"`
+	OutputTruncated     bool   `json:"output_truncated,omitempty"`
+	Error               string `json:"error,omitempty"`
+}
+
+// WorkflowTelemetry records one synthesis runtime and its terminal state.
+type WorkflowTelemetry struct {
+	Workflow             string              `json:"workflow"`
+	SourceKey            string              `json:"source_key,omitempty"`
+	TerminalReason       string              `json:"terminal_reason,omitempty"`
+	TerminalDetail       string              `json:"terminal_detail,omitempty"`
+	ProviderRetries      int                 `json:"provider_retries,omitempty"`
+	ProviderRetryReasons []string            `json:"provider_retry_reasons,omitempty"`
+	Usage                *TokenUsage         `json:"usage,omitempty"`
+	ToolCalls            []ToolCallTelemetry `json:"tool_calls,omitempty"`
 }
 
 type SynthRequest struct {
@@ -590,12 +624,13 @@ type OperationReport struct {
 }
 
 type SynthResult struct {
-	SummariesWritten    int               `json:"summaries_written"`
-	SummariesSkipped    int               `json:"summaries_skipped"`
-	DistillationWritten int               `json:"distillation_written"`
-	DistillationSkipped int               `json:"distillation_skipped"`
-	Report              []OperationReport `json:"report,omitempty"`
-	Metrics             Metrics           `json:"metrics"`
+	SummariesWritten    int                 `json:"summaries_written"`
+	SummariesSkipped    int                 `json:"summaries_skipped"`
+	DistillationWritten int                 `json:"distillation_written"`
+	DistillationSkipped int                 `json:"distillation_skipped"`
+	Report              []OperationReport   `json:"report,omitempty"`
+	Metrics             Metrics             `json:"metrics"`
+	Telemetry           []WorkflowTelemetry `json:"telemetry,omitempty"`
 }
 
 type LocalManager struct {
@@ -1093,7 +1128,7 @@ func internalOperation(operation Operation) internaldomain.Operation {
 			DistillationWritten: operation.Metrics.DistillationWritten, DistillationSkipped: operation.Metrics.DistillationSkipped,
 		}
 		if operation.Metrics.Usage != nil {
-			result.Metrics.Usage = &internaldomain.TokenUsage{PromptTokens: operation.Metrics.Usage.PromptTokens, CompletionTokens: operation.Metrics.Usage.CompletionTokens, TotalTokens: operation.Metrics.Usage.TotalTokens}
+			result.Metrics.Usage = &internaldomain.TokenUsage{PromptTokens: operation.Metrics.Usage.PromptTokens, CompletionTokens: operation.Metrics.Usage.CompletionTokens, TotalTokens: operation.Metrics.Usage.TotalTokens, ThoughtsTokens: operation.Metrics.Usage.ThoughtsTokens}
 		}
 	}
 	return result
@@ -1127,7 +1162,7 @@ func publicOperation(operation internaldomain.Operation) Operation {
 			DistillationWritten: operation.Metrics.DistillationWritten, DistillationSkipped: operation.Metrics.DistillationSkipped,
 		}
 		if operation.Metrics.Usage != nil {
-			result.Metrics.Usage = &TokenUsage{PromptTokens: operation.Metrics.Usage.PromptTokens, CompletionTokens: operation.Metrics.Usage.CompletionTokens, TotalTokens: operation.Metrics.Usage.TotalTokens}
+			result.Metrics.Usage = &TokenUsage{PromptTokens: operation.Metrics.Usage.PromptTokens, CompletionTokens: operation.Metrics.Usage.CompletionTokens, TotalTokens: operation.Metrics.Usage.TotalTokens, ThoughtsTokens: operation.Metrics.Usage.ThoughtsTokens}
 		}
 	}
 	return result
@@ -1153,13 +1188,45 @@ func publicSynthResult(result app.SynthResult) SynthResult {
 	converted := SynthResult{
 		SummariesWritten: result.SummariesWritten, SummariesSkipped: result.SummariesSkipped,
 		DistillationWritten: result.DistillationWritten, DistillationSkipped: result.DistillationSkipped,
-		Report:  publicOperationReport(result.Committed),
-		Metrics: Metrics{Turns: result.Metrics.Turns, ToolCalls: result.Metrics.ToolCalls, Duration: result.Metrics.Duration},
+		Report:    publicOperationReport(result.Committed),
+		Metrics:   Metrics{Turns: result.Metrics.Turns, ToolCalls: result.Metrics.ToolCalls, Duration: result.Metrics.Duration},
+		Telemetry: publicWorkflowTelemetry(result.Telemetry),
 	}
 	if result.Metrics.Usage != nil {
-		converted.Metrics.Usage = &TokenUsage{PromptTokens: result.Metrics.Usage.PromptTokens, CompletionTokens: result.Metrics.Usage.CompletionTokens, TotalTokens: result.Metrics.Usage.TotalTokens}
+		converted.Metrics.Usage = &TokenUsage{PromptTokens: result.Metrics.Usage.PromptTokens, CompletionTokens: result.Metrics.Usage.CompletionTokens, TotalTokens: result.Metrics.Usage.TotalTokens, ThoughtsTokens: result.Metrics.Usage.ThoughtsTokens}
 	}
 	return converted
+}
+
+func publicWorkflowTelemetry(telemetry []app.StageTelemetry) []WorkflowTelemetry {
+	if len(telemetry) == 0 {
+		return nil
+	}
+	result := make([]WorkflowTelemetry, len(telemetry))
+	for index, stage := range telemetry {
+		result[index] = WorkflowTelemetry{
+			Workflow: stage.Workflow, SourceKey: stage.SourceKey,
+			TerminalReason: stage.TerminalReason, TerminalDetail: stage.TerminalDetail,
+			ProviderRetries: stage.ProviderRetries, ProviderRetryReasons: stage.ProviderRetryReasons,
+		}
+		if stage.Usage != nil {
+			result[index].Usage = &TokenUsage{PromptTokens: stage.Usage.PromptTokens, CompletionTokens: stage.Usage.CompletionTokens, TotalTokens: stage.Usage.TotalTokens, ThoughtsTokens: stage.Usage.ThoughtsTokens}
+		}
+		if len(stage.ToolCalls) == 0 {
+			continue
+		}
+		result[index].ToolCalls = make([]ToolCallTelemetry, len(stage.ToolCalls))
+		for callIndex, call := range stage.ToolCalls {
+			result[index].ToolCalls[callIndex] = ToolCallTelemetry{
+				Turn: call.Turn, Index: call.Index, ID: call.ID, Name: call.Name,
+				ArgumentsBytes: call.ArgumentsBytes, ArgumentsSHA256: call.ArgumentsSHA256,
+				ArgumentsPreview: call.ArgumentsPreview, OutputBytes: call.OutputBytes,
+				OutputReturnedBytes: call.OutputReturnedBytes, OutputSHA256: call.OutputSHA256,
+				OutputTruncated: call.OutputTruncated, Error: call.Error,
+			}
+		}
+	}
+	return result
 }
 
 func publicOperationReport(operations []app.Operation) []OperationReport {

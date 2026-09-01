@@ -35,6 +35,7 @@ func Synth(ctx context.Context, workspace Workspace, provider agent.CompletionPr
 			result.Metrics.Usage.PromptTokens += metrics.Usage.PromptTokens
 			result.Metrics.Usage.CompletionTokens += metrics.Usage.CompletionTokens
 			result.Metrics.Usage.TotalTokens += metrics.Usage.TotalTokens
+			result.Metrics.Usage.ThoughtsTokens += metrics.Usage.ThoughtsTokens
 			usageReceived = true
 		}
 	}
@@ -46,6 +47,8 @@ func Synth(ctx context.Context, workspace Workspace, provider agent.CompletionPr
 		result.DistillationSkipped += boolCount(distill.Skipped && written == 0)
 		result.Committed = append(result.Committed, summaries.Committed...)
 		result.Committed = append(result.Committed, distill.Committed...)
+		result.Telemetry = append(result.Telemetry, summaries.Telemetry...)
+		result.Telemetry = append(result.Telemetry, distill.Telemetry...)
 		mergeMetrics(summaries.Metrics)
 		mergeMetrics(distill.Metrics)
 	}
@@ -79,7 +82,7 @@ func Synth(ctx context.Context, workspace Workspace, provider agent.CompletionPr
 	}
 	if result.Metrics.Usage != nil {
 		operation.Metrics.Usage = &domain.TokenUsage{
-			PromptTokens: result.Metrics.Usage.PromptTokens, CompletionTokens: result.Metrics.Usage.CompletionTokens, TotalTokens: result.Metrics.Usage.TotalTokens,
+			PromptTokens: result.Metrics.Usage.PromptTokens, CompletionTokens: result.Metrics.Usage.CompletionTokens, TotalTokens: result.Metrics.Usage.TotalTokens, ThoughtsTokens: result.Metrics.Usage.ThoughtsTokens,
 		}
 	}
 	if returnErr == nil {
