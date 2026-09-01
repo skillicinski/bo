@@ -10,13 +10,23 @@ tmp/
 /evals/*
 !/evals/RUBRIC.md
 !/evals/DISTILL_RUBRIC.md
+!/evals/README.md
+!/evals/harness
+!/evals/harness.py
+!/evals/pyproject.toml
+!/evals/uv.lock
 !/evals/run.sh
 !/evals/test_run.sh
 !/evals/evaluate.py
 !/evals/test_evaluate.py
+!/evals/test_harness.py
+!/evals/fixtures/
+!/evals/fixtures/README.md
 !/evals/cmd/
 !/evals/cmd/bo-eval/
 !/evals/cmd/bo-eval/*.go
+/evals/fixtures/*
+!/evals/fixtures/README.md
 
 # os
 .DS_Store
