@@ -1,0 +1,53 @@
+{
+  "cli_version": "0.10.3",
+  "checkpoint_id": "01M1FBGH69RRM3K2EJ19T7WK3C",
+  "strategy": "manual-commit",
+  "branch": "fix/harden-evals",
+  "checkpoints_count": 16,
+  "files_touched": [
+    ".gitignore",
+    "AGENTS.md",
+    "api.go",
+    "api_telemetry_test.go",
+    "cmd/bo/main.go",
+    "docs/architecture.md",
+    "evals/DISTILL_RUBRIC.md",
+    "evals/README.md",
+    "evals/RUBRIC.md",
+    "evals/cmd/bo-eval/main.go",
+    "evals/cmd/bo-eval/main_test.go",
+    "evals/evaluate.py",
+    "evals/fixtures/README.md",
+    "evals/harness.py",
+    "evals/rubrics/DISTILLATION.md",
+    "evals/rubrics/SUMMARY.md",
+    "evals/test_harness.py",
+    "internal/agent/agent.go",
+    "internal/agent/agent_test.go",
+    "internal/application/config.go",
+    "internal/application/distill.go",
+    "internal/application/distill_test.go",
+    "internal/application/distill_tools.go",
+    "internal/application/summarize.go",
+    "internal/application/synth.go",
+    "internal/domain/operation.go",
+    "internal/provider/gemini/gemini.go",
+    "internal/provider/gemini/gemini_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2885514,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 134659584,
+    "output_tokens": 569569,
+    "api_call_count": 1028
+  }
+}

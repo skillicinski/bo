@@ -1,0 +1,154 @@
+good morning! i'd like you to run the evals runner and evaluator a few times, review the results and see if the evals "system" could use some improvements for stability/robustness, please? it's due for an audit now that v0.2.x releases are happening and i want to make sure we can confidently grow the existing default corpus, add new corpora and get a truthful representation of the core bo workflow in order to catch real regressions (not simple bugs or failures caused by badly optimized context caps or ineffective API calls).
+
+the evals system should really be more like an evals harness that runs the package primitives as they are through the public API, right?
+
+---
+
+ah, no i'm pretty sure that secret does exist in the keychain!
+
+---
+
+you could also try one more run that uses `gemini-api-key` and the Gemini provider. i assume that should work fine without any real changes to the evals harness, but if it does skip it and factor that in to whatever laundry list of improvements we need to do to the evals harness at large :)
+
+---
+
+the gemini api should have OpenAI compatibility: https://ai.google.dev/gemini-api/docs/openai
+
+but that might differ from how we wired in deepseek into the evals harness..
+
+---
+
+generateContent is active but legacy: https://ai.google.dev/gemini-api/docs/interactions-overview
+
+---
+
+https://ai.google.dev/gemini-api/docs/text-generation
+
+---
+
+let's revamp this into an actual eval harness that can be called in with it's own tiny cli that is a clearly defined contract and optimized for speed of iteration.
+
+- I agree, we shouldn't be having this many issues with a simple evaluation run. We can't trust that our actual agent runtime works properly if it's not working, we need to test it with a method that simulates real client consumer usage!
+- Yes, good call. Let's simply remove that item from the corpus if we don't plan on fixing that 500 (it's not a priority right now)
+- Fair enough. You could build a fixtures/ directory and use snap to capture the items in the default corpus into it. Then, perhaps the harness can target that as an already seeded workspace instead of the default corpus?
+- Understood. We don't really have a baseline yet, but I would be worried if any individual score goes below 4 and any aggregate mean is below 4.6
+- Ok, fine, I'll file a separate issue for migrating the Gemini provider to Interactions API, it's out of scope.
+
+We don't have to reinvent the wheel here, it feels like not that mucn innovation/research has been done in the field of agent evals in the last year or so. this article still feels pretty up to date: https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents
+
+dumping the nice charts that are included in it:
+- [Image #1] 
+- [Image #2] 
+- [Image #3] 
+- [Image #4] 
+- [Image #5] 
+
+I think we are early but mostly on track with the "roadmap" image. we are sort of skipping step 3 because we haven't covered negative cases and I am now pushing for step 4., sort of.
+
+I think that's fine, and we don't have to take it all the way to fulfilling the entire roadmap from the article. we can file what we leave on the table as one or more follow up issues once we're happy with what we have accomplished in this session, which i maintain should probably be a properly constrcuted evals harness (+ scaffold if needed) that can run fairly quickly both with you (codex) as the runtime OR by passing API keys into the harness execution (at least i interpreted the article as Claude Code being part of the infrastructure of running evals, powering the harness, but maybe i read that wrong)
+
+what do you think?
+
+---
+
+you can really go nuts and start over if you feel that is easiest
+
+---
+
+that is to say, start over on the entire evals implementation. just back up the corpus somewhere before nuking antyhing :)
+
+---
+
+oh and you can write it in any language if that makes it easier. python is what i'm most familiar and maybe has more depth in what can be done using existing libraries and such, but don't let me disturb you if you are already thinking in Go
+
+---
+
+nice
+
+---
+
+oh, and just to add, i think that creating a uv workspace in the evals/ dir for use in running the evals harness would be awesome. would love to not have a bunch of pip dependecies and packages installed globally on my machine :)
+
+---
+
+alright. commit the work on a new fix/harden-evals branch. clean up any backups/test artifacts that we don't need anymore
+
+---
+
+i committed the pre-existing unstaged files, they were from the entire.io project setup and enabling codex session tracking through hooks.
+
+great work so far! i'd like you to manually investigate in what ways the latest gemini evals run fell short and propose some testable theories as to why the coverage mean dropped below the accepted threshold. don't start any processes that will incur more gemini api spend for now.
+
+---
+
+okay, before we test any of this, let's do some minor house-keeping:
+- i believe we can remove evals/corpora now? duplicate of evals/fixtures/default/ right?
+- the evals/RUBRIC.md should be renamed to SUMMARY_RUBRIC.md - alternatively move it and DISTILL_RUBRIC.md into a rubrics/ dir and name them SUMMARY.md and DISTILLATION.md respectively while preserving eval harness functionality
+- we might want to confirm if eval harness runs produce reports (including with failures) locally in a gitignored directory somewhere before we start any new runs (so that run outcomes are preserved for analysis)
+- there's a bin/ directory in root, is that something we created while messing around? is it a result of using `mise build`? should it be left untouched
+
+---
+
+okay. run one execution of the evals harness using gemini now, end to end, to produce one full evaluation report, please.
+
+---
+
+then inspect the results manually when it's finished.
+
+---
+
+okay, let's start by making a targeted update to add evaluation telemetry that catches what happens end to end! tool use, read calls, terminal reasons sound good.
+
+i guess that could be best to do first before injecting skip_distill requirements (i feel like those kinds of guardrails should already be enforced by the workflow for Synth that the public api exposes?)
+
+---
+
+alright, let's try another run now and a) see if it fails the same way with gemini and b) try to deduce what caused the failure if we see it again,.
+
+---
+
+okay, let's do two things:
+- look at the default corpus fixture raw and summary results, for example /Users/simon/projects/bo/evals/results/end-to-end-20260901T184342Z-67692/trials/trial-001/home/.bo/eval and ground two real distillations (if possible) from them
+- write them both as the curated distillation fixtures for two explicitly expected topics each derived from at least two sources
+- good find on the design issues, look into whether this needs to fixed in both the synth and distill application layer workflows in the package
+  - the agent runtime should have been guarded from skipping distillation if there are not distill documents present, and at least skim over the summaries to get a sense of the potential destillation topics and find its way to at least a pair of sources if a topic is identified
+  - essentially, the agent should look around for possibilities to distill if there are a bunch of summarised sources and no destillation, but i'm unsure of whether we found a way to guide the internal agent to do so. it's possible that gemini also just performs worse at this than deepseek, but i can't be sure
+
+
+i'm not sure how best to attack the problem without digging around in the guts of the source code :) but i trust your judgment to at least chart a course of action on this
+
+---
+
+all right, have another go at the gemini evaluation harness run
+
+---
+
+that's weird... is the token cap for reading a source too low? that hasn't happened for the Mario Zechner source before, track down the root cause plaese
+
+---
+
+okay, let's try what you suggested!
+
+---
+
+okay, what's the root cause of this new failure then? so weird!
+
+---
+
+alright, and what would be the consequences of that? letting gemini mess up a tool call but not terminate the loop and let it try again?
+
+---
+
+alright, is that a provider-specific adjustment to the gemini provider port?
+
+---
+
+agreed, proceed.
+
+---
+
+okay, let's try one more run of the evals harness with the gemini provider
+
+---
+
+give me a breakdown on what the failure was on the expected-topic contract.

@@ -1,0 +1,203 @@
+{
+  "cli_version": "0.10.3",
+  "checkpoint_id": "01M1FBGH69RRM3K2EJ19T7WK3C",
+  "session_id": "01a05c68-10c1-71a0-bd68-0f6d1c384965",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-01T20:45:36.458238Z",
+  "branch": "fix/harden-evals",
+  "checkpoints_count": 16,
+  "save_step_count": 15,
+  "files_touched": [
+    ".gitignore",
+    "AGENTS.md",
+    "api.go",
+    "api_telemetry_test.go",
+    "cmd/bo/main.go",
+    "docs/architecture.md",
+    "evals/DISTILL_RUBRIC.md",
+    "evals/README.md",
+    "evals/RUBRIC.md",
+    "evals/cmd/bo-eval/main.go",
+    "evals/cmd/bo-eval/main_test.go",
+    "evals/evaluate.py",
+    "evals/fixtures/README.md",
+    "evals/harness.py",
+    "evals/rubrics/DISTILLATION.md",
+    "evals/rubrics/SUMMARY.md",
+    "evals/test_harness.py",
+    "internal/agent/agent.go",
+    "internal/agent/agent_test.go",
+    "internal/application/config.go",
+    "internal/application/distill.go",
+    "internal/application/distill_test.go",
+    "internal/application/distill_tools.go",
+    "internal/application/summarize.go",
+    "internal/application/synth.go",
+    "internal/domain/operation.go",
+    "internal/provider/gemini/gemini.go",
+    "internal/provider/gemini/gemini_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-luna",
+  "turn_id": "fecffcd3613d",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 2885514,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 134659584,
+    "output_tokens": 569569,
+    "api_call_count": 1028
+  },
+  "session_metrics": {
+    "turn_count": 19
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-01T20:45:35.331991Z",
+    "agent_lines": 807,
+    "agent_removed": 167,
+    "human_added": 44,
+    "human_modified": 4,
+    "human_removed": 0,
+    "total_committed": 854,
+    "total_lines_changed": 1022,
+    "agent_percentage": 95.30332681017613,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 30,
+      "agent_lines_removed": 22
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 30,
+      "agent_lines_removed": 22
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 304,
+      "agent_lines_removed": 56
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 304,
+      "agent_lines_removed": 56
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 569,
+      "agent_lines_removed": 106
+    },
+    {
+      "checkpoint_number": 8,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 569,
+      "agent_lines_removed": 106
+    },
+    {
+      "checkpoint_number": 9,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 569,
+      "agent_lines_removed": 106
+    },
+    {
+      "checkpoint_number": 10,
+      "user_lines_added": 5,
+      "user_lines_removed": 0,
+      "agent_lines_added": 716,
+      "agent_lines_removed": 152,
+      "user_added_per_file": {
+        "api_telemetry_test.go": 5
+      }
+    },
+    {
+      "checkpoint_number": 11,
+      "user_lines_added": 5,
+      "user_lines_removed": 0,
+      "agent_lines_added": 716,
+      "agent_lines_removed": 152,
+      "user_added_per_file": {
+        "api_telemetry_test.go": 5
+      }
+    },
+    {
+      "checkpoint_number": 12,
+      "user_lines_added": 5,
+      "user_lines_removed": 0,
+      "agent_lines_added": 716,
+      "agent_lines_removed": 152,
+      "user_added_per_file": {
+        "api_telemetry_test.go": 5
+      }
+    },
+    {
+      "checkpoint_number": 13,
+      "user_lines_added": 5,
+      "user_lines_removed": 0,
+      "agent_lines_added": 716,
+      "agent_lines_removed": 152,
+      "user_added_per_file": {
+        "api_telemetry_test.go": 5
+      }
+    },
+    {
+      "checkpoint_number": 14,
+      "user_lines_added": 7,
+      "user_lines_removed": 1,
+      "agent_lines_added": 851,
+      "agent_lines_removed": 170,
+      "user_added_per_file": {
+        "api_telemetry_test.go": 7
+      },
+      "user_removed_per_file": {
+        "api_telemetry_test.go": 1
+      }
+    },
+    {
+      "checkpoint_number": 15,
+      "user_lines_added": 7,
+      "user_lines_removed": 1,
+      "agent_lines_added": 851,
+      "agent_lines_removed": 170,
+      "user_added_per_file": {
+        "api_telemetry_test.go": 7
+      },
+      "user_removed_per_file": {
+        "api_telemetry_test.go": 1
+      }
+    },
+    {
+      "checkpoint_number": 16,
+      "user_lines_added": 7,
+      "user_lines_removed": 1,
+      "agent_lines_added": 851,
+      "agent_lines_removed": 170,
+      "user_added_per_file": {
+        "api_telemetry_test.go": 7
+      },
+      "user_removed_per_file": {
+        "api_telemetry_test.go": 1
+      }
+    }
+  ]
+}
