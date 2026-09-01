@@ -1,0 +1,132 @@
+{
+  "cli_version": "0.10.3",
+  "checkpoint_id": "01M1ESN7024S5JRN5JKK17APXZ",
+  "session_id": "01a05c68-10c1-71a0-bd68-0f6d1c384965",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-01T15:33:33.967743Z",
+  "branch": "fix/harden-evals",
+  "checkpoints_count": 3,
+  "save_step_count": 3,
+  "files_touched": [
+    ".gitignore",
+    "docs/architecture.md",
+    "evals/README.md",
+    "evals/cmd/bo-eval/main.go",
+    "evals/cmd/bo-eval/main_test.go",
+    "evals/evaluate.py",
+    "evals/fixtures/README.md",
+    "evals/harness",
+    "evals/harness.py",
+    "evals/pyproject.toml",
+    "evals/run.sh",
+    "evals/test_evaluate.py",
+    "evals/test_harness.py",
+    "evals/test_run.sh",
+    "evals/uv.lock",
+    "mise.toml"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-luna",
+  "turn_id": "b9b68a07316c",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1321586,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 81586176,
+    "output_tokens": 314435,
+    "api_call_count": 607
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-01T15:33:33.48541Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 1647,
+    "human_removed": 872,
+    "total_committed": 332,
+    "total_lines_changed": 2519,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 400,
+      "user_lines_removed": 34,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".codex/hooks.json": 88,
+        "docs/architecture.md": 3,
+        "evals/cmd/bo-eval/main.go": 122,
+        "evals/cmd/bo-eval/main_test.go": 6,
+        "evals/evaluate.py": 36,
+        "evals/run.sh": 108,
+        "evals/test_evaluate.py": 32,
+        "evals/test_run.sh": 5
+      },
+      "user_removed_per_file": {
+        "docs/architecture.md": 2,
+        "evals/cmd/bo-eval/main.go": 15,
+        "evals/cmd/bo-eval/main_test.go": 3,
+        "evals/evaluate.py": 5,
+        "evals/run.sh": 9
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 2122,
+      "user_lines_removed": 2485,
+      "agent_lines_added": 321,
+      "agent_lines_removed": 38,
+      "user_added_per_file": {
+        ".codex/hooks.json": 88,
+        ".gitignore": 7,
+        "docs/architecture.md": 35,
+        "evals-corpus-backup-20260901/default.txt": 19,
+        "evals-corpus-backup-20260901/demystifying-evals-for-ai-agents-anthropic.md": 368,
+        "evals/cmd/bo-eval/main.go": 241,
+        "evals/cmd/bo-eval/main_test.go": 30,
+        "evals/evaluate.py": 457,
+        "evals/fixtures/README.md": 33,
+        "evals/harness": 5,
+        "evals/harness.py": 675,
+        "evals/run.sh": 2,
+        "evals/test_evaluate.py": 59,
+        "evals/test_harness.py": 98,
+        "evals/test_run.sh": 2,
+        "mise.toml": 3
+      },
+      "user_removed_per_file": {
+        "docs/architecture.md": 6,
+        "evals/cmd/bo-eval/main.go": 123,
+        "evals/cmd/bo-eval/main_test.go": 16,
+        "evals/evaluate.py": 960,
+        "evals/run.sh": 612,
+        "evals/test_evaluate.py": 567,
+        "evals/test_run.sh": 199,
+        "mise.toml": 2
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 88,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2678,
+      "agent_lines_removed": 2228,
+      "user_added_per_file": {
+        ".codex/hooks.json": 88
+      }
+    }
+  ]
+}
