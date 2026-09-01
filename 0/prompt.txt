@@ -1,0 +1,37 @@
+/goal checkout to a new branch and run an experiment. do not commit any code. do not release any new
+  package versions. do build and test the binary locally when needed during development
+
+  the objective is to build a completely separate experimental python sidecar that uses scikit-llm and
+  transformers libraries together with an appropriate text summarization model from huggingface, eg.
+  distilbart-cnn-12-6. the idea is that this experimental sidecar can be used to route evals runner into
+  for summary document generation specifically. it is not expected to handle distillation document
+  generation.
+
+  do not modify the existing agent runtime or any production Go modules unless absolutely necessary. it is
+  allowed to borrow bits and pieces from them when necessary (eg. system prompts, tool definitions, etc.)
+  in order to not "reinvent the wheel".
+
+  the objective is complete when the evals runner has successfully completed the default evals corpus
+  using the python text summarization sidecar.
+
+---
+
+nice work, inspect the reports and evaluation aggregates manually. let me know how much worse the outomces were than other recent deepseek-backed runs
+
+---
+
+interesting work! i guess the advantage is cost being near-0 but it causes some noticeable Distill degradation, even though the Distill can reach into raw documents, i assume the worse summary quality impacts how accurately the Distill identifies what raw document to distill or which parts to include? could be worth reasoning a bit about before we move on. while you do that i will look into alternative huggingface models
+
+---
+
+okay, is it possible to run the sidecar + runner without any distill phase being executed at all?
+
+---
+
+aight, nice. let's do that for now to cut down on runner time.
+
+does this model work with `transformers` as well: https://huggingface.co/M37labsorg/Saransh-1.7B
+
+---
+
+okay, rename this branch with a "-distilbart" suffix. then, we can checkout to a new branch with "-saransh" as the suffix using this distilbart branch as the base, then retool around the Saransh model. what do you think?
