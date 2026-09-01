@@ -68,3 +68,7 @@ nice
 ---
 
 oh, and just to add, i think that creating a uv workspace in the evals/ dir for use in running the evals harness would be awesome. would love to not have a bunch of pip dependecies and packages installed globally on my machine :)
+
+---
+
+alright. commit the work on a new fix/harden-evals branch. clean up any backups/test artifacts that we don't need anymore
