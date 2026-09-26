@@ -13,14 +13,6 @@ import (
 	internalerrors "github.com/skillicinski/bo/internal/errors"
 )
 
-type DistillRequest struct {
-	Workspace  Workspace
-	Provider   agent.CompletionProvider
-	Options    SynthesisOptions
-	ToolNames  []string
-	Operations OperationOptions
-}
-
 type DistillResult struct {
 	Filename  string           `json:"filename,omitempty"`
 	Skipped   bool             `json:"skipped"`

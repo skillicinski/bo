@@ -424,7 +424,7 @@ func TestCommittedTransactionRecoversWorkspaceEvent(t *testing.T) {
 	}
 	defer recovered.Close()
 	page, err := recovered.ReadEvents(context.Background(), 0, 20)
-	if err != nil || len(page.Entries) != 1 || page.Entries[0].OperationID != commit.Event.OperationID {
+	if err != nil || len(page.Entries) != 2 || page.Entries[1].OperationID != commit.Event.OperationID {
 		t.Fatalf("recovered events = %#v, err = %v", page, err)
 	}
 }

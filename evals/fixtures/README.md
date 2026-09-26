@@ -3,8 +3,7 @@
 Fixtures are seeded workspaces for fast, repeatable trials. They contain no
 network fetches during a run.
 
-The harness owns the `uv` project in `evals/pyproject.toml`; `uv run` creates
-the local environment and keeps Python packages out of the global interpreter.
+The harness uses Python 3.11 or later and needs no Python packages.
 
 Create or refresh one from a corpus with:
 

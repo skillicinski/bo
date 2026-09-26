@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 
 	"github.com/skillicinski/bo/internal/domain"
@@ -29,6 +30,21 @@ func RevisionFromString(value string) (Revision, error) {
 func (r Revision) Equal(other Revision) bool { return r == other }
 func (r Revision) IsZero() bool              { return r == Revision{} }
 func (r Revision) String() string            { return hex.EncodeToString(r.digest[:]) }
+
+func (r Revision) MarshalJSON() ([]byte, error) { return json.Marshal(r.String()) }
+
+func (r *Revision) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	decoded, err := RevisionFromString(value)
+	if err != nil {
+		return fmt.Errorf("invalid revision")
+	}
+	*r = decoded
+	return nil
+}
 
 type SnapshotCommit = domain.SnapshotCommit
 type SummaryCommit = domain.SummaryCommit

@@ -2,9 +2,6 @@ package bo
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	stderrors "errors"
 	"fmt"
 	"net/http"
@@ -111,28 +108,9 @@ func DistillationRef(name string) DocumentRef {
 	return DocumentRef{Kind: DocumentKindDistillation, Name: name}
 }
 
-type Revision struct{ digest [sha256.Size]byte }
+type Revision = app.Revision
 
-func NewRevision(data []byte) Revision { return Revision{digest: sha256.Sum256(data)} }
-
-func (r Revision) Equal(other Revision) bool { return r == other }
-func (r Revision) IsZero() bool              { return r == Revision{} }
-func (r Revision) String() string            { return hex.EncodeToString(r.digest[:]) }
-
-func (r Revision) MarshalJSON() ([]byte, error) { return json.Marshal(r.String()) }
-
-func (r *Revision) UnmarshalJSON(data []byte) error {
-	var value string
-	if err := json.Unmarshal(data, &value); err != nil {
-		return err
-	}
-	decoded, err := hex.DecodeString(value)
-	if err != nil || len(decoded) != sha256.Size {
-		return fmt.Errorf("invalid revision")
-	}
-	copy(r.digest[:], decoded)
-	return nil
-}
+func NewRevision(data []byte) Revision { return app.NewRevision(data) }
 
 type RawRecord struct {
 	Filename  string    `json:"filename"`
@@ -732,7 +710,7 @@ func ReadState(ctx context.Context, request StateRequest) (StateResult, error) {
 	if err != nil {
 		return StateResult{}, publicError(err)
 	}
-	return StateResult{State: converted, Revision: publicRevision(revision)}, nil
+	return StateResult{State: converted, Revision: revision}, nil
 }
 
 func Synth(ctx context.Context, request SynthRequest) (SynthResult, error) {
@@ -776,7 +754,7 @@ func (w *localWorkspace) ReadState(ctx context.Context) (State, Revision, error)
 	if err != nil {
 		return State{}, Revision{}, publicError(err)
 	}
-	return converted, publicRevision(revision), nil
+	return converted, revision, nil
 }
 
 func (w *localWorkspace) ReadEvents(ctx context.Context, offset, limit int) (OperationPage, error) {
@@ -808,7 +786,7 @@ func (w *localWorkspace) CommitEvent(ctx context.Context, event Operation) error
 }
 
 func (w *localWorkspace) CommitSnapshot(ctx context.Context, commit SnapshotCommit, expected Revision) (State, Revision, error) {
-	state, revision, err := w.workspace.CommitSnapshot(ctx, internalSnapshotCommit(commit), internalRevision(expected))
+	state, revision, err := w.workspace.CommitSnapshot(ctx, internalSnapshotCommit(commit), expected)
 	if err != nil {
 		return State{}, Revision{}, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "committing snapshot"))
 	}
@@ -816,11 +794,11 @@ func (w *localWorkspace) CommitSnapshot(ctx context.Context, commit SnapshotComm
 	if err != nil {
 		return State{}, Revision{}, publicError(err)
 	}
-	return converted, publicRevision(revision), nil
+	return converted, revision, nil
 }
 
 func (w *localWorkspace) CommitSummary(ctx context.Context, commit SummaryCommit, expected Revision) (State, Revision, error) {
-	state, revision, err := w.workspace.CommitSummary(ctx, internalSummaryCommit(commit), internalRevision(expected))
+	state, revision, err := w.workspace.CommitSummary(ctx, internalSummaryCommit(commit), expected)
 	if err != nil {
 		return State{}, Revision{}, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "committing summary"))
 	}
@@ -828,11 +806,11 @@ func (w *localWorkspace) CommitSummary(ctx context.Context, commit SummaryCommit
 	if err != nil {
 		return State{}, Revision{}, publicError(err)
 	}
-	return converted, publicRevision(revision), nil
+	return converted, revision, nil
 }
 
 func (w *localWorkspace) CommitDistillation(ctx context.Context, commit DistillationCommit, expected Revision) (State, Revision, error) {
-	state, revision, err := w.workspace.CommitDistillation(ctx, internalDistillationCommit(commit), internalRevision(expected))
+	state, revision, err := w.workspace.CommitDistillation(ctx, internalDistillationCommit(commit), expected)
 	if err != nil {
 		return State{}, Revision{}, publicError(internalErrorAs(err, internalerrors.KindFilesystem, "committing distillation document"))
 	}
@@ -840,7 +818,7 @@ func (w *localWorkspace) CommitDistillation(ctx context.Context, commit Distilla
 	if err != nil {
 		return State{}, Revision{}, publicError(err)
 	}
-	return converted, publicRevision(revision), nil
+	return converted, revision, nil
 }
 
 func (w *localWorkspace) Close() error {
@@ -879,11 +857,7 @@ func (w *publicWorkspace) ReadState(ctx context.Context) (internaldomain.State, 
 	if err != nil {
 		return internaldomain.State{}, app.Revision{}, internalError(err)
 	}
-	internalRevision, err := app.RevisionFromString(revision.String())
-	if err != nil {
-		return internaldomain.State{}, app.Revision{}, internalError(err)
-	}
-	return converted, internalRevision, nil
+	return converted, revision, nil
 }
 
 func (w *publicWorkspace) ReadEvents(ctx context.Context, offset, limit int) (app.OperationPage, error) {
@@ -926,7 +900,7 @@ func (w *publicWorkspace) CommitEvent(ctx context.Context, event app.Operation) 
 }
 
 func (w *publicWorkspace) CommitSnapshot(ctx context.Context, commit app.SnapshotCommit, expected app.Revision) (internaldomain.State, app.Revision, error) {
-	state, revision, err := w.workspace.CommitSnapshot(ctx, publicSnapshotCommit(commit), publicRevision(expected))
+	state, revision, err := w.workspace.CommitSnapshot(ctx, publicSnapshotCommit(commit), expected)
 	if err != nil {
 		return internaldomain.State{}, app.Revision{}, internalErrorAs(err, internalerrors.KindFilesystem, "committing snapshot")
 	}
@@ -934,15 +908,11 @@ func (w *publicWorkspace) CommitSnapshot(ctx context.Context, commit app.Snapsho
 	if err != nil {
 		return internaldomain.State{}, app.Revision{}, internalError(err)
 	}
-	internalRevision, err := app.RevisionFromString(revision.String())
-	if err != nil {
-		return internaldomain.State{}, app.Revision{}, internalError(err)
-	}
-	return converted, internalRevision, nil
+	return converted, revision, nil
 }
 
 func (w *publicWorkspace) CommitSummary(ctx context.Context, commit app.SummaryCommit, expected app.Revision) (internaldomain.State, app.Revision, error) {
-	state, revision, err := w.workspace.CommitSummary(ctx, publicSummaryCommit(commit), publicRevision(expected))
+	state, revision, err := w.workspace.CommitSummary(ctx, publicSummaryCommit(commit), expected)
 	if err != nil {
 		return internaldomain.State{}, app.Revision{}, internalErrorAs(err, internalerrors.KindFilesystem, "committing summary")
 	}
@@ -950,15 +920,11 @@ func (w *publicWorkspace) CommitSummary(ctx context.Context, commit app.SummaryC
 	if err != nil {
 		return internaldomain.State{}, app.Revision{}, internalError(err)
 	}
-	internalRevision, err := app.RevisionFromString(revision.String())
-	if err != nil {
-		return internaldomain.State{}, app.Revision{}, internalError(err)
-	}
-	return converted, internalRevision, nil
+	return converted, revision, nil
 }
 
 func (w *publicWorkspace) CommitDistillation(ctx context.Context, commit app.DistillationCommit, expected app.Revision) (internaldomain.State, app.Revision, error) {
-	state, revision, err := w.workspace.CommitDistillation(ctx, publicDistillationCommit(commit), publicRevision(expected))
+	state, revision, err := w.workspace.CommitDistillation(ctx, publicDistillationCommit(commit), expected)
 	if err != nil {
 		return internaldomain.State{}, app.Revision{}, internalErrorAs(err, internalerrors.KindFilesystem, "committing distillation document")
 	}
@@ -966,27 +932,11 @@ func (w *publicWorkspace) CommitDistillation(ctx context.Context, commit app.Dis
 	if err != nil {
 		return internaldomain.State{}, app.Revision{}, internalError(err)
 	}
-	internalRevision, err := app.RevisionFromString(revision.String())
-	if err != nil {
-		return internaldomain.State{}, app.Revision{}, internalError(err)
-	}
-	return converted, internalRevision, nil
+	return converted, revision, nil
 }
 
 func internalOperationOptions(options OperationOptions) app.OperationOptions {
 	return app.OperationOptions{Actor: options.Actor}
-}
-
-func internalRevision(revision Revision) app.Revision {
-	result, _ := app.RevisionFromString(revision.String())
-	return result
-}
-
-func publicRevision(revision app.Revision) Revision {
-	data, _ := hex.DecodeString(revision.String())
-	var digest [sha256.Size]byte
-	copy(digest[:], data)
-	return Revision{digest: digest}
 }
 
 func internalDocumentRef(ref DocumentRef) internaldomain.DocumentRef {

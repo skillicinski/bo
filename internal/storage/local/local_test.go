@@ -94,6 +94,10 @@ func TestSeedFailureLeavesWorkspaceNameAvailable(t *testing.T) {
 
 func TestCommitEventRejectsOversizedLine(t *testing.T) {
 	store, target := seededStore(t)
+	before, err := os.ReadFile(filepath.Join(target, "log.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	event := domain.Operation{
 		OperationID: strings.Repeat("x", 1<<20), Attempt: 1, Timestamp: "1970-01-01T00:00:00Z", Actor: "test",
 		Command: domain.CommandState, Outcome: domain.OutcomeCommitted,
@@ -105,8 +109,8 @@ func TestCommitEventRejectsOversizedLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(data) != 0 {
-		t.Fatalf("oversized event changed ledger: %d bytes", len(data))
+	if string(data) != string(before) {
+		t.Fatal("oversized event changed ledger")
 	}
 }
 
