@@ -1,6 +1,0 @@
-#!/bin/sh
-set -eu
-
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-export UV_CACHE_DIR="$script_dir/../tmp/uv-cache"
-exec uv run --project "$script_dir" python "$script_dir/harness.py" run "$@"

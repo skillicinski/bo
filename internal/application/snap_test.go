@@ -109,10 +109,10 @@ func TestSnapRecordsCorrelatedFailedAndCommittedAttempts(t *testing.T) {
 		t.Fatalf("outcomes = %#v, err = %v", outcomes, err)
 	}
 	page, err := store.ReadEvents(context.Background(), 0, 20)
-	if err != nil || len(page.Entries) != 2 {
+	if err != nil || len(page.Entries) != 3 {
 		t.Fatalf("events = %#v, err = %v", page, err)
 	}
-	first, second := page.Entries[0], page.Entries[1]
+	first, second := page.Entries[1], page.Entries[2]
 	if first.OperationID == "" || first.OperationID != second.OperationID || first.Attempt != 1 || second.Attempt != 2 || first.Outcome != domain.OutcomeFailed || second.Outcome != domain.OutcomeCommitted || first.Error == nil || first.Error.Retryable {
 		t.Fatalf("attempt events = %#v", page.Entries)
 	}
@@ -240,7 +240,7 @@ func TestSnapStopsOnContextFailureWithoutUnstartedEvents(t *testing.T) {
 				t.Fatalf("calls = %#v, err = %v", source.calls, err)
 			}
 			page, pageErr := store.ReadEvents(context.Background(), 0, 20)
-			if pageErr != nil || len(page.Entries) != 2 || page.Entries[1].Error == nil || page.Entries[1].Error.Kind != string(test.kind) {
+			if pageErr != nil || len(page.Entries) != 3 || page.Entries[2].Error == nil || page.Entries[2].Error.Kind != string(test.kind) {
 				t.Fatalf("events = %#v, err = %v", page, pageErr)
 			}
 		})
@@ -264,11 +264,11 @@ func TestSnapBoundsFilenameCollisions(t *testing.T) {
 		t.Fatalf("collision attempts = %d", workspace.attempts)
 	}
 	page, pageErr := store.ReadEvents(context.Background(), 0, 20)
-	if pageErr != nil || len(page.Entries) != workspace.attempts {
+	if pageErr != nil || len(page.Entries) != workspace.attempts+1 {
 		t.Fatalf("events = %#v, err = %v", page, pageErr)
 	}
-	filenames := make(map[string]bool, len(page.Entries))
-	for _, event := range page.Entries {
+	filenames := make(map[string]bool, workspace.attempts)
+	for _, event := range page.Entries[1:] {
 		if event.Outcome != domain.OutcomeFailed || event.Document == nil || filenames[event.Document.Filename] {
 			t.Fatalf("collision event = %#v", event)
 		}
@@ -287,7 +287,7 @@ func TestSnapChecksContextBetweenFilenameCollisions(t *testing.T) {
 		t.Fatalf("outcomes = %#v, attempts = %d, err = %v", outcomes, workspace.attempts, err)
 	}
 	page, pageErr := store.ReadEvents(context.Background(), 0, 20)
-	if pageErr != nil || len(page.Entries) != 2 || page.Entries[1].Attempt != 2 || page.Entries[1].Error == nil || page.Entries[1].Error.Kind != string(internalerrors.KindCanceled) {
+	if pageErr != nil || len(page.Entries) != 3 || page.Entries[2].Attempt != 2 || page.Entries[2].Error == nil || page.Entries[2].Error.Kind != string(internalerrors.KindCanceled) {
 		t.Fatalf("events = %#v, err = %v", page, pageErr)
 	}
 }
@@ -301,7 +301,7 @@ func TestSnapRecordsContextBeforeFirstCommit(t *testing.T) {
 		t.Fatalf("outcomes = %#v, err = %v", outcomes, err)
 	}
 	page, pageErr := store.ReadEvents(context.Background(), 0, 20)
-	if pageErr != nil || len(page.Entries) != 1 || page.Entries[0].Attempt != 1 || page.Entries[0].Error == nil || page.Entries[0].Error.Kind != string(internalerrors.KindCanceled) {
+	if pageErr != nil || len(page.Entries) != 2 || page.Entries[1].Attempt != 1 || page.Entries[1].Error == nil || page.Entries[1].Error.Kind != string(internalerrors.KindCanceled) {
 		t.Fatalf("events = %#v, err = %v", page, pageErr)
 	}
 }

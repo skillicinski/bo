@@ -368,31 +368,7 @@ func (s *Store) CommitSnapshot(ctx context.Context, commit application.SnapshotC
 	if err := s.ensureDocumentBaseline(&next, domain.RawRef(commit.Filename), commit.Contents); err != nil {
 		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
 	}
-	data, err = domain.MarshalState(next)
-	if err != nil {
-		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, normalizeStorageError("serializing state.json", err))
-	}
-	transaction.NewState = data
-	if err := s.writeWorkspaceTransaction(transaction); err != nil {
-		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
-	}
-	if err := s.writeAtomic("state.json", transaction.StateTemporary, data); err != nil {
-		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
-	}
-	if err := s.publishTransactionEvent(transaction); err != nil {
-		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
-	}
-	revision, err := s.workspaceRevision(data)
-	if err != nil {
-		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
-	}
-	if err := s.publishWorkspaceCommit(transaction); err != nil {
-		return domain.State{}, application.Revision{}, err
-	}
-	if err := s.removeWorkspaceTransaction(transaction); err != nil {
-		return domain.State{}, application.Revision{}, err
-	}
-	return next, revision, nil
+	return s.finishDocumentCommit(transaction, next)
 }
 
 func (s *Store) CommitSummary(ctx context.Context, commit application.SummaryCommit, expected application.Revision) (domain.State, application.Revision, error) {
@@ -421,7 +397,7 @@ func (s *Store) CommitSummary(ctx context.Context, commit application.SummaryCom
 			return domain.State{}, application.Revision{}, err
 		}
 	}
-	if err := s.ensureSummaryDirectory(); err != nil {
+	if err := s.ensureDocumentDirectory("summaries"); err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
 	path := filepath.Join("summaries", commit.Filename)
@@ -465,31 +441,7 @@ func (s *Store) CommitSummary(ctx context.Context, commit application.SummaryCom
 	if err := s.ensureDocumentBaseline(&next, domain.SummaryRef(commit.Filename), commit.Contents); err != nil {
 		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
 	}
-	data, err = domain.MarshalState(next)
-	if err != nil {
-		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, normalizeStorageError("serializing state.json", err))
-	}
-	transaction.NewState = data
-	if err := s.writeWorkspaceTransaction(transaction); err != nil {
-		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
-	}
-	if err := s.writeAtomic("state.json", transaction.StateTemporary, data); err != nil {
-		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
-	}
-	if err := s.publishTransactionEvent(transaction); err != nil {
-		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
-	}
-	revision, err := s.workspaceRevision(data)
-	if err != nil {
-		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
-	}
-	if err := s.publishWorkspaceCommit(transaction); err != nil {
-		return domain.State{}, application.Revision{}, err
-	}
-	if err := s.removeWorkspaceTransaction(transaction); err != nil {
-		return domain.State{}, application.Revision{}, err
-	}
-	return next, revision, nil
+	return s.finishDocumentCommit(transaction, next)
 }
 
 func (s *Store) CommitDistillation(ctx context.Context, commit application.DistillationCommit, expected application.Revision) (domain.State, application.Revision, error) {
@@ -508,7 +460,7 @@ func (s *Store) CommitDistillation(ctx context.Context, commit application.Disti
 	if !currentRevision.Equal(expected) {
 		return domain.State{}, application.Revision{}, internalerrors.Conflict("workspace revision changed")
 	}
-	if err := s.ensureDistillationDirectory(); err != nil {
+	if err := s.ensureDocumentDirectory("distillations"); err != nil {
 		return domain.State{}, application.Revision{}, err
 	}
 	path := filepath.Join("distillations", commit.Filename)
@@ -548,7 +500,11 @@ func (s *Store) CommitDistillation(ctx context.Context, commit application.Disti
 	if err := s.ensureDocumentBaseline(&next, domain.DistillationRef(commit.Filename), commit.Contents); err != nil {
 		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, err)
 	}
-	data, err = domain.MarshalState(next)
+	return s.finishDocumentCommit(transaction, next)
+}
+
+func (s *Store) finishDocumentCommit(transaction workspaceTransaction, next domain.State) (domain.State, application.Revision, error) {
+	data, err := domain.MarshalState(next)
 	if err != nil {
 		return domain.State{}, application.Revision{}, s.abortWorkspaceTransaction(transaction, normalizeStorageError("serializing state.json", err))
 	}
@@ -1401,32 +1357,17 @@ func (s *Store) optionalDocument(ref domain.DocumentRef) ([]byte, bool, error) {
 	return data, true, err
 }
 
-func (s *Store) ensureSummaryDirectory() error {
-	if info, err := s.root.Lstat("summaries"); err == nil {
+func (s *Store) ensureDocumentDirectory(name string) error {
+	if info, err := s.root.Lstat(name); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return internalerrors.Filesystem("summaries must be a directory")
+			return internalerrors.Filesystem(name + " must be a directory")
 		}
 		return nil
 	} else if !os.IsNotExist(err) {
-		return filesystem(filepath.Join(s.path, "summaries"), err)
+		return filesystem(filepath.Join(s.path, name), err)
 	}
-	if err := s.root.Mkdir("summaries", 0o755); err != nil {
-		return filesystem(filepath.Join(s.path, "summaries"), err)
-	}
-	return syncRoot(s.root)
-}
-
-func (s *Store) ensureDistillationDirectory() error {
-	if info, err := s.root.Lstat("distillations"); err == nil {
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return internalerrors.Filesystem("distillations must be a directory")
-		}
-		return nil
-	} else if !os.IsNotExist(err) {
-		return filesystem(filepath.Join(s.path, "distillations"), err)
-	}
-	if err := s.root.Mkdir("distillations", 0o755); err != nil {
-		return filesystem(filepath.Join(s.path, "distillations"), err)
+	if err := s.root.Mkdir(name, 0o755); err != nil {
+		return filesystem(filepath.Join(s.path, name), err)
 	}
 	return syncRoot(s.root)
 }

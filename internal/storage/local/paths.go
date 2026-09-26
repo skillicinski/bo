@@ -76,14 +76,10 @@ func RandomName() (string, error) {
 var randomWorkspaceName = RandomName
 
 func Seed(home string, requestedName *string) (string, error) {
-	return seed(home, requestedName, nil)
+	return SeedWithEvent(home, requestedName, domain.Operation{Command: domain.CommandSeed, Outcome: domain.OutcomeCommitted})
 }
 
 func SeedWithEvent(home string, requestedName *string, event domain.Operation) (string, error) {
-	return seed(home, requestedName, &event)
-}
-
-func seed(home string, requestedName *string, event *domain.Operation) (string, error) {
 	rootPath := filepath.Join(home, ".bo")
 	attempts := 1
 	if requestedName == nil {
@@ -127,7 +123,7 @@ func seed(home string, requestedName *string, event *domain.Operation) (string, 
 	return "", internalerrors.Wrap(internalerrors.KindAlreadyExists, "workspace already exists", internalerrors.ErrAlreadyExists)
 }
 
-func seedWorkspaceAttempt(rootPath, target string, event *domain.Operation) (bool, error) {
+func seedWorkspaceAttempt(rootPath, target string, event domain.Operation) (bool, error) {
 	temporary, err := os.MkdirTemp(rootPath, ".bo-workspace-")
 	if err != nil {
 		return false, filesystem(rootPath, err)
@@ -139,11 +135,9 @@ func seedWorkspaceAttempt(rootPath, target string, event *domain.Operation) (boo
 		}
 	}()
 	state := domain.State{Sources: []domain.SourceRecord{}}
-	if event != nil {
-		event.Normalize()
-		if err := event.ValidateSeed(); err != nil {
-			return false, err
-		}
+	event.Normalize()
+	if err := event.ValidateSeed(); err != nil {
+		return false, err
 	}
 	if err := initializeState(temporary, state); err != nil {
 		return false, err
@@ -167,14 +161,10 @@ func seedWorkspaceAttempt(rootPath, target string, event *domain.Operation) (boo
 	return false, nil
 }
 
-func initializeEvents(target string, event *domain.Operation) error {
-	var data []byte
-	if event != nil {
-		var err error
-		data, err = marshalEventLine(*event)
-		if err != nil {
-			return err
-		}
+func initializeEvents(target string, event domain.Operation) error {
+	data, err := marshalEventLine(event)
+	if err != nil {
+		return err
 	}
 	root, err := os.OpenRoot(target)
 	if err != nil {

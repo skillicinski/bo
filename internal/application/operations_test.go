@@ -54,10 +54,10 @@ func TestSnapStoresEventsInWorkspaceLedger(t *testing.T) {
 		t.Fatal(err)
 	}
 	page, err := store.ReadEvents(context.Background(), 0, 20)
-	if err != nil || len(page.Entries) != 3 {
+	if err != nil || len(page.Entries) != 4 {
 		t.Fatalf("events = %#v, err = %v", page, err)
 	}
-	if page.Entries[0].Outcome != domain.OutcomeCommitted || page.Entries[1].Outcome != domain.OutcomeFailed || page.Entries[2].Outcome != domain.OutcomeCommitted {
+	if page.Entries[1].Outcome != domain.OutcomeCommitted || page.Entries[2].Outcome != domain.OutcomeFailed || page.Entries[3].Outcome != domain.OutcomeCommitted {
 		t.Fatalf("events = %#v", page.Entries)
 	}
 }
@@ -79,7 +79,7 @@ func TestReadEventDoesNotChangeContentRevision(t *testing.T) {
 		t.Fatalf("content revision changed after read event: before=%s after=%s", before, after)
 	}
 	page, err := store.ReadEvents(context.Background(), 0, 20)
-	if err != nil || len(page.Entries) != 1 || page.Entries[0].Command != domain.CommandState {
+	if err != nil || len(page.Entries) != 2 || page.Entries[1].Command != domain.CommandState {
 		t.Fatalf("events = %#v, err = %v", page, err)
 	}
 }
@@ -93,7 +93,7 @@ func TestReadStateFailureStoresTypedError(t *testing.T) {
 		t.Fatal("ReadState succeeded after state removal")
 	}
 	page, err := store.ReadEvents(context.Background(), 0, 20)
-	if err != nil || len(page.Entries) != 1 || page.Entries[0].Error == nil {
+	if err != nil || len(page.Entries) != 2 || page.Entries[1].Error == nil {
 		t.Fatalf("events = %#v, err = %v", page, err)
 	}
 }
@@ -107,7 +107,7 @@ func TestCanceledReadStillStoresFailureEvent(t *testing.T) {
 		t.Fatal("canceled ReadState succeeded")
 	}
 	page, err := store.ReadEvents(context.Background(), 0, 20)
-	if err != nil || len(page.Entries) != 1 || page.Entries[0].Outcome != domain.OutcomeFailed || page.Entries[0].Error == nil {
+	if err != nil || len(page.Entries) != 2 || page.Entries[1].Outcome != domain.OutcomeFailed || page.Entries[1].Error == nil {
 		t.Fatalf("events = %#v, read err = %v, event err = %v", page, readErr, err)
 	}
 }

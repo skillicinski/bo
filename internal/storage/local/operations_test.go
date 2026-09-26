@@ -53,7 +53,7 @@ func TestWorkspaceMutationStoresCommittedEventWithContent(t *testing.T) {
 		t.Fatalf("state = %#v, err = %v", state, err)
 	}
 	page, err := store.ReadEvents(context.Background(), 0, 20)
-	if err != nil || len(page.Entries) != 1 || page.Entries[0].Outcome != domain.OutcomeCommitted {
+	if err != nil || len(page.Entries) != 2 || page.Entries[1].Outcome != domain.OutcomeCommitted {
 		t.Fatalf("events = %#v, err = %v", page, err)
 	}
 	contents, err := store.ReadDocument(context.Background(), domain.RawRef("note.md"))
@@ -96,7 +96,7 @@ func TestWorkspaceEventsPaginationIsBounded(t *testing.T) {
 		t.Fatalf("first event page = %#v, err = %v", first, err)
 	}
 	second, err := store.ReadEvents(context.Background(), first.NextOffset, 1000)
-	if err != nil || len(second.Entries) != 5 || second.HasMore || second.NextOffset != 105 {
+	if err != nil || len(second.Entries) != 6 || second.HasMore || second.NextOffset != 106 {
 		t.Fatalf("second event page = %#v, err = %v", second, err)
 	}
 }
@@ -164,7 +164,7 @@ func TestWorkspaceEventsConcurrentAppends(t *testing.T) {
 		}(index)
 	}
 	group.Wait()
-	page, err := store.ReadEvents(context.Background(), 0, count)
+	page, err := store.ReadEvents(context.Background(), 1, count)
 	if err != nil || len(page.Entries) != count || page.HasMore {
 		t.Fatalf("page = %#v, err = %v", page, err)
 	}

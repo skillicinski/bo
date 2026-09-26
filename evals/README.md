@@ -67,6 +67,6 @@ A score below 4 or a criterion mean below 4.6 fails the quality gate.
 The summary and distillation rubrics are in `evals/rubrics/SUMMARY.md` and
 `evals/rubrics/DISTILLATION.md`.
 
-The Python project has no dependencies. `evals/harness`, `evals/run.sh`, and
-`evals/test_run.sh` run through `uv` so the project does not install packages
-into the global interpreter.
+The harness and evaluator use only Python's standard library. Run them with
+Python 3.11 or later. `evals/harness` and `evals/test_run.sh` provide the
+command entry points.
