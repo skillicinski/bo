@@ -1,0 +1,43 @@
+{
+  "cli_version": "0.10.3",
+  "checkpoint_id": "01M3EDFG6SWGTQZ397G60VRZCH",
+  "strategy": "manual-commit",
+  "branch": "fix/harden-evals",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".gitignore",
+    "api.go",
+    "evals/README.md",
+    "evals/fixtures/README.md",
+    "evals/harness",
+    "evals/pyproject.toml",
+    "evals/run.sh",
+    "evals/test_run.sh",
+    "evals/uv.lock",
+    "internal/application/contracts.go",
+    "internal/application/distill.go",
+    "internal/application/operations_test.go",
+    "internal/application/snap_test.go",
+    "internal/storage/local/local.go",
+    "internal/storage/local/local_test.go",
+    "internal/storage/local/operations_test.go",
+    "internal/storage/local/paths.go",
+    "internal/storage/local/transaction_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 465769,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 7951232,
+    "output_tokens": 34456,
+    "api_call_count": 83
+  }
+}
