@@ -17,6 +17,7 @@ import (
 )
 
 func TestCompleteUsesGeminiHTTPContract(t *testing.T) {
+	thinkingBudget := 0
 	parameters := map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
@@ -60,7 +61,7 @@ func TestCompleteUsesGeminiHTTPContract(t *testing.T) {
 		if response == nil || response.ID != "call-1" || response.Name != "read" || response.Response["output"] != "document" {
 			t.Fatalf("function response = %#v", response)
 		}
-		if payload.GenerationConfig.MaxOutputTokens != 77 || len(payload.Tools) != 1 || len(payload.Tools[0].FunctionDeclarations) != 1 {
+		if payload.GenerationConfig.MaxOutputTokens != 77 || payload.GenerationConfig.ThinkingConfig == nil || payload.GenerationConfig.ThinkingConfig.ThinkingBudget == nil || *payload.GenerationConfig.ThinkingConfig.ThinkingBudget != 0 || len(payload.Tools) != 1 || len(payload.Tools[0].FunctionDeclarations) != 1 {
 			t.Fatalf("request config = %#v", payload)
 		}
 		if payload.ToolConfig == nil || payload.ToolConfig.FunctionCallingConfig.Mode != "ANY" {
@@ -83,11 +84,11 @@ func TestCompleteUsesGeminiHTTPContract(t *testing.T) {
 			t.Fatalf("nested array schema = %#v", groups["items"])
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		io.WriteString(writer, `{"candidates":[{"content":{"role":"model","parts":[{"text":"done"},{"functionCall":{"id":"call-2","name":"write","args":{"filename":"note.md"}}}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2,"totalTokenCount":5}}`)
+		io.WriteString(writer, `{"candidates":[{"content":{"role":"model","parts":[{"text":"done"},{"functionCall":{"id":"call-2","name":"write","args":{"filename":"note.md"}}}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2,"totalTokenCount":5,"thoughtsTokenCount":7}}`)
 	}))
 	defer server.Close()
 
-	result, err := New(Config{APIKey: "gemini-key", Endpoint: server.URL, Model: "test-model"}).Complete(context.Background(), agent.CompletionRequest{
+	result, err := New(Config{APIKey: "gemini-key", Endpoint: server.URL, Model: "test-model", ThinkingBudget: &thinkingBudget}).Complete(context.Background(), agent.CompletionRequest{
 		Messages: []agent.ChatMessage{
 			{Role: "system", Content: "rules"},
 			{Role: "user", Content: "read note"},
@@ -102,7 +103,69 @@ func TestCompleteUsesGeminiHTTPContract(t *testing.T) {
 	if result.Message.Content != "done" || len(result.Message.ToolCalls) != 1 || result.Message.ToolCalls[0].ID != "call-2" || result.Message.ToolCalls[0].Function.Arguments != `{"filename":"note.md"}` {
 		t.Fatalf("result message = %#v", result.Message)
 	}
-	if result.Usage == nil || result.Usage.PromptTokens != 3 || result.Usage.CompletionTokens != 2 || result.Usage.TotalTokens != 5 {
+	if result.Usage == nil || result.Usage.PromptTokens != 3 || result.Usage.CompletionTokens != 2 || result.Usage.TotalTokens != 5 || result.Usage.ThoughtsTokens != 7 {
+		t.Fatalf("usage = %#v", result.Usage)
+	}
+}
+
+func TestCompletePreservesUsageWhenProviderReturnsNoContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		io.WriteString(writer, `{"candidates":[{"finishReason":"MAX_TOKENS"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":2,"totalTokenCount":7,"thoughtsTokenCount":3}}`)
+	}))
+	defer server.Close()
+
+	result, err := New(Config{APIKey: "gemini-key", Endpoint: server.URL, Model: "test-model"}).Complete(context.Background(), agent.CompletionRequest{
+		Messages: []agent.ChatMessage{{Role: "user", Content: "continue"}}, MaxTokens: 10,
+	})
+	if err == nil {
+		t.Fatal("completion succeeded")
+	}
+	if result.Usage == nil || result.Usage.PromptTokens != 5 || result.Usage.CompletionTokens != 2 || result.Usage.TotalTokens != 7 || result.Usage.ThoughtsTokens != 3 {
+		t.Fatalf("usage = %#v", result.Usage)
+	}
+}
+
+func TestCompleteRetriesMalformedFunctionCallOnce(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if requests.Add(1) == 1 {
+			io.WriteString(writer, `{"candidates":[{"finishReason":"MALFORMED_FUNCTION_CALL","finishMessage":"invalid function arguments"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":2,"totalTokenCount":7,"thoughtsTokenCount":3}}`)
+			return
+		}
+		io.WriteString(writer, `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":4,"totalTokenCount":15,"thoughtsTokenCount":1}}`)
+	}))
+	defer server.Close()
+
+	result, err := New(Config{APIKey: "gemini-key", Endpoint: server.URL, Model: "test-model"}).Complete(context.Background(), agent.CompletionRequest{
+		Messages: []agent.ChatMessage{{Role: "user", Content: "continue"}}, MaxTokens: 10,
+	})
+	if err != nil || result.Message.Content != "ok" {
+		t.Fatalf("result = %#v, error = %v", result, err)
+	}
+	if requests.Load() != 2 || result.ProviderRetries != 1 || len(result.ProviderRetryReasons) != 1 || result.ProviderRetryReasons[0] != "malformed_function_call" {
+		t.Fatalf("retry metadata = %#v, requests = %d", result, requests.Load())
+	}
+	if result.Usage == nil || result.Usage.PromptTokens != 16 || result.Usage.CompletionTokens != 6 || result.Usage.TotalTokens != 22 || result.Usage.ThoughtsTokens != 4 {
+		t.Fatalf("usage = %#v", result.Usage)
+	}
+}
+
+func TestCompleteStopsAfterOneMalformedFunctionCallRetry(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		io.WriteString(writer, `{"candidates":[{"finishReason":"MALFORMED_FUNCTION_CALL","finishMessage":"invalid function arguments"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":2,"totalTokenCount":7}}`)
+	}))
+	defer server.Close()
+
+	result, err := New(Config{APIKey: "gemini-key", Endpoint: server.URL, Model: "test-model"}).Complete(context.Background(), agent.CompletionRequest{
+		Messages: []agent.ChatMessage{{Role: "user", Content: "continue"}}, MaxTokens: 10,
+	})
+	if err == nil || requests.Load() != 2 || result.ProviderRetries != 1 {
+		t.Fatalf("result = %#v, error = %v, requests = %d", result, err, requests.Load())
+	}
+	if result.Usage == nil || result.Usage.TotalTokens != 14 {
 		t.Fatalf("usage = %#v", result.Usage)
 	}
 }

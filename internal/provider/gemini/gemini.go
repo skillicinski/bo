@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,37 +19,42 @@ import (
 )
 
 const (
-	DefaultEndpoint       = "https://generativelanguage.googleapis.com/v1beta"
-	DefaultVertexEndpoint = "https://aiplatform.googleapis.com"
-	DefaultModel          = "gemini-2.5-flash"
-	cloudPlatformScope    = "https://www.googleapis.com/auth/cloud-platform"
-	maxResponseBodyBytes  = 1 << 20
+	DefaultEndpoint                 = "https://generativelanguage.googleapis.com/v1beta"
+	DefaultVertexEndpoint           = "https://aiplatform.googleapis.com"
+	DefaultModel                    = "gemini-2.5-flash"
+	cloudPlatformScope              = "https://www.googleapis.com/auth/cloud-platform"
+	maxResponseBodyBytes            = 1 << 20
+	maxMalformedFunctionCallRetries = 1
 )
 
+var malformedFunctionCallCause = errors.New("Gemini returned a malformed function call")
+
 type Config struct {
-	APIKey     string
-	ProjectID  string
-	Location   string
-	Endpoint   string
-	Model      string
-	HTTPClient *http.Client
+	APIKey         string
+	ProjectID      string
+	Location       string
+	Endpoint       string
+	Model          string
+	ThinkingBudget *int
+	HTTPClient     *http.Client
 }
 
 type Client struct {
-	APIKey      string
-	ProjectID   string
-	Location    string
-	Endpoint    string
-	Model       string
-	HTTPClient  *http.Client
-	vertex      bool
-	tokenSource oauth2.TokenSource
+	APIKey         string
+	ProjectID      string
+	Location       string
+	Endpoint       string
+	Model          string
+	ThinkingBudget *int
+	HTTPClient     *http.Client
+	vertex         bool
+	tokenSource    oauth2.TokenSource
 }
 
 func New(config Config) *Client {
 	return &Client{
 		APIKey: config.APIKey, Endpoint: config.Endpoint, Model: config.Model,
-		HTTPClient: config.HTTPClient,
+		ThinkingBudget: config.ThinkingBudget, HTTPClient: config.HTTPClient,
 	}
 }
 
@@ -65,7 +71,7 @@ func NewVertex(ctx context.Context, config Config) (*Client, error) {
 	}
 	return &Client{
 		ProjectID: config.ProjectID, Location: config.Location, Endpoint: config.Endpoint,
-		Model: config.Model, HTTPClient: config.HTTPClient, vertex: true,
+		Model: config.Model, ThinkingBudget: config.ThinkingBudget, HTTPClient: config.HTTPClient, vertex: true,
 		tokenSource: credentials.TokenSource,
 	}, nil
 }
@@ -90,6 +96,9 @@ func (c *Client) Complete(ctx context.Context, request agent.CompletionRequest) 
 	if err != nil {
 		return agent.CompletionResponse{}, internalerrors.ProviderMalformed("invalid Gemini request", err)
 	}
+	if c.ThinkingBudget != nil {
+		payload.GenerationConfig.ThinkingConfig = &thinkingConfig{ThinkingBudget: c.ThinkingBudget}
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return agent.CompletionResponse{}, internalerrors.ProviderTransport("encoding Gemini request failed", err)
@@ -98,6 +107,34 @@ func (c *Client) Complete(ctx context.Context, request agent.CompletionRequest) 
 	if httpClient == nil {
 		httpClient = &http.Client{}
 	}
+	var usage agent.TokenUsage
+	usageKnown := true
+	retryReasons := []string{}
+	for retries := 0; ; retries++ {
+		result, err := c.completeOnce(ctx, endpoint, body, httpClient)
+		if result.Usage == nil {
+			usageKnown = false
+		} else if usageKnown {
+			usage.PromptTokens += result.Usage.PromptTokens
+			usage.CompletionTokens += result.Usage.CompletionTokens
+			usage.TotalTokens += result.Usage.TotalTokens
+			usage.ThoughtsTokens += result.Usage.ThoughtsTokens
+		}
+		result.ProviderRetries = retries
+		result.ProviderRetryReasons = append([]string(nil), retryReasons...)
+		if usageKnown {
+			result.Usage = &usage
+		} else {
+			result.Usage = nil
+		}
+		if err == nil || retries >= maxMalformedFunctionCallRetries || !isMalformedFunctionCallError(err) {
+			return result, err
+		}
+		retryReasons = append(retryReasons, "malformed_function_call")
+	}
+}
+
+func (c *Client) completeOnce(ctx context.Context, endpoint string, body []byte, httpClient *http.Client) (agent.CompletionResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return agent.CompletionResponse{}, internalerrors.ProviderTransport("creating Gemini request failed", err)
@@ -150,8 +187,8 @@ func (c *Client) Complete(ctx context.Context, request agent.CompletionRequest) 
 	}
 	candidate := responsePayload.Candidates[0]
 	if candidate.Content == nil {
-		if err := finishReasonError(candidate.FinishReason); err != nil {
-			return agent.CompletionResponse{}, err
+		if err := finishReasonError(candidate.FinishReason, candidate.FinishMessage); err != nil {
+			return agent.CompletionResponse{Usage: agentUsage(responsePayload.Usage)}, err
 		}
 		return agent.CompletionResponse{}, internalerrors.ProviderMalformed("malformed Gemini response: missing candidates[0].content", nil)
 	}
@@ -166,7 +203,7 @@ func (c *Client) Complete(ctx context.Context, request agent.CompletionRequest) 
 		return agent.CompletionResponse{}, internalerrors.ProviderMalformed("malformed Gemini response: "+err.Error(), nil)
 	}
 	result := agent.CompletionResponse{Message: message, Usage: agentUsage(responsePayload.Usage)}
-	if err := finishReasonError(candidate.FinishReason); err != nil {
+	if err := finishReasonError(candidate.FinishReason, candidate.FinishMessage); err != nil {
 		return result, err
 	}
 	return result, nil
@@ -244,7 +281,12 @@ type functionDeclaration struct {
 }
 
 type generationConfig struct {
-	MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
+	MaxOutputTokens int             `json:"maxOutputTokens,omitempty"`
+	ThinkingConfig  *thinkingConfig `json:"thinkingConfig,omitempty"`
+}
+
+type thinkingConfig struct {
+	ThinkingBudget *int `json:"thinkingBudget,omitempty"`
 }
 
 type completionResponse struct {
@@ -253,8 +295,9 @@ type completionResponse struct {
 }
 
 type candidate struct {
-	Content      *responseContent `json:"content"`
-	FinishReason string           `json:"finishReason"`
+	Content       *responseContent `json:"content"`
+	FinishReason  string           `json:"finishReason"`
+	FinishMessage string           `json:"finishMessage"`
 }
 
 type responseContent struct {
@@ -278,6 +321,7 @@ type usage struct {
 	PromptTokens     int `json:"promptTokenCount"`
 	CompletionTokens int `json:"candidatesTokenCount"`
 	TotalTokens      int `json:"totalTokenCount"`
+	ThoughtsTokens   int `json:"thoughtsTokenCount"`
 }
 
 func wireRequest(request agent.CompletionRequest) (completionRequest, error) {
@@ -494,19 +538,30 @@ func agentUsage(value *usage) *agent.TokenUsage {
 	if value == nil {
 		return nil
 	}
-	if value.PromptTokens < 0 || value.CompletionTokens < 0 || value.TotalTokens < 0 {
+	if value.PromptTokens < 0 || value.CompletionTokens < 0 || value.TotalTokens < 0 || value.ThoughtsTokens < 0 {
 		return nil
 	}
-	return &agent.TokenUsage{PromptTokens: value.PromptTokens, CompletionTokens: value.CompletionTokens, TotalTokens: value.TotalTokens}
+	return &agent.TokenUsage{PromptTokens: value.PromptTokens, CompletionTokens: value.CompletionTokens, TotalTokens: value.TotalTokens, ThoughtsTokens: value.ThoughtsTokens}
 }
 
-func finishReasonError(reason string) error {
-	switch strings.ToUpper(reason) {
+func finishReasonError(reason, finishMessage string) error {
+	reason = strings.ToUpper(reason)
+	detail := "provider completion ended with finish_reason=" + strings.ToLower(reason)
+	if finishMessage = strings.TrimSpace(finishMessage); finishMessage != "" {
+		detail += ": " + agent.BoundedOutput(finishMessage, 512)
+	}
+	switch reason {
 	case "", "STOP":
 		return nil
-	case "MAX_TOKENS", "SAFETY", "RECITATION", "OTHER", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "MALFORMED_FUNCTION_CALL", "IMAGE_SAFETY", "UNEXPECTED_TOOL_CALL", "NO_IMAGE":
-		return internalerrors.ProviderRejected("provider completion ended with finish_reason="+strings.ToLower(reason), false)
+	case "MALFORMED_FUNCTION_CALL":
+		return internalerrors.Wrap(internalerrors.KindProviderRejected, detail, malformedFunctionCallCause)
+	case "MAX_TOKENS", "SAFETY", "RECITATION", "OTHER", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY", "UNEXPECTED_TOOL_CALL", "NO_IMAGE":
+		return internalerrors.ProviderRejected(detail, false)
 	default:
 		return internalerrors.ProviderMalformed("malformed Gemini response: invalid candidates[0].finishReason", nil)
 	}
+}
+
+func isMalformedFunctionCallError(err error) bool {
+	return errors.Is(err, malformedFunctionCallCause)
 }

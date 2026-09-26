@@ -22,12 +22,13 @@ type DistillRequest struct {
 }
 
 type DistillResult struct {
-	Filename  string        `json:"filename,omitempty"`
-	Skipped   bool          `json:"skipped"`
-	Reason    string        `json:"reason,omitempty"`
-	Committed []Operation   `json:"-"`
-	Filenames []string      `json:"-"`
-	Metrics   agent.Metrics `json:"metrics"`
+	Filename  string           `json:"filename,omitempty"`
+	Skipped   bool             `json:"skipped"`
+	Reason    string           `json:"reason,omitempty"`
+	Committed []Operation      `json:"-"`
+	Filenames []string         `json:"-"`
+	Metrics   agent.Metrics    `json:"metrics"`
+	Telemetry []StageTelemetry `json:"telemetry,omitempty"`
 }
 
 func Distill(ctx context.Context, workspace Workspace, provider agent.CompletionProvider, config SynthesisOptions, options OperationOptions) (DistillResult, error) {
@@ -53,7 +54,7 @@ func DistillWithTools(ctx context.Context, workspace Workspace, provider agent.C
 	}
 	if result.Metrics.Usage != nil {
 		operation.Metrics.Usage = &domain.TokenUsage{
-			PromptTokens: result.Metrics.Usage.PromptTokens, CompletionTokens: result.Metrics.Usage.CompletionTokens, TotalTokens: result.Metrics.Usage.TotalTokens,
+			PromptTokens: result.Metrics.Usage.PromptTokens, CompletionTokens: result.Metrics.Usage.CompletionTokens, TotalTokens: result.Metrics.Usage.TotalTokens, ThoughtsTokens: result.Metrics.Usage.ThoughtsTokens,
 		}
 	}
 	if returnErr == nil {
@@ -112,7 +113,10 @@ func runDistill(ctx context.Context, workspace Workspace, provider agent.Complet
 		return DistillResult{}, internalerrors.MissingResource("no current raw Markdown documents in workspace")
 	}
 	if len(catalog.sources) < 2 {
-		return DistillResult{Skipped: true, Reason: "at least two source identities are required"}, nil
+		return DistillResult{
+			Skipped: true, Reason: "at least two source identities are required",
+			Telemetry: []StageTelemetry{{Workflow: "distill", TerminalReason: "precondition", TerminalDetail: "at least two source identities are required"}},
+		}, nil
 	}
 	result := DistillResult{}
 	readLogsEnabled := false
@@ -133,6 +137,12 @@ func runDistill(ctx context.Context, workspace Workspace, provider agent.Complet
 		directory: workspace.Name(), workspace: workspace, options: options,
 		catalog: catalog, state: state, revision: revision, maxOutputBytes: config.MaxToolOutputBytes,
 		readDocuments: map[string][]byte{}, readRefs: map[string]bool{}, readDistillations: map[string]bool{}, mutationOps: map[string]Operation{},
+	}
+	for _, name := range toolNames {
+		if name == toolReadSummary {
+			contextState.summaryToolEnabled = true
+			break
+		}
 	}
 	if readLogsEnabled {
 		contextState.logEvents = scopedSynthesisEvents(events, catalog.sources)
@@ -166,6 +176,16 @@ func runDistill(ctx context.Context, workspace Workspace, provider agent.Complet
 		MaxToolOutputBytes: config.MaxToolOutputBytes, MaxResponseTokens: config.MaxResponseTokens,
 	})
 	cancel()
+	terminalDetail := contextState.reason
+	if runtimeErr != nil {
+		terminalDetail = runtimeErr.Error()
+	}
+	result.Telemetry = append(result.Telemetry, StageTelemetry{
+		Workflow: "distill", TerminalReason: runtimeResult.Telemetry.TerminalReason,
+		TerminalDetail: terminalDetail, ProviderRetries: runtimeResult.Telemetry.ProviderRetries,
+		ProviderRetryReasons: runtimeResult.Telemetry.ProviderRetryReasons, Usage: runtimeResult.Metrics.Usage,
+		ToolCalls: runtimeResult.Telemetry.ToolCalls,
+	})
 	result.Metrics = runtimeResult.Metrics
 	result.Committed = append(result.Committed, contextState.committed...)
 	result.Filenames = append(result.Filenames, contextState.filenames...)

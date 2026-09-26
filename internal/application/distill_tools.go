@@ -39,27 +39,28 @@ type distillDocument struct {
 }
 
 type distillContext struct {
-	ctx               context.Context
-	directory         string
-	workspace         Workspace
-	options           OperationOptions
-	catalog           distillCatalog
-	state             domain.State
-	revision          Revision
-	maxOutputBytes    int
-	readDocuments     map[string][]byte
-	readRefs          map[string]bool
-	readDistillations map[string]bool
-	mutationOps       map[string]Operation
-	committed         []Operation
-	filenames         []string
-	filename          string
-	reason            string
-	equivalent        bool
-	skipped           bool
-	logEvents         []Operation
-	logWindowLoaded   bool
-	eventFailure      error
+	ctx                context.Context
+	directory          string
+	workspace          Workspace
+	options            OperationOptions
+	catalog            distillCatalog
+	state              domain.State
+	revision           Revision
+	maxOutputBytes     int
+	readDocuments      map[string][]byte
+	readRefs           map[string]bool
+	readDistillations  map[string]bool
+	summaryToolEnabled bool
+	mutationOps        map[string]Operation
+	committed          []Operation
+	filenames          []string
+	filename           string
+	reason             string
+	equivalent         bool
+	skipped            bool
+	logEvents          []Operation
+	logWindowLoaded    bool
+	eventFailure       error
 }
 
 type distillSourceReference struct {
@@ -237,8 +238,22 @@ func distillSystemPrompt(contextState *distillContext, readLogsEnabled bool) str
 	if len(distillations) > 0 {
 		existingInstruction = fmt.Sprintf(" Existing distillation candidates are available by topic and filename: %s. Read a candidate before editing it; candidates are not evidence.", strings.Join(distillations, ", "))
 	}
+	summaries := make([]string, 0, len(contextState.catalog.state.Sources))
+	for _, source := range contextState.catalog.state.Sources {
+		if source.Summary != nil {
+			summaries = append(summaries, source.SourceKey+" ("+source.Summary.Filename+")")
+		}
+	}
+	summaryInstruction := " Current summaries: none."
+	if len(summaries) > 0 {
+		summaryInstruction = fmt.Sprintf(" Current summaries: %s.", strings.Join(summaries, ", "))
+	}
+	surveyInstruction := ""
+	if contextState.summaryToolEnabled && len(summaries) >= 2 && len(contextState.catalog.distillations) == 0 {
+		surveyInstruction = " There are no existing distillation documents. Before deciding to skip, read current summaries for at least two distinct source identities with read_summary, use them to select a promising cross-source theme, and do not skip after reading only the log, corpus index, or one source."
+	}
 	taskInstruction := "Process every useful unprocessed theme supported by at least two distinct source identities. Use write_distillation once for each new topic or edit_distillation once for each existing topic with changed evidence after reading it. If current evidence exactly matches an existing topic, skip that topic and continue. Call skip_distill exactly once only when no unprocessed theme remains."
-	return fmt.Sprintf("You are bo's cross-source distill agent for %s. %s Use only the current raw snapshots and summaries exposed by the host as evidence; stale summaries and distillation documents are not evidence. Preserve qualifications, uncertainty, authorship, measurements, recommendations, opinions, and forecasts. The host owns document access, current-snapshot selection, provenance, filename allocation, and publication.%s%s Available source identities: %s.", contextState.directory, taskInstruction, logInstruction, existingInstruction, strings.Join(keys, ", "))
+	return fmt.Sprintf("You are bo's cross-source distill agent for %s. %s Use only the current raw snapshots and summaries exposed by the host as evidence; stale summaries and distillation documents are not evidence. Preserve qualifications, uncertainty, authorship, measurements, recommendations, opinions, and forecasts. The host owns document access, current-snapshot selection, provenance, filename allocation, and publication.%s%s%s Available source identities: %s.", contextState.directory, taskInstruction, logInstruction, existingInstruction, summaryInstruction+surveyInstruction, strings.Join(keys, ", "))
 }
 
 func executeDistillTool(contextState *distillContext, call agent.ToolCall) (output string, returnErr error) {
@@ -358,12 +373,42 @@ func executeDistillTool(contextState *distillContext, call agent.ToolCall) (outp
 		if contextState.skipped {
 			return "", fmt.Errorf("distill already has a terminal result")
 		}
+		if len(contextState.catalog.distillations) == 0 && len(contextState.filenames) == 0 {
+			if contextState.summaryToolEnabled && contextState.availableSourceCount(domain.DocumentKindSummary) >= 2 {
+				if contextState.readSourceCount(domain.DocumentKindSummary) < 2 {
+					return "", fmt.Errorf("skip_distill requires current summaries from at least two distinct source identities before the first distillation; read_summary for another source before skipping")
+				}
+			} else if contextState.readSourceCount("") < 2 {
+				return "", fmt.Errorf("skip_distill requires evidence from at least two distinct source identities before the first distillation; read current summaries or raw documents first")
+			}
+		}
 		contextState.skipped = true
 		contextState.reason = strings.TrimSpace(reason)
 		return "skip_distill succeeded", nil
 	default:
 		return "", fmt.Errorf("unsupported tool: %s", name)
 	}
+}
+
+func (contextState *distillContext) availableSourceCount(kind domain.DocumentKind) int {
+	sources := map[string]bool{}
+	for _, document := range contextState.catalog.documents {
+		if kind == "" || document.Ref.Kind == kind {
+			sources[document.SourceKey] = true
+		}
+	}
+	return len(sources)
+}
+
+func (contextState *distillContext) readSourceCount(kind domain.DocumentKind) int {
+	sources := map[string]bool{}
+	for key := range contextState.readRefs {
+		document, ok := contextState.catalog.documents[key]
+		if ok && (kind == "" || document.Ref.Kind == kind) {
+			sources[document.SourceKey] = true
+		}
+	}
+	return len(sources)
 }
 
 func (contextState *distillContext) nextMutationOperation(key string) Operation {

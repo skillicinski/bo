@@ -35,7 +35,7 @@ func SynthesizeWithTools(ctx context.Context, workspace Workspace, provider agen
 	}
 	if result.Metrics.Usage != nil {
 		operation.Metrics.Usage = &domain.TokenUsage{
-			PromptTokens: result.Metrics.Usage.PromptTokens, CompletionTokens: result.Metrics.Usage.CompletionTokens, TotalTokens: result.Metrics.Usage.TotalTokens,
+			PromptTokens: result.Metrics.Usage.PromptTokens, CompletionTokens: result.Metrics.Usage.CompletionTokens, TotalTokens: result.Metrics.Usage.TotalTokens, ThoughtsTokens: result.Metrics.Usage.ThoughtsTokens,
 		}
 	}
 	if returnErr == nil {
@@ -148,6 +148,16 @@ func runSynthesis(ctx context.Context, workspace Workspace, provider agent.Compl
 			MaxToolOutputBytes: config.MaxToolOutputBytes, MaxResponseTokens: config.MaxResponseTokens,
 		})
 		cancel()
+		terminalDetail := ""
+		if runtimeErr != nil {
+			terminalDetail = runtimeErr.Error()
+		}
+		result.Telemetry = append(result.Telemetry, StageTelemetry{
+			Workflow: "summarize", SourceKey: sourceKey, TerminalReason: runtimeResult.Telemetry.TerminalReason,
+			TerminalDetail: terminalDetail, ProviderRetries: runtimeResult.Telemetry.ProviderRetries,
+			ProviderRetryReasons: runtimeResult.Telemetry.ProviderRetryReasons, Usage: runtimeResult.Metrics.Usage,
+			ToolCalls: runtimeResult.Telemetry.ToolCalls,
+		})
 		result.Metrics.Turns += runtimeResult.Metrics.Turns
 		result.Metrics.ToolCalls += runtimeResult.Metrics.ToolCalls
 		result.Metrics.Duration += runtimeResult.Metrics.Duration
@@ -157,6 +167,7 @@ func runSynthesis(ctx context.Context, workspace Workspace, provider agent.Compl
 			usage.PromptTokens += runtimeResult.Metrics.Usage.PromptTokens
 			usage.CompletionTokens += runtimeResult.Metrics.Usage.CompletionTokens
 			usage.TotalTokens += runtimeResult.Metrics.Usage.TotalTokens
+			usage.ThoughtsTokens += runtimeResult.Metrics.Usage.ThoughtsTokens
 			usageReceived = true
 		}
 		for sourceKey := range contextState.written {
@@ -201,7 +212,7 @@ func aggregateUsage(usage agent.TokenUsage, known, received bool) *agent.TokenUs
 	if !known || !received {
 		return nil
 	}
-	return &agent.TokenUsage{PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens, TotalTokens: usage.TotalTokens}
+	return &agent.TokenUsage{PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens, TotalTokens: usage.TotalTokens, ThoughtsTokens: usage.ThoughtsTokens}
 }
 
 const synthesisEventWindow = MaxOperationPageLimit

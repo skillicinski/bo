@@ -13,11 +13,23 @@ type SynthesisOptions struct {
 	RuntimeTimeoutSeconds int
 }
 
+type StageTelemetry struct {
+	Workflow             string                    `json:"workflow"`
+	SourceKey            string                    `json:"source_key,omitempty"`
+	TerminalReason       string                    `json:"terminal_reason,omitempty"`
+	TerminalDetail       string                    `json:"terminal_detail,omitempty"`
+	ProviderRetries      int                       `json:"provider_retries,omitempty"`
+	ProviderRetryReasons []string                  `json:"provider_retry_reasons,omitempty"`
+	Usage                *agent.TokenUsage         `json:"usage,omitempty"`
+	ToolCalls            []agent.ToolCallTelemetry `json:"tool_calls,omitempty"`
+}
+
 type SynthesisResult struct {
-	SummariesWritten int           `json:"summaries_written"`
-	SummariesSkipped int           `json:"summaries_skipped"`
-	Committed        []Operation   `json:"-"`
-	Metrics          agent.Metrics `json:"metrics"`
+	SummariesWritten int              `json:"summaries_written"`
+	SummariesSkipped int              `json:"summaries_skipped"`
+	Committed        []Operation      `json:"-"`
+	Metrics          agent.Metrics    `json:"metrics"`
+	Telemetry        []StageTelemetry `json:"telemetry,omitempty"`
 }
 
 type SynthMode string
@@ -35,6 +47,7 @@ type SynthResult struct {
 	DistillationSkipped int
 	Committed           []Operation
 	Metrics             agent.Metrics
+	Telemetry           []StageTelemetry
 }
 
 func DefaultSynthesisOptions() SynthesisOptions {

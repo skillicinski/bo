@@ -56,6 +56,38 @@ func TestRuntimeUsesConfiguredToolSet(t *testing.T) {
 	}
 }
 
+func TestRuntimeRecordsToolTelemetry(t *testing.T) {
+	arguments := `{"filename":"one.md"}`
+	output := "document contents"
+	provider := &fakeProvider{responses: []agent.CompletionResponse{
+		{Message: agent.ChatMessage{Role: "assistant", ToolCalls: []agent.ToolCall{{
+			ID: "read-1", Function: agent.ToolFunction{Name: "read_document", Arguments: arguments},
+		}}}},
+		{Message: agent.ChatMessage{Role: "assistant", Content: "done"}},
+	}}
+	runtime := agent.Runtime{Provider: provider, Tools: []agent.Tool{{
+		Definition: agent.ToolDefinition{Function: agent.ToolDeclaration{Name: "read_document"}},
+		Execute:    func(context.Context, agent.ToolCall) (string, error) { return output, nil },
+	}}}
+	result, err := runtime.Run(context.Background(), nil, agent.Options{MaxTurns: 2, MaxToolCalls: 1, MaxToolOutputBytes: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Telemetry.TerminalReason != "assistant_message" || len(result.Telemetry.ToolCalls) != 1 {
+		t.Fatalf("telemetry = %#v", result.Telemetry)
+	}
+	call := result.Telemetry.ToolCalls[0]
+	if call.Turn != 1 || call.Index != 1 || call.Name != "read_document" || call.ArgumentsPreview != arguments {
+		t.Fatalf("tool telemetry = %#v", call)
+	}
+	if call.ArgumentsBytes != len(arguments) || call.ArgumentsSHA256 == "" || call.OutputSHA256 == "" {
+		t.Fatalf("tool hashes = %#v", call)
+	}
+	if call.OutputBytes != len(output) || call.OutputReturnedBytes != 8 || !call.OutputTruncated {
+		t.Fatalf("tool output telemetry = %#v", call)
+	}
+}
+
 func TestRuntimeStopsAfterCompletedToolBatch(t *testing.T) {
 	provider := &fakeProvider{responses: []agent.CompletionResponse{{Message: agent.ChatMessage{Role: "assistant", ToolCalls: []agent.ToolCall{{
 		ID: "write-1", Function: agent.ToolFunction{Name: "write"},
@@ -110,15 +142,22 @@ func (p responseErrorProvider) Complete(context.Context, agent.CompletionRequest
 func TestRuntimeAggregatesUsageFromProviderError(t *testing.T) {
 	providerErr := internalerrors.ProviderRejected("completion was incomplete", false)
 	runtime := agent.Runtime{Provider: responseErrorProvider{
-		response: agent.CompletionResponse{Usage: &agent.TokenUsage{PromptTokens: 5, CompletionTokens: 7, TotalTokens: 12}},
-		err:      providerErr,
+		response: agent.CompletionResponse{
+			Usage:                &agent.TokenUsage{PromptTokens: 5, CompletionTokens: 7, TotalTokens: 12, ThoughtsTokens: 2},
+			ProviderRetries:      1,
+			ProviderRetryReasons: []string{"malformed_function_call"},
+		},
+		err: providerErr,
 	}}
 	result, err := runtime.Run(context.Background(), nil, agent.Options{MaxTurns: 1})
 	if err != providerErr {
 		t.Fatalf("error = %v", err)
 	}
-	if result.Usage == nil || result.Usage.PromptTokens != 5 || result.Usage.CompletionTokens != 7 || result.Usage.TotalTokens != 12 {
+	if result.Usage == nil || result.Usage.PromptTokens != 5 || result.Usage.CompletionTokens != 7 || result.Usage.TotalTokens != 12 || result.Usage.ThoughtsTokens != 2 {
 		t.Fatalf("usage = %#v", result.Usage)
+	}
+	if result.Telemetry.ProviderRetries != 1 || len(result.Telemetry.ProviderRetryReasons) != 1 || result.Telemetry.ProviderRetryReasons[0] != "malformed_function_call" {
+		t.Fatalf("telemetry = %#v", result.Telemetry)
 	}
 }
 

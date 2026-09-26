@@ -5,7 +5,8 @@
 ```text
 external Go consumer       -> bo
 cmd/bo                     -> bo
-evals/cmd/bo-eval          -> application, provider/deepseek, storage/local
+evals/harness.py           -> evals/cmd/bo-eval, evaluate.py
+evals/cmd/bo-eval          -> bo
 bo                         -> application, agent, domain, errors, provider/deepseek, provider/gemini, source, source/file, source/url, storage/local
 application                -> agent, domain, errors, source
 source                     -> domain, errors
@@ -28,6 +29,11 @@ separate consumer module in `testdata/public-api` compiles that boundary in CI.
   a workflow can use a local, memory, or remote implementation.
 - **Composition root:** the package that selects concrete implementations and
   connects them. `cmd/bo` selects the local workspace and calls `bo`.
+- **Task:** one evaluation input, workflow, and explicit success criteria.
+- **Trial:** one isolated execution of a task.
+- **Trajectory:** the recorded command output, public operation events, runtime
+  telemetry, and execution metadata for one trial.
+- **Outcome:** the final workspace state produced by a trial.
 - **Aggregate:** one state object that keeps related records and their rules
   together. A `SourceRecord` groups one source, its snapshots, and its summary.
 - **Opaque revision:** a value that callers may compare and pass back, but not
@@ -111,7 +117,8 @@ The DeepSeek adapter translates the provider HTTP protocol.
 ### `internal/provider/gemini`
 
 The Gemini adapter translates the native `generateContent` protocol for the
-Gemini Developer API and Vertex AI.
+Gemini Developer API and Vertex AI. It does not implement the Interactions API
+or Gemini's OpenAI-compatible endpoint.
 
 - Owns: Gemini requests, responses, API-key headers, Vertex AI endpoint paths,
   and ADC access tokens.
@@ -135,13 +142,40 @@ The shared error package gives internal layers one failure vocabulary.
 - Does not own: workflow policy, output formatting, or HTTP status selection.
 - Calls: standard-library error behavior only.
 
+### `evals/harness.py`
+
+The evaluation harness is a separate composition root for repeatable agent
+trials.
+
+- Owns: fixture capture, isolated workspaces, runtime adapters, trajectory
+  records, deterministic outcome checks, expected-output checks, and
+  pass@k/pass^k aggregation.
+- Does not own: synthesis rules, provider protocols, or internal application
+  seams.
+- Calls: the small `evals/cmd/bo-eval` adapter for the package runtime and an
+  explicit external command for agent-runtime trials.
+
+The `command` runtime receives `BO_EVAL_TASK` and `BO_EVAL_WORKSPACE`. The
+per-trial task JSON contains the selected workflow and provider. The harness
+gives the runtime an isolated `HOME`, starts it in the repository root, and owns the
+trial report and captured output. This is enough for Codex or any other client
+to run against the same seeded workspace contract.
+
 ### `evals/cmd/bo-eval`
 
-The evaluation command is a separate composition root for controlled tests.
+The package-runtime adapter is a small executable composition root.
 
-- Owns: evaluation setup and explicit tool selection.
-- Does not own: production CLI behavior or the public API contract.
-- Calls: selected internal application, provider, and storage packages.
+- Owns: provider selection and the capture/run process contract.
+- Does not own: evaluation grading, fixture management, or custom tool
+  selection.
+- Calls: only the exported `bo` workflows, workspace manager, and provider
+  constructors.
+
+### `evals/evaluate.py`
+
+The evaluator is separate from execution. It scores completed trial artifacts
+with an OpenAI-compatible judge, applies the individual and aggregate score
+thresholds, and fails the report if execution failed.
 
 ## Workspace contract
 
@@ -213,8 +247,12 @@ distillation candidates for topic matching, and call `skip_distill`,
 reference, computes its digest, renders deterministic Markdown, and commits the
 document, state, and mutation event in one conditional transaction. Matching
 requires the topic and the complete set of input references and digests. An
-unchanged topic and input set is skipped. The public `Synth` result reports
-committed documents grouped by mutation operation.
+unchanged topic and input set is skipped. When no distillation exists yet, the
+host does not accept a skip until the agent has read evidence from two source
+identities; when two current summaries are available, it requires two summary
+reads first. This guard is shared by direct `distill` and the distill stage of
+`synth`. The public `Synth` result reports committed documents grouped by
+mutation operation.
 
 ## Optional reading
 

@@ -2,8 +2,11 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -68,14 +71,17 @@ type CompletionRequest struct {
 }
 
 type CompletionResponse struct {
-	Message ChatMessage
-	Usage   *TokenUsage
+	Message              ChatMessage
+	Usage                *TokenUsage
+	ProviderRetries      int
+	ProviderRetryReasons []string
 }
 
 type TokenUsage struct {
-	PromptTokens     int
-	CompletionTokens int
-	TotalTokens      int
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+	ThoughtsTokens   int `json:"thoughts_tokens,omitempty"`
 }
 
 type CompletionProvider interface {
@@ -100,27 +106,54 @@ type Metrics struct {
 	Duration  time.Duration `json:"duration"`
 }
 
+// ToolCallTelemetry records bounded metadata for one provider-requested tool call.
+// ArgumentsPreview is populated only for read and terminal tools.
+type ToolCallTelemetry struct {
+	Turn                int    `json:"turn"`
+	Index               int    `json:"index"`
+	ID                  string `json:"id,omitempty"`
+	Name                string `json:"name"`
+	ArgumentsBytes      int    `json:"arguments_bytes"`
+	ArgumentsSHA256     string `json:"arguments_sha256"`
+	ArgumentsPreview    string `json:"arguments_preview,omitempty"`
+	OutputBytes         int    `json:"output_bytes"`
+	OutputReturnedBytes int    `json:"output_returned_bytes"`
+	OutputSHA256        string `json:"output_sha256"`
+	OutputTruncated     bool   `json:"output_truncated,omitempty"`
+	Error               string `json:"error,omitempty"`
+}
+
+type Telemetry struct {
+	ToolCalls            []ToolCallTelemetry `json:"tool_calls,omitempty"`
+	ProviderRetries      int                 `json:"provider_retries,omitempty"`
+	ProviderRetryReasons []string            `json:"provider_retry_reasons,omitempty"`
+	TerminalReason       string              `json:"terminal_reason,omitempty"`
+}
+
 type Result struct {
 	Messages []ChatMessage
 	Message  ChatMessage
 	Metrics
+	Telemetry Telemetry
 }
 
 func (runtime Runtime) Run(ctx context.Context, messages []ChatMessage, options Options) (Result, error) {
 	started := time.Now()
 	turns, toolCalls := 0, 0
+	telemetry := Telemetry{}
 	var usage TokenUsage
 	usageKnown := true
 	usageReceived := false
-	finish := func(message ChatMessage, err error) (Result, error) {
+	finish := func(reason string, message ChatMessage, err error) (Result, error) {
 		metrics := Metrics{Turns: turns, ToolCalls: toolCalls, Duration: time.Since(started)}
 		if usageKnown && usageReceived && turns > 0 {
 			metrics.Usage = &usage
 		}
-		return Result{Messages: messages, Message: message, Metrics: metrics}, err
+		telemetry.TerminalReason = reason
+		return Result{Messages: messages, Message: message, Metrics: metrics, Telemetry: telemetry}, err
 	}
 	if runtime.Provider == nil {
-		return finish(ChatMessage{}, internalerrors.Request("agent provider is not configured"))
+		return finish("provider_not_configured", ChatMessage{}, internalerrors.Request("agent provider is not configured"))
 	}
 	options = normalizedOptions(options)
 	var lastToolError error
@@ -142,10 +175,10 @@ func (runtime Runtime) Run(ctx context.Context, messages []ChatMessage, options 
 	}
 	for {
 		if err := ctx.Err(); err != nil {
-			return finish(ChatMessage{}, internalerrors.Context(err))
+			return finish("context_error", ChatMessage{}, internalerrors.Context(err))
 		}
 		if turns >= options.MaxTurns {
-			return finish(ChatMessage{}, terminalError(internalerrors.ProviderMalformed(fmt.Sprintf("max turns reached (%d)", options.MaxTurns), nil), nil))
+			return finish("max_turns", ChatMessage{}, terminalError(internalerrors.ProviderMalformed(fmt.Sprintf("max turns reached (%d)", options.MaxTurns), nil), nil))
 		}
 		turns++
 		response, err := runtime.Provider.Complete(ctx, CompletionRequest{
@@ -155,12 +188,19 @@ func (runtime Runtime) Run(ctx context.Context, messages []ChatMessage, options 
 			usage.PromptTokens += response.Usage.PromptTokens
 			usage.CompletionTokens += response.Usage.CompletionTokens
 			usage.TotalTokens += response.Usage.TotalTokens
+			usage.ThoughtsTokens += response.Usage.ThoughtsTokens
 			usageReceived = true
 		} else if err == nil {
 			usageKnown = false
 		}
+		if response.ProviderRetries > 0 {
+			telemetry.ProviderRetries += response.ProviderRetries
+		}
+		if len(response.ProviderRetryReasons) > 0 {
+			telemetry.ProviderRetryReasons = append(telemetry.ProviderRetryReasons, response.ProviderRetryReasons...)
+		}
 		if err != nil {
-			return finish(ChatMessage{}, providerError(err))
+			return finish("provider_error", ChatMessage{}, providerError(err))
 		}
 		message := response.Message
 		if message.Role == "" {
@@ -171,11 +211,18 @@ func (runtime Runtime) Run(ctx context.Context, messages []ChatMessage, options 
 			batchToolError := error(nil)
 			for _, call := range message.ToolCalls {
 				if toolCalls >= options.MaxToolCalls {
-					return finish(message, terminalError(internalerrors.ProviderMalformed(fmt.Sprintf("max tool calls reached (%d)", options.MaxToolCalls), nil), batchToolError))
+					return finish("max_tool_calls", message, terminalError(internalerrors.ProviderMalformed(fmt.Sprintf("max tool calls reached (%d)", options.MaxToolCalls), nil), batchToolError))
 				}
 				toolCalls++
+				telemetry.ToolCalls = append(telemetry.ToolCalls, ToolCallTelemetry{
+					Turn: turns, Index: toolCalls, ID: call.ID, Name: call.Function.Name,
+					ArgumentsBytes: len(call.Function.Arguments), ArgumentsSHA256: sha256Hex(call.Function.Arguments),
+					ArgumentsPreview: toolArgumentsPreview(call.Function.Name, call.Function.Arguments),
+				})
+				trace := &telemetry.ToolCalls[len(telemetry.ToolCalls)-1]
 				if call.ID == "" {
-					return finish(message, internalerrors.ProviderMalformed("assistant tool call has no id", nil))
+					trace.Error = "assistant tool call has no id"
+					return finish("invalid_tool_call", message, internalerrors.ProviderMalformed("assistant tool call has no id", nil))
 				}
 				execute, ok := executors[call.Function.Name]
 				var output string
@@ -188,23 +235,49 @@ func (runtime Runtime) Run(ctx context.Context, messages []ChatMessage, options 
 					output, toolErr = execute(ctx, call)
 				}
 				if toolErr != nil {
+					trace.Error = toolErr.Error()
 					var categorized *internalerrors.Error
 					if errors.As(toolErr, &categorized) {
 						batchToolError = toolErr
 					}
 					output = "ERROR: " + toolErr.Error()
 				}
-				messages = append(messages, ChatMessage{Role: "tool", ToolCallID: call.ID, Content: BoundedOutput(output, options.MaxToolOutputBytes)})
+				boundedOutput := BoundedOutput(output, options.MaxToolOutputBytes)
+				trace.OutputBytes = len(output)
+				trace.OutputReturnedBytes = len(boundedOutput)
+				trace.OutputSHA256 = sha256Hex(output)
+				trace.OutputTruncated = len(output) != len(boundedOutput)
+				messages = append(messages, ChatMessage{Role: "tool", ToolCallID: call.ID, Content: boundedOutput})
 			}
 			lastToolError = batchToolError
 			if runtime.Done != nil && runtime.Done() {
-				return finish(message, lastToolError)
+				reason := "done"
+				if lastToolError != nil {
+					reason = "done_with_tool_error"
+				}
+				return finish(reason, message, lastToolError)
 			}
 			continue
 		}
 		messages = append(messages, message)
-		return finish(message, lastToolError)
+		reason := "assistant_message"
+		if lastToolError != nil {
+			reason = "assistant_message_with_tool_error"
+		}
+		return finish(reason, message, lastToolError)
 	}
+}
+
+func sha256Hex(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(digest[:])
+}
+
+func toolArgumentsPreview(name, arguments string) string {
+	if strings.HasPrefix(name, "read_") || name == "skip_distill" {
+		return BoundedOutput(arguments, 2048)
+	}
+	return ""
 }
 
 func providerError(err error) error {

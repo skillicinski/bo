@@ -43,8 +43,8 @@ workspace.
 3. Run the default end-to-end workflow with `DEEPSEEK_API_KEY="$(security find-generic-password -s deepseek-api-key -w)" mise run evals`. Set `DEEPSEEK_API_KEY` by another secure method on systems without the macOS keychain.
 4. Run a focused workflow with `mise run evals --workflow summarize --corpus regression.txt` or `mise run evals --workflow distill --corpus regression.txt`. A bare corpus name resolves under `evals/corpora/`; a path that contains `/` resolves from the repository root. Add `--tools all|name,name,...` only for a focused workflow when the tool set must change.
 5. Inspect the printed `evals/results/<run-id>` path. For end-to-end runs, require `summarize status: 0`, `distill status: 0`, at least two successful source identities, one distillation document, unchanged raw and summary hashes, and no missing summaries. For focused runs, require the selected workflow status to be `0`. A nonzero `snap status` can contain reported fetch failures; inspect `expected-failures.log`.
-6. Read `evals/RUBRIC.md` and `evals/DISTILL_RUBRIC.md`, then score the run with `BO_EVAL_API_KEY=... python3 evals/evaluate.py evals/results/<run-id>`. The evaluator accepts only `BO_EVAL_API_KEY`.
-7. Inspect `evaluation/aggregate.json`, the stage aggregates under `evaluation/summarize/` and `evaluation/distill/`, and their `documents/` directories. The runner also copies the selected corpus to `corpus.txt` in the run report. Treat `evals/corpora/`, `evals/work/`, and `evals/results/` as local data. Do not commit them or API keys.
+6. Read `evals/rubrics/SUMMARY.md` and `evals/rubrics/DISTILLATION.md`, then score the run with `BO_EVAL_API_KEY=... python3 evals/evaluate.py evals/results/<run-id>`. The evaluator accepts only `BO_EVAL_API_KEY`.
+7. Inspect `evaluation/aggregate.json`, the stage aggregates under `evaluation/summarize/` and `evaluation/distill/`, and their `documents/` directories. The runner also copies the selected corpus to `corpus.txt` in the run report. Treat `evals/corpora/`, `evals/fixtures/`, and `evals/results/` as local data. Do not commit them or API keys.
 
 ## Git
 
